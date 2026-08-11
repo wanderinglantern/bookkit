@@ -27,6 +27,7 @@ HELP = """\
 [b]today screen[/b]
   b  book        c  renewal calendar        a  new task
   p  pipeline    m  markets                 y  sync program files
+  ,  setup (where program files live — first y opens it for you)
 
 [b]book screen[/b]
   a  new account · e  edit account · f  filter
@@ -46,6 +47,7 @@ HELP = """\
 [b]placements tab[/b]
   r  renew into next period (file-backed placements clone next
      year's towerkit file, linked at birth)
+  t  create the towerkit file FROM this placement (nothing typed twice)
   x  merge a duplicate into another placement
 
 [b]entry — type fast, it stores clean[/b]

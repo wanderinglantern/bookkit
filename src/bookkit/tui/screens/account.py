@@ -121,6 +121,7 @@ class AccountScreen(Screen):
         Binding("e", "edit_here", "Edit"),
         Binding("s", "new_submission", "Submission"),
         Binding("r", "renew_placement", "Renew"),
+        Binding("t", "scaffold_tower", "Tower file"),
         Binding("x", "merge_placement", "Merge"),
         Binding("d", "task_done", "Done (task)"),
         Binding("p", "mark_primary", "Primary (contact)"),
@@ -522,6 +523,52 @@ class AccountScreen(Screen):
             self.refresh_data()
 
         return done
+
+    def action_scaffold_tower(self) -> None:
+        """Create the towerkit file FROM the selected placement — insured,
+        name, period, and indicated premium flow over; build the tower itself
+        in towerkit. Nothing is typed twice."""
+        from ... import sync
+        from ..widgets.forms import Field, FormModal, FormSpec
+
+        if self._active_tab() != "tab-placements":
+            self.notify("t scaffolds a tower file (placements tab)", severity="warning")
+            return
+        key = self._selected_key("placements-table")
+        if key is None:
+            return
+        placement = placements.get(self.app.conn, key)
+        if placement.program_path:
+            self.notify(f"{placement.ref} already has a file: {placement.program_path}")
+            return
+        roots = sync.configured_roots(self.app.conn)
+        if not roots:
+            self.notify("set the program file location first (, on Today)", severity="warning")
+            return
+        org = orgs.get(self.app.conn, placement.org_id)
+        slug = "-".join(org.name.lower().split()[:2]).strip(",.")
+        year = placement.period_from[:4]
+        default = roots[0] / f"{slug}-{year}.json"
+
+        def saved(values: dict | None) -> None:
+            if values is None:
+                return
+            dest, diags = sync.scaffold_program(
+                self.app.conn, placement.id, Path(values["path"]).expanduser()
+            )
+            if dest is None or not diags.ok:
+                first = diags.errors[0] if diags.errors else "unknown error"
+                self.notify(f"scaffold refused: {first}", severity="error")
+                return
+            self.notify(f"created {dest.name} — build the tower in towerkit")
+            self.refresh_data()
+
+        spec = FormSpec(
+            "create tower file",
+            [Field("path", "file path", required=True)],
+            initial={"path": str(default)},
+        )
+        self.app.push_screen(FormModal(spec), saved)
 
     def action_merge_placement(self) -> None:
         """Merge the selected (duplicate) placement into another of this org's

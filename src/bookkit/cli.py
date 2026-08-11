@@ -39,7 +39,12 @@ def main(argv: list[str] | None = None) -> int:
     search_p.add_argument("query")
 
     sync_p = sub.add_parser("sync", help="project towerkit program files")
-    sync_p.add_argument("--roots", type=Path, nargs="+", required=True)
+    sync_p.add_argument("--roots", type=Path, nargs="+", default=None,
+                        help="override the configured program roots")
+
+    roots_p = sub.add_parser("roots", help="show or set the program file locations")
+    roots_p.add_argument("paths", type=Path, nargs="*",
+                         help="directories to save (omit to show current)")
 
     backup_p = sub.add_parser("backup", help="timestamped copy + integrity check")
     backup_p.add_argument("--dest", type=Path, default=None)
@@ -113,9 +118,35 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
     if args.command == "sync":
         from . import sync
 
-        report = sync.project_all(conn, [Path(r) for r in args.roots])
+        roots = (
+            [Path(r) for r in args.roots] if args.roots else sync.configured_roots(conn)
+        )
+        if not roots:
+            print("no program roots configured — run `bookctl roots <dir> …` first")
+            return 2
+        report = sync.project_all(conn, roots)
         print(report.render())
         return 0 if report.ok else 1
+
+    if args.command == "roots":
+        from . import sync
+        from .repo import settings as settings_repo
+
+        if args.paths:
+            missing = [p for p in args.paths if not p.expanduser().is_dir()]
+            if missing:
+                print(f"not a directory: {missing[0]}")
+                return 2
+            settings_repo.set_program_roots(
+                conn, [str(p.expanduser()) for p in args.paths]
+            )
+        roots = sync.configured_roots(conn)
+        if not roots:
+            print("no program roots configured")
+        for root in roots:
+            count = len(sync.scan([root]))
+            print(f"{root}  ({count} program file(s))")
+        return 0
 
     if args.command == "backup":
         from datetime import datetime

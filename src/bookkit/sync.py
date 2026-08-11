@@ -40,12 +40,24 @@ from towerkit.validate import Diagnostics, validate_file, validate_program
 
 from .db import utc_now
 from .models import Opportunity, Org, Placement
-from .money import dollars_to_cents
-from .repo import links, opportunities, orgs, placements, projection
+from .money import MoneyParseError, cents_to_dollars, dollars_to_cents
+from .repo import links, opportunities, orgs, placements, projection, settings
 
 
 def file_sha256(path: Path | str) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def configured_roots(conn: sqlite3.Connection) -> list[Path]:
+    """Where program files live: the saved setting, falling back to the
+    BOOKKIT_PROGRAM_ROOTS env var (colon-separated) for scripting."""
+    import os
+
+    saved = settings.get_program_roots(conn)
+    if saved:
+        return [Path(r).expanduser() for r in saved]
+    raw = os.environ.get("BOOKKIT_PROGRAM_ROOTS", "")
+    return [Path(r).expanduser() for r in raw.split(":") if r]
 
 
 def scan(roots: list[Path]) -> list[Path]:
@@ -557,6 +569,76 @@ def renew(
         diags = project(conn, new_path, placement_id=new_placement.id)
         new_placement = placements.get(conn, new_placement.id)
     return new_placement, new_path, diags
+
+
+# --- scaffold: the inverse of adoption (DRY the other direction) --------------
+
+
+def scaffold_program(
+    conn: sqlite3.Connection, placement_id: str, dest: Path
+) -> tuple[Path | None, Diagnostics]:
+    """Create a towerkit file FROM a bookkit placement — insured, program
+    name, period, and indicated premium/limit flow over so nothing is typed
+    twice. The scaffold carries one TBD line with one pending ('To be placed')
+    layer, which is valid towerkit (warnings only), renders dashed, and is
+    ready to be built out in towerkit's editor."""
+    from datetime import date as _date
+
+    from towerkit.model import Layer, Line
+    from towerkit.model import Period as TkPeriod
+    from towerkit.model import Placement as TkPlacement
+
+    diags = Diagnostics()
+    placement = placements.get(conn, placement_id)
+    if placement.program_path:
+        diags.error("linked", f"{placement.ref} already has a program file")
+        return None, diags
+    if dest.exists():
+        diags.error("exists", f"{dest} already exists — refusing to overwrite")
+        return None, diags
+    org = orgs.get(conn, placement.org_id)
+
+    def _dollars(cents: int | None) -> int | None:
+        if cents is None:
+            return None
+        try:
+            return cents_to_dollars(cents)
+        except MoneyParseError:
+            return cents // 100
+
+    limit = _dollars(placement.total_limit) or 1_000_000
+    program = Program(
+        insured=org.name,
+        program=placement.program_name,
+        placement=(
+            TkPlacement.BOUND if placement.status == "bound" else TkPlacement.PROPOSED
+        ),
+        period=TkPeriod(
+            start=_date.fromisoformat(placement.period_from),
+            end=_date.fromisoformat(placement.period_to),
+        ),
+        currency=placement.currency,
+        lines=[Line(id="tbd", name="Coverage TBD", abbr="TBD")],
+        layers=[
+            Layer(
+                id="tbd-primary",
+                name="To be placed",
+                applies_to=["tbd"],
+                attach=0,
+                limit=limit,
+                premium=_dollars(placement.total_premium),
+                participants=[],
+            )
+        ],
+    )
+    check = validate_program(program)
+    if not check.ok:
+        return None, check
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dump_program(program, dest)
+    links.confirm(conn, str(dest), org.id, org.name, source="scaffold")
+    diags = project(conn, dest, placement_id=placement.id)
+    return dest, diags
 
 
 # --- write-through ------------------------------------------------------------

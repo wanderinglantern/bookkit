@@ -35,7 +35,8 @@ def org_for_insured(conn: sqlite3.Connection, insured: str) -> str | None:
     a guess and belongs in the review queue."""
     row = conn.execute(
         "SELECT org_id FROM program_link WHERE insured_name = ?"
-        " AND source IN ('user', 'renewal') ORDER BY confirmed_at DESC LIMIT 1",
+        " AND source IN ('user', 'renewal', 'scaffold')"
+        " ORDER BY confirmed_at DESC LIMIT 1",
         (insured,),
     ).fetchone()
     return row["org_id"] if row else None

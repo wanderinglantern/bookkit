@@ -36,6 +36,7 @@ class TodayScreen(Screen):
         Binding("d", "task_done", "Done (task)"),
         Binding("u", "undo", "Undo"),
         Binding("y", "sync_programs", "Sync programs"),
+        Binding("comma", "settings", "Setup", key_display=","),
         Binding("r", "refresh", "Refresh", show=False),
     ]
 
@@ -186,21 +187,26 @@ class TodayScreen(Screen):
     def action_refresh(self) -> None:
         self.refresh_data()
 
-    def action_sync_programs(self) -> None:
-        """Project towerkit files from $BOOKKIT_PROGRAM_ROOTS (colon-separated),
-        then open the review queue for anything unlinked."""
-        import os
-        from pathlib import Path
+    def action_settings(self) -> None:
+        from ..widgets.settings import SettingsModal
 
+        self.app.push_screen(SettingsModal())
+
+    def action_sync_programs(self) -> None:
+        """Project towerkit files from the configured roots; first run opens
+        the setup dialogue, then the review queue handles anything unlinked."""
         from ... import sync
         from ..widgets.link_review import LinkReview
+        from ..widgets.settings import SettingsModal
 
-        raw = os.environ.get("BOOKKIT_PROGRAM_ROOTS", "")
-        roots = [Path(p).expanduser() for p in raw.split(":") if p]
+        roots = sync.configured_roots(self.app.conn)
         if not roots:
-            self.notify(
-                "set BOOKKIT_PROGRAM_ROOTS (colon-separated dirs) to sync", severity="warning"
-            )
+            def configured(saved: bool | None) -> None:
+                if saved:
+                    self.action_sync_programs()
+
+            self.notify("first sync — tell me where the program files live")
+            self.app.push_screen(SettingsModal(), configured)
             return
         report = sync.project_all(self.app.conn, roots)
         bits = [f"projected {len(report.projected)}"]
