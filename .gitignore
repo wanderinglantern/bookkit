@@ -1,0 +1,11 @@
+# client contacts and premium figures live in the DB — never commit it
+*.db
+*.db-*
+*.sqlite*
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+dist/
