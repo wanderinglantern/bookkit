@@ -22,14 +22,26 @@ HELP = """\
 [b]lists[/b]
   j / k    move                       enter   open
   g / G    top / bottom               d       mark task done
+  a        add (contextual)           e       edit selected
 
 [b]today screen[/b]
-  b  book        c  renewal calendar
-  p  pipeline    m  markets
+  b  book        c  renewal calendar        a  new task
+  p  pipeline    m  markets                 y  sync program files
+
+[b]book screen[/b]
+  a  new account · e  edit account · f  filter
 
 [b]account screen[/b]
+  a adds whatever the open tab holds: task (overview), contact,
+  placement, opportunity, document; e edits the selected row
+  (or the account itself). s sends a submission for the selected
+  placement/opportunity; e on a submission records the market's
+  response (quote / decline / bind).
   p  mark contact primary (contacts tab)
   enter on a placement shows its tower · enter on a document opens it
+
+[b]markets screen[/b]
+  a  new market · e  edit · in a market: a appetite, w underwriter
 
 [b]quick capture[/b]
   ctrl+s save · esc keeps a draft for next time

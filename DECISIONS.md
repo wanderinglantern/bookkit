@@ -26,7 +26,10 @@ One line per choice the brief didn't specify. Newest at the bottom.
 - Projection creates the placement row when a linked file has no matching (path or org+period) placement — the file *is* a program period, and the cross-book query must see it. towerkit placement bound→bound, proposed→prospective.
 - Projection refreshes placement program_name/period/totals from the file (the file is the source of truth for program structure, §5); commission_bps and status stay bookkit-owned.
 - TUI sync roots come from `BOOKKIT_PROGRAM_ROOTS` (colon-separated), `y` on Today runs project_all + the link review queue; the CLI takes explicit `--roots`.
-- Field-level editing in the TUI covers the high-frequency mutations (log interaction, task done, stage move, contact primary, file links); broad record editing is CLI/DB territory for now — the 5-second capture path is the product.
+- ~~Field-level editing in the TUI covers the high-frequency mutations only~~ Superseded (same day, after review): every entity is creatable/editable in the TUI via one generic `FormModal` (drain-on-save, human dates, money shorthand, typed parsing) — `a` adds contextually per screen/tab, `e` edits the selected row, `s` sends a submission, `e` on a submission records the market response. Creation never went to the CLI: forms are the TUI's job and `bookctl` stays a reporting/pipeline surface.
+- Placements linked to a towerkit file warn on edit that structure/premium comes from the file (projection overwrites them); status and commission_bps remain bookkit-owned either way.
+- Textual 8.x gotcha: `Select.BLANK` is a plain `False`; the real no-selection sentinel is `Select.NULL` (bit us — recorded so it doesn't bite twice).
+- Empty-book onboarding: Today and Book show a "press b then a" hint when no orgs exist; `bookctl init` prints the same next steps.
 - Unlinked files are review items, not errors: `bookctl sync` exits 0 with them listed; only validation failures exit non-zero.
 - SVG screen snapshots are written by the TUI tests as crash+render cover but not committed as compared baselines (gitignored).
 - 10× responsiveness (§8) rests on the schema indexes (expiry, org+date, market+status, FTS) rather than a perf test; every hot query is indexed and the seed is small enough that a dedicated benchmark would test nothing real yet.

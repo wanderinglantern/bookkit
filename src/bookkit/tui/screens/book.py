@@ -26,6 +26,8 @@ class BookScreen(Screen):
     app: BookkitApp
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
+        Binding("a", "new_account", "New account"),
+        Binding("e", "edit_account", "Edit"),
         Binding("f", "focus_filter", "Filter"),
         Binding("u", "undo", "Undo"),
     ]
@@ -39,7 +41,10 @@ class BookScreen(Screen):
 
     def on_mount(self) -> None:
         self.refresh_data()
-        self.query_one("#book-table", ListTable).focus()
+        table = self.query_one("#book-table", ListTable)
+        table.focus()
+        if table.row_count == 0:
+            self.notify("empty book — press a to create your first account")
 
     def refresh_data(self, filter_text: str = "") -> None:
         conn = self.app.conn
@@ -77,6 +82,46 @@ class BookScreen(Screen):
     def on_data_table_row_selected(self, event: ListTable.RowSelected) -> None:
         if event.row_key.value:
             self.app.open_account(event.row_key.value)
+
+    def _selected_org_id(self) -> str | None:
+        table = self.query_one("#book-table", ListTable)
+        if table.cursor_row is None or table.row_count == 0:
+            return None
+        from textual.coordinate import Coordinate
+
+        return table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+
+    def action_new_account(self) -> None:
+        from ..widgets.entity_forms import apply_org, org_form
+        from ..widgets.forms import FormModal
+
+        def saved(values: dict | None) -> None:
+            if values is None:
+                return
+            org = apply_org(self.app.conn, values)
+            self.notify(f"created {org.ref} {org.name}")
+            self.refresh_data(self.query_one("#book-filter", Input).value)
+
+        self.app.push_screen(FormModal(org_form()), saved)
+
+    def action_edit_account(self) -> None:
+        from ...repo import orgs
+        from ..widgets.entity_forms import apply_org, org_form_initial_profile
+        from ..widgets.forms import FormModal
+
+        org_id = self._selected_org_id()
+        if org_id is None:
+            return
+        existing = orgs.get(self.app.conn, org_id)
+
+        def saved(values: dict | None) -> None:
+            if values is None:
+                return
+            apply_org(self.app.conn, values, existing)
+            self.notify(f"updated {existing.ref}")
+            self.refresh_data(self.query_one("#book-filter", Input).value)
+
+        self.app.push_screen(FormModal(org_form_initial_profile(self.app.conn, existing)), saved)
 
     def action_focus_filter(self) -> None:
         self.query_one("#book-filter", Input).focus()

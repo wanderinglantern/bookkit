@@ -63,6 +63,8 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
     if args.command == "init":
         path = args.db or db.default_db_path()
         print(f"database ready at {path} (schema v{db.schema_version(conn)})")
+        print("next: bookctl  (the TUI — press b then a to create your first account,")
+        print("       m then a for markets; or `bookctl seed --demo` for a demo book)")
         return 0
 
     if args.command == "migrate":

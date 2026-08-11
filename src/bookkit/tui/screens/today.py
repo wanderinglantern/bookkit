@@ -31,6 +31,8 @@ class TodayScreen(Screen):
         Binding("c", "open_calendar", "Calendar"),
         Binding("p", "open_pipeline", "Pipeline"),
         Binding("m", "open_markets", "Markets"),
+        Binding("a", "new_task", "New task"),
+        Binding("e", "edit_task", "Edit task"),
         Binding("d", "task_done", "Done (task)"),
         Binding("u", "undo", "Undo"),
         Binding("y", "sync_programs", "Sync programs"),
@@ -57,6 +59,12 @@ class TodayScreen(Screen):
     def on_mount(self) -> None:
         self.refresh_data()
         self.query_one("#tasks-table", ListTable).focus()
+        from ...repo import orgs
+
+        if not orgs.list_orgs(self.app.conn):
+            self.notify(
+                "empty book — press b for the book, then a to create your first account"
+            )
 
     def refresh_data(self) -> None:
         conn = self.app.conn
@@ -135,6 +143,41 @@ class TodayScreen(Screen):
             tasks_repo.complete(self.app.conn, task_id)
             self.notify("task done — u to undo")
             self.refresh_data()
+
+    def _selected_task_id(self) -> str | None:
+        table = self.query_one("#tasks-table", ListTable)
+        if table.cursor_row is None or table.row_count == 0:
+            return None
+        key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value or ""
+        kind, task_id, _ = key.split(":", 2)
+        return task_id if kind == "task" else None
+
+    def action_new_task(self) -> None:
+        from ..widgets.entity_forms import apply_task, task_form
+        from ..widgets.forms import FormModal
+
+        def saved(values: dict | None) -> None:
+            if values is not None:
+                apply_task(self.app.conn, values)
+                self.refresh_data()
+
+        self.app.push_screen(FormModal(task_form()), saved)
+
+    def action_edit_task(self) -> None:
+        from ..widgets.entity_forms import apply_task, task_form
+        from ..widgets.forms import FormModal
+
+        task_id = self._selected_task_id()
+        if task_id is None:
+            return
+        task = tasks_repo.get(self.app.conn, task_id)
+
+        def saved(values: dict | None) -> None:
+            if values is not None:
+                apply_task(self.app.conn, values, existing=task)
+                self.refresh_data()
+
+        self.app.push_screen(FormModal(task_form(task)), saved)
 
     def action_undo(self) -> None:
         self.app.show_undo_result()

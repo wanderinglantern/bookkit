@@ -22,7 +22,11 @@ from ..widgets.tables import ListTable
 
 class MarketsScreen(Screen):
     app: BookkitApp
-    BINDINGS = [Binding("escape", "app.pop_screen", "Back")]
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("a", "new_market", "New market"),
+        Binding("e", "edit_market", "Edit"),
+    ]
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -58,17 +62,94 @@ class MarketsScreen(Screen):
         if event.row_key.value:
             self.app.push_screen(MarketDetailScreen(event.row_key.value))
 
+    def _refresh(self) -> None:
+        table = self.query_one("#markets-table", ListTable)
+        table.clear(columns=True)
+        self.on_mount()
+
+    def _selected_market_id(self) -> str | None:
+        from textual.coordinate import Coordinate
+
+        table = self.query_one("#markets-table", ListTable)
+        if table.cursor_row is None or table.row_count == 0:
+            return None
+        return table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+
+    def action_new_market(self) -> None:
+        from ..widgets.entity_forms import apply_org, org_form
+        from ..widgets.forms import FormModal
+
+        def saved(values: dict | None) -> None:
+            if values is not None:
+                org = apply_org(self.app.conn, values)
+                self.notify(f"created {org.name}")
+                self._refresh()
+
+        self.app.push_screen(FormModal(org_form(default_kind="market")), saved)
+
+    def action_edit_market(self) -> None:
+        from ..widgets.entity_forms import apply_org, org_form_initial_profile
+        from ..widgets.forms import FormModal
+
+        market_id = self._selected_market_id()
+        if market_id is None:
+            return
+        existing = orgs.get(self.app.conn, market_id)
+
+        def saved(values: dict | None) -> None:
+            if values is not None:
+                apply_org(self.app.conn, values, existing)
+                self._refresh()
+
+        self.app.push_screen(
+            FormModal(org_form_initial_profile(self.app.conn, existing)), saved
+        )
+
 
 class MarketDetailScreen(Screen):
     app: BookkitApp
     """One market before a meeting: appetite, underwriters, live submissions,
     and every tower it sits on in the next 90 days."""
 
-    BINDINGS = [Binding("escape", "app.pop_screen", "Back")]
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("a", "add_appetite", "Add appetite"),
+        Binding("w", "add_underwriter", "Add underwriter"),
+    ]
 
     def __init__(self, market_org_id: str) -> None:
         super().__init__()
         self.market_org_id = market_org_id
+
+    def _refresh(self) -> None:
+        for table in self.query(ListTable):
+            table.clear(columns=True)
+        self.on_mount()
+
+    def action_add_appetite(self) -> None:
+        from ..widgets.entity_forms import appetite_form
+        from ..widgets.forms import FormModal, dropped
+
+        def saved(values: dict | None) -> None:
+            if values is not None:
+                orgs.add_appetite(self.app.conn, self.market_org_id, **dropped(values))
+                self.notify("appetite recorded")
+                self._refresh()
+
+        self.app.push_screen(FormModal(appetite_form()), saved)
+
+    def action_add_underwriter(self) -> None:
+        from ..widgets.entity_forms import apply_contact, contact_form
+        from ..widgets.forms import FormModal
+
+        def saved(values: dict | None) -> None:
+            if values is not None:
+                values["role"] = values.get("role") or "underwriter"
+                contact = apply_contact(self.app.conn, self.market_org_id, values)
+                self.notify(f"added {contact.name}")
+                self._refresh()
+
+        self.app.push_screen(FormModal(contact_form()), saved)
 
     def compose(self) -> ComposeResult:
         yield Header()

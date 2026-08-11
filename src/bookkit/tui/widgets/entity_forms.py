@@ -1,0 +1,326 @@
+"""FormSpec builders for every creatable entity, plus the apply helpers the
+screens call on save. Screens stay thin: push FormModal(spec), hand the
+result dict to the matching apply_*."""
+
+from __future__ import annotations
+
+import sqlite3
+from typing import Any
+
+from ...models import (
+    CONTACT_ROLES,
+    Appetite,
+    Contact,
+    Opportunity,
+    Org,
+    Placement,
+    Submission,
+    Task,
+)
+from ...repo import contacts, opportunities, orgs, placements, submissions
+from ...repo import tasks as tasks_repo
+from .forms import Field, FormSpec, dropped
+
+_STATUS = tuple((s, s) for s in ("prospect", "active", "dormant", "lost", "declined"))
+_KINDS = tuple((k, k) for k in ("client", "market", "other"))
+_MARKET_TYPES = tuple((m, m) for m in ("carrier", "mga", "wholesaler", "reinsurer", "lloyds"))
+_ROLES = tuple((r, r) for r in CONTACT_ROLES)
+_PLACEMENT_STATUS = tuple(
+    (s, s) for s in ("prospective", "submitted", "quoted", "bound", "lapsed")
+)
+_PRIORITY = (("1 — high", "1"), ("2 — normal", "2"), ("3 — low", "3"))
+_APPETITE = tuple((a, a) for a in ("target", "will_consider", "selective", "no"))
+_RESPONSE = tuple((s, s) for s in ("quoted", "declined", "bound", "withdrawn"))
+
+
+# --- org ----------------------------------------------------------------------
+
+
+def org_form(existing: Org | None = None, default_kind: str = "client") -> FormSpec:
+    profile_initial: dict[str, Any] = {}
+    return FormSpec(
+        "edit account" if existing else "new account",
+        [
+            Field("name", "name", required=True),
+            Field("kind", "kind", "select", _KINDS),
+            Field("status", "status", "select", _STATUS),
+            Field("owner", "owner"),
+            Field("industry", "industry"),
+            Field("hq_city", "hq city"),
+            Field("hq_country", "hq country"),
+            Field("website", "website"),
+            Field("market_type", "market type (markets)", "select", _MARKET_TYPES,
+                  optional_select=True),
+            Field("am_best_rating", "AM Best rating (markets)"),
+            Field("notes", "notes", "textarea"),
+        ],
+        initial=(
+            {**existing.model_dump(), **profile_initial}
+            if existing
+            else {
+                "kind": default_kind,
+                "status": "prospect" if default_kind == "client" else "active",
+            }
+        ),
+    )
+
+
+def apply_org(
+    conn: sqlite3.Connection, values: dict[str, Any], existing: Org | None = None
+) -> Org:
+    market_type = values.pop("market_type", None)
+    rating = values.pop("am_best_rating", None)
+    core = dropped(values)
+    org = (
+        orgs.update(conn, existing.id, **core) if existing else orgs.create(conn, **core)
+    )
+    if org.kind == "market" and (market_type or rating):
+        profile: dict[str, Any] = {}
+        if market_type:
+            profile["market_type"] = market_type
+        if rating:
+            profile["am_best_rating"] = rating
+        orgs.set_market_profile(conn, org.id, **profile)
+    return org
+
+
+def org_form_initial_profile(conn: sqlite3.Connection, existing: Org) -> FormSpec:
+    """org_form for an edit, with the market profile fields pre-filled."""
+    spec = org_form(existing)
+    profile = orgs.get_market_profile(conn, existing.id)
+    if profile:
+        spec.initial["market_type"] = profile.market_type
+        spec.initial["am_best_rating"] = profile.am_best_rating
+    return spec
+
+
+# --- contact ------------------------------------------------------------------
+
+
+def contact_form(existing: Contact | None = None) -> FormSpec:
+    return FormSpec(
+        "edit contact" if existing else "new contact",
+        [
+            Field("first_name", "first name", required=True),
+            Field("last_name", "last name", required=True),
+            Field("title", "title"),
+            Field("role", "role", "select", _ROLES, optional_select=True),
+            Field("email", "email"),
+            Field("phone", "phone"),
+            Field("mobile", "mobile"),
+            Field("notes", "notes", "textarea"),
+        ],
+        initial=existing.model_dump() if existing else {},
+    )
+
+
+def apply_contact(
+    conn: sqlite3.Connection,
+    org_id: str,
+    values: dict[str, Any],
+    existing: Contact | None = None,
+) -> Contact:
+    core = dropped(values)
+    if existing:
+        return contacts.update(conn, existing.id, **core)
+    return contacts.create(conn, org_id, **core)
+
+
+# --- task ---------------------------------------------------------------------
+
+
+def task_form(existing: Task | None = None) -> FormSpec:
+    initial = existing.model_dump() if existing else {"priority": "2"}
+    if existing:
+        initial["priority"] = str(existing.priority)
+    return FormSpec(
+        "edit task" if existing else "new task",
+        [
+            Field("title", "title", required=True),
+            Field("detail", "detail", "textarea"),
+            Field("due_on", "due", "date"),
+            Field("priority", "priority", "select", _PRIORITY),
+        ],
+        initial=initial,
+    )
+
+
+def apply_task(
+    conn: sqlite3.Connection,
+    values: dict[str, Any],
+    org_id: str | None = None,
+    existing: Task | None = None,
+) -> Task:
+    core = dropped(values)
+    if "priority" in core:
+        core["priority"] = int(core["priority"])
+    if existing:
+        return tasks_repo.update(conn, existing.id, **core)
+    title = core.pop("title")
+    return tasks_repo.create(conn, title, org_id=org_id, **core)
+
+
+# --- placement ----------------------------------------------------------------
+
+
+def placement_form(existing: Placement | None = None) -> FormSpec:
+    return FormSpec(
+        "edit placement" if existing else "new placement",
+        [
+            Field("program_name", "program name", required=True),
+            Field("period_from", "period from", "date", required=True),
+            Field("period_to", "period to (expiry)", "date", required=True),
+            Field("status", "status", "select", _PLACEMENT_STATUS),
+            Field("total_premium", "premium", "money"),
+            Field("total_limit", "total limit", "money"),
+            Field("commission_bps", "commission (bps)", "int"),
+        ],
+        initial=existing.model_dump() if existing else {"status": "prospective"},
+    )
+
+
+def apply_placement(
+    conn: sqlite3.Connection,
+    values: dict[str, Any],
+    org_id: str,
+    existing: Placement | None = None,
+) -> Placement:
+    core = dropped(values)
+    if existing:
+        return placements.update(conn, existing.id, **core)
+    return placements.create(
+        conn,
+        org_id,
+        core.pop("program_name"),
+        core.pop("period_from"),
+        core.pop("period_to"),
+        **core,
+    )
+
+
+# --- opportunity --------------------------------------------------------------
+
+
+def opportunity_form(existing: Opportunity | None = None) -> FormSpec:
+    return FormSpec(
+        "edit opportunity" if existing else "new opportunity",
+        [
+            Field("title", "title", required=True),
+            Field("lines", "lines (cyber, casualty…)"),
+            Field("target_premium", "target premium", "money"),
+            Field("target_effective", "target effective", "date"),
+            Field("probability_pct", "probability %", "int"),
+            Field("source", "source (referral, rfp…)"),
+            Field("incumbent_broker", "incumbent broker"),
+            Field("competitor", "competitor"),
+        ],
+        initial=existing.model_dump() if existing else {"probability_pct": 50},
+    )
+
+
+def apply_opportunity(
+    conn: sqlite3.Connection,
+    values: dict[str, Any],
+    org_id: str,
+    existing: Opportunity | None = None,
+) -> Opportunity:
+    core = dropped(values)
+    if existing:
+        return opportunities.update(conn, existing.id, **core)
+    title = core.pop("title")
+    return opportunities.create(conn, org_id, title, **core)
+
+
+# --- submission ---------------------------------------------------------------
+
+
+def submission_form(conn: sqlite3.Connection) -> FormSpec:
+    markets = tuple((o.name, o.id) for o in orgs.list_orgs(conn, kind="market"))
+    return FormSpec(
+        "new submission",
+        [
+            Field("market_org_id", "market", "select", markets, required=True),
+            Field("sent_on", "sent", "date", required=True),
+            Field("notes", "notes", "textarea"),
+        ],
+        initial={"sent_on": "today"},
+    )
+
+
+def apply_submission(
+    conn: sqlite3.Connection,
+    values: dict[str, Any],
+    placement_id: str | None = None,
+    opportunity_id: str | None = None,
+) -> Submission:
+    core = dropped(values)
+    return submissions.create(
+        conn,
+        core.pop("market_org_id"),
+        core.pop("sent_on"),
+        placement_id=placement_id,
+        opportunity_id=opportunity_id,
+        **core,
+    )
+
+
+def response_form(existing: Submission) -> FormSpec:
+    # NB: no `status` initial — the current value is 'out', which is not a
+    # legal *outcome*, and Select rejects a value missing from its options.
+    return FormSpec(
+        "record market response",
+        [
+            Field("status", "outcome", "select", _RESPONSE, required=True),
+            Field("response_on", "response date", "date"),
+            Field("quoted_premium", "quoted premium", "money"),
+            Field("quoted_limit", "quoted limit", "money"),
+            Field("decline_reason", "decline reason"),
+            Field("notes", "notes", "textarea"),
+        ],
+        initial={
+            "response_on": existing.response_on or "today",
+            "quoted_premium": existing.quoted_premium,
+            "quoted_limit": existing.quoted_limit,
+            "decline_reason": existing.decline_reason,
+            "notes": existing.notes,
+        },
+    )
+
+
+def apply_response(
+    conn: sqlite3.Connection, submission_id: str, values: dict[str, Any]
+) -> Submission:
+    return submissions.update(conn, submission_id, **dropped(values))
+
+
+# --- document -----------------------------------------------------------------
+
+
+def document_form() -> FormSpec:
+    return FormSpec(
+        "add document",
+        [
+            Field("title", "title", required=True),
+            Field("kind", "kind (policy, submission, sov…)"),
+            Field("path", "path", required=True),
+        ],
+    )
+
+
+# --- appetite -----------------------------------------------------------------
+
+
+def appetite_form(existing: Appetite | None = None) -> FormSpec:
+    return FormSpec(
+        "edit appetite" if existing else "add appetite",
+        [
+            Field("line", "line", required=True),
+            Field("appetite", "appetite", "select", _APPETITE, required=True),
+            Field("class_of_business", "class of business"),
+            Field("min_premium", "min premium", "money"),
+            Field("max_limit", "max limit", "money"),
+            Field("territories", "territories"),
+            Field("notes", "notes", "textarea"),
+        ],
+        initial=existing.model_dump() if existing else {},
+    )
