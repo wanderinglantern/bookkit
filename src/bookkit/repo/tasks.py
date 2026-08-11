@@ -41,6 +41,14 @@ def open_tasks(
     return [Task.from_row(r) for r in rows]
 
 
+def reassign_placement(conn: sqlite3.Connection, from_id: str, to_id: str) -> int:
+    """Bulk move for placement merges; the service logs the event."""
+    cur = conn.execute(
+        "UPDATE task SET placement_id = ? WHERE placement_id = ?", (to_id, from_id)
+    )
+    return cur.rowcount
+
+
 def complete(conn: sqlite3.Connection, task_id: str) -> Task:
     base.update(conn, "task", task_id, {"status": "done", "completed_at": utc_now()})
     return get(conn, task_id)

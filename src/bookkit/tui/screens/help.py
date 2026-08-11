@@ -43,10 +43,24 @@ HELP = """\
 [b]markets screen[/b]
   a  new market · e  edit · in a market: a appetite, w underwriter
 
+[b]placements tab[/b]
+  r  renew into next period (file-backed placements clone next
+     year's towerkit file, linked at birth)
+  x  merge a duplicate into another placement
+
+[b]entry — type fast, it stores clean[/b]
+  dates accept: today · tomorrow · fri · +2w · 15 oct · 2026-10-15
+  money accepts: 1.5m · 250k · 1,500,000
+  emails, phones, URLs, LinkedIn handles are tidied on save
+  ("312.555.0142" → "(312) 555-0142")
+
 [b]quick capture[/b]
   ctrl+s save · esc keeps a draft for next time
-  dates accept: today · tomorrow · fri · +2w · 15 oct · 2026-10-15
   "follow up Tuesday" in a note offers to create the task
+
+[b]sync review (y on today)[/b]
+  steps through unlinked files, ambiguous placements, and offered
+  opportunities from proposed programs' unplaced (TBD) lines
 """
 
 

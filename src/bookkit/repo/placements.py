@@ -70,6 +70,27 @@ def expiring_between(
     return [Placement.from_row(r) for r in rows]
 
 
+def unlinked_overlapping(
+    conn: sqlite3.Connection, org_id: str, start: str, end: str
+) -> list[Placement]:
+    """File-less placements whose period overlaps [start, end) — adoption
+    candidates when a towerkit file appears for this org."""
+    rows = conn.execute(
+        f"""SELECT * FROM placement WHERE org_id = ? AND program_path IS NULL
+            AND period_from < ? AND period_to > ? AND {base.alive()}
+            ORDER BY period_to""",
+        (org_id, end, start),
+    ).fetchall()
+    return [Placement.from_row(r) for r in rows]
+
+
+def all_linked(conn: sqlite3.Connection) -> list[Placement]:
+    rows = conn.execute(
+        f"SELECT * FROM placement WHERE program_path IS NOT NULL AND {base.alive()}"
+    ).fetchall()
+    return [Placement.from_row(r) for r in rows]
+
+
 def by_program_path(conn: sqlite3.Connection, path: str) -> Placement | None:
     row = conn.execute(
         f"SELECT * FROM placement WHERE program_path = ? AND {base.alive()}", (path,)

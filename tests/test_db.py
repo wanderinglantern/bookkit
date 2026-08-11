@@ -47,17 +47,18 @@ def test_db_file_created_0600(db_path: Path) -> None:
 
 def test_failed_migration_rolls_back(db_path: Path, tmp_path: Path, monkeypatch) -> None:
     connection = db.connect(db_path)
+    applied = db.schema_version(connection)
     connection.close()
     bad_dir = tmp_path / "migrations"
     bad_dir.mkdir()
     for entry in db.migrations_dir().iterdir():
         (bad_dir / entry.name).write_text(entry.read_text())
-    (bad_dir / "002_bad.sql").write_text("CREATE TABLE will_fail (x); SYNTAX ERROR;")
+    (bad_dir / "099_bad.sql").write_text("CREATE TABLE will_fail (x); SYNTAX ERROR;")
     monkeypatch.setattr(db, "migrations_dir", lambda: bad_dir)
     connection = db.connect(db_path, migrate=False)
     with pytest.raises(sqlite3.Error):
         db.apply_migrations(connection)
-    assert db.schema_version(connection) == 1
+    assert db.schema_version(connection) == applied
     tables = {
         r[0]
         for r in connection.execute(

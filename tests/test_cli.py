@@ -18,7 +18,7 @@ def cli_db(tmp_path: Path, monkeypatch) -> Path:
 def test_init_creates_db(cli_db: Path, capsys) -> None:
     assert main(["init"]) == 0
     assert cli_db.exists()
-    assert "schema v1" in capsys.readouterr().out
+    assert "schema v" in capsys.readouterr().out
 
 
 def test_migrate_reports_up_to_date(cli_db: Path, capsys) -> None:

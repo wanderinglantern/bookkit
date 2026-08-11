@@ -24,13 +24,24 @@ from textual.widgets import Button, Input, Label, Select, Static, TextArea
 
 from ...dates import parse_human_date
 from ...money import MoneyParseError, format_cents, parse_money_cents
+from ...normalize import (
+    clean_domain,
+    clean_email,
+    clean_linkedin,
+    clean_naics,
+    clean_phone,
+    clean_text,
+    clean_url,
+)
 
 
 @dataclass(frozen=True)
 class Field:
     key: str
     label: str
-    kind: str = "text"  # text | textarea | select | date | money | int
+    # text | textarea | select | date | money | int
+    # + normalised kinds: email | phone | url | domain | linkedin | naics
+    kind: str = "text"
     options: tuple[tuple[str, str], ...] = ()  # (label, value) for select
     required: bool = False
     placeholder: str = ""
@@ -151,7 +162,8 @@ class FormModal(ModalScreen):
                 return int(text)
             except ValueError as exc:
                 raise ValueError(f"{text!r} is not a whole number") from exc
-        return text
+        cleaner = _CLEANERS.get(f.kind, clean_text)
+        return cleaner(text)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -160,6 +172,22 @@ class FormModal(ModalScreen):
 _PLACEHOLDERS = {
     "date": "today · fri · +2w · 2026-10-15",
     "money": "1.5m · 250k · 1,500,000",
+    "phone": "312 555 0142 · +44 …",
+    "email": "name@company.com",
+    "linkedin": "profile URL or handle",
+}
+
+# Everything typed gets cleaned on save; textarea (multi-line notes) is the
+# one kind stored verbatim.
+_CLEANERS = {
+    "text": clean_text,
+    "email": clean_email,
+    "phone": clean_phone,
+    "url": clean_url,
+    "domain": clean_domain,
+    "linkedin": clean_linkedin,
+    "naics": clean_naics,
+    "textarea": lambda text: text,
 }
 
 

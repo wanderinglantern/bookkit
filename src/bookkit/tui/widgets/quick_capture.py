@@ -23,6 +23,7 @@ from textual.widgets.option_list import Option
 
 from ...dates import parse_human_date
 from ...models import InteractionType
+from ...normalize import clean_text
 from ...repo import drafts, interactions, orgs
 from ...repo import tasks as tasks_repo
 from ...services import capture
@@ -159,11 +160,12 @@ class QuickCapture(ModalScreen):
             self.notify("nothing to save", severity="error")
             return
         occurred = parse_human_date(payload["date"] or "today") or date.today()
+        subject = clean_text(payload["subject"]) or payload["note"].splitlines()[0][:60]
         interaction = interactions.log(
             self.app.conn,
             payload["org_id"],
             payload["type"] or "note",
-            payload["subject"] or (payload["note"].splitlines()[0][:60]),
+            subject,
             occurred.isoformat(),
             body=payload["note"] or None,
         )

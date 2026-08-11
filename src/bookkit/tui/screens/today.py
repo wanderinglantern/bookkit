@@ -203,8 +203,17 @@ class TodayScreen(Screen):
             )
             return
         report = sync.project_all(self.app.conn, roots)
-        self.notify(f"projected {len(report.projected)}, {len(report.needs_link)} need linking")
-        if report.needs_link:
+        bits = [f"projected {len(report.projected)}"]
+        if report.adopted:
+            bits.append(f"{len(report.adopted)} adopted")
+        if report.relinked:
+            bits.append(f"{len(report.relinked)} re-linked")
+        if report.needs_link or report.needs_placement:
+            bits.append(f"{len(report.needs_link) + len(report.needs_placement)} to review")
+        if report.opportunity_candidates:
+            bits.append(f"{len(report.opportunity_candidates)} opportunity offers")
+        self.notify(", ".join(bits))
+        if report.needs_link or report.needs_placement or report.opportunity_candidates:
             self.app.push_screen(LinkReview(report))
         self.refresh_data()
 

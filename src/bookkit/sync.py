@@ -3,7 +3,19 @@
 The JSON file is the only source of truth for program structure; bookkit is a
 second editor of that file, going through towerkit's model, validator, and
 canonical serialiser. The proj_* tables are a derived cache rebuilt from files
-at will, and linking a file to an account is always user-confirmed (§5.2).
+at will.
+
+Linking policy — maximise unified records, never wrongly merge:
+- link at birth: `renew` clones next period's file and placement pre-linked
+- standing confirmation: a new path auto-links when its insured string is
+  byte-identical to one the user already confirmed (provenance recorded)
+- rename detection: identical content hash re-points a dangling link silently
+- adoption: within a linked org, a new file adopts the single uncontested
+  file-less placement whose period overlaps; any ambiguity (multiple
+  candidates, or two files claiming one placement in the same run) queues
+  for the user instead
+- everything fuzzier goes to the review queue; wrong merges are worse than
+  duplicates
 
 Conflict rule — the whole conflict story: source_sha256 is recorded at
 projection time; before any write the file is re-hashed, and a mismatch
@@ -13,6 +25,7 @@ refuses the write. Never merge, never overwrite silently.
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -26,9 +39,9 @@ from towerkit.money import premium_share
 from towerkit.validate import Diagnostics, validate_file, validate_program
 
 from .db import utc_now
-from .models import Org, Placement
+from .models import Opportunity, Org, Placement
 from .money import dollars_to_cents
-from .repo import links, orgs, placements, projection
+from .repo import links, opportunities, orgs, placements, projection
 
 
 def file_sha256(path: Path | str) -> str:
@@ -51,6 +64,14 @@ def scan(roots: list[Path]) -> list[Path]:
     return found
 
 
+class AmbiguousPlacement(Exception):
+    """More than one file-less placement could adopt this file — user picks."""
+
+    def __init__(self, candidates: list[Placement]) -> None:
+        super().__init__(f"{len(candidates)} candidate placements")
+        self.candidates = candidates
+
+
 @dataclass(frozen=True)
 class LinkSuggestion:
     path: Path
@@ -58,10 +79,36 @@ class LinkSuggestion:
     candidates: list[tuple[Org, float]]  # (org, match score 0-100), best first
 
 
+@dataclass(frozen=True)
+class PlacementSuggestion:
+    path: Path
+    org_id: str
+    insured: str
+    candidates: list[Placement]  # file-less overlapping placements
+
+
+@dataclass(frozen=True)
+class OpportunityCandidate:
+    """An unplaced (TBD) line on a proposed program — potential new revenue."""
+
+    path: Path
+    org_id: str
+    placement_id: str
+    line_id: str
+    line_name: str
+    layer_names: tuple[str, ...]
+    premium: int | None  # cents: indicated premium across the pending layers
+    target_effective: str  # DATE — program period start
+
+
 @dataclass
 class SyncReport:
     projected: list[tuple[Path, str]] = field(default_factory=list)  # (path, placement ref)
+    adopted: list[tuple[Path, str]] = field(default_factory=list)  # subset of projected
+    relinked: list[tuple[Path, str]] = field(default_factory=list)  # (path, how)
     needs_link: list[LinkSuggestion] = field(default_factory=list)
+    needs_placement: list[PlacementSuggestion] = field(default_factory=list)
+    opportunity_candidates: list[OpportunityCandidate] = field(default_factory=list)
     failed: list[tuple[Path, Diagnostics]] = field(default_factory=list)
 
     @property
@@ -70,13 +117,28 @@ class SyncReport:
 
     def render(self) -> str:
         lines = [f"projected {len(self.projected)} file(s)"]
+        adopted_paths = {p for p, _ in self.adopted}
         for path, ref in self.projected:
-            lines.append(f"  ✓ {path.name} → {ref}")
+            mark = "⇤ adopted" if path in adopted_paths else "✓"
+            lines.append(f"  {mark} {path.name} → {ref}")
+        for path, how in self.relinked:
+            lines.append(f"  ↺ {path.name}: re-linked ({how})")
         for suggestion in self.needs_link:
             best = ", ".join(f"{o.name} ({score:.0f})" for o, score in suggestion.candidates[:3])
             lines.append(
                 f"  ? {suggestion.path.name}: insured {suggestion.insured!r} not linked"
                 + (f" — candidates: {best}" if best else " — no candidates")
+            )
+        for ps in self.needs_placement:
+            refs = ", ".join(p.ref for p in ps.candidates)
+            lines.append(
+                f"  ? {ps.path.name}: {len(ps.candidates)} matching placements ({refs})"
+                " — resolve in the TUI (y on Today)"
+            )
+        for oc in self.opportunity_candidates:
+            lines.append(
+                f"  $ {oc.path.name}: line {oc.line_name!r} unplaced on proposed program"
+                " — potential opportunity (offer in the TUI)"
             )
         for path, diags in self.failed:
             lines.append(f"  ✗ {path.name}:")
@@ -84,19 +146,41 @@ class SyncReport:
         return "\n".join(lines)
 
 
-def project(conn: sqlite3.Connection, path: Path) -> Diagnostics:
+# --- projection ---------------------------------------------------------------
+
+
+def project(
+    conn: sqlite3.Connection,
+    path: Path,
+    placement_id: str | None = None,
+    create_new: bool = False,
+) -> Diagnostics:
     """Parse + validate one file through towerkit, then upsert proj_* rows.
-    Validation errors mean nothing is projected."""
+    Validation errors mean nothing is projected. May raise AmbiguousPlacement
+    unless an explicit target (placement_id) or create_new is given."""
+    diags, _how, _pid = _project_impl(conn, path, placement_id, create_new)
+    return diags
+
+
+def _project_impl(
+    conn: sqlite3.Connection,
+    path: Path,
+    placement_id: str | None = None,
+    create_new: bool = False,
+) -> tuple[Diagnostics, str, str | None]:
     program, diags = validate_file(path)
     if program is None or not diags.ok:
-        return diags
+        return diags, "failed", None
 
     org_id = links.org_for_path(conn, str(path))
     if org_id is None:
         diags.error("unlinked", f"{path}: no confirmed account link — confirm in review queue")
-        return diags
+        return diags, "failed", None
 
-    placement = _placement_for(conn, path, org_id, program)
+    if placement_id is not None:
+        placement, how = placements.get(conn, placement_id), "adopted"
+    else:
+        placement, how = _placement_for(conn, path, org_id, program, create_new)
     synced = utc_now()
     sha = file_sha256(path)
 
@@ -151,64 +235,331 @@ def project(conn: sqlite3.Connection, path: Path) -> Diagnostics:
         source_sha256=sha,
         synced_at=synced,
     )
-    return diags
+    return diags, how, placement.id
 
 
 def _placement_for(
-    conn: sqlite3.Connection, path: Path, org_id: str, program: Program
-) -> Placement:
-    """The placement row a file projects into: by path, else by org+period,
-    else created — one row per program per period (§3.2)."""
+    conn: sqlite3.Connection,
+    path: Path,
+    org_id: str,
+    program: Program,
+    create_new: bool = False,
+) -> tuple[Placement, str]:
+    """The placement a file projects into: by path; by exact period (never
+    stealing another file's placement); by adopting the single file-less
+    overlapping placement; else created. Ambiguity raises."""
     existing = placements.by_program_path(conn, str(path))
     if existing is not None:
-        return existing
+        return existing, "path"
     start, end = program.period.start.isoformat(), program.period.end.isoformat()
-    for candidate in placements.for_org(conn, org_id):
-        if candidate.period_from == start and candidate.period_to == end:
-            return candidate
+    if not create_new:
+        for candidate in placements.for_org(conn, org_id):
+            if (
+                candidate.period_from == start
+                and candidate.period_to == end
+                and candidate.program_path in (None, str(path))
+            ):
+                return candidate, "exact"
+        clean, dangling = _adoption_candidates(conn, org_id, start, end)
+        if dangling or len(clean) > 1:
+            raise AmbiguousPlacement(clean + dangling)
+        if len(clean) == 1:
+            return clean[0], "adopted"
     status = "bound" if program.placement.value == "bound" else "prospective"
-    return placements.create(
-        conn, org_id, program.program, start, end, status=status
-    )
+    return placements.create(conn, org_id, program.program, start, end, status=status), "created"
+
+
+def _adoption_candidates(
+    conn: sqlite3.Connection, org_id: str, start: str, end: str
+) -> tuple[list[Placement], list[Placement]]:
+    """(clean, dangling): file-less overlapping placements are clean adoption
+    candidates; placements whose linked file is GONE from disk are dangling —
+    plausibly this file renamed-and-edited, but content changed, so they are
+    only ever offered in the queue, never auto-adopted."""
+    clean = placements.unlinked_overlapping(conn, org_id, start, end)
+    dangling = [
+        p
+        for p in placements.for_org(conn, org_id)
+        if p.program_path is not None
+        and not Path(p.program_path).exists()
+        and p.period_from < end
+        and p.period_to > start
+    ]
+    return clean, dangling
+
+
+# --- the sweep ----------------------------------------------------------------
 
 
 def project_all(conn: sqlite3.Connection, roots: list[Path]) -> SyncReport:
     report = SyncReport()
     client_orgs = orgs.list_orgs(conn, kind="client")
+
+    resolved: list[tuple[Path, str]] = []  # (path, org_id)
     for path in scan(roots):
-        if links.org_for_path(conn, str(path)) is None:
+        org_id = links.org_for_path(conn, str(path))
+        if org_id is None:
+            org_id = _detect_rename(conn, path)
+            if org_id is not None:
+                report.relinked.append((path, "rename — identical content"))
+        if org_id is None:
+            insured = _insured(path)
+            org_id = links.org_for_insured(conn, insured)
+            if org_id is not None:
+                links.confirm(conn, str(path), org_id, insured, source="insured_match")
+                report.relinked.append((path, f"insured previously confirmed: {insured!r}"))
+        if org_id is None:
             report.needs_link.append(_suggest(conn, path, client_orgs))
+        else:
+            resolved.append((path, org_id))
+
+    # Placement plan with the contested-candidate guard: two files in one run
+    # must never race for the same manual placement (bound + proposed programs
+    # for one insured is a normal, real case).
+    plans: list[tuple[Path, str | None]] = []  # (path, explicit target or None)
+    pending: list[tuple[Path, str, list[Placement], list[Placement]]] = []
+    claims: dict[str, int] = {}
+    for path, org_id in resolved:
+        if placements.by_program_path(conn, str(path)) is not None:
+            plans.append((path, None))
             continue
-        diags = project(conn, path)
-        if diags.ok:
-            placement = placements.by_program_path(conn, str(path))
-            report.projected.append((path, placement.ref if placement else "?"))
+        try:
+            program = load_program(path)
+        except Exception:
+            plans.append((path, None))  # projection will report the failure
+            continue
+        clean, dangling = _adoption_candidates(
+            conn, org_id, program.period.start.isoformat(), program.period.end.isoformat()
+        )
+        pending.append((path, org_id, clean, dangling))
+        for candidate in clean:
+            claims[candidate.id] = claims.get(candidate.id, 0) + 1
+    for path, org_id, clean, dangling in pending:
+        if not dangling and len(clean) == 1 and claims[clean[0].id] == 1:
+            plans.append((path, clean[0].id))
+        elif not clean and not dangling:
+            plans.append((path, None))
+        else:
+            report.needs_placement.append(
+                PlacementSuggestion(path, org_id, _insured(path), clean + dangling)
+            )
+
+    for path, target in plans:
+        diags, how, placement_id = _project_impl(conn, path, placement_id=target)
+        if diags.ok and placement_id is not None:
+            placement = placements.get(conn, placement_id)
+            report.projected.append((path, placement.ref))
+            if how == "adopted":
+                report.adopted.append((path, placement.ref))
+            report.opportunity_candidates.extend(opportunities_for_path(conn, path))
         else:
             report.failed.append((path, diags))
     return report
 
 
+def _insured(path: Path) -> str:
+    try:
+        return load_program(path).insured
+    except Exception:
+        return path.stem
+
+
+def _detect_rename(conn: sqlite3.Connection, path: Path) -> str | None:
+    """Identical content at a new path while the old path is gone: the same
+    file moved. Re-point silently; anything less than byte-identical queues."""
+    sha = file_sha256(path)
+    matches = [
+        p
+        for p in placements.all_linked(conn)
+        if p.source_sha256 == sha
+        and p.program_path is not None
+        and not Path(p.program_path).exists()
+    ]
+    if len(matches) != 1:
+        return None
+    moved = matches[0]
+    old_path = moved.program_path
+    links.confirm(conn, str(path), moved.org_id, _insured(path), source="rename")
+    if old_path is not None:
+        links.forget(conn, old_path)
+    placements.update(
+        conn, moved.id, program_path=str(path), note=f"file renamed from {old_path}"
+    )
+    return moved.org_id
+
+
 def _suggest(conn: sqlite3.Connection, path: Path, client_orgs: list[Org]) -> LinkSuggestion:
     """Fuzzy candidates for the review queue. Suggestions only — a wrong guess
     attached to the wrong account is worse than asking (§5.2)."""
-    try:
-        insured = load_program(path).insured
-    except Exception:
-        insured = path.stem
+    insured = _insured(path)
     names = {org.name: org for org in client_orgs}
     matches = process.extract(insured, list(names), scorer=fuzz.WRatio, limit=3)
     candidates = [(names[name], float(score)) for name, score, _ in matches if score >= 55]
     return LinkSuggestion(path, insured, candidates)
 
 
+# --- review-queue resolutions -------------------------------------------------
+
+
 def confirm_link(conn: sqlite3.Connection, path: Path, org_id: str) -> Diagnostics:
-    """User confirmed a file ↔ account link: record it and project."""
-    try:
-        insured = load_program(path).insured
-    except Exception:
-        insured = path.stem
-    links.confirm(conn, str(path), org_id, insured)
+    """User confirmed a file ↔ account link: record it and project. May raise
+    AmbiguousPlacement — the caller then asks which placement to adopt."""
+    links.confirm(conn, str(path), org_id, _insured(path))
     return project(conn, path)
+
+
+def confirm_placement(
+    conn: sqlite3.Connection, path: Path, placement_id: str | None
+) -> Diagnostics:
+    """User resolved a placement ambiguity: adopt the chosen placement (also
+    re-pointing a dangling link and forgetting its dead path), or None to
+    create a fresh one."""
+    if placement_id is not None:
+        chosen = placements.get(conn, placement_id)
+        if chosen.program_path and chosen.program_path != str(path):
+            links.forget(conn, chosen.program_path)
+        return project(conn, path, placement_id=placement_id)
+    return project(conn, path, create_new=True)
+
+
+# --- opportunities from proposed programs -------------------------------------
+
+
+def opportunities_for_path(conn: sqlite3.Connection, path: Path) -> list[OpportunityCandidate]:
+    """TBD lines on a proposed program: lines carried only by pending layers
+    (no participants — towerkit's 'To be placed'). Offered, never auto-created;
+    lines already tracked by an opportunity with the same line id and effective
+    date are not re-offered."""
+    try:
+        program = load_program(path)
+    except Exception:
+        return []
+    if program.placement.value != "proposed":
+        return []
+    placement = placements.by_program_path(conn, str(path))
+    if placement is None:
+        return []
+    effective = program.period.start.isoformat()
+    existing = {
+        (o.lines, o.target_effective)
+        for o in opportunities.for_org(conn, placement.org_id)
+    }
+    out: list[OpportunityCandidate] = []
+    for line in program.lines:
+        line_layers = [ly for ly in program.layers if line.id in ly.applies_to]
+        pending = [ly for ly in line_layers if not ly.participants]
+        if not line_layers or not pending:
+            continue
+        if (line.id, effective) in existing:
+            continue
+        premiums = [ly.premium for ly in pending if ly.premium is not None]
+        out.append(
+            OpportunityCandidate(
+                path=path,
+                org_id=placement.org_id,
+                placement_id=placement.id,
+                line_id=line.id,
+                line_name=line.name,
+                layer_names=tuple(ly.name for ly in pending),
+                premium=dollars_to_cents(sum(premiums)) if premiums else None,
+                target_effective=effective,
+            )
+        )
+    return out
+
+
+def create_opportunity(conn: sqlite3.Connection, candidate: OpportunityCandidate) -> Opportunity:
+    """Turn an offered TBD line into a tracked opportunity."""
+    return opportunities.create(
+        conn,
+        candidate.org_id,
+        f"{candidate.line_name} placement",
+        lines=candidate.line_id,
+        target_premium=candidate.premium,
+        target_effective=candidate.target_effective,
+        source="towerkit proposed program",
+    )
+
+
+# --- renew: link at birth -----------------------------------------------------
+
+
+_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+
+
+def _bump_years(text: str) -> str:
+    return _YEAR_RE.sub(lambda m: str(int(m.group(0)) + 1), text)
+
+
+def _plus_year_iso(iso: str) -> str:
+    """A DATE one year on, clamping Feb 29 like towerkit's clone_as_renewal."""
+    from datetime import date as _date
+
+    d = _date.fromisoformat(iso)
+    try:
+        return d.replace(year=d.year + 1).isoformat()
+    except ValueError:  # Feb 29
+        return d.replace(year=d.year + 1, day=28).isoformat()
+
+
+def renew(
+    conn: sqlite3.Connection, placement_id: str
+) -> tuple[Placement | None, Path | None, Diagnostics]:
+    """Roll a placement into its next period. File-backed placements also get
+    next year's towerkit file via clone_as_renewal, linked at birth — no
+    matching ever needed. Returns (new placement, new file path, diagnostics);
+    placement is None when the renew was refused."""
+    diags = Diagnostics()
+    placement = placements.get(conn, placement_id)
+
+    new_path: Path | None = None
+    program: Program | None = None
+    if placement.program_path:
+        path = Path(placement.program_path)
+        if not path.exists():
+            diags.error("io", f"{path}: linked file is missing — fix the link first")
+            return None, None, diags
+        program, file_diags = validate_file(path)
+        if program is None or not file_diags.ok:
+            diags.items.extend(file_diags.items)
+            diags.error("invalid-source", f"{path.name}: fix validation errors before renewing")
+            return None, None, diags
+        stem = _bump_years(path.stem)
+        if stem == path.stem:
+            new_start = program.clone_as_renewal().period.start
+            stem = f"{path.stem}-{new_start.year}"
+        new_path = path.with_name(f"{stem}{path.suffix}")
+        if new_path.exists():
+            diags.error(
+                "exists", f"{new_path.name} already exists — refusing to overwrite"
+            )
+            return None, None, diags
+
+    from_date = _plus_year_iso(placement.period_from)
+    to_date = _plus_year_iso(placement.period_to)
+    new_placement = placements.create(
+        conn,
+        placement.org_id,
+        _bump_years(placement.program_name),
+        from_date,
+        to_date,
+        status="prospective",
+        total_premium=placement.total_premium,  # expiring indication
+        total_limit=placement.total_limit,
+        commission_bps=placement.commission_bps,
+        currency=placement.currency,
+    )
+
+    if new_path is not None and program is not None:
+        clone = program.clone_as_renewal()
+        dump_program(clone, new_path)
+        links.confirm(conn, str(new_path), placement.org_id, clone.insured, source="renewal")
+        diags = project(conn, new_path, placement_id=new_placement.id)
+        new_placement = placements.get(conn, new_placement.id)
+    return new_placement, new_path, diags
+
+
+# --- write-through ------------------------------------------------------------
 
 
 class WriteConflict(Exception):

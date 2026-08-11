@@ -52,6 +52,16 @@ def replace_for_placement(
         )
 
 
+def reassign(conn: sqlite3.Connection, from_id: str, to_id: str) -> None:
+    """Move a placement's projection cache during a merge (target's is cleared
+    first — proj rows always mirror exactly one file)."""
+    for table in ("proj_layer", "proj_participant", "proj_retention"):
+        conn.execute(f"DELETE FROM {table} WHERE placement_id = ?", (to_id,))
+        conn.execute(
+            f"UPDATE {table} SET placement_id = ? WHERE placement_id = ?", (to_id, from_id)
+        )
+
+
 def layers_for_placement(conn: sqlite3.Connection, placement_id: str) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM proj_layer WHERE placement_id = ? ORDER BY attach, rowid",

@@ -77,13 +77,19 @@ async def test_setup_path_from_empty_book(empty_db: Path) -> None:
         await pilot.press("a")
         await pilot.pause()
         assert isinstance(app.screen, FormModal)
-        await _fill(pilot, app, "first_name", "Rosa")
+        await _fill(pilot, app, "first_name", "  Rosa ")
         await _fill(pilot, app, "last_name", "Silva")
         await _pick(pilot, app, "role", "risk_manager")
+        await _fill(pilot, app, "email", " Rosa.Silva@ACME.example ")
+        await _fill(pilot, app, "phone", "312.555.0142")
+        await _fill(pilot, app, "linkedin", "in/rosa-silva")
         await pilot.press("ctrl+s")
         await pilot.pause()
         roster = contacts.for_org(app.conn, org.id)
         assert [c.name for c in roster] == ["Rosa Silva"]
+        assert roster[0].email == "Rosa.Silva@acme.example"
+        assert roster[0].phone == "(312) 555-0142"
+        assert roster[0].linkedin == "https://www.linkedin.com/in/rosa-silva"
 
         # and a placement with human dates + money shorthand
         app.screen.query_one(TabbedContent).active = "tab-placements"

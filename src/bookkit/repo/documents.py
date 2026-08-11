@@ -25,5 +25,13 @@ def for_org(conn: sqlite3.Connection, org_id: str) -> list[Document]:
     return [Document.from_row(r) for r in rows]
 
 
+def reassign_placement(conn: sqlite3.Connection, from_id: str, to_id: str) -> int:
+    """Bulk move for placement merges; the service logs the event."""
+    cur = conn.execute(
+        "UPDATE document SET placement_id = ? WHERE placement_id = ?", (to_id, from_id)
+    )
+    return cur.rowcount
+
+
 def delete(conn: sqlite3.Connection, doc_id: str) -> None:
     base.soft_delete(conn, "document", doc_id)

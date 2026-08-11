@@ -83,6 +83,14 @@ def outstanding(conn: sqlite3.Connection, sent_on_or_before: str | None = None) 
     return [Submission.from_row(r) for r in rows]
 
 
+def reassign_placement(conn: sqlite3.Connection, from_id: str, to_id: str) -> int:
+    """Bulk move for placement merges; the service logs the event."""
+    cur = conn.execute(
+        "UPDATE submission SET placement_id = ? WHERE placement_id = ?", (to_id, from_id)
+    )
+    return cur.rowcount
+
+
 def market_counts(
     conn: sqlite3.Connection, since: str | None = None, until: str | None = None
 ) -> list[sqlite3.Row]:

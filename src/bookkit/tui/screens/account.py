@@ -15,8 +15,9 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
-from textual.screen import Screen
-from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Footer, Header, OptionList, Static, TabbedContent, TabPane
+from textual.widgets.option_list import Option
 
 from ...dates import days_until
 from ...money import format_cents, format_cents_compact
@@ -35,6 +36,83 @@ from ..widgets.tables import ListTable
 from ..widgets.tower_preview import TowerPreview
 
 
+class ConfirmRenew(ModalScreen):
+    """One look before a renew: what gets created, including the cloned file."""
+
+    app: BookkitApp
+    BINDINGS = [
+        Binding("escape,n", "decline", "No"),
+        Binding("y,enter", "accept", "Yes"),
+    ]
+
+    def __init__(self, placement) -> None:
+        super().__init__()
+        self.placement = placement
+
+    def compose(self) -> ComposeResult:
+        p = self.placement
+        file_note = (
+            f"\n+ clone {Path(p.program_path).name} to next year's file, linked at birth"
+            if p.program_path
+            else ""
+        )
+        with VerticalScroll(classes="modal-box"):
+            yield Static("RENEW PLACEMENT", classes="modal-title")
+            yield Static(
+                f"{p.ref} {p.program_name}\ncreate the {p.period_to} → next-year period "
+                f"as prospective{file_note}"
+            )
+            yield Static("y / enter renew · n / esc cancel", classes="hint")
+
+    def action_accept(self) -> None:
+        self.dismiss(True)
+
+    def action_decline(self) -> None:
+        self.dismiss(False)
+
+
+class MergePicker(ModalScreen):
+    """Pick which placement a duplicate merges into."""
+
+    app: BookkitApp
+    BINDINGS = [Binding("escape", "decline", "Cancel")]
+
+    def __init__(self, source, targets) -> None:
+        super().__init__()
+        self.source = source
+        self.targets = targets
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(classes="modal-box"):
+            yield Static("MERGE PLACEMENT", classes="modal-title")
+            yield Static(
+                f"merge [b]{self.source.ref} {self.source.program_name}[/b] "
+                f"({self.source.period_from}→{self.source.period_to}) into:"
+            )
+            yield OptionList(id="merge-targets")
+            yield Static("enter merges · esc cancels · undoable with u", classes="hint")
+
+    def on_mount(self) -> None:
+        option_list = self.query_one("#merge-targets", OptionList)
+        for p in self.targets:
+            linked = " · file-linked" if p.program_path else ""
+            option_list.add_option(
+                Option(
+                    f"{p.ref}  {p.program_name}  {p.period_from}→{p.period_to}"
+                    f"  [{p.status}]{linked}",
+                    id=p.id,
+                )
+            )
+        option_list.focus()
+        option_list.highlighted = 0
+
+    def on_option_list_option_selected(self, event) -> None:
+        self.dismiss(event.option.id)
+
+    def action_decline(self) -> None:
+        self.dismiss(None)
+
+
 class AccountScreen(Screen):
     app: BookkitApp
     BINDINGS = [
@@ -42,6 +120,8 @@ class AccountScreen(Screen):
         Binding("a", "add_here", "Add (this tab)"),
         Binding("e", "edit_here", "Edit"),
         Binding("s", "new_submission", "Submission"),
+        Binding("r", "renew_placement", "Renew"),
+        Binding("x", "merge_placement", "Merge"),
         Binding("d", "task_done", "Done (task)"),
         Binding("p", "mark_primary", "Primary (contact)"),
         Binding("u", "undo", "Undo"),
@@ -414,6 +494,72 @@ class AccountScreen(Screen):
             ef.org_form_initial_profile(conn, existing),
             lambda v: ef.apply_org(conn, v, existing),
         )
+
+    def action_renew_placement(self) -> None:
+        """Roll the selected placement into next period; file-backed ones get
+        next year's towerkit file cloned and linked at birth."""
+        if self._active_tab() != "tab-placements":
+            self.notify("r renews the selected placement (placements tab)", severity="warning")
+            return
+        key = self._selected_key("placements-table")
+        if key is None:
+            return
+        placement = placements.get(self.app.conn, key)
+        self.app.push_screen(ConfirmRenew(placement), self._renew_confirmed(placement.id))
+
+    def _renew_confirmed(self, placement_id: str):
+        def done(confirmed: bool | None) -> None:
+            if not confirmed:
+                return
+            from ... import sync
+
+            new_placement, new_path, diags = sync.renew(self.app.conn, placement_id)
+            if new_placement is None:
+                self.notify(f"renew refused: {diags.errors[0]}", severity="error")
+                return
+            note = f" + {new_path.name}" if new_path else ""
+            self.notify(f"created {new_placement.ref} ({new_placement.period_to}){note}")
+            self.refresh_data()
+
+        return done
+
+    def action_merge_placement(self) -> None:
+        """Merge the selected (duplicate) placement into another of this org's
+        placements — submissions, tasks, and documents move with it."""
+        if self._active_tab() != "tab-placements":
+            self.notify("x merges the selected placement (placements tab)", severity="warning")
+            return
+        key = self._selected_key("placements-table")
+        if key is None:
+            return
+        source = placements.get(self.app.conn, key)
+        targets = [
+            p for p in placements.for_org(self.app.conn, source.org_id) if p.id != source.id
+        ]
+        if not targets:
+            self.notify("nothing to merge into — this is the only placement")
+            return
+        self.app.push_screen(MergePicker(source, targets), self._merge_confirmed(source.id))
+
+    def _merge_confirmed(self, source_id: str):
+        def done(target_id: str | None) -> None:
+            if target_id is None:
+                return
+            from ...services.merge import MergeError, merge_placements
+
+            try:
+                result = merge_placements(self.app.conn, source_id, target_id)
+            except MergeError as exc:
+                self.notify(str(exc), severity="error")
+                return
+            self.notify(
+                f"merged into {result.target.ref}: {result.moved_submissions} submissions, "
+                f"{result.moved_tasks} tasks, {result.moved_documents} documents moved"
+                + (" (file link carried)" if result.carried_link else "")
+            )
+            self.refresh_data()
+
+        return done
 
     def action_new_submission(self) -> None:
         from ...repo import orgs as orgs_repo
