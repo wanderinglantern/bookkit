@@ -4,6 +4,7 @@ work headless so the daily brief can be piped anywhere."""
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 from datetime import date
 from pathlib import Path
@@ -58,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
         conn.close()
 
 
-def _dispatch(args: argparse.Namespace, conn) -> int:
+def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
     if args.command == "init":
         path = args.db or db.default_db_path()
         print(f"database ready at {path} (schema v{db.schema_version(conn)})")
@@ -128,7 +129,7 @@ def _dispatch(args: argparse.Namespace, conn) -> int:
     return 2
 
 
-def _print_today(conn) -> None:
+def _print_today(conn: sqlite3.Connection) -> None:
     today = date.today()
     iso = today.isoformat()
     print(f"bookkit — {iso}\n")
@@ -163,10 +164,10 @@ def _print_today(conn) -> None:
 
     overdue_subs = sla.past_sla(conn, today)
     print(f"\nSUBMISSIONS PAST SLA ({len(overdue_subs)})")
-    for item in overdue_subs[:10]:
+    for late in overdue_subs[:10]:
         print(
-            f"  {item.market.name}: {item.account.name}, out {item.days_out}d "
-            f"(sent {item.submission.sent_on})"
+            f"  {late.market.name}: {late.account.name}, out {late.days_out}d "
+            f"(sent {late.submission.sent_on})"
         )
     if not overdue_subs:
         print("  none")

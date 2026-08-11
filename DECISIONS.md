@@ -19,3 +19,13 @@ One line per choice the brief didn't specify. Newest at the bottom.
 - `bookctl init` and every CLI/TUI entry apply pending migrations on startup inside a transaction (§3.4); `bookctl migrate` exists for explicitness.
 - DB path: `$XDG_DATA_HOME/bookkit/bookkit.db` (default `~/.local/share/bookkit/`), created 0600; `BOOKKIT_DB` env var overrides for tests/dev.
 - Deferred (recorded per §5.2): an optional `bookkitRef` field in towerkit's program schema would make file↔account linking exact; needs a towerkit schema change + migration, so the `program_link` table carries the mapping for now.
+- Stage moves: forward one gate at a time; won/lost allowed from any open stage (deals die anywhere); closed is closed. Won → probability 100, lost → 0.
+- Hit rate counts a bound submission as quoted (it was quoted on the way to binding), so quote_rate = (quoted+bound)/sent and bind_rate = bound/quoted.
+- Book summary "by line": placements carry no line column (per the §3.2 schema), so grouping strips a leading year from program_name ("2025 Casualty Program" → "Casualty Program"). A proper line column is a schema change left for when it's needed.
+- event_log ordering uses SQLite rowid (insert order); ULIDs within one millisecond are not monotonic.
+- Projection creates the placement row when a linked file has no matching (path or org+period) placement — the file *is* a program period, and the cross-book query must see it. towerkit placement bound→bound, proposed→prospective.
+- Projection refreshes placement program_name/period/totals from the file (the file is the source of truth for program structure, §5); commission_bps and status stay bookkit-owned.
+- TUI sync roots come from `BOOKKIT_PROGRAM_ROOTS` (colon-separated), `y` on Today runs project_all + the link review queue; the CLI takes explicit `--roots`.
+- Field-level editing in the TUI covers the high-frequency mutations (log interaction, task done, stage move, contact primary, file links); broad record editing is CLI/DB territory for now — the 5-second capture path is the product.
+- Unlinked files are review items, not errors: `bookctl sync` exits 0 with them listed; only validation failures exit non-zero.
+- SVG screen snapshots are written by the TUI tests as crash+render cover but not committed as compared baselines (gitignored).

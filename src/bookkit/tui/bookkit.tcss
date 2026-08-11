@@ -1,0 +1,132 @@
+/* bookkit — shared TCSS. Keyboard-first, dense, four-pane home. */
+
+Screen {
+    background: $surface;
+}
+
+.pane {
+    border: round $primary-darken-2;
+    padding: 0 1;
+    height: 1fr;
+}
+
+.pane > .pane-title {
+    color: $text-muted;
+    text-style: bold;
+}
+
+#today-grid {
+    layout: grid;
+    grid-size: 2 2;
+    grid-gutter: 0 1;
+    height: 1fr;
+}
+
+DataTable {
+    height: 1fr;
+}
+
+/* --- account screen ------------------------------------------------------- */
+
+#account-header {
+    height: auto;
+    padding: 0 1;
+    background: $boost;
+    border-bottom: solid $primary-darken-2;
+}
+
+#account-header .header-name {
+    text-style: bold;
+}
+
+TabbedContent {
+    height: 1fr;
+}
+
+#tower-preview {
+    border: round $primary-darken-2;
+    padding: 0 1;
+    height: 1fr;
+    overflow-x: auto;
+    overflow-y: auto;
+}
+
+#placement-side {
+    height: 1fr;
+}
+
+/* --- modals ---------------------------------------------------------------- */
+
+QuickCapture, SearchModal, ConfirmTask, LinkReview {
+    align: center middle;
+}
+
+.modal-box {
+    width: 70%;
+    max-width: 100;
+    max-height: 80%;
+    border: thick $primary;
+    background: $surface;
+    padding: 1 2;
+}
+
+.modal-box .modal-title {
+    text-style: bold;
+    color: $primary;
+}
+
+.field-label {
+    color: $text-muted;
+    margin-top: 1;
+}
+
+/* long pick-lists must never dominate a modal */
+.modal-box OptionList {
+    max-height: 10;
+    border: round $primary-darken-2;
+}
+
+.modal-box TextArea {
+    height: 6;
+}
+
+.hint {
+    color: $text-muted;
+    margin-top: 1;
+}
+
+/* --- renewal calendar ------------------------------------------------------ */
+
+#calendar-scroll {
+    height: 1fr;
+    overflow-x: auto;
+    overflow-y: auto;
+}
+
+/* --- kanban ---------------------------------------------------------------- */
+
+#kanban {
+    layout: horizontal;
+    height: 1fr;
+}
+
+.kanban-column {
+    width: 1fr;
+    border: round $primary-darken-2;
+    margin: 0 1 0 0;
+    padding: 0 1;
+}
+
+.kanban-column .column-title {
+    text-style: bold;
+    color: $text-muted;
+}
+
+.kanban-column OptionList {
+    height: 1fr;
+    border: none;
+}
+
+.kanban-column.focused-column {
+    border: round $primary;
+}

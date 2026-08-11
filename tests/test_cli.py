@@ -47,6 +47,23 @@ def test_seed_today_renewals_search(cli_db: Path, capsys) -> None:
     assert main(["search", "zzz-no-such-thing"]) == 1
 
 
+def test_sync_projects_and_reports(cli_db: Path, tmp_path: Path, capsys) -> None:
+    programs = tmp_path / "programs"
+    main(["seed", "--demo", "--programs-dir", str(programs)])
+    capsys.readouterr()
+    assert main(["sync", "--roots", str(programs)]) == 0
+    out = capsys.readouterr().out
+    assert "projected 3 file(s)" in out
+    # an unlinked file is a review item, not an error: reported, exit stays 0
+    source = (programs / "atomic-casualty.json").read_text()
+    (programs / "orphan.json").write_text(
+        source.replace("Atomic Industries, Inc.", "Someone Else")
+    )
+    assert main(["sync", "--roots", str(programs)]) == 0
+    out = capsys.readouterr().out
+    assert "not linked" in out
+
+
 def test_backup(cli_db: Path, tmp_path: Path, capsys) -> None:
     main(["init"])
     dest = tmp_path / "out" / "backup.db"

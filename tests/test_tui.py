@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+from datetime import date
+from pathlib import Path
+
+import pytest
+
+from bookkit import db, seed
+from bookkit.repo import interactions, orgs
+from bookkit.tui.app import BookkitApp
+from bookkit.tui.screens.account import AccountScreen
+from bookkit.tui.screens.book import BookScreen
+from bookkit.tui.screens.calendar import CalendarScreen
+from bookkit.tui.screens.markets import MarketDetailScreen, MarketsScreen
+from bookkit.tui.screens.pipeline import PipelineScreen
+from bookkit.tui.screens.today import TodayScreen
+from bookkit.tui.widgets.tables import ListTable
+
+SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
+
+
+@pytest.fixture
+def seeded_db(tmp_path: Path) -> Path:
+    path = tmp_path / "tui.db"
+    conn = db.connect(path)
+    seed.seed(conn, today=date.today(), programs_dir=tmp_path / "programs")
+    from bookkit import sync
+
+    sync.project_all(conn, [tmp_path / "programs"])
+    conn.close()
+    return path
+
+
+def snapshot(app: BookkitApp, name: str) -> None:
+    SNAPSHOT_DIR.mkdir(exist_ok=True)
+    (SNAPSHOT_DIR / f"{name}.svg").write_text(app.export_screenshot())
+
+
+async def test_today_screen_populates(seeded_db: Path) -> None:
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(120, 40)) as pilot:
+        assert isinstance(app.screen, TodayScreen)
+        assert app.screen.query_one("#renewals-table", ListTable).row_count > 0
+        assert app.screen.query_one("#tasks-table", ListTable).row_count > 0
+        assert app.screen.query_one("#stale-table", ListTable).row_count > 0
+        assert app.screen.query_one("#sla-table", ListTable).row_count > 0
+        snapshot(app, "today")
+        await pilot.press("escape")
+
+
+async def test_book_and_account(seeded_db: Path) -> None:
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("b")
+        assert isinstance(app.screen, BookScreen)
+        table = app.screen.query_one("#book-table", ListTable)
+        assert table.row_count == 20
+        snapshot(app, "book")
+        await pilot.press("enter")
+        assert isinstance(app.screen, AccountScreen)
+        header = str(app.screen.query_one("#account-header").render())
+        assert "ACC-" in header
+        snapshot(app, "account")
+        await pilot.press("escape")
+        assert isinstance(app.screen, BookScreen)
+
+
+async def test_account_placements_tower(seeded_db: Path) -> None:
+    conn = db.connect(seeded_db)
+    org = orgs.find_by_name(conn, "Atomic Industries, Inc.")
+    conn.close()
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, AccountScreen)
+        state = str(screen.query_one("#sync-state").render())
+        assert "in sync" in state
+        carriers = screen.query_one("#carriers-table", ListTable)
+        assert carriers.row_count > 0
+        snapshot(app, "account_placements")
+
+
+async def test_quick_capture_end_to_end(seeded_db: Path) -> None:
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(120, 40)) as pilot:
+        before = None
+        conn = app.conn
+        org = orgs.find_by_name(conn, "Everline Software")
+        before = len(interactions.for_org(conn, org.id))
+        await pilot.press("n")
+        await pilot.pause()
+        # pick the account by typing, then jump to subject and type the note
+        await pilot.click("#qc-org")
+        for ch in "Everline":
+            await pilot.press(ch)
+        await pilot.pause()
+        await pilot.click("#qc-subject")
+        for ch in "Quick call":
+            await pilot.press(ch if ch != " " else "space")
+        snapshot(app, "quick_capture")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        after = interactions.for_org(conn, org.id)
+        assert len(after) == before + 1
+        assert after[0].subject == "Quick call"
+
+
+async def test_quick_capture_draft_survives_escape(seeded_db: Path) -> None:
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("n")
+        await pilot.pause()
+        from textual.widgets import Input as _Input
+
+        app.screen.query_one("#qc-subject", _Input).focus()
+        await pilot.pause()
+        for ch in "Draft":
+            await pilot.press(ch)
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("n")  # reopen: the draft must come back
+        await pilot.pause()
+        from textual.widgets import Input
+
+        assert app.screen.query_one("#qc-subject", Input).value == "Draft"
+
+
+async def test_search_modal(seeded_db: Path) -> None:
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("slash")
+        await pilot.pause()
+        for ch in "atomic":
+            await pilot.press(ch)
+        await pilot.pause()
+        from textual.widgets import OptionList
+
+        results = app.screen.query_one("#search-results", OptionList)
+        assert results.option_count > 0
+        snapshot(app, "search")
+
+
+async def test_calendar_pipeline_markets(seeded_db: Path) -> None:
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.press("c")
+        assert isinstance(app.screen, CalendarScreen)
+        assert app.screen.query_one("#calendar-table", ListTable).row_count > 0
+        snapshot(app, "calendar")
+        await pilot.press("escape")
+
+        await pilot.press("p")
+        assert isinstance(app.screen, PipelineScreen)
+        snapshot(app, "pipeline")
+        await pilot.press("escape")
+
+        await pilot.press("m")
+        assert isinstance(app.screen, MarketsScreen)
+        table = app.screen.query_one("#markets-table", ListTable)
+        assert table.row_count == 15
+        snapshot(app, "markets")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, MarketDetailScreen)
+        snapshot(app, "market_detail")
+
+
+async def test_help_screen(seeded_db: Path) -> None:
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("question_mark")
+        await pilot.pause()
+        from bookkit.tui.screens.help import HelpScreen
+
+        assert isinstance(app.screen, HelpScreen)
+        await pilot.press("escape")
+        assert isinstance(app.screen, TodayScreen)

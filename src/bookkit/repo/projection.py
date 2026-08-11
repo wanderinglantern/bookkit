@@ -54,7 +54,8 @@ def replace_for_placement(
 
 def layers_for_placement(conn: sqlite3.Connection, placement_id: str) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT * FROM proj_layer WHERE placement_id = ? ORDER BY attach", (placement_id,)
+        "SELECT * FROM proj_layer WHERE placement_id = ? ORDER BY attach, rowid",
+        (placement_id,),
     ).fetchall()
 
 
