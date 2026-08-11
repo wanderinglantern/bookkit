@@ -202,10 +202,11 @@ class MarketDetailScreen(Screen):
             )
 
         table = self.query_one("#md-exposure", ListTable)
-        table.add_columns("account", "expiry", "program", "layer", "share", "premium")
-        for row in exposure.carrier_exposure(conn, market.name, days=90):
+        table.add_columns("account", "expiry", "program", "layer", "as written", "share", "premium")
+        for row in exposure.for_market(conn, market.id, days=90):
             table.add_row(
                 row.org_name, row.period_to, row.program_name, row.layer_name,
+                row.carrier if row.carrier != market.name else "",
                 f"{row.share_bps / 100:g}%",
                 format_cents_compact(row.premium) if row.premium else "—",
                 key=row.org_id,

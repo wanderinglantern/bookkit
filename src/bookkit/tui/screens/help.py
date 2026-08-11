@@ -61,8 +61,10 @@ HELP = """\
   "follow up Tuesday" in a note offers to create the task
 
 [b]sync review (y on today)[/b]
-  steps through unlinked files, ambiguous placements, and offered
-  opportunities from proposed programs' unplaced (TBD) lines
+  steps through unlinked files, ambiguous placements, offered
+  opportunities from proposed programs' unplaced (TBD) lines, and
+  unknown carriers (alias a towerkit spelling to a market, or
+  create the market)
 """
 
 

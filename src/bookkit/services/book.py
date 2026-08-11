@@ -8,7 +8,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from ..money import commission_cents
-from ..repo import orgs, placements, projection
+from ..repo import aliases, orgs, placements, projection
 
 
 @dataclass(frozen=True)
@@ -40,10 +40,19 @@ def summary(conn: sqlite3.Connection) -> BookSummary:
         ((label, premium, count) for label, (premium, count) in programs.items()),
         key=lambda t: -t[1],
     )
-    by_market = [
-        (r["carrier"], int(r["premium"]), int(r["placements"]))
-        for r in projection.market_premiums(conn)
-    ]
+    # canonicalise carrier strings through aliases so one market's spellings
+    # roll up to one row (labelled with the market org's name)
+    alias_to_org = aliases.alias_map(conn)
+    market_names = {o.id: o.name for o in orgs.list_orgs(conn, kind="market")}
+    merged: dict[str, tuple[int, int]] = {}
+    for r in projection.market_premiums(conn):
+        label = market_names.get(alias_to_org.get(r["carrier"], ""), r["carrier"])
+        premium, count = merged.get(label, (0, 0))
+        merged[label] = (premium + int(r["premium"]), count + int(r["placements"]))
+    by_market = sorted(
+        ((label, premium, count) for label, (premium, count) in merged.items()),
+        key=lambda t: -t[1],
+    )
     return BookSummary(
         accounts, len(bound), total_premium, total_commission, by_program, by_market
     )

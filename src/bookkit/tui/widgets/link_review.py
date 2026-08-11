@@ -22,10 +22,16 @@ from ... import sync
 from ...money import format_cents_compact
 
 NEW_PLACEMENT = "__new__"
+NEW_MARKET = "__new_market__"
 YES = "__yes__"
 NO = "__no__"
 
-ReviewItem = sync.LinkSuggestion | sync.PlacementSuggestion | sync.OpportunityCandidate
+ReviewItem = (
+    sync.LinkSuggestion
+    | sync.PlacementSuggestion
+    | sync.OpportunityCandidate
+    | sync.CarrierSuggestion
+)
 
 
 class LinkReview(ModalScreen):
@@ -38,6 +44,7 @@ class LinkReview(ModalScreen):
             *report.needs_link,
             *report.needs_placement,
             *report.opportunity_candidates,
+            *report.unresolved_carriers,
         ]
 
     def compose(self) -> ComposeResult:
@@ -84,6 +91,18 @@ class LinkReview(ModalScreen):
                     )
                 )
             options.add_option(Option("(none of these — create a new placement)", id=NEW_PLACEMENT))
+        elif isinstance(item, sync.CarrierSuggestion):
+            prompt.update(
+                f"[b]UNKNOWN CARRIER[/b]\n[b]{item.carrier}[/b] sits on projected "
+                "towers but matches no market — alias it or create the market:"
+            )
+            for org, score in item.candidates:
+                options.add_option(
+                    Option(f"alias → {org.name}  ({score:.0f}% match)", id=org.id)
+                )
+            options.add_option(
+                Option(f"create market {item.carrier!r}", id=NEW_MARKET)
+            )
         else:  # opportunity offer
             candidate = item
             indicated = (
@@ -110,6 +129,13 @@ class LinkReview(ModalScreen):
             self._resolve_org(item, event.option.id)
         elif isinstance(item, sync.PlacementSuggestion):
             self._resolve_placement(item, event.option.id)
+        elif isinstance(item, sync.CarrierSuggestion):
+            if event.option.id == NEW_MARKET:
+                market = sync.create_market_for_carrier(self.app.conn, item.carrier)
+                self.notify(f"created market {market.name} ({market.ref})")
+            else:
+                sync.alias_carrier(self.app.conn, item.carrier, event.option.id)
+                self.notify(f"aliased {item.carrier!r}")
         elif event.option.id == YES:
             opp = sync.create_opportunity(self.app.conn, item)
             self.notify(f"created {opp.ref} {opp.title}")

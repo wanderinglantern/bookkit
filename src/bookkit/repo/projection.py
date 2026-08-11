@@ -91,25 +91,32 @@ def carriers(conn: sqlite3.Connection) -> list[str]:
 
 
 def carrier_exposure(
-    conn: sqlite3.Connection, carrier: str, expiring_from: str, expiring_to: str
+    conn: sqlite3.Connection,
+    carriers: list[str],
+    expiring_from: str,
+    expiring_to: str,
 ) -> list[sqlite3.Row]:
-    """Every account where `carrier` is on the tower, renewing in the window —
-    the query the proj_ tables exist for."""
+    """Every account where any of these carrier strings (a market's name plus
+    its aliases) is on the tower, renewing in the window — the query the
+    proj_ tables exist for."""
+    if not carriers:
+        return []
+    marks = ", ".join("?" for _ in carriers)
     return conn.execute(
         f"""
         SELECT o.name AS org_name, o.ref AS org_ref, o.id AS org_id,
                p.id AS placement_id, p.ref AS placement_ref, p.program_name,
                p.period_to, pl.name AS layer_name, pl.attach, pl.lim,
-               pp.share_bps, pp.premium
+               pp.carrier, pp.share_bps, pp.premium
         FROM proj_participant pp
         JOIN placement p ON p.id = pp.placement_id
         JOIN proj_layer pl ON pl.placement_id = pp.placement_id AND pl.layer_id = pp.layer_id
         JOIN org o ON o.id = p.org_id
-        WHERE pp.carrier = ? AND p.period_to >= ? AND p.period_to <= ?
+        WHERE pp.carrier IN ({marks}) AND p.period_to >= ? AND p.period_to <= ?
           AND {base.alive('p')} AND {base.alive('o')}
         ORDER BY p.period_to, o.name
         """,
-        (carrier, expiring_from, expiring_to),
+        (*carriers, expiring_from, expiring_to),
     ).fetchall()
 
 

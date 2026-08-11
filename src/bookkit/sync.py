@@ -41,7 +41,7 @@ from towerkit.validate import Diagnostics, validate_file, validate_program
 from .db import utc_now
 from .models import Opportunity, Org, Placement
 from .money import MoneyParseError, cents_to_dollars, dollars_to_cents
-from .repo import links, opportunities, orgs, placements, projection, settings
+from .repo import aliases, links, opportunities, orgs, placements, projection, settings
 
 
 def file_sha256(path: Path | str) -> str:
@@ -113,6 +113,15 @@ class OpportunityCandidate:
     target_effective: str  # DATE — program period start
 
 
+@dataclass(frozen=True)
+class CarrierSuggestion:
+    """A carrier string on projected towers matching no market org and no
+    alias — every cross-book join misses it until it's aliased or created."""
+
+    carrier: str
+    candidates: list[tuple[Org, float]]  # (market org, match score), best first
+
+
 @dataclass
 class SyncReport:
     projected: list[tuple[Path, str]] = field(default_factory=list)  # (path, placement ref)
@@ -121,6 +130,7 @@ class SyncReport:
     needs_link: list[LinkSuggestion] = field(default_factory=list)
     needs_placement: list[PlacementSuggestion] = field(default_factory=list)
     opportunity_candidates: list[OpportunityCandidate] = field(default_factory=list)
+    unresolved_carriers: list[CarrierSuggestion] = field(default_factory=list)
     failed: list[tuple[Path, Diagnostics]] = field(default_factory=list)
 
     @property
@@ -151,6 +161,13 @@ class SyncReport:
             lines.append(
                 f"  $ {oc.path.name}: line {oc.line_name!r} unplaced on proposed program"
                 " — potential opportunity (offer in the TUI)"
+            )
+        for cs in self.unresolved_carriers:
+            best = ", ".join(f"{o.name} ({score:.0f})" for o, score in cs.candidates[:3])
+            lines.append(
+                f"  ≈ carrier {cs.carrier!r} matches no market"
+                + (f" — alias to: {best}?" if best else " — create it?")
+                + " (resolve in the TUI)"
             )
         for path, diags in self.failed:
             lines.append(f"  ✗ {path.name}:")
@@ -366,7 +383,32 @@ def project_all(conn: sqlite3.Connection, roots: list[Path]) -> SyncReport:
             report.opportunity_candidates.extend(opportunities_for_path(conn, path))
         else:
             report.failed.append((path, diags))
+
+    report.unresolved_carriers = carrier_suggestions(conn)
     return report
+
+
+def carrier_suggestions(conn: sqlite3.Connection) -> list[CarrierSuggestion]:
+    """Unresolved tower carriers with fuzzy market candidates for the review
+    queue. Suggestions only — an alias is a user decision."""
+    market_orgs = orgs.list_orgs(conn, kind="market")
+    names = {org.name: org for org in market_orgs}
+    out: list[CarrierSuggestion] = []
+    for carrier in aliases.unresolved_carriers(conn):
+        matches = process.extract(carrier, list(names), scorer=fuzz.WRatio, limit=3)
+        candidates = [(names[n], float(score)) for n, score, _ in matches if score >= 60]
+        out.append(CarrierSuggestion(carrier, candidates))
+    return out
+
+
+def alias_carrier(conn: sqlite3.Connection, carrier: str, market_org_id: str) -> None:
+    aliases.set_alias(conn, carrier, market_org_id)
+
+
+def create_market_for_carrier(conn: sqlite3.Connection, carrier: str) -> Org:
+    """The carrier really is a market we don't have yet: create it under the
+    exact tower spelling, so it matches by name with no alias needed."""
+    return orgs.create(conn, kind="market", name=carrier, status="active")
 
 
 def _insured(path: Path) -> str:

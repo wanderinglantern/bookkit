@@ -218,8 +218,15 @@ class TodayScreen(Screen):
             bits.append(f"{len(report.needs_link) + len(report.needs_placement)} to review")
         if report.opportunity_candidates:
             bits.append(f"{len(report.opportunity_candidates)} opportunity offers")
+        if report.unresolved_carriers:
+            bits.append(f"{len(report.unresolved_carriers)} unknown carriers")
         self.notify(", ".join(bits))
-        if report.needs_link or report.needs_placement or report.opportunity_candidates:
+        if (
+            report.needs_link
+            or report.needs_placement
+            or report.opportunity_candidates
+            or report.unresolved_carriers
+        ):
             self.app.push_screen(LinkReview(report))
         self.refresh_data()
 
