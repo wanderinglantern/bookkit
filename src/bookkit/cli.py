@@ -121,7 +121,8 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
         dest = args.dest
         if dest is None:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            dest = db.default_db_path().parent / "backups" / f"bookkit-{stamp}.db"
+            base = args.db or db.default_db_path()
+            dest = base.parent / "backups" / f"bookkit-{stamp}.db"
         db.backup(conn, dest)
         print(f"backup written and verified: {dest}")
         return 0

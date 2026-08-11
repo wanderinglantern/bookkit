@@ -29,3 +29,5 @@ One line per choice the brief didn't specify. Newest at the bottom.
 - Field-level editing in the TUI covers the high-frequency mutations (log interaction, task done, stage move, contact primary, file links); broad record editing is CLI/DB territory for now — the 5-second capture path is the product.
 - Unlinked files are review items, not errors: `bookctl sync` exits 0 with them listed; only validation failures exit non-zero.
 - SVG screen snapshots are written by the TUI tests as crash+render cover but not committed as compared baselines (gitignored).
+- 10× responsiveness (§8) rests on the schema indexes (expiry, org+date, market+status, FTS) rather than a perf test; every hot query is indexed and the seed is small enough that a dedicated benchmark would test nothing real yet.
+- App-level `n` and `/` are ignored while a modal is open — stacked modals from a key leaking through an OptionList were worse than requiring esc first.

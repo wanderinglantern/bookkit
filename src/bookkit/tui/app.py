@@ -35,14 +35,23 @@ class BookkitApp(App):
 
     # --- global actions -------------------------------------------------------
 
+    def _modal_open(self) -> bool:
+        from textual.screen import ModalScreen
+
+        return isinstance(self.screen, ModalScreen)
+
     def action_global_search(self) -> None:
         from .screens.search import SearchModal
 
+        if self._modal_open():
+            return
         self.push_screen(SearchModal())
 
     def action_quick_capture(self) -> None:
         from .widgets.quick_capture import QuickCapture
 
+        if self._modal_open():
+            return
         org_id = getattr(self.screen, "current_org_id", None)
         self.push_screen(QuickCapture(default_org_id=org_id))
 
