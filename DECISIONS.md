@@ -31,3 +31,7 @@ One line per choice the brief didn't specify. Newest at the bottom.
 - SVG screen snapshots are written by the TUI tests as crash+render cover but not committed as compared baselines (gitignored).
 - 10× responsiveness (§8) rests on the schema indexes (expiry, org+date, market+status, FTS) rather than a perf test; every hot query is indexed and the seed is small enough that a dedicated benchmark would test nothing real yet.
 - App-level `n` and `/` are ignored while a modal is open — stacked modals from a key leaking through an OptionList were worse than requiring esc first.
+- Offline install mirrors towerkit's wheelhouse pattern; bookkit's wheelhouse carries the merged dependency closure of BOTH projects (uv export minus the towerkit package itself) and towerkit installs editable from the required `../towerkit` sibling checkout — a frozen towerkit wheel would defeat the live-file integration.
+- `./bookctl` wrapper mirrors towerkit's `./towerctl`: bare invocation is the common case (the TUI — the CLI already does this for no args), everything else passes through.
+- install.sh WHEELHOUSE_URL assumes `wanderinglantern/bookkit` v0.1.0 on GitHub (same account as towerkit); the release doesn't exist yet — run `make wheelhouse` and create it, or edit the URL.
+- towerkit's new `Line.group` is not projected into proj_* (see NOTES.md) — display-only for bookkit today.

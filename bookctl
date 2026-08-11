@@ -1,0 +1,5 @@
+#!/bin/sh
+# Convenience wrapper around the ./install.sh venv.
+# Bare `./bookctl` launches the TUI — the overwhelmingly common case; any
+# arguments pass straight through (today, renewals, search, sync, backup, …).
+exec "$(dirname "$0")/.venv/bin/bookctl" "$@"
