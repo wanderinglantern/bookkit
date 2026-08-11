@@ -26,6 +26,8 @@ class MarketsScreen(Screen):
         Binding("escape", "app.pop_screen", "Back"),
         Binding("a", "new_market", "New market"),
         Binding("e", "edit_market", "Edit"),
+        Binding("x", "merge_market", "Merge duplicate"),
+        Binding("A", "add_alias", "Alias", show=False),
     ]
 
     def compose(self) -> ComposeResult:
@@ -86,6 +88,66 @@ class MarketsScreen(Screen):
                 self._refresh()
 
         self.app.push_screen(FormModal(org_form(default_kind="market")), saved)
+
+    def action_merge_market(self) -> None:
+        """Fold a duplicate market ('Axa XL') into the real one ('AXA XL');
+        the duplicate's name becomes an alias so towers keep resolving."""
+        from ...services.merge import MergeError, merge_markets
+        from ..widgets.picker import Picker
+
+        source_id = self._selected_market_id()
+        if source_id is None:
+            return
+        source = orgs.get(self.app.conn, source_id)
+        targets = [
+            o for o in orgs.list_orgs(self.app.conn, kind="market") if o.id != source_id
+        ]
+        if not targets:
+            return
+
+        def picked(target_id: str | None) -> None:
+            if target_id is None:
+                return
+            try:
+                result = merge_markets(self.app.conn, source_id, target_id)
+            except MergeError as exc:
+                self.notify(str(exc), severity="error")
+                return
+            self.notify(
+                f"merged into {result.target.name} — {result.alias_added!r} is now an "
+                f"alias ({result.moved_contacts} contacts, {result.moved_submissions} "
+                "submissions moved)"
+            )
+            self._refresh()
+
+        self.app.push_screen(
+            Picker(f"merge {source.name} into which market?",
+                   [(o.name, o.id) for o in targets]),
+            picked,
+        )
+
+    def action_add_alias(self) -> None:
+        """Record another tower spelling for the selected market."""
+        from ...repo import aliases
+        from ..widgets.forms import Field, FormModal, FormSpec
+
+        market_id = self._selected_market_id()
+        if market_id is None:
+            return
+        market = orgs.get(self.app.conn, market_id)
+
+        def saved(values: dict | None) -> None:
+            if values is None:
+                return
+            aliases.set_alias(self.app.conn, values["alias"], market_id)
+            self.notify(f"{values['alias']!r} now resolves to {market.name}")
+
+        spec = FormSpec(
+            f"alias for {market.name}",
+            [Field("alias", "tower spelling", required=True,
+                   placeholder="exactly as the file writes it")],
+        )
+        self.app.push_screen(FormModal(spec), saved)
 
     def action_edit_market(self) -> None:
         from ..widgets.entity_forms import apply_org, org_form_initial_profile
@@ -175,7 +237,13 @@ class MarketDetailScreen(Screen):
             f"   quote {rate.quote_rate:.0%} · bind {rate.bind_rate:.0%}"
             f" ({rate.sent} sent)" if rate else ""
         )
-        self.query_one("#market-header", Static).update(f"[b]{market.name}[/b]{rate_text}")
+        from ...repo import aliases
+
+        known = aliases.for_market(conn, market.id)
+        alias_text = f"\nalso written as: {', '.join(known)}" if known else ""
+        self.query_one("#market-header", Static).update(
+            f"[b]{market.name}[/b]{rate_text}{alias_text}"
+        )
 
         table = self.query_one("#md-appetite", ListTable)
         table.add_columns("line", "appetite", "min premium", "max limit", "territories")

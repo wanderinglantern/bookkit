@@ -121,12 +121,15 @@ class AccountScreen(Screen):
         Binding("e", "edit_here", "Edit"),
         Binding("s", "new_submission", "Submission"),
         Binding("r", "renew_placement", "Renew"),
-        Binding("t", "scaffold_tower", "Tower file"),
-        Binding("x", "merge_placement", "Merge"),
-        Binding("d", "task_done", "Done (task)"),
-        Binding("p", "mark_primary", "Primary (contact)"),
+        Binding("l", "edit_layer", "Layer"),
+        Binding("L", "add_layer", "Add layer", show=False),
+        Binding("o", "open_towerkit", "Open in towerkit"),
+        Binding("w", "assign_team", "Assign team", show=False),
+        Binding("t", "scaffold_tower", "Tower file", show=False),
+        Binding("x", "merge_placement", "Merge", show=False),
+        Binding("d", "task_done", "Done (task)", show=False),
+        Binding("p", "mark_primary", "Primary (contact)", show=False),
         Binding("u", "undo", "Undo"),
-        Binding("r", "refresh", "Refresh", show=False),
     ]
 
     def __init__(self, org_id: str) -> None:
@@ -139,6 +142,8 @@ class AccountScreen(Screen):
         with TabbedContent():
             with TabPane("Overview", id="tab-overview"):
                 with VerticalScroll():
+                    yield Static("TEAM", classes="pane-title")
+                    yield ListTable(id="ov-team")
                     yield Static("KEY CONTACTS", classes="pane-title")
                     yield ListTable(id="ov-contacts")
                     yield Static("RECENT INTERACTIONS", classes="pane-title")
@@ -188,6 +193,22 @@ class AccountScreen(Screen):
             f"[b]{org.name}[/b]  {org.ref}   status: {org.status}   "
             f"owner: {org.owner or '—'}   premium: {premium}   next renewal: {renewal}"
         )
+
+        team_table = self.query_one("#ov-team", ListTable)
+        team_table.clear(columns=True)
+        team_table.add_columns("who", "role", "lines", "scope")
+        from ...repo import team as team_repo
+
+        for row in team_repo.for_org(conn, org.id):
+            scope = (
+                f"{row['placement_ref']} {row['program_name']}"
+                if row["placement_ref"] else "account"
+            )
+            team_table.add_row(
+                f"{row['member_name']} ({row['specialty'] or row['member_title'] or '—'})",
+                row["role"] or "—", row["lines"] or "—", scope,
+                key=row["id"],
+            )
 
         roster = contacts.for_org(conn, org.id)
         for table_id, rows in (("#ov-contacts", roster[:5]), ("#contacts-table", roster)):
@@ -290,10 +311,26 @@ class AccountScreen(Screen):
                     key=s.id,
                 )
 
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        """The placements pane lays out at zero size until first shown; re-show
+        the selection once it has a real size."""
+        if event.pane.id == "tab-placements":
+            key = self._selected_key("placements-table")
+            if key:
+                self.call_after_refresh(self.show_placement, key)
+
+    def on_data_table_row_highlighted(self, event: ListTable.RowHighlighted) -> None:
+        """j/k on the placements table switches the previewed program live."""
+        if event.data_table.id == "placements-table" and event.row_key is not None:
+            key = event.row_key.value
+            if key:
+                self.show_placement(key)
+
     def show_placement(self, placement_id: str) -> None:
         """Fill the tower preview, carrier list, and sync-state for one placement."""
         conn = self.app.conn
         placement = placements.get(conn, placement_id)
+        header = f"[b]▸ {placement.ref}  {placement.program_name}[/b]  [{placement.status}]"
 
         carriers = self.query_one("#carriers-table", ListTable)
         carriers.clear(columns=True)
@@ -308,20 +345,20 @@ class AccountScreen(Screen):
         preview = self.query_one("#tower-preview", TowerPreview)
         state = self.query_one("#sync-state", Static)
         if not placement.program_path:
-            state.update("○ no program file linked")
+            state.update(f"{header}\n○ no program file linked")
             preview.show_placeholder()
             return
         path = Path(placement.program_path)
         from ... import sync
 
         if not path.exists():
-            state.update(f"✗ file missing: {path}")
+            state.update(f"{header}\n✗ file missing: {path}")
             preview.show_placeholder()
             return
         if placement.source_sha256 and sync.file_sha256(path) != placement.source_sha256:
-            state.update("⚠ file changed on disk — re-sync to update")
+            state.update(f"{header}\n⚠ file changed on disk — re-sync to update")
         else:
-            state.update(f"✓ in sync ({path.name})")
+            state.update(f"{header}\n✓ in sync ({path.name})")
         preview.show_program(path)
 
     def on_data_table_row_selected(self, event: ListTable.RowSelected) -> None:
@@ -447,25 +484,26 @@ class AccountScreen(Screen):
             if key:
                 placement = placements.get(conn, key)
                 if placement.program_path:
-                    self.notify(
-                        "structure comes from the towerkit file — edit it there; "
-                        "status/commission are editable here",
-                        severity="warning",
+                    self._edit_linked_placement(placement)
+                else:
+                    self._push_form(
+                        ef.placement_form(placement),
+                        lambda v: ef.apply_placement(conn, v, placement.org_id, placement),
                     )
-                self._push_form(
-                    ef.placement_form(placement),
-                    lambda v: ef.apply_placement(conn, v, placement.org_id, placement),
-                )
         elif tab == "tab-pipeline":
             focused = self.focused
             if focused is not None and focused.id == "pipeline-subs":
                 key = self._selected_key("pipeline-subs")
                 if key:
                     sub = submissions.get(conn, key)
-                    self._push_form(
-                        ef.response_form(sub),
-                        lambda v: ef.apply_response(conn, sub.id, v),
-                    )
+
+                    def response_saved(values: dict) -> None:
+                        ef.apply_response(conn, sub.id, values)
+                        if values.get("status") == "bound":
+                            # bound → offer to put the market on a layer
+                            self._offer_bind_to_layer(sub.id)
+
+                    self._push_form(ef.response_form(sub), response_saved)
             else:
                 key = self._selected_key("pipeline-opps")
                 if key:
@@ -569,6 +607,328 @@ class AccountScreen(Screen):
             initial={"path": str(default)},
         )
         self.app.push_screen(FormModal(spec), saved)
+
+    def _edit_linked_placement(self, placement) -> None:
+        """Dual-owner edit: name and effective dates go through the file
+        (write-through, towerkit-validated); status and commission are
+        bookkit-owned and update directly."""
+        from ... import sync
+        from ..widgets.forms import Field, FormModal, FormSpec
+
+        conn = self.app.conn
+        spec = FormSpec(
+            f"edit {placement.ref} (dates/name write to the towerkit file)",
+            [
+                Field("program_name", "program name", required=True),
+                Field("period_from", "effective", "date", required=True),
+                Field("period_to", "expiry", "date", required=True),
+                Field(
+                    "status", "status", "select",
+                    tuple((s, s) for s in
+                          ("prospective", "submitted", "quoted", "bound", "lapsed")),
+                ),
+                Field("commission_bps", "commission (bps)", "int"),
+            ],
+            initial={
+                "program_name": placement.program_name,
+                "period_from": placement.period_from,
+                "period_to": placement.period_to,
+                "status": placement.status,
+                "commission_bps": placement.commission_bps,
+            },
+        )
+
+        def saved(values: dict | None) -> None:
+            if values is None:
+                return
+            file_changes = {
+                key: values[key]
+                for key in ("program_name", "period_from", "period_to")
+                if values.get(key) is not None
+                and values[key] != getattr(placement, key)
+            }
+            if file_changes:
+                diags = sync.update_program(conn, placement.id, **file_changes)
+                if not diags.ok:
+                    self.notify(f"refused: {diags.errors[0]}", severity="error")
+                    return
+            book_changes = {
+                key: values[key]
+                for key in ("status", "commission_bps")
+                if values.get(key) is not None and values[key] != getattr(placement, key)
+            }
+            if book_changes:
+                placements.update(conn, placement.id, **book_changes)
+            self.notify(f"updated {placement.ref}")
+            self.refresh_data()
+
+        self.app.push_screen(FormModal(spec), saved)
+
+    # --- transactional program edits (write-through) --------------------------
+
+    def _selected_linked_placement(self):
+        """The selected placement when it has a program file, else None+notify."""
+        if self._active_tab() != "tab-placements":
+            self.notify("layer keys work on the placements tab", severity="warning")
+            return None
+        key = self._selected_key("placements-table")
+        if key is None:
+            return None
+        placement = placements.get(self.app.conn, key)
+        if not placement.program_path:
+            self.notify(
+                f"{placement.ref} has no program file — e edits it directly, "
+                "or t scaffolds a file first",
+                severity="warning",
+            )
+            return None
+        return placement
+
+    def _apply_write_through(self, diags, success: str) -> None:
+        if diags.ok:
+            self.notify(success)
+            self.refresh_data()
+        else:
+            self.notify(f"refused: {diags.errors[0]}", severity="error")
+
+    def action_edit_layer(self) -> None:
+        from ... import sync
+        from ..widgets.forms import Field, FormModal, FormSpec
+        from ..widgets.picker import Picker
+
+        placement = self._selected_linked_placement()
+        if placement is None:
+            return
+        layers = sync.layer_details(self.app.conn, placement.id)
+        if not layers:
+            self.notify("no layers yet — L adds one", severity="warning")
+            return
+
+        def picked(layer_id: str | None) -> None:
+            if layer_id is None:
+                return
+            layer = next(ly for ly in layers if ly["id"] == layer_id)
+            spec = FormSpec(
+                f"edit layer — {layer['name']}",
+                [
+                    Field("name", "name", required=True),
+                    Field("policy_number", "policy number"),
+                    Field("attach", "attach", "money", required=True),
+                    Field("limit", "limit", "money", required=True),
+                    Field("premium", "premium", "money"),
+                    Field("period_from", "policy effective", "date"),
+                    Field("period_to", "policy expiry", "date"),
+                ],
+                initial={
+                    "name": layer["name"],
+                    "policy_number": layer["policy_number"],
+                    "attach": layer["attach_cents"],
+                    "limit": layer["limit_cents"],
+                    "premium": layer["premium_cents"],
+                    "period_from": layer["period_from"],
+                    "period_to": layer["period_to"],
+                },
+            )
+
+            def saved(values: dict | None) -> None:
+                if values is None:
+                    return
+                diags = sync.update_layer(
+                    self.app.conn,
+                    placement.id,
+                    layer_id,
+                    name=values.get("name"),
+                    policy_number=values.get("policy_number"),
+                    attach_cents=values.get("attach"),
+                    limit_cents=values.get("limit"),
+                    premium_cents=values.get("premium"),
+                    period_from=values.get("period_from"),
+                    period_to=values.get("period_to"),
+                )
+                self._apply_write_through(diags, f"updated {layer['name']}")
+
+            self.app.push_screen(FormModal(spec), saved)
+
+        options = [
+            (
+                f"{ly['name']}  {format_cents_compact(ly['limit_cents'])} xs "
+                f"{format_cents_compact(ly['attach_cents'])}  ({ly['signed_pct']:g}% placed)",
+                str(ly["id"]),
+            )
+            for ly in layers
+        ]
+        self.app.push_screen(Picker("edit which layer?", options), picked)
+
+    def action_add_layer(self) -> None:
+        from ... import sync
+        from ..widgets.forms import Field, FormModal, FormSpec
+
+        placement = self._selected_linked_placement()
+        if placement is None:
+            return
+        lines = sync.program_lines(self.app.conn, placement.id)
+        if not lines:
+            self.notify("the program has no lines — add them in towerkit (o)")
+            return
+        line_options = tuple((name, line_id) for line_id, name in lines)
+        if len(lines) > 1:
+            line_options = (("all lines", "__all__"), *line_options)
+        spec = FormSpec(
+            "add layer (pending — markets join as they bind)",
+            [
+                Field("name", "name", required=True, placeholder="1st Excess"),
+                Field("line", "applies to", "select", line_options, required=True),
+                Field("attach", "attach", "money", required=True),
+                Field("limit", "limit", "money", required=True),
+                Field("premium", "indicated premium", "money"),
+            ],
+        )
+
+        def saved(values: dict | None) -> None:
+            if values is None:
+                return
+            line_ids = (
+                [line_id for line_id, _ in lines]
+                if values["line"] == "__all__"
+                else [values["line"]]
+            )
+            diags = sync.add_layer(
+                self.app.conn,
+                placement.id,
+                values["name"],
+                line_ids,
+                attach_cents=values["attach"],
+                limit_cents=values["limit"],
+                premium_cents=values.get("premium"),
+            )
+            self._apply_write_through(diags, f"added {values['name']} (to be placed)")
+
+        self.app.push_screen(FormModal(spec), saved)
+
+    def action_open_towerkit(self) -> None:
+        """Suspend bookkit, open the linked file in towerkit's editor, and
+        re-project on the way back so the cache follows the edits."""
+        import shutil
+        import sys
+
+        from ... import sync
+
+        placement = self._selected_linked_placement()
+        if placement is None:
+            return
+        towerctl = Path(sys.executable).with_name("towerctl")
+        if not towerctl.exists():
+            found = shutil.which("towerctl")
+            if found is None:
+                self.notify("towerctl not found on PATH", severity="error")
+                return
+            towerctl = Path(found)
+        with self.app.suspend():
+            subprocess.run([str(towerctl), "edit", placement.program_path])
+        diags = sync.project(self.app.conn, Path(placement.program_path))
+        if diags.ok:
+            self.notify("back from towerkit — re-projected")
+        else:
+            self.notify(
+                f"back from towerkit, but the file has issues: {diags.errors[0]}",
+                severity="error",
+            )
+        self.refresh_data()
+
+    def _offer_bind_to_layer(self, submission_id: str) -> None:
+        """A market bound: offer to put them on a layer at their share."""
+        from ... import sync
+        from ...money import MoneyParseError, parse_share_bps
+        from ..widgets.forms import Field, FormModal, FormSpec
+        from ..widgets.picker import Picker
+
+        conn = self.app.conn
+        sub = submissions.get(conn, submission_id)
+        if sub.placement_id is None:
+            return
+        placement = placements.get(conn, sub.placement_id)
+        if not placement.program_path:
+            return
+        market = orgs.get(conn, sub.market_org_id)
+        layers = sync.layer_details(conn, placement.id)
+        if not layers:
+            return
+
+        def picked(layer_id: str | None) -> None:
+            if layer_id is None:
+                return
+            layer = next(ly for ly in layers if ly["id"] == layer_id)
+            spec = FormSpec(
+                f"{market.name} on {layer['name']}",
+                [Field("share", "share % ('25', '12.5%')", required=True)],
+            )
+
+            def saved(values: dict | None) -> None:
+                if values is None:
+                    return
+                try:
+                    share_bps = parse_share_bps(str(values["share"]))
+                except MoneyParseError as exc:
+                    self.notify(str(exc), severity="error")
+                    return
+                diags = sync.add_participant(
+                    conn, placement.id, layer_id, market.name, share_bps
+                )
+                self._apply_write_through(
+                    diags, f"{market.name} added to {layer['name']} at {share_bps / 100:g}%"
+                )
+
+            self.app.push_screen(FormModal(spec), saved)
+
+        options = [
+            (
+                f"{ly['name']}  {format_cents_compact(ly['limit_cents'])} xs "
+                f"{format_cents_compact(ly['attach_cents'])}  ({ly['signed_pct']:g}% placed)",
+                str(ly["id"]),
+            )
+            for ly in layers
+        ]
+        self.app.push_screen(
+            Picker(f"add {market.name} to which layer? (esc skips)", options), picked
+        )
+
+    def action_assign_team(self) -> None:
+        """Assign a colleague: to the account, or to the selected placement
+        when the placements tab is open."""
+        from ...repo import team as team_repo
+        from ..widgets.entity_forms import assignment_form
+        from ..widgets.forms import FormModal, dropped
+
+        conn = self.app.conn
+        members = team_repo.list_members(conn)
+        if not members:
+            self.notify("no team members yet — press w on Today, then a", severity="warning")
+            return
+        placement_id = (
+            self._selected_key("placements-table")
+            if self._active_tab() == "tab-placements"
+            else None
+        )
+        org_id = None if placement_id else self.current_org_id
+
+        def saved(values: dict | None) -> None:
+            if values is None:
+                return
+            values = dropped(values)
+            member_id = values.pop("team_member_id")
+            team_repo.assign(
+                conn, member_id, org_id=org_id, placement_id=placement_id, **values
+            )
+            member = team_repo.get_member(conn, member_id)
+            scope = "placement" if placement_id else "account"
+            self.notify(f"{member.name} assigned to this {scope}")
+            self.refresh_data()
+
+        options = tuple(
+            (f"{m.name} ({m.specialty})" if m.specialty else m.name, m.id)
+            for m in members
+        )
+        self.app.push_screen(FormModal(assignment_form(options)), saved)
 
     def action_merge_placement(self) -> None:
         """Merge the selected (duplicate) placement into another of this org's

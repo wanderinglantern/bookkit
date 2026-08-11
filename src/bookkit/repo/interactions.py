@@ -55,6 +55,14 @@ def for_org(conn: sqlite3.Connection, org_id: str, limit: int = 200) -> list[Int
     return [Interaction.from_row(r) for r in rows]
 
 
+def reassign_org(conn: sqlite3.Connection, from_org_id: str, to_org_id: str) -> int:
+    """Bulk move for org merges; the service logs the event."""
+    cur = conn.execute(
+        "UPDATE interaction SET org_id = ? WHERE org_id = ?", (to_org_id, from_org_id)
+    )
+    return cur.rowcount
+
+
 def attendees(conn: sqlite3.Connection, interaction_id: str) -> list[Contact]:
     rows = conn.execute(
         f"""

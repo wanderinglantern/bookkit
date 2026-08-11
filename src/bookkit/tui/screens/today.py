@@ -31,6 +31,7 @@ class TodayScreen(Screen):
         Binding("c", "open_calendar", "Calendar"),
         Binding("p", "open_pipeline", "Pipeline"),
         Binding("m", "open_markets", "Markets"),
+        Binding("w", "open_team", "Team"),
         Binding("a", "new_task", "New task"),
         Binding("e", "edit_task", "Edit task"),
         Binding("d", "task_done", "Done (task)"),
@@ -244,6 +245,11 @@ class TodayScreen(Screen):
         from .pipeline import PipelineScreen
 
         self.app.push_screen(PipelineScreen())
+
+    def action_open_team(self) -> None:
+        from .team import TeamScreen
+
+        self.app.push_screen(TeamScreen())
 
     def action_open_markets(self) -> None:
         from .markets import MarketsScreen

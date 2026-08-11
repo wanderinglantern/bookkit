@@ -274,6 +274,44 @@ class Document(Row):
     deleted_at: str | None = None
 
 
+class TeamMember(Row):
+    id: str
+    name: str
+    title: str | None = None
+    specialty: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    active: bool = True
+    notes: str | None = None
+    created_at: str
+    updated_at: str
+    deleted_at: str | None = None
+
+
+class TeamAssignment(Row):
+    id: str
+    team_member_id: str
+    org_id: str | None = None
+    placement_id: str | None = None
+    role: str | None = None
+    lines: str | None = None
+    notes: str | None = None
+    created_at: str
+    updated_at: str
+    deleted_at: str | None = None
+
+
+# Controlled but extensible internal-role vocabulary.
+TEAM_ROLES = (
+    "account_lead",
+    "placement_specialist",
+    "claims_advocate",
+    "analyst",
+    "coverage_counsel",
+    "other",
+)
+
+
 class EventLogEntry(Row):
     id: str
     entity_type: str

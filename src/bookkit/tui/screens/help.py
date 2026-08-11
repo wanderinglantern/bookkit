@@ -27,6 +27,7 @@ HELP = """\
 [b]today screen[/b]
   b  book        c  renewal calendar        a  new task
   p  pipeline    m  markets                 y  sync program files
+  w  team (who to go to for what)
   ,  setup (where program files live — first y opens it for you)
 
 [b]book screen[/b]
@@ -45,10 +46,21 @@ HELP = """\
   a  new market · e  edit · in a market: a appetite, w underwriter
 
 [b]placements tab[/b]
+  j/k switch the previewed program · header names the selection
   r  renew into next period (file-backed placements clone next
      year's towerkit file, linked at birth)
+  e  edit — dates/name write to the file, status/commission to bookkit
+  l  edit a layer (premium, policy no., attach/limit, policy dates)
+  L  add a pending layer · o  open the file in towerkit's editor
   t  create the towerkit file FROM this placement (nothing typed twice)
+  w  assign a team member to this placement
   x  merge a duplicate into another placement
+  binding a submission (e on it → bound) offers to put the market
+  on a layer at its share — towerkit validation gates every write
+
+[b]markets screen[/b]
+  x  merge a duplicate market (its name becomes an alias)
+  A  add a tower spelling as an alias for the selected market
 
 [b]entry — type fast, it stores clean[/b]
   dates accept: today · tomorrow · fri · +2w · 15 oct · 2026-10-15

@@ -30,9 +30,11 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from rapidfuzz import fuzz, process
 from towerkit.model import SCHEMA_ID, Program, dump_program, load_program
+from towerkit.model import Layer as TkModelLayer
 
 # towerkit shares/premiums: dollars + bps; participant premium is floor-divided
 from towerkit.money import premium_share
@@ -681,6 +683,224 @@ def scaffold_program(
     links.confirm(conn, str(dest), org.id, org.name, source="scaffold")
     diags = project(conn, dest, placement_id=placement.id)
     return dest, diags
+
+
+# --- transactional program edits (all via write_through) ----------------------
+#
+# bookkit edits the facts that arise from book events — premiums firming up,
+# markets binding onto layers, dates moving. Tower DESIGN (lines, retentions,
+# structure) stays in towerkit's editor; `o` jumps there.
+
+
+def _dollars_or_diag(cents: int, diags: Diagnostics, label: str) -> int | None:
+    try:
+        return cents_to_dollars(cents)
+    except MoneyParseError:
+        diags.error("money", f"{label}: {cents} cents is not whole dollars")
+        return None
+
+
+def update_program(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    program_name: str | None = None,
+    period_from: str | None = None,
+    period_to: str | None = None,
+) -> Diagnostics:
+    """Edit the program-level facts the file owns: name and effective dates."""
+    from datetime import date as _date
+
+    def mutate(program: Program) -> None:
+        if program_name is not None:
+            program.program = program_name
+        start = _date.fromisoformat(period_from) if period_from else program.period.start
+        end = _date.fromisoformat(period_to) if period_to else program.period.end
+        if (period_from or period_to) and end <= start:
+            raise ValueError(f"period ends {end} on or before it starts {start}")
+        if period_from or period_to:
+            from towerkit.model import Period as TkPeriod
+
+            program.period = TkPeriod(start=start, end=end)
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def update_layer(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    name: str | None = None,
+    policy_number: str | None = None,
+    attach_cents: int | None = None,
+    limit_cents: int | None = None,
+    premium_cents: int | None = None,
+    period_from: str | None = None,
+    period_to: str | None = None,
+) -> Diagnostics:
+    from datetime import date as _date
+
+    from towerkit.model import Period as TkPeriod
+
+    def mutate(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        if name is not None:
+            layer.name = name
+        if policy_number is not None:
+            layer.policy_number = policy_number
+        if attach_cents is not None:
+            layer.attach = _require_dollars(attach_cents, "attach")
+        if limit_cents is not None:
+            layer.limit = _require_dollars(limit_cents, "limit")
+        if premium_cents is not None:
+            layer.premium = _require_dollars(premium_cents, "premium")
+        if period_from or period_to:
+            base = layer.period or program.period
+            start = _date.fromisoformat(period_from) if period_from else base.start
+            end = _date.fromisoformat(period_to) if period_to else base.end
+            if end <= start:
+                raise ValueError(f"policy period ends {end} on or before it starts {start}")
+            layer.period = TkPeriod(start=start, end=end)
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def add_layer(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    name: str,
+    line_ids: list[str],
+    attach_cents: int,
+    limit_cents: int,
+    premium_cents: int | None = None,
+) -> Diagnostics:
+    """Append a pending ('To be placed') layer — participants join as markets
+    bind."""
+    from towerkit.model import Layer as TkLayer
+
+    def mutate(program: Program) -> None:
+        layer_id = _slug(name, {ly.id for ly in program.layers})
+        program.layers.append(
+            TkLayer(
+                id=layer_id,
+                name=name,
+                applies_to=line_ids,
+                attach=_require_dollars(attach_cents, "attach"),
+                limit=_require_dollars(limit_cents, "limit"),
+                premium=(
+                    _require_dollars(premium_cents, "premium")
+                    if premium_cents is not None
+                    else None
+                ),
+                participants=[],
+            )
+        )
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def add_participant(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    carrier: str,
+    share_bps: int,
+) -> Diagnostics:
+    """A market bound onto a layer at a share. Over-signing is refused by
+    towerkit's validator and nothing is written."""
+    from towerkit.model import Participant as TkParticipant
+
+    def mutate(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        for existing in layer.participants:
+            if existing.carrier == carrier:
+                raise ValueError(f"{carrier} is already on {layer.name}")
+        layer.participants.append(TkParticipant(carrier=carrier, share_bps=share_bps))
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def layer_details(conn: sqlite3.Connection, placement_id: str) -> list[dict[str, Any]]:
+    """The linked program's layers with everything the edit form needs,
+    money in cents (bookkit-native)."""
+    placement = placements.get(conn, placement_id)
+    if not placement.program_path:
+        return []
+    try:
+        program = load_program(Path(placement.program_path))
+    except Exception:
+        return []
+    out: list[dict[str, Any]] = []
+    for layer in program.layers:
+        out.append(
+            {
+                "id": layer.id,
+                "name": layer.name,
+                "policy_number": layer.policy_number,
+                "attach_cents": dollars_to_cents(layer.attach),
+                "limit_cents": dollars_to_cents(layer.limit),
+                "premium_cents": (
+                    dollars_to_cents(layer.premium) if layer.premium is not None else None
+                ),
+                "period_from": layer.period.start.isoformat() if layer.period else None,
+                "period_to": layer.period.end.isoformat() if layer.period else None,
+                "signed_pct": layer.signed_bps / 100,
+                "applies_to": list(layer.applies_to),
+            }
+        )
+    return out
+
+
+def program_lines(conn: sqlite3.Connection, placement_id: str) -> list[tuple[str, str]]:
+    """(id, name) of the linked program's lines, for the add-layer picker."""
+    placement = placements.get(conn, placement_id)
+    if not placement.program_path:
+        return []
+    try:
+        program = load_program(Path(placement.program_path))
+    except Exception:
+        return []
+    return [(line.id, line.name) for line in program.lines]
+
+
+def _mutate(
+    conn: sqlite3.Connection, placement_id: str, mutation: Callable[[Program], None]
+) -> Diagnostics:
+    """write_through with ValueError/WriteConflict surfaced as diagnostics,
+    so forms get one uniform result shape."""
+    try:
+        return write_through(conn, placement_id, mutation)
+    except ValueError as exc:
+        diags = Diagnostics()
+        diags.error("edit", str(exc))
+        return diags
+    except WriteConflict as exc:
+        diags = Diagnostics()
+        diags.error("conflict", str(exc))
+        return diags
+
+
+def _find_layer(program: Program, layer_id: str) -> TkModelLayer:
+    for layer in program.layers:
+        if layer.id == layer_id:
+            return layer
+    raise ValueError(f"layer {layer_id!r} is not in this program (re-sync?)")
+
+
+def _require_dollars(cents: int, label: str) -> int:
+    try:
+        return cents_to_dollars(cents)
+    except MoneyParseError as exc:
+        raise ValueError(f"{label}: {exc}") from exc
+
+
+def _slug(name: str, taken: set[str]) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "layer"
+    slug = base
+    counter = 2
+    while slug in taken:
+        slug = f"{base}-{counter}"
+        counter += 1
+    return slug
 
 
 # --- write-through ------------------------------------------------------------

@@ -47,12 +47,21 @@ TabbedContent {
     border: round $primary-darken-2;
     padding: 0 1;
     height: 1fr;
+    width: 1fr;
     overflow-x: auto;
     overflow-y: auto;
 }
 
+/* the preview's wide ANSI content must never starve the side panel */
 #placement-side {
     height: 1fr;
+    width: 44%;
+    min-width: 44;
+}
+
+#placement-side #sync-state {
+    height: auto;
+    padding: 0 1;
 }
 
 /* --- modals ---------------------------------------------------------------- */

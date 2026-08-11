@@ -39,6 +39,14 @@ def update(
     return get(conn, contact_id)
 
 
+def reassign_org(conn: sqlite3.Connection, from_org_id: str, to_org_id: str) -> int:
+    """Bulk move for org merges; the service logs the event."""
+    cur = conn.execute(
+        "UPDATE contact SET org_id = ? WHERE org_id = ?", (to_org_id, from_org_id)
+    )
+    return cur.rowcount
+
+
 def set_primary(conn: sqlite3.Connection, contact_id: str) -> None:
     """Exactly one primary per org."""
     contact = get(conn, contact_id)

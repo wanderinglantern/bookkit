@@ -50,6 +50,15 @@ def alias_map(conn: sqlite3.Connection) -> dict[str, str]:
     return {r["alias"]: r["market_org_id"] for r in rows}
 
 
+def reassign_market(conn: sqlite3.Connection, from_org_id: str, to_org_id: str) -> int:
+    """Bulk move for market merges; the service logs the event."""
+    cur = conn.execute(
+        "UPDATE carrier_alias SET market_org_id = ? WHERE market_org_id = ?",
+        (to_org_id, from_org_id),
+    )
+    return cur.rowcount
+
+
 def unresolved_carriers(conn: sqlite3.Connection) -> list[str]:
     """Carrier strings on projected towers that match no market org name and
     no alias — the strings that would silently miss every cross-book join."""

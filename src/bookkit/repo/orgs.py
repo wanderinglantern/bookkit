@@ -95,6 +95,15 @@ def get_market_profile(conn: sqlite3.Connection, org_id: str) -> MarketProfile |
 # --- appetite -----------------------------------------------------------------
 
 
+def reassign_appetite(conn: sqlite3.Connection, from_org_id: str, to_org_id: str) -> int:
+    """Bulk move for market merges; the service logs the event."""
+    cur = conn.execute(
+        "UPDATE appetite SET market_org_id = ? WHERE market_org_id = ?",
+        (to_org_id, from_org_id),
+    )
+    return cur.rowcount
+
+
 def add_appetite(conn: sqlite3.Connection, market_org_id: str, **fields: Any) -> Appetite:
     appetite_id = base.insert(conn, "appetite", {"market_org_id": market_org_id, **fields})
     row = base.get(conn, "appetite", appetite_id)

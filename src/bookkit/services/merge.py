@@ -1,18 +1,33 @@
-"""Merge duplicate placements into one unified record.
+"""Merge duplicate records into one.
 
-The target survives; the source's submissions, tasks, and documents move to
-it, the file link carries over when only the source has one, and the source is
-soft-deleted (recoverable with undo). Two file-backed placements never merge —
-that would be two sources of truth, which is the situation §5 exists to
-prevent."""
+Placements: the target survives; the source's submissions, tasks, and
+documents move to it, the file link carries over when only the source has
+one, and the source is soft-deleted (recoverable with undo). Two file-backed
+placements never merge — that would be two sources of truth, which is the
+situation §5 exists to prevent.
+
+Markets: the duplicate's contacts, appetite, submissions, interactions,
+documents, and aliases move to the survivor, and the duplicate's NAME becomes
+an alias — so tower spellings that created the duplicate keep resolving."""
 
 from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
 
-from ..models import Placement
-from ..repo import base, documents, placements, projection, submissions, tasks
+from ..models import Org, Placement
+from ..repo import (
+    aliases,
+    base,
+    contacts,
+    documents,
+    interactions,
+    orgs,
+    placements,
+    projection,
+    submissions,
+    tasks,
+)
 
 
 class MergeError(ValueError):
@@ -72,4 +87,52 @@ def merge_placements(
     base.soft_delete(conn, "placement", source.id, note=f"merged into {target.ref}")
     return MergeResult(
         placements.get(conn, target.id), moved_subs, moved_tasks, moved_docs, carried_link
+    )
+
+
+@dataclass(frozen=True)
+class MarketMergeResult:
+    target: Org
+    moved_contacts: int
+    moved_appetite: int
+    moved_submissions: int
+    alias_added: str
+
+
+def merge_markets(conn: sqlite3.Connection, source_id: str, target_id: str) -> MarketMergeResult:
+    """Fold a duplicate market org (e.g. 'Axa XL' created from a tower
+    spelling) into the real one ('AXA XL'). The duplicate's name becomes an
+    alias of the survivor so every tower keeps resolving."""
+    if source_id == target_id:
+        raise MergeError("a market cannot merge into itself")
+    source = orgs.get(conn, source_id)
+    target = orgs.get(conn, target_id)
+    if source.kind != "market" or target.kind != "market":
+        raise MergeError("market merge is for market orgs only")
+
+    moved_contacts = contacts.reassign_org(conn, source.id, target.id)
+    moved_appetite = orgs.reassign_appetite(conn, source.id, target.id)
+    moved_subs = submissions.reassign_market(conn, source.id, target.id)
+    interactions.reassign_org(conn, source.id, target.id)
+    documents.reassign_org(conn, source.id, target.id)
+    aliases.reassign_market(conn, source.id, target.id)
+    aliases.set_alias(conn, source.name, target.id)
+
+    profile = orgs.get_market_profile(conn, source.id)
+    if profile and orgs.get_market_profile(conn, target.id) is None:
+        fields = {
+            k: v
+            for k, v in profile.model_dump().items()
+            if k != "org_id" and v is not None
+        }
+        if fields:
+            orgs.set_market_profile(conn, target.id, **fields)
+
+    base.log_event(
+        conn, "org", target.id, "merged_from", None, source.name,
+        note=f"{moved_contacts} contacts, {moved_appetite} appetite, {moved_subs} submissions",
+    )
+    base.soft_delete(conn, "org", source.id, note=f"merged into {target.name}")
+    return MarketMergeResult(
+        orgs.get(conn, target.id), moved_contacts, moved_appetite, moved_subs, source.name
     )

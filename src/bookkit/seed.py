@@ -263,6 +263,25 @@ def seed(
             org_id=org.id, due_on=_iso(due), priority=rng.choice([1, 2, 2, 3]),
         )
 
+    from .repo import team
+
+    team_members = []
+    for name, title, specialty in [
+        ("Dana Okafor", "SVP, Cyber Practice", "cyber, tech E&O"),
+        ("Raj Patel", "Property Broker", "property, builders risk"),
+        ("Mia Torres", "Casualty Lead", "casualty, umbrella, auto"),
+        ("Leo Novak", "Claims Advocate", "claims"),
+    ]:
+        team_members.append(
+            team.create_member(conn, name, title=title, specialty=specialty)
+        )
+    for org in rng.sample([o for o in client_orgs if o.status == "active"], k=8):
+        team.assign(
+            conn, rng.choice(team_members).id, org_id=org.id,
+            role=rng.choice(["account_lead", "placement_specialist"]),
+            lines=rng.choice(LINES),
+        )
+
     program_files = 0
     if programs_dir is not None:
         programs_dir.mkdir(parents=True, exist_ok=True)
@@ -287,6 +306,7 @@ def seed(
         "opportunities": len(opp_rows),
         "submissions": submission_count,
         "tasks": 25,
+        "team": len(team_members),
         "program_files": program_files,
     }
 

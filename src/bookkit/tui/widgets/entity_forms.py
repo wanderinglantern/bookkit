@@ -9,6 +9,7 @@ from typing import Any
 
 from ...models import (
     CONTACT_ROLES,
+    TEAM_ROLES,
     Appetite,
     Contact,
     Opportunity,
@@ -16,6 +17,7 @@ from ...models import (
     Placement,
     Submission,
     Task,
+    TeamMember,
 )
 from ...repo import contacts, opportunities, orgs, placements, submissions
 from ...repo import tasks as tasks_repo
@@ -294,6 +296,37 @@ def apply_response(
     conn: sqlite3.Connection, submission_id: str, values: dict[str, Any]
 ) -> Submission:
     return submissions.update(conn, submission_id, **dropped(values))
+
+
+# --- team ---------------------------------------------------------------------
+
+
+def member_form(existing: TeamMember | None = None) -> FormSpec:
+    return FormSpec(
+        "edit team member" if existing else "new team member",
+        [
+            Field("name", "name", required=True),
+            Field("title", "title"),
+            Field("specialty", "specialty / lines", placeholder="cyber, tech E&O, property"),
+            Field("email", "email", "email"),
+            Field("phone", "phone", "phone"),
+            Field("notes", "notes", "textarea"),
+        ],
+        initial=existing.model_dump() if existing else {},
+    )
+
+
+def assignment_form(member_options: tuple[tuple[str, str], ...]) -> FormSpec:
+    return FormSpec(
+        "assign team member",
+        [
+            Field("team_member_id", "who", "select", member_options, required=True),
+            Field("role", "role", "select", tuple((r, r) for r in TEAM_ROLES),
+                  optional_select=True),
+            Field("lines", "lines they're placing", placeholder="cyber, D&O"),
+            Field("notes", "notes", "textarea"),
+        ],
+    )
 
 
 # --- document -----------------------------------------------------------------
