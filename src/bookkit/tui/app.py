@@ -8,6 +8,7 @@ from textual.app import App
 from textual.binding import Binding
 
 from .. import db
+from .theme import BOOKKIT_THEME
 
 
 class BookkitApp(App):
@@ -33,6 +34,8 @@ class BookkitApp(App):
     def on_mount(self) -> None:
         from .screens.navigator import NavigatorScreen
 
+        self.register_theme(BOOKKIT_THEME)
+        self.theme = "bookkit"
         self.push_screen(NavigatorScreen())
 
     def on_unmount(self) -> None:

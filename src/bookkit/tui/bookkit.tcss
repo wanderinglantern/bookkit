@@ -1,11 +1,18 @@
-/* bookkit — shared TCSS. Keyboard-first, dense, four-pane home. */
+/* bookkit — shared TCSS. Keyboard-first, dense. Palette lives in theme.py;
+   this file only references theme variables so the two never drift. */
 
 Screen {
-    background: $surface;
+    background: $background;
+}
+
+/* slim scrollbars everywhere — chrome should whisper */
+* {
+    scrollbar-size-vertical: 1;
+    scrollbar-size-horizontal: 1;
 }
 
 .pane {
-    border: round $primary-darken-2;
+    border: round $panel-lighten-2;
     padding: 0 1;
     height: 1fr;
 }
@@ -24,6 +31,76 @@ Screen {
 
 DataTable {
     height: 1fr;
+    background: transparent;
+}
+
+DataTable > .datatable--header {
+    background: transparent;
+    color: $text-muted;
+    text-style: bold;
+}
+
+DataTable > .datatable--even-row {
+    background: $surface-lighten-1 30%;
+}
+
+Tree {
+    background: transparent;
+}
+
+Tree > .tree--guides {
+    color: $panel-lighten-1;
+}
+
+Tree > .tree--guides-hover, Tree > .tree--guides-selected {
+    color: $primary-darken-1;
+}
+
+Footer {
+    background: $panel;
+}
+
+/* --- navigator (home) ------------------------------------------------------- */
+
+#status-bar {
+    height: 1;
+    padding: 0 2;
+    background: $panel;
+    color: $text-muted;
+}
+
+#nav-split {
+    height: 1fr;
+}
+
+#nav-tree {
+    width: 44;
+    min-width: 36;
+    border-right: solid $panel-lighten-1;
+    padding: 0 1;
+}
+
+#nav-pane {
+    width: 1fr;
+    padding: 0 1;
+}
+
+#nav-card {
+    height: auto;
+    padding: 1 2;
+}
+
+#table-hint {
+    height: 1;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+#nav-preview {
+    height: 40%;
+    border-top: solid $panel-lighten-1;
+    overflow-x: auto;
+    overflow-y: auto;
 }
 
 /* --- account screen ------------------------------------------------------- */
@@ -31,8 +108,8 @@ DataTable {
 #account-header {
     height: auto;
     padding: 0 1;
-    background: $boost;
-    border-bottom: solid $primary-darken-2;
+    background: $panel;
+    border-bottom: solid $panel-lighten-1;
 }
 
 #account-header .header-name {
@@ -44,7 +121,7 @@ TabbedContent {
 }
 
 #tower-preview {
-    border: round $primary-darken-2;
+    border: round $panel-lighten-2;
     padding: 0 1;
     height: 1fr;
     width: 1fr;
@@ -72,7 +149,7 @@ ImportChooser, ImportScreen, FormModal, Picker, ConfirmRenew, MergePicker {
 }
 
 #paste-preview, #import-preview {
-    border: round $primary-darken-2;
+    border: round $panel-lighten-2;
     padding: 0 1;
     height: auto;
     max-height: 16;
@@ -101,7 +178,7 @@ ImportChooser, ImportScreen, FormModal, Picker, ConfirmRenew, MergePicker {
 /* long pick-lists must never dominate a modal */
 .modal-box OptionList {
     max-height: 10;
-    border: round $primary-darken-2;
+    border: round $panel-lighten-2;
 }
 
 .modal-box TextArea {
@@ -130,7 +207,7 @@ ImportChooser, ImportScreen, FormModal, Picker, ConfirmRenew, MergePicker {
 
 .kanban-column {
     width: 1fr;
-    border: round $primary-darken-2;
+    border: round $panel-lighten-2;
     margin: 0 1 0 0;
     padding: 0 1;
 }
@@ -147,34 +224,4 @@ ImportChooser, ImportScreen, FormModal, Picker, ConfirmRenew, MergePicker {
 
 .kanban-column.focused-column {
     border: round $primary;
-}
-
-/* --- navigator (home) ------------------------------------------------------- */
-
-#nav-split {
-    height: 1fr;
-}
-
-#nav-tree {
-    width: 44;
-    min-width: 36;
-    border-right: solid $primary-darken-2;
-    padding: 0 1;
-}
-
-#nav-pane {
-    width: 1fr;
-    padding: 0 1;
-}
-
-#nav-card {
-    height: auto;
-    padding: 1;
-}
-
-#nav-preview {
-    height: 40%;
-    border-top: solid $primary-darken-2;
-    overflow-x: auto;
-    overflow-y: auto;
 }

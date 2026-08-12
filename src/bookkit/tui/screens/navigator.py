@@ -13,22 +13,58 @@ if TYPE_CHECKING:
 from datetime import date
 from pathlib import Path
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Static, Tree
+from textual.widgets import Footer, Static, Tree
 
 from ...dates import days_until
 from ...money import format_cents_compact
 from ...repo import contacts, opportunities, orgs, placements
 from ...repo import projects as projects_repo
 from ...repo import tasks as tasks_repo
-from ...services import renewals, sla
+from ...services import book, renewals, sla
+from .. import theme
+from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.tables import ListTable
 from ..widgets.tower_preview import TowerPreview
 
 NodeData = tuple[str, Any]
+
+# the second home for the hidden row-action keys: a one-line hint that names
+# exactly the actions valid for the rows on screen (help lists them too)
+ROW_HINTS = {
+    "placements": (
+        "[b]a[/b] add · [b]e[/b] edit · [b]r[/b] renew · [b]l[/b] layer · "
+        "[b]enter[/b] opens account"
+    ),
+    "contacts": "[b]a[/b] add · [b]e[/b] edit · [b]enter[/b] opens account",
+    "opportunities": "[b]a[/b] add · [b]e[/b] edit · [b]enter[/b] opens account",
+    "tasks": "[b]a[/b] add · [b]e[/b] edit · [b]d[/b] done · [b]enter[/b] opens account",
+    "projects": "[b]a[/b] add · [b]e[/b] edit · [b]enter[/b] opens account",
+    "overdue": "[b]e[/b] edit · [b]r[/b] renew · [b]l[/b] layer · [b]enter[/b] opens account",
+    "renewals": "[b]e[/b] edit · [b]r[/b] renew · [b]l[/b] layer · [b]enter[/b] opens account",
+    "needs": "[b]enter[/b] opens account",
+    "sla": "[b]enter[/b] opens account",
+}
+ADDABLE = ("placements", "contacts", "opportunities", "tasks", "projects")
+
+
+def _section(label: str, count: int | None = None) -> str:
+    """A tree section header: quiet bold caps, count in dim."""
+    suffix = f" [{theme.DIM}]· {count}[/]" if count is not None else ""
+    return f"[b {theme.DIM}]{label}[/]{suffix}"
+
+
+def _attention_label(key: str, label: str, count: int) -> str:
+    """Attention leaves: red+◆ when overdue items exist, dim when empty."""
+    if count == 0:
+        return f"[{theme.DIM}]{label} · 0[/]"
+    if key == "overdue":
+        return f"[b {theme.RED}]◆ {label} · {count}[/]"
+    return f"{label} [{theme.DIM}]·[/] [b]{count}[/b]"
 
 
 class NavigatorScreen(Screen):
@@ -48,6 +84,8 @@ class NavigatorScreen(Screen):
         Binding("l", "edit_layer_row", "Layer", show=False),
         Binding("u", "undo", "Undo"),
         Binding("R", "refresh", "Refresh", show=False),
+        Binding("tab", "hop", "tree ⇄ rows", show=False),
+        Binding("escape", "back_to_tree", "Back to tree", show=False),
     ]
 
     def __init__(self) -> None:
@@ -57,12 +95,13 @@ class NavigatorScreen(Screen):
         self._attention: dict[str, list[Any]] = {}
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield Static(id="status-bar")
         with Horizontal(id="nav-split"):
             yield Tree("book", id="nav-tree")
             with Vertical(id="nav-pane"):
                 yield Static(id="nav-card")
                 yield ListTable(id="nav-table")
+                yield Static(id="table-hint")
                 yield TowerPreview(id="nav-preview")
         yield Footer()
 
@@ -93,7 +132,7 @@ class NavigatorScreen(Screen):
             "overdue": overdue, "renewals": soon, "needs": needs,
             "tasks": due_tasks, "sla": late,
         }
-        att = tree.root.add("⚠ ATTENTION", expand=True, data=("att-root", None))
+        att = tree.root.add(_section("ATTENTION"), expand=True, data=("att-root", None))
         for key, label, count in (
             ("overdue", "overdue renewals", len(overdue)),
             ("renewals", "renewals ≤ 120d", len(soon)),
@@ -101,20 +140,18 @@ class NavigatorScreen(Screen):
             ("tasks", "tasks due", len(due_tasks)),
             ("sla", "submissions past SLA", len(late)),
         ):
-            style = "[red]" if key == "overdue" and count else ""
-            end = "[/red]" if style else ""
-            att.add_leaf(f"{style}{label} ({count}){end}", data=("att", key))
+            att.add_leaf(_attention_label(key, label, count), data=("att", key))
 
         clients = orgs.list_orgs(conn, kind="client")
         overdue_orgs = {i.org.id for i in overdue}
         accounts = tree.root.add(
-            f"ACCOUNTS ({len(clients)})", expand=True, data=("accounts-root", None)
+            _section("ACCOUNTS", len(clients)), expand=True, data=("accounts-root", None)
         )
         for org in clients:
-            badge = "[red]⚠ [/red]" if org.id in overdue_orgs else ""
+            badge = f"[{theme.RED}]◆ [/]" if org.id in overdue_orgs else ""
             node = accounts.add(f"{badge}{org.name}", data=("account", org.id))
             node.allow_expand = True
-        markets_root = tree.root.add("MARKETS", data=("markets-root", None))
+        markets_root = tree.root.add(_section("MARKETS"), data=("markets-root", None))
         for master, kids in orgs.market_families(conn):
             if kids:  # a family: master expands to its issuing companies
                 family = markets_root.add(master.name, data=("market", master.id))
@@ -122,7 +159,33 @@ class NavigatorScreen(Screen):
                     family.add_leaf(kid.name, data=("market", kid.id))
             else:
                 markets_root.add_leaf(master.name, data=("market", master.id))
+        self._summary = book.summary(conn)
+        self._n_clients = len(clients)
+        self._render_status_bar()
         self._render_pane()
+
+    def _render_status_bar(self) -> None:
+        s = self._summary
+        overdue = len(self._attention["overdue"])
+        tasks = len(self._attention["tasks"])
+        parts = [
+            f"[b {theme.GOLD}]bookkit[/]",
+            f"{self._n_clients} accounts",
+            f"[{theme.GREEN}]{format_cents_compact(s.total_premium)} bound[/]"
+            f" [{theme.DIM}]({s.bound_placements} placements)[/]",
+        ]
+        parts.append(
+            f"[b {theme.RED}]◆ {overdue} overdue[/]"
+            if overdue
+            else f"[{theme.DIM}]nothing overdue[/]"
+        )
+        parts.append(
+            f"[{theme.AMBER}]{tasks} tasks due[/]"
+            if tasks
+            else f"[{theme.DIM}]no tasks due[/]"
+        )
+        bar = f"  [{theme.RULE}]·[/]  ".join(parts)
+        self.query_one("#status-bar", Static).update(bar)
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         data = event.node.data
@@ -152,6 +215,44 @@ class NavigatorScreen(Screen):
             from .markets import MarketDetailScreen
 
             self.app.push_screen(MarketDetailScreen(data[1]))
+        elif data and data[0] in ("att", "group"):
+            # enter on a list node dives into its rows: cursor lands on the
+            # table so e/a/d/r/l work immediately; esc hops back out
+            self._dive()
+
+    def _dive(self) -> None:
+        table = self.query_one("#nav-table", ListTable)
+        if table.display and table.row_count:
+            table.focus()
+
+    def on_descendant_focus(self, event) -> None:
+        # focus lands asynchronously — the hint re-renders when it does,
+        # so "tab into rows" flips to "esc back to tree" at the right moment
+        self._render_hint_for_current()
+
+    def on_descendant_blur(self, event) -> None:
+        self._render_hint_for_current()
+
+    def _render_hint_for_current(self) -> None:
+        kind, payload = self._current
+        table = self.query_one("#nav-table", ListTable)
+        if kind == "att":
+            self._render_hint(payload, table)
+        elif kind == "group":
+            self._render_hint(payload[0], table)
+
+    def action_hop(self) -> None:
+        """tab bounces between the tree and the rows it points at."""
+        table = self.query_one("#nav-table", ListTable)
+        if table.has_focus:
+            self.query_one("#nav-tree", Tree).focus()
+        elif table.display and table.row_count:
+            table.focus()
+
+    def action_back_to_tree(self) -> None:
+        tree = self.query_one("#nav-tree", Tree)
+        if not tree.has_focus:
+            tree.focus()
 
     # -- right pane --------------------------------------------------------------
 
@@ -166,48 +267,124 @@ class NavigatorScreen(Screen):
             card.display = False
             table.display = True
             self._fill_attention_table(table, payload)
+            self._render_hint(payload, table)
         elif kind == "group":
             card.display = False
             table.display = True
             self._fill_group_table(table, *payload)
+            self._render_hint(payload[0], table)
         elif kind == "account":
             table.display = False
             card.display = True
+            self._render_hint(None)
             card.update(self._account_card(payload))
         elif kind == "market":
             table.display = False
             card.display = True
+            self._render_hint(None)
             card.update(self._market_card(payload))
         else:
             table.display = False
             card.display = True
-            card.update("select a node — j/k moves, space expands, enter opens")
+            self._render_hint(None)
+            card.update(self._glance_card())
+
+    def _render_hint(self, hint_key: str | None, table: ListTable | None = None) -> None:
+        """The hint line under the table — the visible home for hidden keys."""
+        hint = self.query_one("#table-hint", Static)
+        if hint_key is None:
+            hint.display = False
+            return
+        hint.display = True
+        if table is not None and table.row_count == 0:
+            text = (
+                "empty — [b]a[/b] adds the first row"
+                if hint_key in ADDABLE
+                else "nothing here — that's good"
+            )
+            hint.update(f"[{theme.DIM}]{text}[/]")
+            return
+        actions = ROW_HINTS.get(hint_key, "[b]enter[/b] opens account")
+        hop = (
+            "[b]esc[/b] back to tree — "
+            if table is not None and table.has_focus
+            else "[b]enter[/b]/[b]tab[/b] into rows — "
+        )
+        hint.update(f"[{theme.DIM}]{hop}{actions}[/]")
+
+    def _glance_card(self) -> str:
+        """The landing view: the book at a glance instead of an empty pane."""
+        s = self._summary
+        overdue = self._attention["overdue"]
+        soon = self._attention["renewals"]
+        lines = [
+            f"[b {theme.GOLD}]THE BOOK AT A GLANCE[/]",
+            "",
+            f"  {s.accounts} accounts with bound business · "
+            f"{s.bound_placements} bound placements",
+            f"  [{theme.GREEN}]{format_cents_compact(s.total_premium)}[/] premium · "
+            f"[{theme.GREEN}]{format_cents_compact(s.total_commission)}[/] commission",
+            "",
+        ]
+        nxt = (overdue + soon)[:5]
+        if nxt:
+            lines.append(f"[b {theme.DIM}]NEXT RENEWALS[/]")
+            for item in nxt:
+                d = item.days_remaining
+                # pad the plain text FIRST so markup length can't skew alignment
+                if d < 0:
+                    when = f"[b {theme.RED}]{f'◆ {-d}d over':>12}[/]"
+                elif d <= 60:
+                    when = f"[{theme.AMBER}]{f'{d}d':>12}[/]"
+                else:
+                    when = f"[{theme.DIM}]{f'{d}d':>12}[/]"
+                money = (
+                    format_cents_compact(item.placement.total_premium)
+                    if item.placement.total_premium
+                    else "—"
+                )
+                lines.append(
+                    f"  {item.placement.period_to}  {when}  "
+                    f"{item.org.name}  [{theme.DIM}]{item.placement.program_name}[/]"
+                    f"  {money}"
+                )
+            lines.append("")
+        lines.append(
+            f"[{theme.DIM}][b]j/k[/b] move · [b]space[/b] expands · "
+            f"[b]enter[/b] opens · [b]?[/b] all keys[/]"
+        )
+        return "\n".join(lines)
 
     def _fill_attention_table(self, table: ListTable, which: str) -> None:
         conn = self.app.conn
         today = date.today()
         table.clear(columns=True)
         if which in ("overdue", "renewals"):
-            table.add_columns("expiry", "d", "account", "program", "status", "premium")
+            table.add_columns(
+                "expiry", right("due in"), "account", "program", "lines",
+                "status", right("premium"),
+            )
             for item in self._attention[which]:
                 key = f"placement:{item.placement.id}"
                 self._row_org[key] = item.org.id
                 table.add_row(
-                    item.placement.period_to, str(item.days_remaining), item.org.name,
-                    item.placement.program_name, item.placement.status,
-                    format_cents_compact(item.placement.total_premium)
-                    if item.placement.total_premium else "—",
+                    date_text(item.placement.period_to, item.days_remaining),
+                    days_text(item.days_remaining), item.org.name,
+                    item.placement.program_name, item.lines or "—",
+                    status_text(item.placement.status),
+                    money_text(item.placement.total_premium),
                     key=key,
                 )
         elif which == "needs":
-            table.add_columns("needed by", "d", "account", "need", "status")
+            table.add_columns("needed by", right("due in"), "account", "need", "status")
             for need in self._attention["needs"]:
                 key = f"need:{need['id']}"
                 self._row_org[key] = need["org_id"]
+                days = days_until(need["needed_by"], today)
                 table.add_row(
-                    need["needed_by"], str(days_until(need["needed_by"], today)),
+                    date_text(need["needed_by"], days), days_text(days),
                     need["org_name"], f"{need['line']} — {need['project_name']}",
-                    need["status"], key=key,
+                    status_text(need["status"]), key=key,
                 )
         elif which == "tasks":
             table.add_columns("due", "task", "account")
@@ -220,38 +397,42 @@ class NavigatorScreen(Screen):
                         name = orgs.get(conn, task.org_id).name
                     except KeyError:
                         name = "(deleted account)"
-                table.add_row(task.due_on or "—", task.title, name, key=key)
+                due = (
+                    date_text(task.due_on, days_until(task.due_on, today))
+                    if task.due_on else dash()
+                )
+                table.add_row(due, task.title, name, key=key)
         elif which == "sla":
-            table.add_columns("market", "account", "sent", "out")
+            table.add_columns("market", "account", "sent", right("out"))
             for item in self._attention["sla"]:
                 key = f"submission:{item.submission.id}"
                 self._row_org[key] = item.account.id
                 table.add_row(
                     item.market.name, item.account.name,
-                    item.submission.sent_on, f"{item.days_out}d", key=key,
+                    item.submission.sent_on,
+                    days_text(-item.days_out), key=key,
                 )
 
     def _fill_group_table(self, table: ListTable, group: str, org_id: str) -> None:
         conn = self.app.conn
         table.clear(columns=True)
         if group == "placements":
-            table.add_columns("ref", "program", "effective", "expires", "d", "status", "premium")
+            table.add_columns(
+                "ref", "program", "effective", "expires", right("due in"),
+                "status", right("premium"),
+            )
             rows = sorted(
                 placements.for_org(conn, org_id),
                 key=lambda p: (days_until(p.period_to) < 0, abs(days_until(p.period_to))),
             )
             for p in rows:
                 days = days_until(p.period_to)
-                expires = p.period_to
-                if days < 0:
-                    expires = f"[red]{p.period_to}[/red]"
-                elif days <= 60:
-                    expires = f"[yellow]{p.period_to}[/yellow]"
                 key = f"placement:{p.id}"
                 self._row_org[key] = org_id
                 table.add_row(
-                    p.ref, p.program_name, p.period_from, expires, str(days), p.status,
-                    format_cents_compact(p.total_premium) if p.total_premium else "—",
+                    p.ref, p.program_name, p.period_from,
+                    date_text(p.period_to, days), days_text(days),
+                    status_text(p.status), money_text(p.total_premium),
                     key=key,
                 )
         elif group == "contacts":
@@ -260,33 +441,43 @@ class NavigatorScreen(Screen):
                 key = f"contact:{c.id}"
                 self._row_org[key] = org_id
                 table.add_row(
-                    "p" if c.is_primary else "", c.name, c.role or "—", c.title or "—",
-                    c.email or "—", c.phone or c.mobile or "—", key=key,
+                    Text("★", style=theme.GOLD) if c.is_primary else "",
+                    c.name, c.role.replace("_", " ") if c.role else dash(),
+                    c.title or dash(),
+                    c.email or dash(), c.phone or c.mobile or dash(), key=key,
                 )
         elif group == "opportunities":
-            table.add_columns("ref", "title", "stage", "target", "eff", "prob")
+            table.add_columns(
+                "ref", "title", "stage", right("target"), "eff", right("prob")
+            )
             for o in opportunities.for_org(conn, org_id):
                 key = f"opportunity:{o.id}"
                 self._row_org[key] = org_id
                 table.add_row(
-                    o.ref, o.title, o.stage,
-                    format_cents_compact(o.target_premium) if o.target_premium else "—",
-                    o.target_effective or "—", f"{o.probability_pct}%", key=key,
+                    o.ref, o.title, status_text(o.stage),
+                    money_text(o.target_premium),
+                    o.target_effective or dash(),
+                    Text(f"{o.probability_pct}%", justify="right"), key=key,
                 )
         elif group == "tasks":
             table.add_columns("due", "task", "status")
+            today = date.today()
             for task in tasks_repo.open_tasks(conn, org_id=org_id):
                 key = f"task:{task.id}"
                 self._row_org[key] = org_id
-                table.add_row(task.due_on or "—", task.title, task.status, key=key)
+                due = (
+                    date_text(task.due_on, days_until(task.due_on, today))
+                    if task.due_on else dash()
+                )
+                table.add_row(due, task.title, status_text(task.status), key=key)
         elif group == "projects":
             table.add_columns("ref", "project", "status", "start", "end")
             for project in projects_repo.projects_for_org(conn, org_id):
                 key = f"project:{project.id}"
                 self._row_org[key] = org_id
                 table.add_row(
-                    project.ref, project.name, project.status,
-                    project.start_on or "—", project.end_on or "—", key=key,
+                    project.ref, project.name, status_text(project.status),
+                    project.start_on or dash(), project.end_on or dash(), key=key,
                 )
 
     def _account_card(self, org_id: str) -> str:
@@ -294,20 +485,31 @@ class NavigatorScreen(Screen):
         org = orgs.get(conn, org_id)
         nxt = renewals.next_for_org(conn, org_id)
         if nxt is None:
-            renewal = "none scheduled"
+            renewal = f"[{theme.DIM}]none scheduled[/]"
         elif nxt.days_remaining < 0:
             renewal = (
-                f"[red]{nxt.placement.period_to} "
-                f"({-nxt.days_remaining}d overdue — {nxt.placement.program_name})[/red]"
+                f"[b {theme.RED}]◆ {nxt.placement.period_to} "
+                f"({-nxt.days_remaining}d overdue — {nxt.placement.program_name})[/]"
             )
         else:
-            renewal = f"{nxt.placement.period_to} ({nxt.days_remaining}d)"
+            style = theme.AMBER if nxt.days_remaining <= 60 else theme.FG
+            renewal = f"[{style}]{nxt.placement.period_to} ({nxt.days_remaining}d)[/]"
+        bound = [
+            p for p in placements.for_org(conn, org_id) if p.status == "bound"
+        ]
+        premium = sum(p.total_premium or 0 for p in bound)
+        n_contacts = len(contacts.for_org(conn, org_id))
+        n_tasks = len(tasks_repo.open_tasks(conn, org_id=org_id))
         lines = [
-            f"[b]{org.name}[/b]  {org.ref}",
-            f"status: {org.status}   owner: {org.owner or '—'}",
-            f"next renewal: {renewal}",
+            f"[b]{org.name}[/b]  [{theme.DIM}]{org.ref}[/]",
             "",
-            "space expands · enter opens the account screen",
+            f"  status [b]{org.status}[/b]   owner {org.owner or '—'}",
+            f"  [{theme.GREEN}]{format_cents_compact(premium)}[/] bound premium "
+            f"across {len(bound)} placements",
+            f"  {n_contacts} contacts · {n_tasks} open tasks",
+            f"  next renewal  {renewal}",
+            "",
+            f"[{theme.DIM}][b]space[/b] expands · [b]enter[/b] opens the account screen[/]",
         ]
         return "\n".join(lines)
 

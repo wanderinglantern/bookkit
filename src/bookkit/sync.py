@@ -850,6 +850,19 @@ def layer_details(conn: sqlite3.Connection, placement_id: str) -> list[dict[str,
     return out
 
 
+def line_labels(program_path: str | None) -> str:
+    """Compact lines-of-cover label ("GL, AL, EL") straight from the file —
+    what cover the placement actually is, for the attention tables. Empty
+    string when unlinked or unreadable (never raises: home must render)."""
+    if not program_path:
+        return ""
+    try:
+        program = load_program(Path(program_path))
+    except Exception:
+        return ""
+    return ", ".join(line.label for line in program.lines)
+
+
 def program_lines(conn: sqlite3.Connection, placement_id: str) -> list[tuple[str, str]]:
     """(id, name) of the linked program's lines, for the add-layer picker."""
     placement = placements.get(conn, placement_id)

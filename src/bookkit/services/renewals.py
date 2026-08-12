@@ -26,6 +26,7 @@ class RenewalItem:
     org: Org
     days_remaining: int  # negative when overdue
     bucket: str  # 'overdue' | '0-30' | '31-60' | '61-90' | '91-120'
+    lines: str = ""  # compact cover labels ("GL, AL, EL"); "" when unlinked
 
 
 def _renewed(placement: Placement, others: list[Placement]) -> bool:
@@ -40,6 +41,16 @@ def _renewed(placement: Placement, others: list[Placement]) -> bool:
         ):
             return True
     return False
+
+
+def _labels(program_path: str | None, cache: dict[str, str]) -> str:
+    from .. import sync
+
+    if not program_path:
+        return ""
+    if program_path not in cache:
+        cache[program_path] = sync.line_labels(program_path)
+    return cache[program_path]
 
 
 def _bucket(remaining: int) -> str:
@@ -59,6 +70,7 @@ def upcoming(
     today = today or date.today()
     horizon = today + timedelta(days=days)
     by_org: dict[str, list[Placement]] = {}
+    label_cache: dict[str, str] = {}
     items: list[RenewalItem] = []
     for placement in placements.expiring_between(conn, "0001-01-01", horizon.isoformat()):
         if placement.status == "lapsed":
@@ -73,7 +85,7 @@ def upcoming(
         items.append(
             RenewalItem(
                 placement, orgs.get(conn, placement.org_id), remaining,
-                _bucket(remaining),
+                _bucket(remaining), _labels(placement.program_path, label_cache),
             )
         )
     return items
@@ -96,7 +108,8 @@ def next_for_org(
         return None
     remaining, placement = min(live, key=lambda pair: pair[0])
     return RenewalItem(
-        placement, orgs.get(conn, org_id), remaining, _bucket(remaining)
+        placement, orgs.get(conn, org_id), remaining, _bucket(remaining),
+        _labels(placement.program_path, {}),
     )
 
 

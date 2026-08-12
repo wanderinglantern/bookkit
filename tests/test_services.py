@@ -194,3 +194,21 @@ class TestRenewalsScanAllPrograms:
         assert nxt is not None
         assert nxt.placement.program_name == "Casualty"  # overdue beats upcoming
         assert nxt.days_remaining < 0
+
+
+def test_renewal_items_carry_line_labels(tmp_path) -> None:
+    from bookkit import db as db_mod
+    from bookkit import sync as sync_mod
+
+    connection = db_mod.connect(tmp_path / "t.db")
+    try:
+        seed.seed(connection, today=TODAY, programs_dir=tmp_path / "programs")
+        sync_mod.project_all(connection, [tmp_path / "programs"])
+        items = renewals.upcoming(connection, TODAY)
+        linked = [i for i in items if i.placement.program_path]
+        assert linked, "seed has file-linked placements in the window"
+        assert all(item.lines for item in linked)  # e.g. "GL, AL, EL"
+        unlinked = [i for i in items if not i.placement.program_path]
+        assert all(item.lines == "" for item in unlinked)
+    finally:
+        connection.close()

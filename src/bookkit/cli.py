@@ -222,9 +222,11 @@ def _print_today(conn: sqlite3.Connection) -> None:
     items = renewals.upcoming(conn, today, days=120)
     print(f"\nRENEWALS NEXT 120 DAYS ({len(items)})")
     for item in items[:15]:
+        cover = f" ({item.lines})" if item.lines else ""
         print(
             f"  {item.placement.period_to} ({item.days_remaining:>3}d) "
-            f"{item.org.name} — {item.placement.program_name} [{item.placement.status}]"
+            f"{item.org.name} — {item.placement.program_name}{cover} "
+            f"[{item.placement.status}]"
         )
     if not items:
         print("  none")

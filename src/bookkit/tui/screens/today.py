@@ -92,13 +92,16 @@ class TodayScreen(Screen):
 
         renewals_table = self.query_one("#renewals-table", ListTable)
         renewals_table.clear(columns=True)
-        renewals_table.add_columns("expiry", "d", "account", "program", "status", "premium")
+        renewals_table.add_columns(
+            "expiry", "d", "account", "program", "lines", "status", "premium"
+        )
         for item in renewals.upcoming(conn, today, days=120):
             renewals_table.add_row(
                 item.placement.period_to,
                 str(item.days_remaining),
                 item.org.name,
                 item.placement.program_name,
+                item.lines or "—",
                 item.placement.status,
                 format_cents_compact(item.placement.total_premium)
                 if item.placement.total_premium
@@ -113,7 +116,8 @@ class TodayScreen(Screen):
                 need["needed_by"],
                 str(days_until(need["needed_by"], today)),
                 need["org_name"],
-                f"{need['line']} — {need['project_name']} (need)",
+                f"{need['project_name']} (need)",
+                need["line"],
                 need["status"],
                 format_cents_compact(need["limit_cents"]) if need["limit_cents"] else "—",
                 key=f"need:{need['id']}:{need['org_id']}",

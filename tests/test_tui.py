@@ -366,7 +366,7 @@ async def test_navigator_home_attention_and_group_tables(seeded_db: Path) -> Non
         nav._render_pane()
         await pilot.pause()
         labels = [str(col.label) for col in table.columns.values()]
-        assert "expires" in labels and "d" in labels
+        assert "expires" in labels and "due in" in labels
         assert table.row_count > 0
 
         # e on a placement row opens the commit-in-place form

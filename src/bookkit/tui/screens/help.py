@@ -30,6 +30,8 @@ HELP = """\
   the tree drills: attention → accounts → their placements/contacts/
   opportunities/tasks/projects; the right pane is a working table —
   a add · e edit · d done · r renew · l layer · enter opens the account
+  the hop loop: enter (or tab) dives from the tree into the rows,
+  e edits in place, esc hops back to the tree — no detours
   t  classic Today dashboard    b/c/p/m/w  book/calendar/pipeline/markets/team
   ,  setup (where program files live)
 
