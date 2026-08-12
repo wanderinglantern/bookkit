@@ -1,4 +1,4 @@
-# Forms commit in place + direct layer editing
+# Forms commit in place, direct layer editing, expiry visibility
 
 **Date:** 2026-08-12
 **Status:** Approved design, pre-implementation
@@ -68,8 +68,42 @@ currently crash or half-apply; under `commit` they become a stay-open error.
 - Existing form tests (test_tui_forms.py) keep passing — the values contract
   is unchanged; only failure-path navigation differs.
 
+## Expiry visibility (added 2026-08-12)
+
+Goal: always know what is coming up for expiration, from any table that
+shows policies.
+
+- Account placements table: replace the single "period" column
+  (`from → to`) with `effective`, `expires`, and `d` (days until expiry,
+  negative when past). Rows sort by soonest expiry first. Rows within 60
+  days render the expiry cell with the warning style; past-due with error
+  style (Rich markup, consistent with existing table styling).
+- Book table and Today renewals already carry expiry + days — unchanged.
+- Carriers/participant tables show layer economics, not policies — unchanged.
+
+## Team assignments — evaluation outcome (added 2026-08-12)
+
+The internal-team feature built 2026-08-11 already covers the request:
+members (`team_member`: name/title/specialty) with assignments
+(`team_assignment`) carrying a `role` from the TEAM_ROLES vocabulary
+(account_lead, placement_specialist, claims_advocate, analyst,
+coverage_counsel, other), free-text `lines`, and a scope of exactly one of
+account OR specific placement. "Placement specialist on certain policies" =
+placement-scoped assignment; "advisory for lines of cover" = account-scoped
+role + lines. Surfaces: `w` on Today (team screen), `w` on an account
+(assign), TEAM pane on the account overview.
+
+One visibility delta ships with this spec: the placements tab currently
+doesn't show who is on the deal. Add the placement-scoped team members to
+the `sync-state` line under the placements table ("team: Rosa (placement
+specialist), Ken (analyst)") for the selected placement, so deal staffing
+is visible where the deal lives.
+
 ## Out of scope
 
 - The import surfaces (PasteImportModal, ImportScreen) — they already stage
   and gate in place.
 - Inline table cell editing; the form modal remains the edit surface.
+- Line-level (per coverage line) placement assignments — the placement-level
+  scope plus the `lines` text covers today's need; revisit if a real case
+  demands per-line granularity.
