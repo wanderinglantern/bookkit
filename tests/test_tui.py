@@ -205,3 +205,56 @@ async def test_l_edits_layer_under_cursor_and_single_layer_skips_picker(
         await pilot.pause()
         assert isinstance(app.screen, FormModal)  # no picker in between
         assert app.screen.spec.title.startswith("edit layer")
+
+
+async def test_placements_table_shows_expiry_sorted_soonest_first(
+    seeded_db: Path,
+) -> None:
+    from textual.widgets import TabbedContent
+
+    from bookkit.repo import placements as placements_repo
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        linked = placements_repo.all_linked(app.conn)[0]
+        app.open_account(linked.org_id)
+        await pilot.pause()
+        app.screen.query_one(TabbedContent).active = "tab-placements"
+        await pilot.pause()
+        table = app.screen.query_one("#placements-table", ListTable)
+        labels = [str(col.label) for col in table.columns.values()]
+        assert "expires" in labels and "d" in labels
+        from bookkit.dates import days_until
+
+        day_counts = [
+            days_until(placements_repo.get(app.conn, str(key.value)).period_to)
+            for key in table.rows
+        ]
+        live = [d for d in day_counts if d >= 0]
+        assert live == sorted(live)  # soonest upcoming expiry on top
+        if any(d < 0 for d in day_counts):  # expired sink below the live block
+            first_expired = next(i for i, d in enumerate(day_counts) if d < 0)
+            assert all(d < 0 for d in day_counts[first_expired:])
+
+
+async def test_deal_team_shows_under_placement(seeded_db: Path) -> None:
+    from textual.widgets import Static, TabbedContent
+
+    from bookkit.repo import placements as placements_repo
+    from bookkit.repo import team as team_repo
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        linked = placements_repo.all_linked(app.conn)[0]
+        member = team_repo.create_member(app.conn, "Rosa Silva", specialty="property")
+        team_repo.assign(
+            app.conn, member.id, placement_id=linked.id, role="placement_specialist"
+        )
+        app.open_account(linked.org_id)
+        await pilot.pause()
+        app.screen.query_one(TabbedContent).active = "tab-placements"
+        await pilot.pause()
+        app.screen.show_placement(linked.id)
+        await pilot.pause()
+        state = str(app.screen.query_one("#sync-state", Static).render())
+        assert "Rosa Silva" in state and "placement_specialist" in state

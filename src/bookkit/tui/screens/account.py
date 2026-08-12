@@ -266,11 +266,22 @@ class AccountScreen(Screen):
         conn = self.app.conn
         table = self.query_one("#placements-table", ListTable)
         table.clear(columns=True)
-        table.add_columns("ref", "program", "period", "status", "premium")
-        rows = placements.for_org(conn, org_id)
+        table.add_columns("ref", "program", "effective", "expires", "d", "status", "premium")
+        # live placements first, soonest expiry on top; already-expired ones
+        # sink below (most recently expired first) instead of pinning forever
+        rows = sorted(
+            placements.for_org(conn, org_id),
+            key=lambda p: (days_until(p.period_to) < 0, abs(days_until(p.period_to))),
+        )
         for p in rows:
+            days = days_until(p.period_to)
+            expires = p.period_to
+            if days < 0:
+                expires = f"[red]{p.period_to}[/red]"
+            elif days <= 60:
+                expires = f"[yellow]{p.period_to}[/yellow]"
             table.add_row(
-                p.ref, p.program_name, f"{p.period_from} → {p.period_to}", p.status,
+                p.ref, p.program_name, p.period_from, expires, str(days), p.status,
                 format_cents_compact(p.total_premium) if p.total_premium else "—",
                 key=p.id,
             )
@@ -332,6 +343,15 @@ class AccountScreen(Screen):
         conn = self.app.conn
         placement = placements.get(conn, placement_id)
         header = f"[b]▸ {placement.ref}  {placement.program_name}[/b]  [{placement.status}]"
+        from ...repo import team as team_repo
+
+        deal_team = [
+            f"{row['member_name']} ({row['role'] or row['specialty'] or 'team'})"
+            for row in team_repo.for_org(conn, placement.org_id)
+            if row["placement_id"] == placement.id
+        ]
+        if deal_team:  # deal staffing belongs where the deal lives
+            header += f"\nteam: {', '.join(deal_team)}"
 
         carriers = self.query_one("#carriers-table", ListTable)
         carriers.clear(columns=True)
