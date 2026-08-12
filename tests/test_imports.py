@@ -158,6 +158,87 @@ def test_match_contact_by_email(conn) -> None:
     assert match_contact(conn, org.id, "nobody@atomic.example.com") is None
 
 
+# --- book mapper ------------------------------------------------------------------
+
+from bookkit.imports.mappers.book import stage_book  # noqa: E402
+from bookkit.imports.readers import RawTable  # noqa: E402
+from bookkit.imports.tablemap import Mapping  # noqa: E402
+
+_BOOK_HEADERS = [
+    "account", "status", "contact_name", "contact_email",
+    "program", "inception", "expiry", "premium", "commission",
+]
+
+
+def _book_table(rows: list[dict[str, object]]) -> tuple[RawTable, Mapping]:
+    table = RawTable("book.csv", "ab" * 32, _BOOK_HEADERS, rows)
+    return table, map_headers(_BOOK_HEADERS, BOOK_FIELDS)
+
+
+def test_stage_book_stages_account_contact_placement(conn) -> None:
+    table, mapping = _book_table([
+        {
+            "account": "Atomic Industries", "status": "active",
+            "contact_name": "Rosa Silva", "contact_email": "Rosa@Atomic.example.com",
+            "program": "Property", "inception": "10/1/2026", "expiry": "10/1/2027",
+            "premium": "250,000", "commission": "15%",
+        },
+        {"account": "Atomic Industries", "contact_name": "Ken Ito",
+         "contact_email": "ken@atomic.example.com"},
+        {"account": "Borealis Foods", "status": "wibble"},
+        {"account": "", "program": "Casualty"},
+    ])
+    staged = stage_book(conn, table, mapping)
+    kinds = [(r.kind, r.action) for r in staged.records]
+    assert kinds.count(("account", "create")) == 2
+    assert kinds.count(("contact", "create")) == 2
+    assert kinds.count(("placement", "create")) == 1
+
+    placement = next(r for r in staged.records if r.kind == "placement")
+    assert placement.fields["period_from"] == "2026-10-01"
+    assert placement.fields["total_premium"] == 25_000_000  # cents
+    assert placement.fields["commission_bps"] == 1500
+    assert placement.fields["org_key"] == "Atomic Industries"
+
+    contact = next(r for r in staged.records if "Rosa" in r.key)
+    assert contact.fields["email"] == "Rosa@atomic.example.com"  # local part keeps case
+    assert contact.fields["first_name"] == "Rosa"
+
+    bad_status = next(r for r in staged.records if r.key == "Borealis Foods")
+    assert any(i.field == "status" for i in bad_status.issues)
+    assert any(i.field == "account" for r in staged.records for i in r.issues)
+    assert not staged.ok
+
+
+def test_stage_book_matches_existing_as_update(conn) -> None:
+    org = orgs_repo.create(conn, kind="client", name="Atomic Industries")
+    contacts_repo.create(
+        conn, org.id, first_name="Rosa", last_name="Silva",
+        email="rosa@atomic.example.com",
+    )
+    placements_repo.create(conn, org.id, "Property", "2026-10-01", "2027-10-01")
+    table, mapping = _book_table([
+        {
+            "account": "Atomic Industries", "contact_name": "Rosa Silva",
+            "contact_email": "rosa@atomic.example.com", "program": "Property",
+            "inception": "2026-10-01", "expiry": "2027-10-01",
+        },
+    ])
+    staged = stage_book(conn, table, mapping)
+    assert staged.ok
+    assert all(r.action == "update" and r.target_id for r in staged.records)
+
+
+def test_stage_book_expiry_before_inception_is_error(conn) -> None:
+    table, mapping = _book_table([
+        {"account": "Atomic", "program": "Property",
+         "inception": "2027-10-01", "expiry": "2026-10-01"},
+    ])
+    staged = stage_book(conn, table, mapping)
+    assert any(i.field == "expiry" for r in staged.records for i in r.issues)
+    assert not staged.ok
+
+
 def test_match_placement_is_period_aware(conn) -> None:
     org = orgs_repo.create(conn, kind="client", name="Atomic")
     p26 = placements_repo.create(conn, org.id, "Property", "2026-10-01", "2027-10-01")
