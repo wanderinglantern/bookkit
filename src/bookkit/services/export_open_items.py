@@ -10,6 +10,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 
 from ..models import Task
 from ..money import format_cents
@@ -140,3 +141,38 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
                 ),
             ))
     return sections
+
+
+_COLUMNS: tuple[tuple[str, float], ...] = (
+    ("Item", 30.0), ("Details", 58.0), ("Type", 12.0),
+    ("Due / Needed by", 16.0), ("Status", 14.0), ("Days open", 10.0),
+)
+
+
+def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) -> Path:
+    """Render via towerkit so the workbook carries SOI formatting exactly —
+    formatting authority stays in one place (the money.parse_share pattern)."""
+    from towerkit.render.table_xlsx import TableColumn, TableSection, write_table
+    from towerkit.theme import load_theme
+
+    org = orgs.get(conn, org_id)
+    columns = [TableColumn(h, w) for h, w in _COLUMNS[:-1]]
+    columns.append(TableColumn("Days open", 10.0, align="right"))
+
+    sections = [
+        TableSection(
+            s.label,
+            tuple((r.item, r.details, r.kind, r.due, r.status, r.days_open)
+                  for r in s.rows),
+        )
+        for s in compose(conn, org_id, today)
+    ] or [TableSection(None, ((f"No open items as of {today.isoformat()}",
+                               "", "", "", "", ""),))]
+
+    return write_table(
+        columns, sections,
+        title=f"Open Items — {org.name}"[:31],  # Excel sheet-title cap
+        theme=load_theme(None), out_path=out_path,
+        # Details is the only multi-line column; two-line floor like the SOI
+        row_height=lambda values: 18.0 * max(2, str(values[1]).count("\n") + 1),
+    )

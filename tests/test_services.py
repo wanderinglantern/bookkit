@@ -311,3 +311,42 @@ def test_compose_groups_by_program_project_and_general(conn):
 def test_compose_empty_book_returns_no_sections(conn):
     org = orgs.create(conn, kind="client", name="Empty Co", status="active", owner="grant")
     assert compose(conn, org.id, date(2026, 8, 12)) == []
+
+
+def test_write_open_items_deterministic_and_styled(conn, tmp_path):
+    from bookkit.services.export_open_items import write
+
+    # reuse the fixture-building from test_compose_groups...
+    client = orgs.create(conn, kind="client", name="Acme", status="active", owner="grant")
+    market = orgs.create(conn, kind="market", name="Zurich", status="active")
+
+    tasks.create(
+        conn, "Chase updated loss runs", org_id=client.id,
+        description="waiting on brief line from the client",
+    )
+
+    p = placements.create(
+        conn, client.id, "Acme Property 25-26", "2025-10-01", "2026-10-01"
+    )
+    tasks.create(conn, "Confirm bound terms", placement_id=p.id)
+    submissions.create(conn, market.id, "2026-07-01", placement_id=p.id)
+
+    project = projects_repo.create_project(conn, client.id, "Warehouse Expansion")
+    projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-09-01")
+
+    a = write(conn, client.id, tmp_path / "a.xlsx", date(2026, 8, 12))
+    b = write(conn, client.id, tmp_path / "b.xlsx", date(2026, 8, 12))
+    assert a.read_bytes() == b.read_bytes()
+    from openpyxl import load_workbook  # test-only import; src never imports it
+    ws = load_workbook(a).active
+    assert [c.value for c in ws[1]] == [
+        "Item", "Details", "Type", "Due / Needed by", "Status", "Days open"]
+
+
+def test_write_empty_book_says_so(conn, tmp_path):
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Empty Co", kind="client")
+    path = write(conn, org.id, tmp_path / "e.xlsx", date(2026, 8, 12))
+    from openpyxl import load_workbook
+    assert load_workbook(path).active["A2"].value == "No open items as of 2026-08-12"
