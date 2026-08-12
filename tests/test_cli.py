@@ -34,7 +34,9 @@ def test_seed_today_renewals_search(cli_db: Path, capsys) -> None:
 
     assert main(["today"]) == 0
     out = capsys.readouterr().out
-    for heading in ("TASKS DUE", "RENEWALS NEXT 90 DAYS", "STALE ACCOUNTS", "SUBMISSIONS PAST SLA"):
+    for heading in (
+        "TASKS DUE", "RENEWALS NEXT 120 DAYS", "STALE ACCOUNTS", "SUBMISSIONS PAST SLA",
+    ):
         assert heading in out
 
     assert main(["renewals", "--days", "120"]) == 0

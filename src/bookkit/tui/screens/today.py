@@ -49,7 +49,7 @@ class TodayScreen(Screen):
                 yield Static("TASKS DUE & OVERDUE", classes="pane-title")
                 yield ListTable(id="tasks-table")
             with Vertical(classes="pane"):
-                yield Static("RENEWALS — NEXT 90 DAYS", classes="pane-title")
+                yield Static("RENEWALS — NEXT 120 DAYS", classes="pane-title")
                 yield ListTable(id="renewals-table")
             with Vertical(classes="pane"):
                 yield Static("STALE ACCOUNTS", classes="pane-title")
@@ -93,7 +93,7 @@ class TodayScreen(Screen):
         renewals_table = self.query_one("#renewals-table", ListTable)
         renewals_table.clear(columns=True)
         renewals_table.add_columns("expiry", "d", "account", "program", "status", "premium")
-        for item in renewals.upcoming(conn, today, days=90):
+        for item in renewals.upcoming(conn, today, days=120):
             renewals_table.add_row(
                 item.placement.period_to,
                 str(item.days_remaining),
@@ -107,7 +107,7 @@ class TodayScreen(Screen):
             )
         from ...repo import projects as projects_repo
 
-        for need in projects_repo.needs_due(conn, today, days=90):
+        for need in projects_repo.needs_due(conn, today, days=120):
             # a project's insurance-needed-by is the same class of attention
             renewals_table.add_row(
                 need["needed_by"],

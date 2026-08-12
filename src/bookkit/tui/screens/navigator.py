@@ -83,10 +83,10 @@ class NavigatorScreen(Screen):
         tree.show_root = False
         tree.root.expand()
 
-        items = renewals.upcoming(conn, today, days=90)
+        items = renewals.upcoming(conn, today, days=120)
         overdue = [i for i in items if i.days_remaining < 0]
         soon = [i for i in items if i.days_remaining >= 0]
-        needs = projects_repo.needs_due(conn, today, days=90)
+        needs = projects_repo.needs_due(conn, today, days=120)
         due_tasks = tasks_repo.open_tasks(conn, due_by=today.isoformat())
         late = sla.past_sla(conn, today)
         self._attention = {
@@ -96,7 +96,7 @@ class NavigatorScreen(Screen):
         att = tree.root.add("⚠ ATTENTION", expand=True, data=("att-root", None))
         for key, label, count in (
             ("overdue", "overdue renewals", len(overdue)),
-            ("renewals", "renewals ≤ 90d", len(soon)),
+            ("renewals", "renewals ≤ 120d", len(soon)),
             ("needs", "project needs due", len(needs)),
             ("tasks", "tasks due", len(due_tasks)),
             ("sla", "submissions past SLA", len(late)),

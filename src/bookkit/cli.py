@@ -219,8 +219,8 @@ def _print_today(conn: sqlite3.Connection) -> None:
     if not due:
         print("  none")
 
-    items = renewals.upcoming(conn, today, days=90)
-    print(f"\nRENEWALS NEXT 90 DAYS ({len(items)})")
+    items = renewals.upcoming(conn, today, days=120)
+    print(f"\nRENEWALS NEXT 120 DAYS ({len(items)})")
     for item in items[:15]:
         print(
             f"  {item.placement.period_to} ({item.days_remaining:>3}d) "
@@ -231,7 +231,7 @@ def _print_today(conn: sqlite3.Connection) -> None:
 
     from .repo import projects as projects_repo
 
-    needs = projects_repo.needs_due(conn, today, days=90)
+    needs = projects_repo.needs_due(conn, today, days=120)
     print(f"\nPROJECT NEEDS ({len(needs)})")
     for need in needs[:15]:
         d = days_until(need["needed_by"], today)
