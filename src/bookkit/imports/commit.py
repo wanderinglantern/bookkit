@@ -142,6 +142,55 @@ def commit_program(
     return dest, project_diags
 
 
+def commit_renewal(
+    conn: sqlite3.Connection, staged: StagedImport, placement_id: str, db_path: Path
+) -> tuple[str | None, object]:
+    """sync.renew rolls the placement (clone-at-birth for linked files), then
+    each staged money delta lands on the renewed file via write-through."""
+    from towerkit.validate import Diagnostics
+
+    from .. import sync
+
+    diags = Diagnostics()
+    if not staged.ok:
+        diags.error("staged", f"{len(staged.errors)} staging error(s); commit refused")
+        return None, diags
+    _snapshot(conn, db_path)
+    new_placement, _new_path, renew_diags = sync.renew(conn, placement_id)
+    if new_placement is None:
+        return None, renew_diags
+    layer_ids = {
+        str(layer["name"]).strip().lower(): str(layer["id"])
+        for layer in sync.layer_details(conn, new_placement.id)
+    }
+    for record in staged.records:
+        if record.kind != "layer" or record.action != "update":
+            continue
+        layer_id = layer_ids.get(str(record.fields["layer_name"]).strip().lower())
+        if layer_id is None:
+            renew_diags.warn(
+                "layer", f"{record.fields['layer_name']!r} missing from the renewed file"
+            )
+            continue
+        update_diags = sync.update_layer(
+            conn, new_placement.id, layer_id,
+            attach_cents=_maybe_int(record.fields.get("attach_cents")),
+            limit_cents=_maybe_int(record.fields.get("limit_cents")),
+            premium_cents=_maybe_int(record.fields.get("premium_cents")),
+        )
+        renew_diags.items.extend(update_diags.items)
+    base.log_event(
+        conn, "placement", new_placement.id, "import", None, "renewal paste",
+        "import renewal terms from paste",
+    )
+    conn.commit()
+    return new_placement.id, renew_diags
+
+
+def _maybe_int(value: object) -> int | None:
+    return value if isinstance(value, int) else None
+
+
 def _snapshot(conn: sqlite3.Connection, db_path: Path) -> Path:
     backups = db_path.parent / "backups"
     backups.mkdir(parents=True, exist_ok=True)

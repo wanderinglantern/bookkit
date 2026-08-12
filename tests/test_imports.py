@@ -324,6 +324,78 @@ def test_commit_program_refuses_already_linked(db_path: Path, tmp_path: Path) ->
         connection.close()
 
 
+# --- renewal updates -------------------------------------------------------------------
+
+from bookkit.imports.commit import commit_renewal  # noqa: E402
+from bookkit.imports.mappers.renewal_paste import stage_renewal  # noqa: E402
+
+
+def _linked_placement(connection, tmp_path: Path):
+    org = orgs_repo.create(connection, kind="client", name="Atomic Industries")
+    placement = placements_repo.create(
+        connection, org.id, "Property", "2026-10-01", "2027-10-01"
+    )
+    staged, draft = stage_program(
+        connection, _TOWER, org.name, "Property", "2026-10-01", "2027-10-01"
+    )
+    dest = tmp_path / "programs" / "atomic-property-2026.json"
+    commit_program(connection, staged, draft, placement.id, dest, tmp_path / "unused.db")
+    return placements_repo.get(connection, placement.id)
+
+
+def test_stage_renewal_diffs_by_layer_name(db_path: Path, tmp_path: Path) -> None:
+    connection = db.connect(db_path)
+    try:
+        placement = _linked_placement(connection, tmp_path)
+        staged = stage_renewal(
+            connection, placement.id,
+            "Primary 10M — Chubb 100% — 275,000\n20M xs 10M — Sompo — 200k\n",
+        )
+        assert staged.ok
+        primary = next(r for r in staged.records if r.key.endswith("Primary"))
+        assert primary.action == "update"
+        assert primary.fields["premium_cents"] == 27_500_000
+        assert "250,000" in str(primary.fields["diff"]) or "$250,000" in str(
+            primary.fields["diff"]
+        )
+        unmatched = [r for r in staged.records if r.action == "skip"]
+        assert any("20M" in r.key or "$20M" in r.key for r in unmatched)  # new layer
+        assert any("15M" in r.key or "$15M" in r.key for r in unmatched)  # not in paste
+    finally:
+        connection.close()
+
+
+def test_commit_renewal_creates_next_period_with_new_premium(
+    db_path: Path, tmp_path: Path
+) -> None:
+    connection = db.connect(db_path)
+    try:
+        placement = _linked_placement(connection, tmp_path)
+        staged = stage_renewal(
+            connection, placement.id, "Primary 10M — Chubb 100% — 275,000\n"
+        )
+        new_id, diags = commit_renewal(connection, staged, placement.id, db_path)
+        assert new_id is not None and diags.ok
+        renewed = placements_repo.get(connection, new_id)
+        assert renewed.period_from == "2027-10-01"
+        from bookkit import sync
+
+        primary = next(
+            layer for layer in sync.layer_details(connection, new_id)
+            if layer["name"] == "Primary"
+        )
+        assert primary["premium_cents"] == 27_500_000
+    finally:
+        connection.close()
+
+
+def test_stage_renewal_unlinked_placement_is_error(conn) -> None:
+    org = orgs_repo.create(conn, kind="client", name="Atomic")
+    placement = placements_repo.create(conn, org.id, "Property", "2026-10-01", "2027-10-01")
+    staged = stage_renewal(conn, placement.id, "Primary 10M — Chubb\n")
+    assert not staged.ok
+
+
 # --- cli ---------------------------------------------------------------------------
 
 from bookkit.cli import main as cli_main  # noqa: E402
