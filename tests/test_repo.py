@@ -184,3 +184,41 @@ def test_fts_updates_on_edit(conn) -> None:
     orgs.update(conn, org.id, name="Molecular Industries")
     assert search.search(conn, "Atomic") == []
     assert len(search.search(conn, "Molecular")) == 1
+
+
+class TestProjects:
+    def test_project_and_need_round_trip(self, conn) -> None:
+        from bookkit.repo import projects
+
+        org = orgs.create(conn, kind="client", name="Atomic Industries")
+        project = projects.create_project(
+            conn, org.id, "HQ Tower Build", site="Chicago, IL",
+            status="active", start_on="2026-09-01", end_on="2028-03-01",
+        )
+        assert project.ref.startswith("PRJ-")
+        need = projects.add_need(
+            conn, project.id, "Builder's Risk", "2026-08-25",
+            limit_cents=5_000_000_000, status="identified",
+        )
+        assert [n.id for n in projects.needs_for_project(conn, project.id)] == [need.id]
+        projects.update_need(conn, need.id, status="placed")
+        assert projects.get_need(conn, need.id).status == "placed"
+        projects.delete_project(conn, project.id)
+        assert projects.projects_for_org(conn, org.id) == []
+
+    def test_needs_due_window_and_statuses(self, conn) -> None:
+        from datetime import date
+
+        from bookkit.repo import projects
+
+        today = date(2026, 8, 12)
+        org = orgs.create(conn, kind="client", name="Atomic")
+        project = projects.create_project(conn, org.id, "Plant Expansion")
+        overdue = projects.add_need(conn, project.id, "Wrap-up GL", "2026-08-01")
+        soon = projects.add_need(conn, project.id, "Builder's Risk", "2026-09-15")
+        projects.add_need(conn, project.id, "Marine Cargo", "2027-06-01")  # far out
+        projects.add_need(conn, project.id, "Pollution", "2026-08-20", status="placed")
+        rows = projects.needs_due(conn, today, days=90)
+        assert [row["id"] for row in rows] == [overdue.id, soon.id]
+        assert rows[0]["project_name"] == "Plant Expansion"
+        assert rows[0]["org_name"] == "Atomic"

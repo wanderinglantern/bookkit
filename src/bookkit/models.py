@@ -204,6 +204,43 @@ class Task(Row):
     deleted_at: str | None = None
 
 
+class Project(Row):
+    id: str
+    ref: str
+    org_id: str
+    name: str
+    description: str | None = None
+    site: str | None = None
+    status: str = "planned"
+    start_on: str | None = None
+    end_on: str | None = None
+    notes: str | None = None
+    created_at: str
+    updated_at: str
+    deleted_at: str | None = None
+
+
+class ProjectNeed(Row):
+    id: str
+    project_id: str
+    line: str
+    needed_by: str
+    limit_cents: int | None = None
+    premium_indication_cents: int | None = None
+    status: str = "identified"
+    opportunity_id: str | None = None
+    placement_id: str | None = None
+    notes: str | None = None
+    created_at: str
+    updated_at: str
+    deleted_at: str | None = None
+
+
+# Controlled but extensible vocabularies (same pattern as TEAM_ROLES).
+PROJECT_STATUSES = ("planned", "active", "completed", "cancelled")
+NEED_STATUSES = ("identified", "quoted", "placed", "not_needed")
+
+
 class Placement(Row):
     id: str
     ref: str

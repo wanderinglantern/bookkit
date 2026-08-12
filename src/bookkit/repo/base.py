@@ -26,6 +26,8 @@ ENTITY_TABLES = {
     "document": "document",
     "team_member": "team_member",
     "team_assignment": "team_assignment",
+    "project": "project",
+    "project_need": "project_need",
 }
 
 
