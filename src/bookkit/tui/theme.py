@@ -7,9 +7,12 @@ state also carries a glyph or word so it survives monochrome terminals."""
 
 from __future__ import annotations
 
+from datetime import date
+
 from rich.text import Text
 from textual.theme import Theme
 
+from ..dates import days_until
 from ..money import format_cents_compact
 
 BG = "#15171c"  # screen
@@ -73,6 +76,9 @@ STATUS_STYLES: dict[str, str] = {
     "out": BLUE,
     "declined": RED,
     "withdrawn": DIM,
+    # orgs
+    "prospect": BLUE,
+    "dormant": DIM,
     # projects / needs
     "planned": DIM,
     "active": BLUE,
@@ -112,6 +118,28 @@ def money_text(cents: int | None) -> Text:
 
 def dash() -> Text:
     return Text("—", style=DIM)
+
+
+def lines_text(
+    line_ends: tuple[tuple[str, str], ...], today: date | None = None
+) -> Text:
+    """Per-line renewal clocks: 'IM ◆ 9d over · PR 32d · GL 87d'. Each line
+    of cover carries its own countdown — the line, not the program, is what
+    the broker renews."""
+    if not line_ends:
+        return dash()
+    text = Text()
+    for i, (label, end_iso) in enumerate(line_ends[:4]):
+        if i:
+            text.append(" · ", style=RULE)
+        days = days_until(end_iso, today)
+        if days < 0:
+            text.append(f"{label} ◆ {-days}d over", style=f"bold {RED}")
+        elif days <= 60:
+            text.append(f"{label} {days}d", style=AMBER)
+        else:
+            text.append(f"{label} {days}d", style=DIM)
+    return text
 
 
 def right(label: str) -> Text:

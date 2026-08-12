@@ -505,3 +505,48 @@ async def test_paste_underwriter_on_market_detail(seeded_db: Path) -> None:
         )
         assert ken.role == "underwriter"
         assert ken.email == "ken.ito@sompo.example.com"
+
+
+async def test_navigator_inline_cell_edit(seeded_db: Path) -> None:
+    """i opens a cell editor on the contact row; enter commits through the
+    normalizers as one undoable field write; esc abandons without writing."""
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.tui.widgets.inline_edit import CellEditor, InlineTable
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        conn = app.conn
+        org = orgs.list_orgs(conn, kind="client")[0]
+        contact = contacts_repo.for_org(conn, org.id)[0]
+        nav._current = ("group", ("contacts", org.id))
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(f"contact:{contact.id}"))
+        await pilot.pause()
+
+        await pilot.press("i")  # editor opens over the first editable column
+        await pilot.pause()
+        editor = nav.query_one(CellEditor)
+        assert editor.value == (contact.role or "")
+        editor.value = "cfo"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert contacts_repo.get(conn, contact.id).role == "cfo"
+        assert not nav.query(CellEditor), "editor closes on commit"
+
+        # esc must abandon, never write
+        table.focus()
+        await pilot.press("i")
+        await pilot.pause()
+        nav.query_one(CellEditor).value = "never-saved"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert contacts_repo.get(conn, contact.id).role == "cfo"
+
+        # the commit is one event-log entry: u reverts it
+        await pilot.press("u")
+        await pilot.pause()
+        assert contacts_repo.get(conn, contact.id).role == (contact.role or None)

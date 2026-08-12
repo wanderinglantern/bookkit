@@ -28,6 +28,8 @@ from ...repo import tasks as tasks_repo
 from ...services import book, renewals, sla
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
+from ..widgets.forms import Field
+from ..widgets.inline_edit import InlineTable
 from ..widgets.tables import ListTable
 from ..widgets.tower_preview import TowerPreview
 
@@ -40,9 +42,15 @@ ROW_HINTS = {
         "[b]a[/b] add · [b]e[/b] edit · [b]r[/b] renew · [b]l[/b] layer · "
         "[b]enter[/b] opens account"
     ),
-    "contacts": "[b]a[/b] add · [b]e[/b] edit · [b]enter[/b] opens account",
+    "contacts": (
+        "[b]i[/b] edit in cell · [b]a[/b] add · [b]e[/b] edit form · "
+        "[b]enter[/b] opens account"
+    ),
     "opportunities": "[b]a[/b] add · [b]e[/b] edit · [b]enter[/b] opens account",
-    "tasks": "[b]a[/b] add · [b]e[/b] edit · [b]d[/b] done · [b]enter[/b] opens account",
+    "tasks": (
+        "[b]i[/b] edit in cell · [b]a[/b] add · [b]e[/b] edit form · "
+        "[b]d[/b] done · [b]enter[/b] opens account"
+    ),
     "projects": "[b]a[/b] add · [b]e[/b] edit · [b]enter[/b] opens account",
     "overdue": "[b]e[/b] edit · [b]r[/b] renew · [b]l[/b] layer · [b]enter[/b] opens account",
     "renewals": "[b]e[/b] edit · [b]r[/b] renew · [b]l[/b] layer · [b]enter[/b] opens account",
@@ -50,6 +58,19 @@ ROW_HINTS = {
     "sla": "[b]enter[/b] opens account",
 }
 ADDABLE = ("placements", "contacts", "opportunities", "tasks", "projects")
+
+# columns editable straight in the table (i) — values parse exactly like the
+# modal forms, and each commit is one undoable field write
+CONTACT_INLINE = {
+    2: Field("role", "role"),
+    3: Field("title", "title"),
+    4: Field("email", "email", "email"),
+    5: Field("phone", "phone", "phone"),
+}
+TASK_INLINE = {
+    0: Field("due_on", "due", "date"),
+    1: Field("title", "task", required=True),
+}
 
 
 def _section(label: str, count: int | None = None) -> str:
@@ -93,6 +114,8 @@ class NavigatorScreen(Screen):
         self._current: NodeData = ("none", None)
         self._row_org: dict[str, str] = {}  # table row key → org id (for enter)
         self._attention: dict[str, list[Any]] = {}
+        self._fill_key: Any = None  # which rows the table holds, for cursor keeping
+        self._refresh_pending = False  # a refresh deferred while a cell edit is open
 
     def compose(self) -> ComposeResult:
         yield Static(id="status-bar")
@@ -100,12 +123,13 @@ class NavigatorScreen(Screen):
             yield Tree("book", id="nav-tree")
             with Vertical(id="nav-pane"):
                 yield Static(id="nav-card")
-                yield ListTable(id="nav-table")
+                yield InlineTable(id="nav-table")
                 yield Static(id="table-hint")
                 yield TowerPreview(id="nav-preview")
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#nav-table", InlineTable).inline_initial = self._inline_initial
         self.refresh_data()
         self.query_one("#nav-tree", Tree).focus()
 
@@ -228,6 +252,9 @@ class NavigatorScreen(Screen):
     def on_descendant_focus(self, event) -> None:
         # focus lands asynchronously — the hint re-renders when it does,
         # so "tab into rows" flips to "esc back to tree" at the right moment
+        if self._refresh_pending:
+            self._refresh_pending = False
+            self.refresh_data()
         self._render_hint_for_current()
 
     def on_descendant_blur(self, event) -> None:
@@ -259,10 +286,15 @@ class NavigatorScreen(Screen):
     def _render_pane(self) -> None:
         kind, payload = self._current
         card = self.query_one("#nav-card", Static)
-        table = self.query_one("#nav-table", ListTable)
+        table = self.query_one("#nav-table", InlineTable)
         preview = self.query_one("#nav-preview", TowerPreview)
         preview.display = False
         self._row_org.clear()
+        # refilling the same rows keeps the cursor on the row you were on
+        new_key = (kind, payload)
+        keep = table.cursor_row if new_key == self._fill_key and table.display else None
+        self._fill_key = new_key
+        table.inline_fields = {}
         if kind == "att":
             card.display = False
             table.display = True
@@ -288,6 +320,8 @@ class NavigatorScreen(Screen):
             card.display = True
             self._render_hint(None)
             card.update(self._glance_card())
+        if kind in ("att", "group") and keep is not None and table.row_count:
+            table.move_cursor(row=min(keep, table.row_count - 1))
 
     def _render_hint(self, hint_key: str | None, table: ListTable | None = None) -> None:
         """The hint line under the table — the visible home for hidden keys."""
@@ -343,10 +377,11 @@ class NavigatorScreen(Screen):
                     if item.placement.total_premium
                     else "—"
                 )
+                what = item.line_ends[0][0] if item.line_ends else item.placement.program_name
                 lines.append(
-                    f"  {item.placement.period_to}  {when}  "
-                    f"{item.org.name}  [{theme.DIM}]{item.placement.program_name}[/]"
-                    f"  {money}"
+                    f"  {item.renewal_on or item.placement.period_to}  {when}  "
+                    f"{item.org.name} — [b]{what}[/b]"
+                    f"  [{theme.DIM}]{item.placement.program_name}[/]  {money}"
                 )
             lines.append("")
         lines.append(
@@ -355,22 +390,23 @@ class NavigatorScreen(Screen):
         )
         return "\n".join(lines)
 
-    def _fill_attention_table(self, table: ListTable, which: str) -> None:
+    def _fill_attention_table(self, table: InlineTable, which: str) -> None:
         conn = self.app.conn
         today = date.today()
         table.clear(columns=True)
         if which in ("overdue", "renewals"):
             table.add_columns(
-                "expiry", right("due in"), "account", "program", "lines",
-                "status", right("premium"),
+                "renews", right("due in"), "account", "line of cover due",
+                "program", "status", right("premium"),
             )
             for item in self._attention[which]:
                 key = f"placement:{item.placement.id}"
                 self._row_org[key] = item.org.id
                 table.add_row(
-                    date_text(item.placement.period_to, item.days_remaining),
+                    date_text(item.renewal_on, item.days_remaining),
                     days_text(item.days_remaining), item.org.name,
-                    item.placement.program_name, item.lines or "—",
+                    theme.lines_text(item.line_ends, today),
+                    Text(book._program_label(item.placement.program_name), style=theme.DIM),
                     status_text(item.placement.status),
                     money_text(item.placement.total_premium),
                     key=key,
@@ -388,6 +424,7 @@ class NavigatorScreen(Screen):
                 )
         elif which == "tasks":
             table.add_columns("due", "task", "account")
+            table.inline_fields = TASK_INLINE
             for task in self._attention["tasks"]:
                 key = f"task:{task.id}"
                 name = ""
@@ -413,7 +450,7 @@ class NavigatorScreen(Screen):
                     days_text(-item.days_out), key=key,
                 )
 
-    def _fill_group_table(self, table: ListTable, group: str, org_id: str) -> None:
+    def _fill_group_table(self, table: InlineTable, group: str, org_id: str) -> None:
         conn = self.app.conn
         table.clear(columns=True)
         if group == "placements":
@@ -437,6 +474,7 @@ class NavigatorScreen(Screen):
                 )
         elif group == "contacts":
             table.add_columns("", "name", "role", "title", "email", "phone")
+            table.inline_fields = CONTACT_INLINE
             for c in contacts.for_org(conn, org_id):
                 key = f"contact:{c.id}"
                 self._row_org[key] = org_id
@@ -461,6 +499,7 @@ class NavigatorScreen(Screen):
                 )
         elif group == "tasks":
             table.add_columns("due", "task", "status")
+            table.inline_fields = TASK_INLINE
             today = date.today()
             for task in tasks_repo.open_tasks(conn, org_id=org_id):
                 key = f"task:{task.id}"
@@ -486,14 +525,19 @@ class NavigatorScreen(Screen):
         nxt = renewals.next_for_org(conn, org_id)
         if nxt is None:
             renewal = f"[{theme.DIM}]none scheduled[/]"
-        elif nxt.days_remaining < 0:
-            renewal = (
-                f"[b {theme.RED}]◆ {nxt.placement.period_to} "
-                f"({-nxt.days_remaining}d overdue — {nxt.placement.program_name})[/]"
-            )
         else:
-            style = theme.AMBER if nxt.days_remaining <= 60 else theme.FG
-            renewal = f"[{style}]{nxt.placement.period_to} ({nxt.days_remaining}d)[/]"
+            what = nxt.line_ends[0][0] if nxt.line_ends else nxt.placement.program_name
+            if nxt.days_remaining < 0:
+                renewal = (
+                    f"[b {theme.RED}]◆ {nxt.renewal_on or nxt.placement.period_to} "
+                    f"({-nxt.days_remaining}d overdue — {what})[/]"
+                )
+            else:
+                style = theme.AMBER if nxt.days_remaining <= 60 else theme.FG
+                renewal = (
+                    f"[{style}]{nxt.renewal_on or nxt.placement.period_to} "
+                    f"({nxt.days_remaining}d — {what})[/]"
+                )
         bound = [
             p for p in placements.for_org(conn, org_id) if p.status == "bound"
         ]
@@ -566,6 +610,37 @@ class NavigatorScreen(Screen):
                 preview.show_program(Path(placement.program_path))
                 return
         preview.display = False
+
+    # -- inline cell edits ---------------------------------------------------------
+
+    def _inline_initial(self, row_key: str, field_key: str) -> str:
+        kind, _, entity_id = row_key.partition(":")
+        conn = self.app.conn
+        try:
+            if kind == "contact":
+                return getattr(contacts.get(conn, entity_id), field_key) or ""
+            if kind == "task":
+                return getattr(tasks_repo.get(conn, entity_id), field_key) or ""
+        except KeyError:
+            pass
+        return ""
+
+    def on_inline_table_cell_edited(self, event: InlineTable.CellEdited) -> None:
+        kind, _, entity_id = event.row_key.partition(":")
+        conn = self.app.conn
+        if kind == "contact":
+            contacts.update(conn, entity_id, **{event.field.key: event.value})
+        elif kind == "task":
+            tasks_repo.update(conn, entity_id, **{event.field.key: event.value})
+        else:
+            return
+        self.notify(f"{event.field.label} saved — u undoes")
+        # refreshing mid-edit would pull rows out from under the editor while
+        # tab walks the row; flush when the editor closes and focus returns
+        if event.table._editor is None:
+            self.refresh_data()
+        else:
+            self._refresh_pending = True
 
     # -- row actions ---------------------------------------------------------------
 
