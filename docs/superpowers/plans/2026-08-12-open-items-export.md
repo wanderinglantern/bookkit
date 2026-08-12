@@ -36,22 +36,38 @@ Append to `tests/test_soi_xlsx.py` (it already has `program`, `theme` fixtures a
 
 ```python
 # Refactor guard: extracting the generic table writer (render/table_xlsx.py)
-# must not change SOI bytes. Regenerate this hash ONLY on a deliberate style
-# change or an openpyxl version bump — never to make a refactor pass.
+# must not change SOI output. docProps/core.xml embeds provenance() — the
+# CURRENT git sha and dirty marker — so RAW file bytes change with every
+# commit; the guard therefore hashes every zip entry EXCEPT core.xml.
+# Regenerate GOLDEN_SHA only on a deliberate style/content change or an
+# openpyxl bump — never to make a refactor pass.
 GOLDEN_SHA = "FILL_ME"
 
 
-def test_refactor_golden_bytes(program, theme, tmp_path):
+def _content_hash(xlsx_path: Path) -> str:
     import hashlib
 
+    digest = hashlib.sha256()
+    with zipfile.ZipFile(xlsx_path) as z:
+        for name in sorted(z.namelist()):
+            if name == "docProps/core.xml":
+                continue
+            digest.update(name.encode())
+            digest.update(z.read(name))
+    return digest.hexdigest()
+
+
+def test_refactor_golden_content(program, theme, tmp_path):
     path = _write(program, theme, tmp_path / "golden.xlsx")
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == GOLDEN_SHA
+    assert _content_hash(path) == GOLDEN_SHA
 ```
+
+(`zipfile` and `Path` are already imported at the top of this test file.)
 
 - [ ] **Step 2: Run it to get the real hash**
 
-Run: `cd /Users/grantgreeson/Developer/towerkit && uv run pytest tests/test_soi_xlsx.py::test_refactor_golden_bytes -v 2>&1 | tail -5`
-Expected: FAIL; the assertion message contains the actual sha256. Copy it into `GOLDEN_SHA`.
+Run: `cd /Users/grantgreeson/Developer/towerkit && uv run pytest tests/test_soi_xlsx.py::test_refactor_golden_content -v 2>&1 | tail -5`
+Expected: FAIL; the assertion message contains the actual sha256. Copy it into `GOLDEN_SHA`. Because core.xml is excluded, this hash is stable across commits and dirty/clean trees — verify by running once more AFTER committing (Step 4) and confirming it still passes.
 
 - [ ] **Step 3: Run again to verify it passes**
 
