@@ -141,8 +141,12 @@ def _stage_placement(
     rownum: int,
 ) -> StagedRecord | None:
     program = normalize.clean_text(str(row.get("program") or ""))
-    has_dates = row.get("inception") or row.get("expiry")
-    if not program and not has_dates:
+    # any placement-shaped field triggers staging, so a premium on a row
+    # missing its program/dates becomes a visible error, never dropped data
+    placement_keys = (
+        "inception", "expiry", "premium", "limit", "commission", "placement_status"
+    )
+    if not program and not any(row.get(k) for k in placement_keys):
         return None
     record = StagedRecord(
         "placement", f"{account}/{program or '?'}",

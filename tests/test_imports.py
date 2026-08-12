@@ -194,6 +194,39 @@ def test_commit_book_refuses_errors_and_writes_nothing(db_path: Path) -> None:
         connection.close()
 
 
+# --- cli ---------------------------------------------------------------------------
+
+from bookkit.cli import main as cli_main  # noqa: E402
+
+
+def test_cli_template_and_dry_run_import(tmp_path: Path, capsys) -> None:
+    dbfile = tmp_path / "book.db"
+    template = tmp_path / "book.xlsx"
+    assert cli_main(["--db", str(dbfile), "template", "book", str(template)]) == 0
+    code = cli_main(["--db", str(dbfile), "import", "book", str(template), "--dry-run"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "account: 1 create" in out and "OK to commit" in out
+
+
+def test_cli_import_without_dry_run_points_at_tui(tmp_path: Path, capsys) -> None:
+    dbfile = tmp_path / "book.db"
+    template = tmp_path / "book.xlsx"
+    cli_main(["--db", str(dbfile), "template", "book", str(template)])
+    code = cli_main(["--db", str(dbfile), "import", "book", str(template)])
+    assert code == 2
+    assert "TUI" in capsys.readouterr().out
+
+
+def test_cli_import_bad_file_exits_one(tmp_path: Path, capsys) -> None:
+    dbfile = tmp_path / "book.db"
+    bad = tmp_path / "bad.csv"
+    bad.write_text("account,premium\nAtomic,banana\n")
+    code = cli_main(["--db", str(dbfile), "import", "book", str(bad), "--dry-run"])
+    assert code == 1
+    assert "banana" in capsys.readouterr().out
+
+
 def test_imports_package_contains_no_sql() -> None:
     import re
 

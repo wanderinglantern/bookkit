@@ -49,6 +49,16 @@ def main(argv: list[str] | None = None) -> int:
     backup_p = sub.add_parser("backup", help="timestamped copy + integrity check")
     backup_p.add_argument("--dest", type=Path, default=None)
 
+    template_p = sub.add_parser("template", help="write a populate-and-reimport workbook")
+    template_p.add_argument("flow", choices=["book", "program"])
+    template_p.add_argument("out", type=Path, metavar="template.xlsx")
+
+    import_p = sub.add_parser("import", help="stage a bulk import and print the report")
+    import_p.add_argument("flow", choices=["book"])
+    import_p.add_argument("file", type=Path)
+    import_p.add_argument("--dry-run", action="store_true",
+                          help="report only (committing happens in the TUI)")
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -158,6 +168,38 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
             dest = base.parent / "backups" / f"bookkit-{stamp}.db"
         db.backup(conn, dest)
         print(f"backup written and verified: {dest}")
+        return 0
+
+    if args.command == "template":
+        if args.flow == "book":
+            from .imports.fieldspec import BOOK_FIELDS, write_template
+
+            print(write_template(BOOK_FIELDS, args.out))
+        else:  # program — one registry each side, no duplication
+            from towerkit.ingest_template import write_template as tk_template
+
+            print(tk_template(args.out))
+        return 0
+
+    if args.command == "import":
+        from .imports.fieldspec import BOOK_FIELDS
+        from .imports.mappers.book import stage_book
+        from .imports.readers import read_table
+        from .imports.tablemap import map_headers
+
+        try:
+            table = read_table(args.file)
+        except (ValueError, OSError) as exc:
+            print(exc)
+            return 1
+        mapping = map_headers(table.headers, BOOK_FIELDS)
+        staged = stage_book(conn, table, mapping)
+        print(staged.report())
+        if not staged.ok:
+            return 1
+        if not args.dry_run:
+            print("commit happens in the TUI import screen; use --dry-run for now")
+            return 2
         return 0
 
     return 2
