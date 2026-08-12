@@ -164,6 +164,10 @@ class AccountScreen(Screen):
                         yield ListTable(id="carriers-table")
                         yield Static(id="sync-state")
                     yield TowerPreview(id="tower-preview")
+            with TabPane("Projects", id="tab-projects"):
+                with Vertical():
+                    yield ListTable(id="projects-table")
+                    yield ListTable(id="needs-table")
             with TabPane("Pipeline", id="tab-pipeline"):
                 with VerticalScroll():
                     yield Static("OPPORTUNITIES", classes="pane-title")
@@ -264,6 +268,7 @@ class AccountScreen(Screen):
 
         self._refresh_placements(org.id)
         self._refresh_pipeline(org.id)
+        self._refresh_projects(org.id)
 
         docs = documents.for_org(conn, org.id)
         table = self.query_one("#documents-table", ListTable)
@@ -300,6 +305,57 @@ class AccountScreen(Screen):
         else:
             self.query_one("#sync-state", Static).update("no placements")
             self.query_one("#tower-preview", TowerPreview).show_placeholder()
+
+    def _refresh_projects(self, org_id: str) -> None:
+        from ...repo import projects as projects_repo
+
+        conn = self.app.conn
+        table = self.query_one("#projects-table", ListTable)
+        table.clear(columns=True)
+        table.add_columns("ref", "project", "status", "start", "end", "open needs")
+        rows = projects_repo.projects_for_org(conn, org_id)
+        for project in rows:
+            open_needs = sum(
+                1
+                for need in projects_repo.needs_for_project(conn, project.id)
+                if need.status in projects_repo.ATTENTION_STATUSES
+            )
+            table.add_row(
+                project.ref, project.name, project.status,
+                project.start_on or "—", project.end_on or "—",
+                str(open_needs) if open_needs else "—",
+                key=project.id,
+            )
+        if rows:
+            self.show_project(rows[0].id)
+        else:
+            needs = self.query_one("#needs-table", ListTable)
+            needs.clear(columns=True)
+            needs.add_columns("line", "needed by", "d", "status", "limit", "linked")
+
+    def show_project(self, project_id: str) -> None:
+        """Fill the needs table for one project, expiry-style styling on the
+        needed-by dates."""
+        from ...repo import projects as projects_repo
+
+        table = self.query_one("#needs-table", ListTable)
+        table.clear(columns=True)
+        table.add_columns("line", "needed by", "d", "status", "limit", "linked")
+        for need in projects_repo.needs_for_project(self.app.conn, project_id):
+            days = days_until(need.needed_by)
+            needed = need.needed_by
+            if need.status in projects_repo.ATTENTION_STATUSES:
+                if days < 0:
+                    needed = f"[red]{need.needed_by}[/red]"
+                elif days <= 60:
+                    needed = f"[yellow]{need.needed_by}[/yellow]"
+            linked = "opp" if need.opportunity_id else ("plc" if need.placement_id else "—")
+            table.add_row(
+                need.line, needed, str(days), need.status,
+                format_cents_compact(need.limit_cents) if need.limit_cents else "—",
+                linked,
+                key=need.id,
+            )
 
     def _refresh_pipeline(self, org_id: str) -> None:
         conn = self.app.conn
@@ -347,6 +403,10 @@ class AccountScreen(Screen):
             key = event.row_key.value
             if key:
                 self.show_placement(key)
+        elif event.data_table.id == "projects-table" and event.row_key is not None:
+            key = event.row_key.value
+            if key:
+                self.show_project(key)
 
     def show_placement(self, placement_id: str) -> None:
         """Fill the tower preview, carrier list, and sync-state for one placement."""
@@ -506,6 +566,27 @@ class AccountScreen(Screen):
             )
         elif tab == "tab-interactions":
             self.app.action_quick_capture()
+        elif tab == "tab-projects":
+            from ...repo import projects as projects_repo
+
+            needs_table = self.query_one("#needs-table", ListTable)
+            project_id = self._selected_key("projects-table")
+            if self.focused is needs_table and project_id:
+                project = projects_repo.get_project(conn, project_id)
+                self._push_form(
+                    ef.need_form(),
+                    lambda v: self.notify(
+                        f"need added to {project.name}: "
+                        f"{ef.apply_need(conn, v, project.id).line}"
+                    ),
+                )
+            else:
+                self._push_form(
+                    ef.project_form(),
+                    lambda v: self.notify(
+                        f"created {ef.apply_project(conn, v, org_id).ref}"
+                    ),
+                )
         else:  # overview → a new task for this account
             self._push_form(
                 ef.task_form(conn=conn, default_org_id=org_id),
@@ -558,6 +639,25 @@ class AccountScreen(Screen):
                     self._push_form(
                         ef.opportunity_form(opp),
                         lambda v: ef.apply_opportunity(conn, v, opp.org_id, opp),
+                    )
+        elif tab == "tab-projects":
+            from ...repo import projects as projects_repo
+
+            needs_table = self.query_one("#needs-table", ListTable)
+            need_key = self._selected_key("needs-table")
+            if self.focused is needs_table and need_key:
+                need = projects_repo.get_need(conn, need_key)
+                self._push_form(
+                    ef.need_form(need),
+                    lambda v: ef.apply_need(conn, v, need.project_id, need),
+                )
+            else:
+                project_key = self._selected_key("projects-table")
+                if project_key:
+                    project = projects_repo.get_project(conn, project_key)
+                    self._push_form(
+                        ef.project_form(project),
+                        lambda v: ef.apply_project(conn, v, project.org_id, project),
                     )
         elif tab == "tab-overview":
             key = self._selected_key("ov-tasks")
@@ -984,11 +1084,17 @@ class AccountScreen(Screen):
 
     def action_open_towerkit(self) -> None:
         """Suspend bookkit, open the linked file in towerkit's editor, and
-        re-project on the way back so the cache follows the edits."""
+        re-project on the way back so the cache follows the edits.
+        On the projects tab, `o` instead turns the selected need into its
+        opportunity — the optional link forming when the need gets real."""
         import shutil
         import sys
 
         from ... import sync
+
+        if self._active_tab() == "tab-projects":
+            self._need_to_opportunity()
+            return
 
         placement = self._selected_linked_placement()
         if placement is None:
@@ -1010,6 +1116,32 @@ class AccountScreen(Screen):
                 f"back from towerkit, but the file has issues: {diags.errors[0]}",
                 severity="error",
             )
+        self.refresh_data()
+
+    def _need_to_opportunity(self) -> None:
+        """o on a need row: create the pre-filled opportunity and link it."""
+        from ...repo import projects as projects_repo
+
+        conn = self.app.conn
+        need_key = self._selected_key("needs-table")
+        if need_key is None:
+            self.notify("select a need first (needs table)", severity="warning")
+            return
+        need = projects_repo.get_need(conn, need_key)
+        if need.opportunity_id is not None:
+            self.notify("this need already has an opportunity")
+            return
+        project = projects_repo.get_project(conn, need.project_id)
+        opp = opportunities.create(
+            conn,
+            project.org_id,
+            f"{project.name} — {need.line}",
+            lines=need.line,
+            target_effective=need.needed_by,
+            target_premium=need.premium_indication_cents,
+        )
+        projects_repo.update_need(conn, need.id, opportunity_id=opp.id)
+        self.notify(f"{opp.ref} created from the need — it's in the pipeline")
         self.refresh_data()
 
     def _offer_bind_to_layer(self, submission_id: str) -> None:

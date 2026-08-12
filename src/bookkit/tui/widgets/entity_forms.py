@@ -10,17 +10,22 @@ from typing import Any
 
 from ...models import (
     CONTACT_ROLES,
+    NEED_STATUSES,
+    PROJECT_STATUSES,
     TEAM_ROLES,
     Appetite,
     Contact,
     Opportunity,
     Org,
     Placement,
+    Project,
+    ProjectNeed,
     Submission,
     Task,
     TeamMember,
 )
 from ...repo import contacts, opportunities, orgs, placements, submissions
+from ...repo import projects as projects_repo
 from ...repo import tasks as tasks_repo
 from .forms import Field, FormSpec, dropped
 
@@ -381,3 +386,65 @@ def appetite_form(existing: Appetite | None = None) -> FormSpec:
         ],
         initial=existing.model_dump() if existing else {},
     )
+
+
+# --- project --------------------------------------------------------------------
+
+
+def project_form(existing: Project | None = None) -> FormSpec:
+    initial = existing.model_dump() if existing else {"status": "planned"}
+    return FormSpec(
+        "edit project" if existing else "new project",
+        [
+            Field("name", "name", required=True, placeholder="HQ Tower Build"),
+            Field("site", "site / location"),
+            Field("status", "status", "select", tuple((s, s) for s in PROJECT_STATUSES)),
+            Field("start_on", "start", "date"),
+            Field("end_on", "end", "date"),
+            Field("description", "description", "textarea"),
+        ],
+        initial=initial,
+    )
+
+
+def apply_project(
+    conn: sqlite3.Connection,
+    values: dict[str, Any],
+    org_id: str,
+    existing: Project | None = None,
+) -> Project:
+    core = dropped(values)
+    if existing:
+        return projects_repo.update_project(conn, existing.id, **core)
+    name = core.pop("name")
+    return projects_repo.create_project(conn, org_id, name, **core)
+
+
+def need_form(existing: ProjectNeed | None = None) -> FormSpec:
+    initial = existing.model_dump() if existing else {"status": "identified"}
+    return FormSpec(
+        "edit insurance need" if existing else "new insurance need",
+        [
+            Field("line", "line of cover", required=True, placeholder="Builder's Risk"),
+            Field("needed_by", "insurance needed by", "date", required=True),
+            Field("limit_cents", "limit", "money"),
+            Field("premium_indication_cents", "premium indication", "money"),
+            Field("status", "status", "select", tuple((s, s) for s in NEED_STATUSES)),
+            Field("notes", "notes", "textarea"),
+        ],
+        initial=initial,
+    )
+
+
+def apply_need(
+    conn: sqlite3.Connection,
+    values: dict[str, Any],
+    project_id: str,
+    existing: ProjectNeed | None = None,
+) -> ProjectNeed:
+    core = dropped(values)
+    if existing:
+        return projects_repo.update_need(conn, existing.id, **core)
+    line = core.pop("line")
+    needed_by = core.pop("needed_by")
+    return projects_repo.add_need(conn, project_id, line, needed_by, **core)

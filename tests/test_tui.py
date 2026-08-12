@@ -284,3 +284,54 @@ async def test_ctrl_t_task_from_anywhere_attaches_current_client(
             t for t in tasks_repo.open_tasks(app.conn) if t.title == "chase COI"
         )
         assert task.org_id == org.id
+
+
+async def test_projects_tab_add_edit_and_need_to_opportunity(seeded_db: Path) -> None:
+    from textual.widgets import TabbedContent
+
+    from bookkit.repo import opportunities as opps_repo
+    from bookkit.repo import projects as projects_repo
+    from bookkit.tui.screens.today import TodayScreen
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        org = orgs.list_orgs(app.conn, kind="client")[0]
+        project = projects_repo.create_project(
+            app.conn, org.id, "HQ Tower Build", status="active"
+        )
+        need = projects_repo.add_need(
+            app.conn, project.id, "Builder's Risk", "2026-09-01",
+            premium_indication_cents=25_000_000,
+        )
+        app.open_account(org.id)
+        await pilot.pause()
+        app.screen.query_one(TabbedContent).active = "tab-projects"
+        await pilot.pause()
+        app.screen.refresh_data()
+        await pilot.pause()
+        projects_table = app.screen.query_one("#projects-table", ListTable)
+        assert projects_table.row_count == 1
+        needs_table = app.screen.query_one("#needs-table", ListTable)
+        assert needs_table.row_count == 1
+
+        # o on the need creates the linked, pre-filled opportunity
+        needs_table.focus()
+        await pilot.press("o")
+        await pilot.pause()
+        refreshed = projects_repo.get_need(app.conn, need.id)
+        assert refreshed.opportunity_id is not None
+        opp = opps_repo.get(app.conn, refreshed.opportunity_id)
+        assert opp.title == "HQ Tower Build — Builder's Risk"
+        assert opp.target_effective == "2026-09-01"
+        assert opp.lines == "Builder's Risk"
+        assert opp.target_premium == 25_000_000
+
+        # the need shows on Today as attention
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, TodayScreen)
+        app.screen.refresh_data()
+        await pilot.pause()
+        renewals_table = app.screen.query_one("#renewals-table", ListTable)
+        keys = [str(key.value) for key in renewals_table.rows]
+        assert any(k.startswith(f"need:{need.id}") for k in keys)

@@ -229,6 +229,20 @@ def _print_today(conn: sqlite3.Connection) -> None:
     if not items:
         print("  none")
 
+    from .repo import projects as projects_repo
+
+    needs = projects_repo.needs_due(conn, today, days=90)
+    print(f"\nPROJECT NEEDS ({len(needs)})")
+    for need in needs[:15]:
+        d = days_until(need["needed_by"], today)
+        marker = f"{-d}d overdue" if d < 0 else f"{d}d"
+        print(
+            f"  {need['needed_by']} ({marker:>10}) {need['org_name']} — "
+            f"{need['line']} for {need['project_name']} [{need['status']}]"
+        )
+    if not needs:
+        print("  none")
+
     stale = staleness.stale_accounts(conn, today)
     print(f"\nSTALE ACCOUNTS ({len(stale)})")
     for account in stale[:10]:

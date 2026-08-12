@@ -102,6 +102,19 @@ class TodayScreen(Screen):
                 else "—",
                 key=f"renewal:{item.placement.id}:{item.org.id}",
             )
+        from ...repo import projects as projects_repo
+
+        for need in projects_repo.needs_due(conn, today, days=90):
+            # a project's insurance-needed-by is the same class of attention
+            renewals_table.add_row(
+                need["needed_by"],
+                str(days_until(need["needed_by"], today)),
+                need["org_name"],
+                f"{need['line']} — {need['project_name']} (need)",
+                need["status"],
+                format_cents_compact(need["limit_cents"]) if need["limit_cents"] else "—",
+                key=f"need:{need['id']}:{need['org_id']}",
+            )
 
         stale_table = self.query_one("#stale-table", ListTable)
         stale_table.clear(columns=True)
