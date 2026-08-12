@@ -1,0 +1,33 @@
+name: Wheelhouse
+
+# The wheelhouse is a hand-built release asset, so pyproject.toml and the
+# published zip drift apart in silence — the only machine that notices is the
+# offline one, which is also the one that cannot fix it. Check the published
+# asset here instead, where a red build is cheap.
+#
+# install.sh builds towerkit editable from ../towerkit, so this wheelhouse has
+# to cover towerkit's dependencies as well. Those change on pushes to a repo
+# this workflow never sees, so it runs on every push rather than on a paths
+# filter over bookkit's own pyproject.toml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  wheelhouse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: wanderinglantern/towerkit
+          path: .towerkit
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+      - name: Published wheelhouse satisfies an offline install
+        run: >
+          uv run --no-project --with packaging
+          python tools/check_wheelhouse.py pyproject.toml .towerkit/pyproject.toml
