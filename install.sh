@@ -26,6 +26,7 @@ cd "$(dirname "$0")"
 
 WHEELHOUSE_URL="https://github.com/wanderinglantern/bookkit/releases/download/v0.1.0/bookkit-wheelhouse-macos.zip"
 PY="${PYTHON:-python3}"
+WHEELHOUSE_SHA256="61ced5236da6e7d5e6ed7c0f843af390992defcbfffe3aef5684f23e73cfc9d1"
 TOWERKIT="../towerkit"
 
 if [ ! -f "$TOWERKIT/pyproject.toml" ]; then
@@ -43,6 +44,14 @@ rm -rf .venv
 fetch_wheelhouse() {
     echo "→ downloading wheelhouse (~150MB) …"
     curl -fSL --progress-bar -o wheelhouse.zip "$WHEELHOUSE_URL"
+    # the corporate proxy has been caught altering pip downloads —
+    # verify this artifact against the hash pinned in git
+    echo "$WHEELHOUSE_SHA256  wheelhouse.zip" | shasum -a 256 -c - || {
+        echo "error: wheelhouse.zip hash mismatch — the download was altered in transit." >&2
+        echo "Do NOT bypass this. Re-try on a trusted network, or copy the zip manually." >&2
+        rm -f wheelhouse.zip
+        exit 1
+    }
     rm -rf wheelhouse
     mkdir wheelhouse
     unzip -q wheelhouse.zip -d wheelhouse
@@ -55,8 +64,16 @@ offline_install() {
 
 # towerkit installs first (editable, from the sibling checkout) so bookkit's
 # `towerkit` requirement is satisfied locally and never fetched from an index.
-echo "→ trying PyPI …"
-if ./.venv/bin/pip install -q -e "$TOWERKIT" >.install-pypi.log 2>&1 \
+if [ "${OFFLINE:-0}" = "1" ]; then
+    echo "→ OFFLINE=1 — skipping PyPI, using the wheelhouse …"
+    [ -d wheelhouse ] || fetch_wheelhouse
+    if ! offline_install; then
+        echo "→ cached wheelhouse could not satisfy the install — refreshing it …"
+        fetch_wheelhouse
+        offline_install
+    fi
+    echo "✓ installed from the wheelhouse"
+elif ./.venv/bin/pip install -q -e "$TOWERKIT" >.install-pypi.log 2>&1 \
     && ./.venv/bin/pip install -q -e . >>.install-pypi.log 2>&1; then
     echo "✓ installed from PyPI"
     rm -f .install-pypi.log
