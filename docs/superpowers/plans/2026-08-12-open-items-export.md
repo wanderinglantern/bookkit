@@ -1006,3 +1006,137 @@ cd /Users/grantgreeson/Developer/bookkit && uv run pytest -q && uv run mypy src 
 - [ ] **Step 4: Commit** — `git add tests/test_conventions.py docs/superpowers/specs/2026-08-12-open-items-export-design.md && git commit -m "test: convention scans (openpyxl containment, no raw SQL in tui/imports)"`
 
 - [ ] **Step 5: Shipping note (do not skip)** — this feature needs a towerkit RELEASE before the work machine can use it (bookkit's wheelhouse/PyPI flow pulls towerkit as a wheel there). Follow the new-dep/release drill in towerkit's CLAUDE.md. No bookkit dependency changed, so no bookkit wheelhouse refresh is triggered by this plan.
+
+---
+
+### Task 11: Task `category` — migration, vocab, form (feature add 2026-08-12)
+
+Freeform grouping label for tasks — vocabulary-completed like lines, NEVER a hard-coded enum. Grant's ask: group tasks in bookkit and SOV-style in the export.
+
+**Files:**
+- Create: `migrations/009_task_category.sql`
+- Modify: `src/bookkit/models.py` (Task), `src/bookkit/repo/vocab.py`, `src/bookkit/tui/widgets/entity_forms.py` (task_form)
+- Test: `tests/test_repo.py` (append)
+
+**Interfaces:**
+- Produces: `Task.category: str | None`; `vocab.task_categories(conn) -> list[str]`; task_form carries a suggestions-wired `category` Field.
+
+- [ ] **Step 1: Failing test**
+
+```python
+def test_task_category_round_trips_and_feeds_vocab(conn):
+    from bookkit.repo import vocab
+
+    tasks_repo.create(conn, "chase quote", category="Renewal")
+    tasks_repo.create(conn, "send COI", category="Certificates")
+    tasks_repo.create(conn, "misc")  # no category
+    assert vocab.task_categories(conn) == ["Certificates", "Renewal"]
+```
+
+- [ ] **Step 2: Run to verify failure** — `uv run pytest tests/test_repo.py -k category -v 2>&1 | tail -3`
+
+- [ ] **Step 3: Implement**
+
+`migrations/009_task_category.sql`:
+
+```sql
+ALTER TABLE task ADD COLUMN category TEXT;
+```
+
+`models.py` Task, after `description`:
+
+```python
+    category: str | None = None  # freeform grouping label, vocab-completed
+```
+
+`repo/vocab.py`:
+
+```python
+def task_categories(conn: sqlite3.Connection) -> list[str]:
+    return _dedupe(_column(conn, "task", "category"))
+```
+
+`entity_forms.py::task_form` — add after the `description` Field (task_form already receives `conn`; guard for None):
+
+```python
+        Field("category", "category",
+              suggestions=tuple(vocab.task_categories(conn)) if conn else ()),
+```
+
+(`vocab` is already imported in entity_forms.py.)
+
+- [ ] **Step 4: Run** — `uv run pytest tests/test_repo.py tests/test_tui_forms.py -q 2>&1 | tail -3` → PASS.
+
+- [ ] **Step 5: Commit** — `git commit -m "tasks: freeform vocab-completed category for grouping"`
+
+---
+
+### Task 12: category grouping in the task tables
+
+**Files:**
+- Modify: `src/bookkit/tui/screens/navigator.py` (both task-table branches + TASK_INLINE), `src/bookkit/tui/screens/account.py` (#ov-tasks fill)
+- Test: `tests/test_tui.py` (append)
+
+**Interfaces:**
+- Consumes: Task 11's column; Task 4's table layout (columns currently due/task/description/detail/…).
+
+- [ ] **Step 1: Failing test** — extend the Task 4 test (or add a sibling) asserting a `category` column exists on the attention tasks table and rows arrive grouped: seed three tasks with categories B, A, A and assert the table's row order puts the two A-category tasks adjacent.
+
+- [ ] **Step 2: Run to verify failure**
+
+- [ ] **Step 3: Implement**
+
+Grouping is display-level: repo ordering stays authoritative for briefs. In each of the three task-table fills, sort the fetched list before rendering:
+
+```python
+rows = sorted(task_list, key=lambda t: ((t.category or "~"), t.due_on or "~"))
+```
+
+("~" sorts uncategorized/undated last.) Insert a `category` column immediately after "task" title column in all three tables, rendering `Text(t.category, style=theme.AMBER) if t.category else dash()`. Update TASK_INLINE so `category` is `i`-editable — recount the column indexes after insertion and keep due/title/description editable at their new positions:
+
+```python
+TASK_INLINE = {
+    0: Field("due_on", "due", "date"),
+    1: Field("title", "task", required=True),
+    2: Field("category", "category"),
+    3: Field("description", "description"),
+}
+```
+
+(Order above assumes columns due · task · category · description · detail · … — verify against the actual Task 4 layout and keep indexes true to it.)
+
+- [ ] **Step 4: Run** — `uv run pytest tests/test_tui.py -q 2>&1 | tail -3` → PASS (update any column-count assertions).
+
+- [ ] **Step 5: Commit** — `git commit -m "tasks: category column + grouping across the task tables"`
+
+---
+
+### Task 13: category sections in the export (SOV-style)
+
+**Files:**
+- Modify: `src/bookkit/services/export_open_items.py` (compose)
+- Test: `tests/test_services.py` (append)
+
+**Interfaces:**
+- Consumes: Task 6's compose + Task 11's column. ExportRow/ExportSection shapes unchanged.
+
+- [ ] **Step 1: Failing test**
+
+```python
+def test_compose_sections_org_tasks_by_category(conn):
+    org = orgs.create(conn, name="Cat Co", kind="client")
+    tasks_repo.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    tasks_repo.create(conn, "renew AL", org_id=org.id, category="Renewal")
+    tasks_repo.create(conn, "send COI", org_id=org.id, category="Certificates")
+    tasks_repo.create(conn, "misc", org_id=org.id)
+    labels = [s.label for s in compose(conn, org.id, date(2026, 8, 12))]
+    assert labels == ["Certificates — Cat Co", "Renewal — Cat Co", "General — Cat Co"]
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+- [ ] **Step 3: Implement** — in `compose`, replace the single General section for org-level tasks: group `general` rows' source tasks by `category` (alphabetical, case-insensitive), one section per category labeled `f"{category} — {org.name}"`, uncategorized tasks LAST as `f"General — {org.name}"` (loose opportunity submissions stay in General). Placement and project sections unchanged (REVIEW POINT in spec: category does not subdivide placement sections yet).
+
+- [ ] **Step 4: Run** — `uv run pytest tests/test_services.py -q 2>&1 | tail -3` → PASS.
+
+- [ ] **Step 5: Commit** — `git commit -m "export: org-level tasks sectioned by category, SOV-style"`

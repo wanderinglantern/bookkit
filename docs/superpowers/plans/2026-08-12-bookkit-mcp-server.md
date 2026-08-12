@@ -395,7 +395,7 @@ def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict:
     return {
         "tasks_due": [
             {"ref": t.id, "title": t.title, "description": t.description,
-             "due": t.due_on}
+             "category": t.category, "due": t.due_on}
             for t in tasks_repo.open_tasks(conn, due_by=today.isoformat())
         ],
         "project_needs": [
@@ -536,7 +536,7 @@ CHECK `interactions.log`'s real signature at `repo/interactions.py:12` and mirro
 def _task_create(
     conn: sqlite3.Connection, title: str, client: str | None = None,
     description: str | None = None, detail: str | None = None,
-    due: str | None = None,
+    category: str | None = None, due: str | None = None,
 ) -> dict:
     from .dates import parse_human_date
     from .repo import tasks as tasks_repo
@@ -548,6 +548,10 @@ def _task_create(
         fields["description"] = description
     if detail:
         fields["detail"] = detail  # markdown stored as-is
+    if category:
+        fields["category"] = category  # freeform grouping label; suggest existing
+        # values to the model: the tool docstring should say "prefer an existing
+        # category — call open_items first to see what's in use"
     if due:
         parsed = parse_human_date(due)
         if parsed is None:

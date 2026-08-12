@@ -42,6 +42,12 @@ towerkit's job):
 - Proposed columns (REVIEW POINT — adjust to what clients should see):
   Item | Details | Type (Task / Need / Submission) | Due / Needed by |
   Status | Days open.
+- Task categories (added 2026-08-12): Task gains a freeform `category`
+  column — vocabulary-completed like lines (`vocab.task_categories` +
+  `Field.suggestions`), never an enum. Org-level tasks in the export are
+  sectioned BY CATEGORY (SOV-style; uncategorized falls into "General");
+  placement and project sections are unchanged. REVIEW POINT: whether
+  category sections should also subdivide placement sections.
 - Money (need limits/indications) formatted in whole dollars via the
   existing cents→dollars boundary; dates client-readable.
 
