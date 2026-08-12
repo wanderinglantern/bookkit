@@ -6,8 +6,10 @@ from datetime import date
 import pytest
 
 from bookkit import seed
-from bookkit.repo import events, opportunities, orgs, placements, tasks
+from bookkit.repo import events, opportunities, orgs, placements, submissions, tasks
+from bookkit.repo import projects as projects_repo
 from bookkit.services import book, capture, hit_rate, pipeline, renewals, sla, staleness, undo
+from bookkit.services.export_open_items import compose
 
 TODAY = date(2026, 8, 11)
 
@@ -267,3 +269,45 @@ def test_line_of_cover_drives_renewal_clock(conn, tmp_path) -> None:
 
     nxt = renewals.next_for_org(conn, org.id, TODAY)
     assert nxt is not None and nxt.renewal_on == im_end.isoformat()
+
+
+def test_flatten_markdown_strips_marks_keeps_bullets():
+    from bookkit.services.export_open_items import flatten_markdown
+
+    text = "## Head\n- **bold** item\n* second [link](http://x)\n`code`"
+    assert flatten_markdown(text) == "Head\n- bold item\n- second link\ncode"
+
+
+def test_compose_groups_by_program_project_and_general(conn):
+    # build: client with an org-level task, a placement-attached task,
+    # an outstanding submission on that placement, and a project need
+    client = orgs.create(conn, kind="client", name="Acme", status="active", owner="grant")
+    market = orgs.create(conn, kind="market", name="Zurich", status="active")
+
+    tasks.create(
+        conn, "Chase updated loss runs", org_id=client.id,
+        description="waiting on brief line from the client",
+    )
+
+    p = placements.create(
+        conn, client.id, "Acme Property 25-26", "2025-10-01", "2026-10-01"
+    )
+    tasks.create(conn, "Confirm bound terms", placement_id=p.id)
+    submissions.create(conn, market.id, "2026-07-01", placement_id=p.id)
+
+    project = projects_repo.create_project(conn, client.id, "Warehouse Expansion")
+    projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-09-01")
+
+    sections = compose(conn, client.id, date(2026, 8, 12))
+    labels = [s.label for s in sections]
+    assert labels[0].startswith("General")
+    assert any(lbl.startswith("Acme Property") for lbl in labels)
+    assert any(lbl.startswith("Project — ") for lbl in labels)
+    task_row = sections[0].rows[0]
+    assert task_row.kind == "Task" and task_row.days_open >= 0
+    assert "brief line" in task_row.details  # description first line of the cell
+
+
+def test_compose_empty_book_returns_no_sections(conn):
+    org = orgs.create(conn, kind="client", name="Empty Co", status="active", owner="grant")
+    assert compose(conn, org.id, date(2026, 8, 12)) == []
