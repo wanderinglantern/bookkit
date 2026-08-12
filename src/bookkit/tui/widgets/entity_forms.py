@@ -342,17 +342,27 @@ def member_form(existing: TeamMember | None = None) -> FormSpec:
     )
 
 
-def assignment_form(member_options: tuple[tuple[str, str], ...]) -> FormSpec:
-    return FormSpec(
-        "assign team member",
+def assignment_form(
+    member_options: tuple[tuple[str, str], ...] = (),
+    *,
+    title: str = "assign team member",
+) -> FormSpec:
+    """With member_options, the form picks WHO; without, the caller already
+    knows the member (the Team screen's assign-to-account flow)."""
+    fields = []
+    if member_options:
+        fields.append(
+            Field("team_member_id", "who", "select", member_options, required=True)
+        )
+    fields.extend(
         [
-            Field("team_member_id", "who", "select", member_options, required=True),
             Field("role", "role", "select", tuple((r, r) for r in TEAM_ROLES),
                   optional_select=True),
             Field("lines", "lines they're placing", placeholder="cyber, D&O"),
             Field("notes", "notes", "textarea"),
-        ],
+        ]
     )
+    return FormSpec(title, fields)
 
 
 # --- document -----------------------------------------------------------------

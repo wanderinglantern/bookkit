@@ -28,8 +28,52 @@ class TeamScreen(Screen):
         Binding("a", "new_member", "New member"),
         Binding("e", "edit_member", "Edit"),
         Binding("i", "import_colleague", "Import (paste sig)"),
+        Binding("w", "assign_selected", "Assign to account"),
         Binding("f", "focus_filter", "Who for…?"),
     ]
+
+    def action_assign_selected(self) -> None:
+        """Assign the selected colleague to a client account — the mirror of
+        `w` on an account, starting from the member instead."""
+        from ...repo import orgs
+        from ..widgets.entity_forms import assignment_form
+        from ..widgets.forms import FormModal, dropped
+        from ..widgets.picker import Picker
+
+        member_id = self._selected_member_id()
+        if member_id is None:
+            return
+        conn = self.app.conn
+        member = team.get_member(conn, member_id)
+        clients = orgs.list_orgs(conn, kind="client")
+        if not clients:
+            self.notify("no client accounts yet", severity="warning")
+            return
+
+        def picked(org_id: str | None) -> None:
+            if org_id is None:
+                return
+            org = orgs.get(conn, org_id)
+
+            def commit(values: dict) -> str | None:
+                team.assign(conn, member_id, org_id=org_id, **dropped(values))
+                return None
+
+            def done(values: dict | None) -> None:
+                if values is not None:
+                    self.notify(f"{member.name} assigned to {org.name}")
+                    self.refresh_data(self.query_one("#team-filter", Input).value)
+
+            self.app.push_screen(
+                FormModal(
+                    assignment_form(title=f"{member.name} → {org.name}"),
+                    commit=commit,
+                ),
+                done,
+            )
+
+        options = [(org.name, org.id) for org in clients]
+        self.app.push_screen(Picker(f"assign {member.name} to…", options), picked)
 
     def action_import_colleague(self) -> None:
         """Paste a colleague's email signature — same parser as contacts."""

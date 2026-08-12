@@ -446,3 +446,32 @@ async def test_nest_market_under_new_master(seeded_db: Path) -> None:
         child_row = next(i for i, r in enumerate(rows) if "Indian Harbor" in r)
         assert "└" in rows[child_row]          # indented as a family member
         assert "AXA XL" in rows[child_row - 1]  # directly under its master
+
+
+async def test_assign_member_to_account_from_team_screen(seeded_db: Path) -> None:
+    from bookkit.repo import team as team_repo
+    from bookkit.tui.screens.team import TeamScreen
+    from bookkit.tui.widgets.forms import FormModal
+    from bookkit.tui.widgets.picker import Picker
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        member = team_repo.create_member(app.conn, "Rosa Silva", specialty="property")
+        await pilot.press("w")
+        await pilot.pause()
+        assert isinstance(app.screen, TeamScreen)
+        app.screen.refresh_data()
+        await pilot.pause()
+        table = app.screen.query_one("#team-table", ListTable)
+        table.move_cursor(row=table.get_row_index(member.id))
+        table.focus()
+        await pilot.press("w")
+        await pilot.pause()
+        assert isinstance(app.screen, Picker)
+        await pilot.press("enter")  # first client account
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        await pilot.press("ctrl+s")  # role/lines optional — assign as-is
+        await pilot.pause()
+        rows = team_repo.for_member(app.conn, member.id)
+        assert len(rows) == 1 and rows[0]["org_name"]

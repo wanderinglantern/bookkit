@@ -66,6 +66,7 @@ HELP = """\
   i  paste imports: contact/signature, program schedule, renewal terms
   t  create the towerkit file FROM this placement (nothing typed twice)
   w  assign a team member to this placement
+     (on the Team screen, w assigns the selected member to an account)
   x  merge a duplicate into another placement
   binding a submission (e on it → bound) offers to put the market
   on a layer at its share — towerkit validation gates every write
