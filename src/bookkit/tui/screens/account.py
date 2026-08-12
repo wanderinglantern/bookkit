@@ -417,12 +417,15 @@ class AccountScreen(Screen):
     def _push_form(self, spec, on_save) -> None:
         from ..widgets.forms import FormModal
 
-        def saved(values):
+        def commit(values) -> str | None:
+            on_save(values)  # raises → FormModal shows it and stays open
+            return None
+
+        def done(values) -> None:
             if values is not None:
-                on_save(values)
                 self.refresh_data()
 
-        self.app.push_screen(FormModal(spec), saved)
+        self.app.push_screen(FormModal(spec, commit=commit), done)
 
     def action_add_here(self) -> None:
         from ..widgets import entity_forms as ef
@@ -695,17 +698,22 @@ class AccountScreen(Screen):
         year = placement.period_from[:4]
         default = roots[0] / f"{slug}-{year}.json"
 
-        def saved(values: dict | None) -> None:
-            if values is None:
-                return
+        created: dict[str, str] = {}
+
+        def commit(values: dict) -> str | None:
             dest, diags = sync.scaffold_program(
                 self.app.conn, placement.id, Path(values["path"]).expanduser()
             )
             if dest is None or not diags.ok:
                 first = diags.errors[0] if diags.errors else "unknown error"
-                self.notify(f"scaffold refused: {first}", severity="error")
+                return f"scaffold refused: {first}"
+            created["name"] = dest.name
+            return None
+
+        def done(values: dict | None) -> None:
+            if values is None:
                 return
-            self.notify(f"created {dest.name} — build the tower in towerkit")
+            self.notify(f"created {created['name']} — build the tower in towerkit")
             self.refresh_data()
 
         spec = FormSpec(
@@ -713,7 +721,7 @@ class AccountScreen(Screen):
             [Field("path", "file path", required=True)],
             initial={"path": str(default)},
         )
-        self.app.push_screen(FormModal(spec), saved)
+        self.app.push_screen(FormModal(spec, commit=commit), done)
 
     def _edit_linked_placement(self, placement) -> None:
         """Dual-owner edit: name and effective dates go through the file
@@ -745,9 +753,7 @@ class AccountScreen(Screen):
             },
         )
 
-        def saved(values: dict | None) -> None:
-            if values is None:
-                return
+        def commit(values: dict) -> str | None:
             file_changes = {
                 key: values[key]
                 for key in ("program_name", "period_from", "period_to")
@@ -757,8 +763,7 @@ class AccountScreen(Screen):
             if file_changes:
                 diags = sync.update_program(conn, placement.id, **file_changes)
                 if not diags.ok:
-                    self.notify(f"refused: {diags.errors[0]}", severity="error")
-                    return
+                    return f"refused: {diags.errors[0]}"
             book_changes = {
                 key: values[key]
                 for key in ("status", "commission_bps")
@@ -766,10 +771,15 @@ class AccountScreen(Screen):
             }
             if book_changes:
                 placements.update(conn, placement.id, **book_changes)
+            return None
+
+        def done(values: dict | None) -> None:
+            if values is None:
+                return
             self.notify(f"updated {placement.ref}")
             self.refresh_data()
 
-        self.app.push_screen(FormModal(spec), saved)
+        self.app.push_screen(FormModal(spec, commit=commit), done)
 
     # --- transactional program edits (write-through) --------------------------
 
@@ -790,13 +800,6 @@ class AccountScreen(Screen):
             )
             return None
         return placement
-
-    def _apply_write_through(self, diags, success: str) -> None:
-        if diags.ok:
-            self.notify(success)
-            self.refresh_data()
-        else:
-            self.notify(f"refused: {diags.errors[0]}", severity="error")
 
     def action_edit_layer(self) -> None:
         from ... import sync
@@ -837,9 +840,7 @@ class AccountScreen(Screen):
                 },
             )
 
-            def saved(values: dict | None) -> None:
-                if values is None:
-                    return
+            def commit(values: dict) -> str | None:
                 diags = sync.update_layer(
                     self.app.conn,
                     placement.id,
@@ -852,9 +853,15 @@ class AccountScreen(Screen):
                     period_from=values.get("period_from"),
                     period_to=values.get("period_to"),
                 )
-                self._apply_write_through(diags, f"updated {layer['name']}")
+                return f"refused: {diags.errors[0]}" if not diags.ok else None
 
-            self.app.push_screen(FormModal(spec), saved)
+            def done(values: dict | None) -> None:
+                if values is None:
+                    return
+                self.notify(f"updated {layer['name']}")
+                self.refresh_data()
+
+            self.app.push_screen(FormModal(spec, commit=commit), done)
 
         options = [
             (
@@ -891,9 +898,7 @@ class AccountScreen(Screen):
             ],
         )
 
-        def saved(values: dict | None) -> None:
-            if values is None:
-                return
+        def commit(values: dict) -> str | None:
             line_ids = (
                 [line_id for line_id, _ in lines]
                 if values["line"] == "__all__"
@@ -908,9 +913,15 @@ class AccountScreen(Screen):
                 limit_cents=values["limit"],
                 premium_cents=values.get("premium"),
             )
-            self._apply_write_through(diags, f"added {values['name']} (to be placed)")
+            return f"refused: {diags.errors[0]}" if not diags.ok else None
 
-        self.app.push_screen(FormModal(spec), saved)
+        def done(values: dict | None) -> None:
+            if values is None:
+                return
+            self.notify(f"added {values['name']} (to be placed)")
+            self.refresh_data()
+
+        self.app.push_screen(FormModal(spec, commit=commit), done)
 
     def action_open_towerkit(self) -> None:
         """Suspend bookkit, open the linked file in towerkit's editor, and
@@ -970,22 +981,31 @@ class AccountScreen(Screen):
                 [Field("share", "share % ('25', '12.5%')", required=True)],
             )
 
-            def saved(values: dict | None) -> None:
-                if values is None:
-                    return
+            def commit(values: dict) -> str | None:
                 try:
                     share_bps = parse_share_bps(str(values["share"]))
                 except MoneyParseError as exc:
-                    self.notify(str(exc), severity="error")
-                    return
+                    return str(exc)
                 diags = sync.add_participant(
                     conn, placement.id, layer_id, market.name, share_bps
                 )
-                self._apply_write_through(
-                    diags, f"{market.name} added to {layer['name']} at {share_bps / 100:g}%"
-                )
+                if not diags.ok:
+                    return f"refused: {diags.errors[0]}"
+                bound["share_bps"] = share_bps
+                return None
 
-            self.app.push_screen(FormModal(spec), saved)
+            bound: dict[str, int] = {}
+
+            def done(values: dict | None) -> None:
+                if values is None:
+                    return
+                self.notify(
+                    f"{market.name} added to {layer['name']} "
+                    f"at {bound['share_bps'] / 100:g}%"
+                )
+                self.refresh_data()
+
+            self.app.push_screen(FormModal(spec, commit=commit), done)
 
         options = [
             (
@@ -1018,24 +1038,29 @@ class AccountScreen(Screen):
         )
         org_id = None if placement_id else self.current_org_id
 
-        def saved(values: dict | None) -> None:
+        def commit(values: dict) -> str | None:
+            cleaned = dropped(values)
+            member_id = cleaned.pop("team_member_id")
+            team_repo.assign(
+                conn, member_id, org_id=org_id, placement_id=placement_id, **cleaned
+            )
+            assigned["name"] = team_repo.get_member(conn, member_id).name
+            return None
+
+        assigned: dict[str, str] = {}
+
+        def done(values: dict | None) -> None:
             if values is None:
                 return
-            values = dropped(values)
-            member_id = values.pop("team_member_id")
-            team_repo.assign(
-                conn, member_id, org_id=org_id, placement_id=placement_id, **values
-            )
-            member = team_repo.get_member(conn, member_id)
             scope = "placement" if placement_id else "account"
-            self.notify(f"{member.name} assigned to this {scope}")
+            self.notify(f"{assigned['name']} assigned to this {scope}")
             self.refresh_data()
 
         options = tuple(
             (f"{m.name} ({m.specialty})" if m.specialty else m.name, m.id)
             for m in members
         )
-        self.app.push_screen(FormModal(assignment_form(options)), saved)
+        self.app.push_screen(FormModal(assignment_form(options), commit=commit), done)
 
     def action_merge_placement(self) -> None:
         """Merge the selected (duplicate) placement into another of this org's
