@@ -62,8 +62,14 @@ class PasteImportModal(ModalScreen):
         except Exception as exc:  # staging must never crash the app
             self.notify(f"could not stage: {exc}", severity="error")
             return
+        from rich.text import Text
+
         self._staged_text = text
-        self.query_one("#paste-preview", Static).update(self._staged.report())
+        # verbose: show every parsed field — the point of previewing a paste.
+        # Text() keeps pasted brackets from being eaten as Rich markup.
+        self.query_one("#paste-preview", Static).update(
+            Text(self._staged.report(verbose=True))
+        )
 
     def action_commit(self) -> None:
         current_text = self.query_one("#paste-text", TextArea).text

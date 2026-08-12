@@ -92,6 +92,38 @@ def commit_contact_paste(
     return result
 
 
+def commit_team_paste(
+    conn: sqlite3.Connection, staged: StagedImport, db_path: Path
+) -> CommitResult:
+    """Pasted colleague signature → team member (create, or update by email)."""
+    from ..repo import team
+
+    if not staged.ok:
+        raise ValueError(
+            f"staged import has {len(staged.errors)} error(s); commit refused"
+        )
+    result = CommitResult(backup=_snapshot(conn, db_path))
+    with db.transaction(conn):
+        for record in staged.records:
+            if record.kind != "team_member":
+                continue
+            fields = dict(record.fields)
+            if record.action == "update" and record.target_id is not None:
+                team.update_member(
+                    conn, record.target_id, note="import pasted colleague", **fields
+                )
+            else:
+                name = str(fields.pop("name"))
+                member = team.create_member(conn, name, **fields)
+                _provenance_member = member.id
+                base.log_event(
+                    conn, "team_member", _provenance_member, "import", None,
+                    record.key, "import pasted colleague",
+                )
+            _count(result, record)
+    return result
+
+
 def commit_program(
     conn: sqlite3.Connection,
     staged: StagedImport,

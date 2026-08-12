@@ -27,8 +27,27 @@ class TeamScreen(Screen):
         Binding("escape", "app.pop_screen", "Back"),
         Binding("a", "new_member", "New member"),
         Binding("e", "edit_member", "Edit"),
+        Binding("i", "import_colleague", "Import (paste sig)"),
         Binding("f", "focus_filter", "Who for…?"),
     ]
+
+    def action_import_colleague(self) -> None:
+        """Paste a colleague's email signature — same parser as contacts."""
+        from ...imports.commit import commit_team_paste
+        from ...imports.mappers.team_paste import stage_team_paste
+        from ..widgets.paste_import import PasteImportModal
+
+        def stage(text: str):
+            return stage_team_paste(self.app.conn, text)
+
+        def commit(staged) -> str:
+            commit_team_paste(self.app.conn, staged, self.app.db_file())
+            self.refresh_data(self.query_one("#team-filter", Input).value)
+            return "colleague saved to the team"
+
+        self.app.push_screen(
+            PasteImportModal("paste colleague signature", stage, commit)
+        )
 
     def compose(self) -> ComposeResult:
         yield Header()

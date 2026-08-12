@@ -66,8 +66,17 @@ TabbedContent {
 
 /* --- modals ---------------------------------------------------------------- */
 
-QuickCapture, SearchModal, ConfirmTask, LinkReview {
+QuickCapture, SearchModal, ConfirmTask, LinkReview, PasteImportModal,
+ImportChooser, ImportScreen, FormModal, Picker, ConfirmRenew, MergePicker {
     align: center middle;
+}
+
+#paste-preview, #import-preview {
+    border: round $primary-darken-2;
+    padding: 0 1;
+    height: auto;
+    max-height: 16;
+    overflow-y: auto;
 }
 
 .modal-box {

@@ -61,10 +61,12 @@ class ImportScreen(ModalScreen):
         except (ValueError, OSError) as exc:
             preview.update(str(exc))
             return
+        from rich.text import Text
+
         mapping = map_headers(table.headers, BOOK_FIELDS)
         self._staged = stage_book(self.app.conn, table, mapping)
         self._staged_path = path
-        preview.update(self._staged.report())
+        preview.update(Text(self._staged.report()))
 
     def action_commit(self) -> None:
         from ...imports.commit import commit_book

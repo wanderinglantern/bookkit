@@ -760,3 +760,62 @@ def test_match_placement_is_period_aware(conn) -> None:
     assert match_placement(conn, org.id, "property", "2026-10-01", "2027-10-01") == p26.id
     assert match_placement(conn, org.id, "Property", "2027-12-01", "2028-12-01") == p27.id
     assert match_placement(conn, org.id, "Property", "2030-01-01", "2031-01-01") is None
+
+
+# --- team colleague paste --------------------------------------------------------
+
+from bookkit.imports.commit import commit_team_paste  # noqa: E402
+from bookkit.imports.mappers.team_paste import stage_team_paste  # noqa: E402
+
+
+def test_stage_team_paste_parses_and_matches_by_email(conn) -> None:
+    from bookkit.repo import team as team_repo
+
+    staged = stage_team_paste(conn, _SIGNATURE)
+    [record] = staged.records
+    assert record.fields["name"] == "Rosa Silva"
+    assert record.fields["title"] == "Director of Risk Management"
+    assert record.fields["email"] == "rosa.silva@atomic.example.com"
+    assert staged.ok
+
+    existing = team_repo.create_member(
+        conn, "Rosa Silva", email="rosa.silva@atomic.example.com"
+    )
+    staged = stage_team_paste(conn, _SIGNATURE)
+    assert staged.records[0].action == "update"
+    assert staged.records[0].target_id == existing.id
+
+
+def test_commit_team_paste_creates_member(db_path: Path) -> None:
+    from bookkit.repo import team as team_repo
+
+    connection = db.connect(db_path)
+    try:
+        staged = stage_team_paste(connection, _SIGNATURE)
+        commit_team_paste(connection, staged, db_path)
+        [member] = team_repo.list_members(connection)
+        assert member.name == "Rosa Silva"
+        assert member.phone == "(312) 555-0142"
+    finally:
+        connection.close()
+
+
+def test_stage_team_paste_email_only_falls_back_with_warning(conn) -> None:
+    staged = stage_team_paste(conn, "just-an-email@example.com")
+    assert staged.ok  # email-local fallback, flagged for review
+    assert staged.records[0].fields["name"] == "just-an-email"
+    assert any(i.field == "contact_name" for i in staged.records[0].issues)
+
+
+def test_stage_team_paste_nothing_usable_is_error(conn) -> None:
+    staged = stage_team_paste(conn, "(312) 555-0142")  # phone but nobody
+    assert not staged.ok
+
+
+def test_verbose_report_shows_parsed_fields(conn) -> None:
+    org = orgs_repo.create(conn, kind="client", name="Atomic Industries")
+    staged = stage_contact_paste(conn, _SIGNATURE, org.id, org.name)
+    report = staged.report(verbose=True)
+    assert "rosa.silva@atomic.example.com" in report
+    assert "(312) 555-0142" in report
+    assert "Director of Risk Management" in report

@@ -31,10 +31,10 @@ def _plausible_phone(candidate: str) -> bool:
     return candidate.lstrip().startswith("+") or len(digits) in (10, 11)
 
 
-def stage_contact_paste(
-    conn: sqlite3.Connection, text: str, org_id: str, org_name: str
-) -> StagedImport:
-    contact = StagedRecord("contact", f"{org_name}/?", {"org_id": org_id}, source_row=1)
+def extract_signature(record: StagedRecord, text: str, org_name: str = "") -> None:
+    """Run the shape-based extraction into `record`: email/phone/linkedin by
+    pattern, first_name/last_name/title by position, warnings on the record.
+    Shared by the org-contact paste and the team-colleague paste."""
     remaining_lines: list[str] = []
     for raw_line in text.splitlines():
         line = normalize.clean_text(raw_line)
@@ -47,18 +47,25 @@ def stage_contact_paste(
             match = pattern.search(line)
             if match and field_name == "phone" and not _plausible_phone(match.group()):
                 match = None
-            if match and field_name not in contact.fields:
+            if match and field_name not in record.fields:
                 try:
-                    contact.fields[field_name] = cleaner(match.group())
+                    record.fields[field_name] = cleaner(match.group())
                     consumed = True
                 except ValueError as exc:
-                    contact.warn(field_name, str(exc))
+                    record.warn(field_name, str(exc))
                 line = normalize.clean_text(line.replace(match.group(), " "))
         if line and not consumed:
             remaining_lines.append(line)
         elif line and consumed and _NAMEISH_RE.match(line):
             remaining_lines.append(line)  # "Rosa Silva | rosa@..." style lines
-    _name_and_title(contact, remaining_lines, org_name)
+    _name_and_title(record, remaining_lines, org_name)
+
+
+def stage_contact_paste(
+    conn: sqlite3.Connection, text: str, org_id: str, org_name: str
+) -> StagedImport:
+    contact = StagedRecord("contact", f"{org_name}/?", {"org_id": org_id}, source_row=1)
+    extract_signature(contact, text, org_name)
     email = contact.fields.get("email")
     existing = match_contact(conn, org_id, email) if isinstance(email, str) else None
     if existing is None and "first_name" in contact.fields:

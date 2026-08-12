@@ -61,9 +61,10 @@ class StagedImport:
     def ok(self) -> bool:
         return not self.errors
 
-    def report(self) -> str:
-        """The CLI dry-run text: counts by kind/action, per-record issues,
-        unmapped headers."""
+    def report(self, verbose: bool = False) -> str:
+        """The dry-run text: counts by kind/action, per-record issues,
+        unmapped headers. With verbose (paste previews), every record shows
+        its PARSED FIELDS — what you're about to commit, not just how many."""
         lines = [f"import staging for {self.source}"]
         kinds: dict[str, dict[str, int]] = {}
         for record in self.records:
@@ -73,7 +74,14 @@ class StagedImport:
             counts = ", ".join(f"{n} {action}" for action, n in sorted(actions.items()))
             lines.append(f"  {kind}: {counts}")
         for record in self.records:
-            if record.issues:
+            if verbose:
+                lines.append(f"  {record.kind} {record.key} [{record.action}]")
+                for field_name, value in record.fields.items():
+                    if field_name in ("org_key", "org_id", "body") or value in (None, ""):
+                        continue
+                    lines.append(f"    {field_name}: {value}")
+                lines.extend(f"    {issue}" for issue in record.issues)
+            elif record.issues:
                 lines.append(f"  {record.kind} {record.key} (row {record.source_row})")
                 lines.extend(f"    {issue}" for issue in record.issues)
         if self.unmapped:
