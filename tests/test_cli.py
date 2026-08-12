@@ -74,3 +74,29 @@ def test_backup(cli_db: Path, tmp_path: Path, capsys) -> None:
     check = db.connect(dest, migrate=False)
     assert db.integrity_check(check)
     check.close()
+
+
+def test_export_open_items_writes_workbook(tmp_path: Path, capsys, monkeypatch) -> None:
+    from bookkit.repo import orgs
+    from bookkit.repo import tasks as tasks_repo
+    db_path = tmp_path / "b.db"
+    monkeypatch.setenv("BOOKKIT_DB", str(db_path))
+    conn = db.connect(db_path)
+    org = orgs.create(conn, name="Acme", kind="client")
+    tasks_repo.create(conn, "chase quote", org_id=org.id)
+    conn.close()
+    out = tmp_path / "acme.xlsx"
+    rc = main(["export", "open-items", "Acme", "--out", str(out)])
+    assert rc == 0 and out.exists()
+
+
+def test_export_unknown_org_suggests(tmp_path: Path, capsys, monkeypatch) -> None:
+    from bookkit.repo import orgs
+    db_path = tmp_path / "b.db"
+    monkeypatch.setenv("BOOKKIT_DB", str(db_path))
+    conn = db.connect(db_path)
+    orgs.create(conn, name="Acme Corp", kind="client")
+    conn.close()
+    rc = main(["export", "open-items", "Acme Copr"])
+    assert rc == 2
+    assert "Acme Corp" in capsys.readouterr().out

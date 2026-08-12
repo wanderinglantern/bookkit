@@ -59,6 +59,12 @@ def main(argv: list[str] | None = None) -> int:
     import_p.add_argument("--dry-run", action="store_true",
                           help="report only (committing happens in the TUI)")
 
+    export_p = sub.add_parser("export", help="client-facing workbook exports")
+    export_p.add_argument("flow", choices=["open-items"])
+    export_p.add_argument("org", help="client name or ref")
+    export_p.add_argument("--out", type=Path, default=None,
+                          help="default: <ref>-open-items-<date>.xlsx")
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -200,6 +206,25 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
         if not args.dry_run:
             print("commit happens in the TUI import screen; use --dry-run for now")
             return 2
+        return 0
+
+    if args.command == "export":
+        from .repo import orgs as orgs_repo
+        from .services import export_open_items
+
+        org = orgs_repo.find(conn, args.org) or orgs_repo.find_by_name(conn, args.org)
+        if org is None:
+            from rapidfuzz import process
+
+            names = [o.name for o in orgs_repo.list_orgs(conn, kind="client")]
+            close = process.extract(args.org, names, limit=3, score_cutoff=60)
+            hint = f" — did you mean: {', '.join(m[0] for m in close)}" if close else ""
+            print(f"no client matching {args.org!r}{hint}")
+            return 2
+        today = date.today()
+        out = args.out or Path(f"{org.ref}-open-items-{today.isoformat()}.xlsx")
+        path = export_open_items.write(conn, org.id, out, today)
+        print(f"wrote {path}")
         return 0
 
     return 2
