@@ -127,6 +127,7 @@ class AccountScreen(Screen):
         Binding("w", "assign_team", "Assign team", show=False),
         Binding("t", "scaffold_tower", "Tower file", show=False),
         Binding("x", "merge_placement", "Merge", show=False),
+        Binding("i", "import_here", "Import (paste)"),
         Binding("d", "task_done", "Done (task)", show=False),
         Binding("p", "mark_primary", "Primary (contact)", show=False),
         Binding("u", "undo", "Undo"),
@@ -561,6 +562,107 @@ class AccountScreen(Screen):
             self.refresh_data()
 
         return done
+
+    def action_import_here(self) -> None:
+        """Paste imports for this account: contact/signature, a program
+        schedule onto an unlinked placement, or renewal terms onto a linked
+        one. Every flow stages first; commit is gated on zero errors."""
+        from ..widgets.paste_import import ImportChooser
+
+        conn = self.app.conn
+        org = orgs.get(conn, self.current_org_id)
+        options: list[tuple[str, str]] = [("contact", "Contact / signature paste")]
+        for placement in placements.for_org(conn, self.current_org_id):
+            label = f"{placement.ref} {placement.program_name} {placement.period_from}"
+            if placement.program_path:
+                options.append((f"renewal:{placement.id}", f"Renewal terms → {label}"))
+            else:
+                options.append((f"program:{placement.id}", f"Program schedule → {label}"))
+
+        def chosen(option_id: str | None) -> None:
+            if option_id is None:
+                return
+            if option_id == "contact":
+                self._paste_contact(org)
+            elif option_id.startswith("program:"):
+                self._paste_program(org, option_id.partition(":")[2])
+            elif option_id.startswith("renewal:"):
+                self._paste_renewal(option_id.partition(":")[2])
+
+        self.app.push_screen(ImportChooser(options), chosen)
+
+    def _paste_contact(self, org) -> None:
+        from ...imports.commit import commit_contact_paste
+        from ...imports.mappers.contact_paste import stage_contact_paste
+        from ..widgets.paste_import import PasteImportModal
+
+        def stage(text: str):
+            return stage_contact_paste(self.app.conn, text, org.id, org.name)
+
+        def commit(staged) -> str:
+            commit_contact_paste(self.app.conn, staged, org.id, self.app.db_file())
+            self.refresh_data()
+            return "contact captured"
+
+        self.app.push_screen(PasteImportModal("paste signature / thread", stage, commit))
+
+    def _paste_program(self, org, placement_id: str) -> None:
+        from ... import sync
+        from ...imports.commit import commit_program
+        from ...imports.mappers.program_paste import stage_program
+        from ..widgets.paste_import import PasteImportModal
+
+        placement = placements.get(self.app.conn, placement_id)
+        roots = sync.configured_roots(self.app.conn)
+        if not roots:
+            self.notify("set the program file location first (, on Today)", severity="warning")
+            return
+        slug = "-".join(org.name.lower().split()[:2]).strip(",.")
+        dest = roots[0] / f"{slug}-{placement.period_from[:4]}.json"
+        state: dict = {}
+
+        def stage(text: str):
+            staged, draft = stage_program(
+                self.app.conn, text, org.name, placement.program_name,
+                placement.period_from, placement.period_to,
+            )
+            state["draft"] = draft
+            return staged
+
+        def commit(staged) -> str:
+            path, diags = commit_program(
+                self.app.conn, staged, state["draft"], placement.id, dest,
+                self.app.db_file(),
+            )
+            if path is None:
+                first = diags.errors[0] if diags.errors else "unknown error"
+                raise ValueError(str(first))
+            self.refresh_data()
+            return f"created {path.name} — projected onto {placement.ref}"
+
+        self.app.push_screen(
+            PasteImportModal(f"paste schedule → {placement.program_name}", stage, commit)
+        )
+
+    def _paste_renewal(self, placement_id: str) -> None:
+        from ...imports.commit import commit_renewal
+        from ...imports.mappers.renewal_paste import stage_renewal
+        from ..widgets.paste_import import PasteImportModal
+
+        def stage(text: str):
+            return stage_renewal(self.app.conn, placement_id, text)
+
+        def commit(staged) -> str:
+            new_id, diags = commit_renewal(
+                self.app.conn, staged, placement_id, self.app.db_file()
+            )
+            if new_id is None:
+                first = diags.errors[0] if diags.errors else "unknown error"
+                raise ValueError(str(first))
+            self.refresh_data()
+            return "renewed with pasted terms — review in the placements tab"
+
+        self.app.push_screen(PasteImportModal("paste renewal terms", stage, commit))
 
     def action_scaffold_tower(self) -> None:
         """Create the towerkit file FROM the selected placement — insured,

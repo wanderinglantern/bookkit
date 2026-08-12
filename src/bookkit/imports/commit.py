@@ -10,10 +10,14 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .. import db
 from ..repo import base, contacts, interactions, orgs, placements
 from .staging import StagedImport, StagedRecord
+
+if TYPE_CHECKING:
+    from towerkit.validate import Diagnostics
 
 _KIND_TABLES = {"account": "org", "contact": "contact", "placement": "placement"}
 
@@ -103,7 +107,7 @@ def commit_program(
     placement_id: str,
     dest: Path,
     db_path: Path,
-) -> tuple[Path | None, object]:
+) -> tuple[Path | None, Diagnostics]:
     """Write-through order: towerkit file first (validated by to_program),
     then link + projection. Returns (path, Diagnostics)."""
     from towerkit.ingest import DraftProgram
@@ -144,10 +148,12 @@ def commit_program(
 
 def commit_renewal(
     conn: sqlite3.Connection, staged: StagedImport, placement_id: str, db_path: Path
-) -> tuple[str | None, object]:
+) -> tuple[str | None, Diagnostics]:
     """sync.renew rolls the placement (clone-at-birth for linked files), then
     each staged money delta lands on the renewed file via write-through."""
-    from towerkit.validate import Diagnostics
+    from towerkit.validate import (
+        Diagnostics,  # noqa: F811 — runtime import of the TYPE_CHECKING name
+    )
 
     from .. import sync
 

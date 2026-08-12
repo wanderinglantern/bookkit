@@ -36,6 +36,7 @@ class TodayScreen(Screen):
         Binding("e", "edit_task", "Edit task"),
         Binding("d", "task_done", "Done (task)"),
         Binding("u", "undo", "Undo"),
+        Binding("i", "import_book", "Import"),
         Binding("y", "sync_programs", "Sync programs"),
         Binding("comma", "settings", "Setup", key_display=","),
         Binding("r", "refresh", "Refresh", show=False),
@@ -153,6 +154,11 @@ class TodayScreen(Screen):
         key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value or ""
         kind, task_id, _ = key.split(":", 2)
         return task_id if kind == "task" else None
+
+    def action_import_book(self) -> None:
+        from .import_screen import ImportScreen
+
+        self.app.push_screen(ImportScreen())
 
     def action_new_task(self) -> None:
         from ..widgets.entity_forms import apply_task, task_form

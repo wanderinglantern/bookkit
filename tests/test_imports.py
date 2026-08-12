@@ -429,6 +429,61 @@ def test_cli_import_bad_file_exits_one(tmp_path: Path, capsys) -> None:
     assert "banana" in capsys.readouterr().out
 
 
+# --- TUI pilots -----------------------------------------------------------------------
+
+
+async def test_import_screen_book_commit(tmp_path: Path) -> None:
+    from bookkit.tui.app import BookkitApp
+    from bookkit.tui.screens.import_screen import ImportScreen
+
+    dbfile = tmp_path / "tui.db"
+    db.connect(dbfile).close()
+    template = tmp_path / "book.xlsx"
+    from bookkit.imports.fieldspec import write_template
+
+    write_template(BOOK_FIELDS, template)
+    app = BookkitApp(dbfile)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("i")
+        assert isinstance(app.screen, ImportScreen)
+        path_input = app.screen.query_one("#import-path")
+        path_input.value = str(template)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen._staged is not None and app.screen._staged.ok
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert orgs_repo.find_by_name(app.conn, "Atomic Industries") is not None
+
+
+async def test_account_import_chooser_contact_paste(tmp_path: Path) -> None:
+    from bookkit.tui.app import BookkitApp
+    from bookkit.tui.widgets.paste_import import ImportChooser, PasteImportModal
+
+    dbfile = tmp_path / "tui.db"
+    connection = db.connect(dbfile)
+    org = orgs_repo.create(connection, kind="client", name="Atomic Industries")
+    connection.close()
+    app = BookkitApp(dbfile)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("i")
+        await pilot.pause()
+        assert isinstance(app.screen, ImportChooser)
+        await pilot.press("enter")  # first option: contact paste
+        await pilot.pause()
+        assert isinstance(app.screen, PasteImportModal)
+        app.screen.query_one("#paste-text").text = _SIGNATURE
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        assert app.screen._staged is not None and app.screen._staged.ok
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        [contact] = contacts_repo.for_org(app.conn, org.id)
+        assert contact.name == "Rosa Silva"
+
+
 def test_imports_package_contains_no_sql() -> None:
     import re
 

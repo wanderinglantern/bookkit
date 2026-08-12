@@ -25,6 +25,10 @@ class BookkitApp(App):
         self._db_path = db_path
         self.conn = db.connect(db_path)
 
+    def db_file(self) -> Path:
+        """The on-disk database path — import commits snapshot it first."""
+        return Path(self._db_path) if self._db_path else db.default_db_path()
+
     def on_mount(self) -> None:
         from .screens.today import TodayScreen
 
