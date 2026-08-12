@@ -177,3 +177,31 @@ async def test_help_screen(seeded_db: Path) -> None:
         assert isinstance(app.screen, HelpScreen)
         await pilot.press("escape")
         assert isinstance(app.screen, TodayScreen)
+
+
+async def test_l_edits_layer_under_cursor_and_single_layer_skips_picker(
+    seeded_db: Path,
+) -> None:
+    from textual.widgets import TabbedContent
+
+    from bookkit.repo import placements as placements_repo
+    from bookkit.tui.widgets.forms import FormModal
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        linked = placements_repo.all_linked(app.conn)[0]
+        app.open_account(linked.org_id)
+        await pilot.pause()
+        app.screen.query_one(TabbedContent).active = "tab-placements"
+        await pilot.pause()
+        table = app.screen.query_one("#placements-table", ListTable)
+        table.move_cursor(row=table.get_row_index(linked.id))
+        app.screen.show_placement(linked.id)
+        await pilot.pause()
+        carriers = app.screen.query_one("#carriers-table", ListTable)
+        assert carriers.row_count > 0
+        carriers.focus()
+        await pilot.press("l")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)  # no picker in between
+        assert app.screen.spec.title.startswith("edit layer")

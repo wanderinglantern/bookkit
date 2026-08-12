@@ -336,12 +336,25 @@ class AccountScreen(Screen):
         carriers = self.query_one("#carriers-table", ListTable)
         carriers.clear(columns=True)
         carriers.add_columns("carrier", "layer", "share", "premium")
-        for row in projection.participants_for_placement(conn, placement_id):
+        # rows are keyed "<layer_id>:<n>" so `l` can edit the layer under the
+        # cursor; participant-less layers get a placeholder row to stay reachable
+        seen_layers: set[str] = set()
+        for index, row in enumerate(projection.participants_for_placement(conn, placement_id)):
+            seen_layers.add(str(row["layer_id"]))
             carriers.add_row(
                 row["carrier"], row["layer_name"],
                 f"{row['share_bps'] / 100:g}%",
                 format_cents_compact(row["premium"]) if row["premium"] else "—",
+                key=f"{row['layer_id']}:{index}",
             )
+        from ... import sync as _sync
+
+        for layer in _sync.layer_details(conn, placement_id):
+            if str(layer["id"]) not in seen_layers:
+                carriers.add_row(
+                    "— to be placed —", layer["name"], "", "",
+                    key=f"{layer['id']}:x",
+                )
 
         preview = self.query_one("#tower-preview", TowerPreview)
         state = self.query_one("#sync-state", Static)
@@ -814,6 +827,15 @@ class AccountScreen(Screen):
             self.notify("no layers yet — L adds one", severity="warning")
             return
 
+        def _layer_under_cursor() -> str | None:
+            """The carriers table's highlighted row names a layer directly."""
+            table = self.query_one("#carriers-table", ListTable)
+            if self.focused is not table or not table.row_count:
+                return None
+            cell_key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0))
+            row_key = cell_key.row_key.value
+            return str(row_key).partition(":")[0] if row_key else None
+
         def picked(layer_id: str | None) -> None:
             if layer_id is None:
                 return
@@ -871,6 +893,13 @@ class AccountScreen(Screen):
             )
             for ly in layers
         ]
+        direct = _layer_under_cursor()
+        if direct is not None and any(str(ly["id"]) == direct for ly in layers):
+            picked(direct)  # the layer under the cursor — no picker needed
+            return
+        if len(layers) == 1:
+            picked(str(layers[0]["id"]))  # only one choice — don't ask
+            return
         self.app.push_screen(Picker("edit which layer?", options), picked)
 
     def action_add_layer(self) -> None:
