@@ -16,7 +16,7 @@ from datetime import date
 from rapidfuzz import fuzz
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Select, Static, TextArea
 from textual.widgets.option_list import Option
@@ -37,6 +37,17 @@ class QuickCapture(ModalScreen):
         Binding("escape", "cancel", "Cancel (keeps draft)"),
         Binding("ctrl+s", "save", "Save", priority=True),
     ]
+    # only the field list scrolls — the title and the save/cancel hint are
+    # pinned so they never leave the screen on short terminals
+    DEFAULT_CSS = """
+    QuickCapture .modal-box {
+        height: auto;
+    }
+    QuickCapture .modal-fields {
+        height: auto;
+        max-height: 55vh;
+    }
+    """
 
     def __init__(self, default_org_id: str | None = None) -> None:
         super().__init__()
@@ -45,28 +56,35 @@ class QuickCapture(ModalScreen):
         self._orgs: list = []
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(classes="modal-box"):
+        with Vertical(classes="modal-box"):
             yield Static("LOG INTERACTION", classes="modal-title")
-            yield Label("account", classes="field-label")
-            yield Input(placeholder="type to fuzzy-match…", id="qc-org")
-            yield OptionList(id="qc-org-options")
-            yield Label("type", classes="field-label")
-            yield Select(
-                [(t.value, t.value) for t in InteractionType],
-                value="note",
-                allow_blank=False,
-                id="qc-type",
+            with VerticalScroll(classes="modal-fields"):
+                yield Label("account", classes="field-label")
+                yield Input(placeholder="type to fuzzy-match…", id="qc-org")
+                yield OptionList(id="qc-org-options")
+                yield Label("type", classes="field-label")
+                yield Select(
+                    [(t.value, t.value) for t in InteractionType],
+                    value="note",
+                    allow_blank=False,
+                    id="qc-type",
+                )
+                yield Label("date (today, fri, +2w, 2026-10-15…)", classes="field-label")
+                yield Input(value="today", id="qc-date")
+                yield Label("subject", classes="field-label")
+                yield Input(placeholder="what happened", id="qc-subject")
+                yield Label("note", classes="field-label")
+                yield TextArea(id="qc-note")
+            yield Static(
+                "[b]^s[/b] save · [b]esc[/b] cancel (draft kept)", classes="hint"
             )
-            yield Label("date (today, fri, +2w, 2026-10-15…)", classes="field-label")
-            yield Input(value="today", id="qc-date")
-            yield Label("subject", classes="field-label")
-            yield Input(placeholder="what happened", id="qc-subject")
-            yield Label("note", classes="field-label")
-            yield TextArea(id="qc-note")
-            yield Static("ctrl-s save · esc cancel (draft kept)", classes="hint")
             yield Button("Save", variant="primary", id="qc-save")
 
     def on_mount(self) -> None:
+        # the account matches scroll inside 6 rows so subject and note stay
+        # within reach — the app-wide 10-row cap buried the actual note fields
+        # (inline style: the tcss .modal-box OptionList rule outranks DEFAULT_CSS)
+        self.query_one("#qc-org-options", OptionList).styles.max_height = 6
         self._orgs = orgs.list_orgs(self.app.conn)
         self._restore_draft()
         org_input = self.query_one("#qc-org", Input)
@@ -187,9 +205,17 @@ class ConfirmTask(ModalScreen):
     app: BookkitApp
     """The offered follow-up task. Enter/y creates, esc/n declines."""
 
+    DEFAULT_CSS = """
+    ConfirmTask .modal-box {
+        height: auto;
+    }
+    """
+
     BINDINGS = [
         Binding("escape,n", "decline", "No"),
-        Binding("y", "accept", "Yes"),
+        # enter here covers the unfocused case; a focused title input submits
+        # through on_input_submitted instead, so it never fires twice
+        Binding("y,enter", "accept", "Yes"),
     ]
 
     def __init__(
@@ -208,7 +234,10 @@ class ConfirmTask(ModalScreen):
                 f"create a task due {self.suggestion.due_on.isoformat()}?"
             )
             yield Input(value=self.suggestion.phrase.capitalize(), id="ct-title")
-            yield Static("y / enter create · n / esc skip", classes="hint")
+            yield Static(
+                "[b]y[/b] / [b]enter[/b] create · [b]n[/b] / [b]esc[/b] skip",
+                classes="hint",
+            )
             yield Button("Create task", variant="primary", id="ct-yes")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

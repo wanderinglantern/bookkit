@@ -8,20 +8,50 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..app import BookkitApp
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Static
 
-from ...money import format_cents_compact
+from ...dates import days_until
 from ...repo import contacts, orgs, submissions
 from ...services import exposure, hit_rate
+from .. import theme
+from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.tables import ListTable
+
+# appetite vocabulary → state colors, same grammar as theme.STATUS_STYLES
+# (candidates to move there: target/will_consider/selective/no)
+APPETITE_STYLES: dict[str, str] = {
+    "target": theme.GREEN,
+    "will_consider": theme.BLUE,
+    "selective": theme.AMBER,
+    "no": theme.RED,
+}
+
+
+def _appetite_text(value: str) -> Text:
+    """Color + the word itself, snake_case prettified ('will consider')."""
+    return Text(value.replace("_", " "), style=APPETITE_STYLES.get(value, theme.FG))
+
+
+def _pretty(value: str | None) -> Text:
+    return Text(value.replace("_", " ")) if value else dash()
 
 
 class MarketsScreen(Screen):
     app: BookkitApp
+
+    DEFAULT_CSS = """
+    MarketsScreen #markets-hint {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    """
+
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
         Binding("a", "new_market", "New market"),
@@ -92,6 +122,12 @@ class MarketsScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield ListTable(id="markets-table")
+        yield Static(
+            f"[{theme.DIM}][b]enter[/b] opens market · [b]a[/b] add · [b]e[/b] edit · "
+            f"[b]N[/b] nest under master · [b]x[/b] merge duplicate · "
+            f"[b]A[/b] alias[/]",
+            id="markets-hint",
+        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -99,23 +135,28 @@ class MarketsScreen(Screen):
         rates = {r.market_org_id: r for r in hit_rate.by_market(conn)}
         table = self.query_one("#markets-table", ListTable)
         table.add_columns(
-            "market", "type", "rating", "appetite", "subs out", "quote rate", "bind rate"
+            "market", "type", "rating", "target lines",
+            right("subs out"), right("quote rate"), right("bind rate"),
         )
         def add(org, depth: int) -> None:
             profile = orgs.get_market_profile(conn, org.id)
             appetite = orgs.appetite_for_market(conn, org.id)
-            targets = [a.line for a in appetite if a.appetite == "target"]
+            targets = [a.line.replace("_", " ") for a in appetite if a.appetite == "target"]
             rate = rates.get(org.id)
             out = len(submissions.for_market(conn, org.id, status="out"))
-            name = f"  └ {org.name}" if depth else org.name
+            name = (
+                Text.assemble(("  └ ", theme.DIM), org.name) if depth else Text(org.name)
+            )
             table.add_row(
                 name,
-                profile.market_type if profile and profile.market_type else "—",
-                profile.am_best_rating if profile and profile.am_best_rating else "—",
-                ", ".join(targets) or "—",
-                str(out),
-                f"{rate.quote_rate:.0%}" if rate else "—",
-                f"{rate.bind_rate:.0%}" if rate else "—",
+                _pretty(profile.market_type if profile else None),
+                Text(profile.am_best_rating) if profile and profile.am_best_rating else dash(),
+                Text(", ".join(targets), style=theme.GREEN) if targets else dash(),
+                Text(str(out), justify="right", style=theme.BLUE if out else theme.DIM),
+                Text(f"{rate.quote_rate:.0%}", justify="right")
+                if rate else Text("—", style=theme.DIM, justify="right"),
+                Text(f"{rate.bind_rate:.0%}", justify="right")
+                if rate else Text("—", style=theme.DIM, justify="right"),
                 key=org.id,
             )
 
@@ -249,6 +290,24 @@ class MarketDetailScreen(Screen):
     """One market before a meeting: appetite, underwriters, live submissions,
     and every tower it sits on in the next 90 days."""
 
+    DEFAULT_CSS = """
+    MarketDetailScreen #market-header {
+        height: auto;
+        padding: 0 1;
+    }
+    MarketDetailScreen #md-hint {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    MarketDetailScreen .pane-title {
+        color: $text-muted;
+        text-style: bold;
+        padding: 0 1;
+        margin-top: 1;
+    }
+    """
+
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
         Binding("a", "add_appetite", "Add appetite"),
@@ -328,6 +387,12 @@ class MarketDetailScreen(Screen):
         yield Header()
         with VerticalScroll():
             yield Static(id="market-header")
+            yield Static(
+                f"[{theme.DIM}][b]a[/b] add appetite · [b]w[/b] add underwriter · "
+                f"[b]i[/b] paste signature · [b]enter[/b] on a tower row opens the "
+                f"account[/]",
+                id="md-hint",
+            )
             yield Static("APPETITE", classes="pane-title")
             yield ListTable(id="md-appetite")
             yield Static("UNDERWRITERS", classes="pane-title")
@@ -339,55 +404,82 @@ class MarketDetailScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        # dossier layout: each table hugs its rows so the page reads top to
+        # bottom (inline styles — the app-wide `DataTable {height: 1fr}` wins
+        # the cascade over this screen's DEFAULT_CSS)
+        for table in self.query(ListTable):
+            table.styles.height = "auto"
+            table.styles.max_height = 14
         conn = self.app.conn
         market = orgs.get(conn, self.market_org_id)
+        profile = orgs.get_market_profile(conn, market.id)
+        kind = (
+            profile.market_type.replace("_", " ")
+            if profile and profile.market_type else "market"
+        )
+        rating_text = (
+            f"   [b]AM Best {profile.am_best_rating}[/b]"
+            if profile and profile.am_best_rating else ""
+        )
         rate = next(
             (r for r in hit_rate.by_market(conn) if r.market_org_id == market.id), None
         )
         rate_text = (
             f"   quote {rate.quote_rate:.0%} · bind {rate.bind_rate:.0%}"
-            f" ({rate.sent} sent)" if rate else ""
+            f" [{theme.DIM}]({rate.sent} sent)[/]" if rate else ""
         )
         from ...repo import aliases
 
         known = aliases.for_market(conn, market.id)
-        alias_text = f"\nalso written as: {', '.join(known)}" if known else ""
+        alias_text = (
+            f"\n[{theme.DIM}]also written as: {', '.join(known)}[/]" if known else ""
+        )
         self.query_one("#market-header", Static).update(
-            f"[b]{market.name}[/b]{rate_text}{alias_text}"
+            f"[b]{market.name}[/b]  [{theme.DIM}]({kind})[/]"
+            f"{rating_text}{rate_text}{alias_text}"
         )
 
         table = self.query_one("#md-appetite", ListTable)
-        table.add_columns("line", "appetite", "min premium", "max limit", "territories")
+        table.add_columns(
+            "line", "appetite", right("min premium"), right("max limit"), "territories"
+        )
         for a in orgs.appetite_for_market(conn, market.id):
             table.add_row(
-                a.line, a.appetite,
-                format_cents_compact(a.min_premium) if a.min_premium else "—",
-                format_cents_compact(a.max_limit) if a.max_limit else "—",
-                a.territories or "—",
+                _pretty(a.line), _appetite_text(a.appetite),
+                money_text(a.min_premium), money_text(a.max_limit),
+                a.territories or dash(),
             )
 
         table = self.query_one("#md-contacts", ListTable)
         table.add_columns("name", "title", "email", "phone")
         for c in contacts.for_org(conn, market.id):
-            table.add_row(c.name, c.title or "—", c.email or "—", c.phone or c.mobile or "—")
+            table.add_row(
+                c.name, c.title or dash(), c.email or dash(),
+                c.phone or c.mobile or dash(),
+            )
 
         table = self.query_one("#md-subs", ListTable)
-        table.add_columns("sent", "status", "quoted", "response")
+        table.add_columns("sent", "status", right("quoted"), "response")
         for s in submissions.for_market(conn, market.id):
             table.add_row(
-                s.sent_on, s.status,
-                format_cents_compact(s.quoted_premium) if s.quoted_premium else "—",
-                s.response_on or "—",
+                s.sent_on, status_text(s.status),
+                money_text(s.quoted_premium),
+                s.response_on or dash(),
             )
 
         table = self.query_one("#md-exposure", ListTable)
-        table.add_columns("account", "expiry", "program", "layer", "as written", "share", "premium")
+        table.add_columns(
+            "account", "expiry", right("due in"), "program", "layer",
+            "as written", right("share"), right("premium"),
+        )
         for row in exposure.for_market(conn, market.id, days=90):
+            days = days_until(row.period_to)
             table.add_row(
-                row.org_name, row.period_to, row.program_name, row.layer_name,
-                row.carrier if row.carrier != market.name else "",
-                f"{row.share_bps / 100:g}%",
-                format_cents_compact(row.premium) if row.premium else "—",
+                row.org_name, date_text(row.period_to, days), days_text(days),
+                row.program_name, row.layer_name,
+                row.carrier if row.carrier != market.name else dash(),
+                Text(f"{row.share_bps / 100:g}%", justify="right"),
+                money_text(row.premium),
                 key=row.org_id,
             )
 

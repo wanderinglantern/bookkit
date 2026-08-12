@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..app import BookkitApp
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -18,10 +19,18 @@ from textual.widgets.option_list import Option
 from ...money import format_cents_compact, weighted_cents
 from ...repo import opportunities, orgs
 from ...services import pipeline
+from .. import theme
 
 
 class PipelineScreen(Screen):
     app: BookkitApp
+    DEFAULT_CSS = """
+    PipelineScreen #pipeline-hint {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    """
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
         Binding("h,left", "prev_column", "◀ column", key_display="h"),
@@ -43,6 +52,12 @@ class PipelineScreen(Screen):
                 with Vertical(classes="kanban-column", id=f"col-{stage}"):
                     yield Static(id=f"title-{stage}", classes="column-title")
                     yield OptionList(id=f"list-{stage}")
+        yield Static(
+            f"[{theme.DIM}][b]h[/b]/[b]l[/b] columns · [b]↑[/b]/[b]↓[/b] cards · "
+            f"[b]>[/b] advance · [b]<[/b] mark lost · [b]e[/b] edit · "
+            f"[b]enter[/b] opens account · [b]u[/b] undo[/]",
+            id="pipeline-hint",
+        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -54,8 +69,10 @@ class PipelineScreen(Screen):
         for stage in pipeline.OPEN_STAGES:
             opps = opportunities.by_stage(conn, stage)
             weighted = sum(weighted_cents(o.target_premium or 0, o.probability_pct) for o in opps)
+            stage_color = theme.STATUS_STYLES.get(stage, theme.FG)
             self.query_one(f"#title-{stage}", Static).update(
-                f"{stage.upper()} ({len(opps)}) — {format_cents_compact(weighted)}"
+                f"[b {stage_color}]{stage.upper()}[/] "
+                f"[{theme.DIM}]· {len(opps)} · {format_cents_compact(weighted)}[/]"
             )
             option_list = self.query_one(f"#list-{stage}", OptionList)
             option_list.clear_options()
@@ -64,10 +81,17 @@ class PipelineScreen(Screen):
             for o in sorted(opps, key=lambda o: o.target_effective or "9999"):
                 org = orgs.get(conn, o.org_id)
                 target = format_cents_compact(o.target_premium) if o.target_premium else "—"
-                label = (
-                    f"{o.ref} {org.name}\n"
-                    f"  {o.title} · {target} · {o.probability_pct}%\n"
-                    f"  {o.lines or 'lines —'} · eff {o.target_effective or '—'}"
+                # Text.assemble, not markup: account/title text must render
+                # verbatim even if it contains [brackets]
+                label = Text.assemble(
+                    (o.ref, theme.DIM), " ", (org.name, "bold"), "\n",
+                    "  ", o.title,
+                    (" · ", theme.DIM), target,
+                    (f" · {o.probability_pct}%", theme.DIM), "\n",
+                    (
+                        f"  {o.lines or 'lines —'} · eff {o.target_effective or '—'}",
+                        theme.DIM,
+                    ),
                 )
                 option_list.add_option(Option(label, id=o.id))
 

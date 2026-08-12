@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static, TextArea
 
@@ -72,6 +72,17 @@ class FormModal(ModalScreen):
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+s", "save", "Save", priority=True),
     ]
+    # the box hugs its content; only the field list scrolls, so the title and
+    # the "^s save" hint stay on screen however long the form is
+    DEFAULT_CSS = """
+    FormModal .modal-box {
+        height: auto;
+    }
+    FormModal .modal-fields {
+        height: auto;
+        max-height: 55vh;
+    }
+    """
 
     def __init__(
         self,
@@ -83,46 +94,50 @@ class FormModal(ModalScreen):
         self._commit = commit
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(classes="modal-box"):
+        with Vertical(classes="modal-box"):
             yield Static(self.spec.title.upper(), classes="modal-title")
-            for f in self.spec.fields:
-                suffix = " *" if f.required else ""
-                yield Label(f"{f.label}{suffix}", classes="field-label")
-                initial = self.spec.initial.get(f.key)
-                if f.kind == "select":
-                    # NB: Select.BLANK is a plain False in Textual 8.x — the
-                    # real no-selection sentinel is Select.NULL.
-                    yield Select(
-                        list(f.options),
-                        value=initial if initial is not None else Select.NULL,
-                        allow_blank=f.optional_select or initial is None,
-                        id=f"form-{f.key}",
-                    )
-                elif f.kind == "textarea":
-                    area = TextArea(id=f"form-{f.key}")
-                    area.text = str(initial) if initial else ""
-                    yield area
-                else:
-                    from textual.suggester import SuggestFromList
-
-                    yield Input(
-                        value=self._initial_text(f, initial),
-                        placeholder=f.placeholder or _PLACEHOLDERS.get(f.kind, ""),
-                        id=f"form-{f.key}",
-                        suggester=(
-                            SuggestFromList(f.suggestions, case_sensitive=False)
-                            if f.suggestions
-                            else None
-                        ),
-                    )
-                    if f.suggestions:
-                        from textual_autocomplete import AutoComplete
-
-                        yield AutoComplete(
-                            f"#form-{f.key}", candidates=list(f.suggestions)
-                        )
-            yield Static("ctrl-s save · esc cancel", classes="hint")
+            with VerticalScroll(classes="modal-fields"):
+                yield from self._compose_fields()
+            yield Static("[b]^s[/b] save · [b]esc[/b] cancel", classes="hint")
             yield Button("Save", variant="primary", id="form-save")
+
+    def _compose_fields(self) -> ComposeResult:
+        for f in self.spec.fields:
+            suffix = " *" if f.required else ""
+            yield Label(f"{f.label}{suffix}", classes="field-label")
+            initial = self.spec.initial.get(f.key)
+            if f.kind == "select":
+                # NB: Select.BLANK is a plain False in Textual 8.x — the
+                # real no-selection sentinel is Select.NULL.
+                yield Select(
+                    list(f.options),
+                    value=initial if initial is not None else Select.NULL,
+                    allow_blank=f.optional_select or initial is None,
+                    id=f"form-{f.key}",
+                )
+            elif f.kind == "textarea":
+                area = TextArea(id=f"form-{f.key}")
+                area.text = str(initial) if initial else ""
+                yield area
+            else:
+                from textual.suggester import SuggestFromList
+
+                yield Input(
+                    value=self._initial_text(f, initial),
+                    placeholder=f.placeholder or _PLACEHOLDERS.get(f.kind, ""),
+                    id=f"form-{f.key}",
+                    suggester=(
+                        SuggestFromList(f.suggestions, case_sensitive=False)
+                        if f.suggestions
+                        else None
+                    ),
+                )
+                if f.suggestions:
+                    from textual_autocomplete import AutoComplete
+
+                    yield AutoComplete(
+                        f"#form-{f.key}", candidates=list(f.suggestions)
+                    )
 
     @staticmethod
     def _initial_text(f: Field, initial: Any) -> str:
@@ -210,6 +225,9 @@ _PLACEHOLDERS = {
     "phone": "312 555 0142 · +44 …",
     "email": "name@company.com",
     "linkedin": "profile URL or handle",
+    "url": "https://company.com",
+    "domain": "company.com",
+    "naics": "6-digit code · 524126",
 }
 
 # Everything typed gets cleaned on save; textarea (multi-line notes) is the

@@ -25,6 +25,10 @@ HELP = """\
   j / k    move                       enter   open
   g / G    top / bottom               d       mark task done
   a        add (contextual)           e       edit selected
+  i        edit in cell (contacts, tasks): enter saves · tab saves + next
+           cell · esc abandons · every save is one u-undoable change
+  renewal tables count down PER LINE OF COVER — a line whose policy dies
+  before the program period surfaces on its own clock (IM ◆ 70d over)
 
 [b]navigator (home)[/b]
   the tree drills: attention → accounts → their placements/contacts/
@@ -44,7 +48,13 @@ HELP = """\
 [b]book screen[/b]
   a  new account · e  edit account · f  filter
 
+[b]calendar (c)[/b]
+  cells: ░░ prospective  ▒▒ submitted  ▓▓ quoted  ██ bound  ×× lapsed
+  ◆ overdue · current month in gold · enter opens the account
+
 [b]account screen[/b]
+  1–7 jump straight to a tab; the cursor lands on its rows, so
+  j/k and e work immediately — each tab's hint line names its keys
   a adds whatever the open tab holds: task (overview), contact,
   placement, opportunity, document; e edits the selected row
   (or the account itself). s sends a submission for the selected
@@ -79,6 +89,8 @@ HELP = """\
   A  add a tower spelling as an alias for the selected market
 
 [b]entry — type fast, it stores clean[/b]
+  pickers filter as you type — ↑↓ steers, enter selects
+  forms: ^s saves from any field · first field is focused on open
   dates accept: today · tomorrow · fri · +2w · 15 oct · 2026-10-15
   money accepts: 1.5m · 250k · 1,500,000
   emails, phones, URLs, LinkedIn handles are tidied on save

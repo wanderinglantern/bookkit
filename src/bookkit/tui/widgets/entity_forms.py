@@ -56,11 +56,12 @@ def org_form(
     return FormSpec(
         "edit account" if existing else "new account",
         [
+            # typed-every-time fields first; pre-defaulted selects after
             Field("name", "name", required=True),
-            Field("kind", "kind", "select", _KINDS),
-            Field("status", "status", "select", _STATUS),
             Field("owner", "owner", suggestions=owner_sugg),
             Field("industry", "industry", suggestions=industry_sugg),
+            Field("kind", "kind", "select", _KINDS),
+            Field("status", "status", "select", _STATUS),
             Field("naics", "naics", "naics"),
             Field("hq_city", "hq city"),
             Field("hq_country", "hq country"),
@@ -68,7 +69,7 @@ def org_form(
             Field("domain", "email domain", "domain"),
             Field("market_type", "market type (markets)", "select", _MARKET_TYPES,
                   optional_select=True),
-            Field("am_best_rating", "AM Best rating (markets)"),
+            Field("am_best_rating", "AM Best rating (markets)", placeholder="A++ · A- · NR"),
             Field("notes", "notes", "textarea"),
         ],
         initial=(
@@ -118,13 +119,14 @@ def contact_form(existing: Contact | None = None) -> FormSpec:
     return FormSpec(
         "edit contact" if existing else "new contact",
         [
+            # signature-block order: name → email → phone, then the rest
             Field("first_name", "first name", required=True),
             Field("last_name", "last name", required=True),
-            Field("title", "title"),
-            Field("role", "role", "select", _ROLES, optional_select=True),
             Field("email", "email", "email"),
             Field("phone", "phone", "phone"),
             Field("mobile", "mobile", "phone"),
+            Field("title", "title"),
+            Field("role", "role", "select", _ROLES, optional_select=True),
             Field("linkedin", "linkedin", "linkedin"),
             Field("notes", "notes", "textarea"),
         ],
@@ -159,9 +161,9 @@ def task_form(
     initial = existing.model_dump() if existing else {"priority": "2"}
     if existing:
         initial["priority"] = str(existing.priority)
+    # most tasks are title + due — the detail textarea goes last
     fields = [
         Field("title", "title", required=True),
-        Field("detail", "detail", "textarea"),
         Field("due_on", "due", "date"),
         Field("priority", "priority", "select", _PRIORITY),
     ]
@@ -175,6 +177,7 @@ def task_form(
             )
             if default_org_id is not None:
                 initial.setdefault("org_id", default_org_id)
+    fields.append(Field("detail", "detail", "textarea"))
     return FormSpec(
         "edit task" if existing else "new task",
         fields,
@@ -215,7 +218,8 @@ def placement_form(
             Field("status", "status", "select", _PLACEMENT_STATUS),
             Field("total_premium", "premium", "money"),
             Field("total_limit", "total limit", "money"),
-            Field("commission_bps", "commission (bps)", "int"),
+            Field("commission_bps", "commission (bps)", "int",
+                  placeholder="1250 = 12.5%"),
         ],
         initial=existing.model_dump() if existing else {"status": "prospective"},
     )
@@ -254,7 +258,7 @@ def opportunity_form(
             Field("lines", "lines (cyber, casualty…)", suggestions=line_sugg),
             Field("target_premium", "target premium", "money"),
             Field("target_effective", "target effective", "date"),
-            Field("probability_pct", "probability %", "int"),
+            Field("probability_pct", "probability %", "int", placeholder="0–100"),
             Field("source", "source (referral, rfp…)"),
             Field("incumbent_broker", "incumbent broker"),
             Field("competitor", "competitor"),
@@ -368,9 +372,9 @@ def assignment_form(
     title: str = "assign team member",
     conn: sqlite3.Connection | None = None,
 ) -> FormSpec:
-    line_sugg = tuple(vocab.lines(conn)) if conn else ()
     """With member_options, the form picks WHO; without, the caller already
     knows the member (the Team screen's assign-to-account flow)."""
+    line_sugg = tuple(vocab.lines(conn)) if conn else ()
     fields = []
     if member_options:
         fields.append(

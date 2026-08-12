@@ -10,20 +10,29 @@ if TYPE_CHECKING:
 from datetime import date
 
 from rapidfuzz import fuzz
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input
+from textual.widgets import Footer, Header, Input, Static
 
-from ...money import format_cents_compact
 from ...repo import interactions, orgs
 from ...services import renewals
+from .. import theme
+from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.tables import ListTable
 
 
 class BookScreen(Screen):
     app: BookkitApp
+    DEFAULT_CSS = """
+    BookScreen #book-hint {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    """
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
         Binding("a", "new_account", "New account"),
@@ -37,6 +46,11 @@ class BookScreen(Screen):
         with Vertical():
             yield Input(placeholder="filter by name / owner / status …", id="book-filter")
             yield ListTable(id="book-table")
+            yield Static(
+                f"[{theme.DIM}][b]a[/b] add · [b]e[/b] edit · [b]f[/b] filter · "
+                f"[b]enter[/b] opens[/]",
+                id="book-hint",
+            )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -52,7 +66,8 @@ class BookScreen(Screen):
         table = self.query_one("#book-table", ListTable)
         table.clear(columns=True)
         table.add_columns(
-            "ref", "account", "owner", "status", "next renewal", "days", "premium", "last touch"
+            "ref", "account", "owner", "status", "next renewal",
+            right("days"), right("premium"), "last touch",
         )
         for org in orgs.list_orgs(conn, kind="client"):
             if filter_text and not _matches(org, filter_text):
@@ -60,27 +75,23 @@ class BookScreen(Screen):
             nxt_item = renewals.next_for_org(conn, org.id, today)
             last = interactions.last_for_org(conn, org.id)
             if nxt_item is None:
-                renewal_cell, days_cell, premium_cell = "—", "—", "—"
+                renewal_cell: Text = dash()
+                days_cell: Text = Text("—", style=theme.DIM, justify="right")
+                premium_cell: Text = money_text(None)
             else:
                 nxt = nxt_item.placement
-                renewal_cell = (
-                    f"[red]{nxt.period_to}[/red]"
-                    if nxt_item.days_remaining < 0
-                    else nxt.period_to
-                )
-                days_cell = str(nxt_item.days_remaining)
-                premium_cell = (
-                    format_cents_compact(nxt.total_premium) if nxt.total_premium else "—"
-                )
+                renewal_cell = date_text(nxt.period_to, nxt_item.days_remaining)
+                days_cell = days_text(nxt_item.days_remaining)
+                premium_cell = money_text(nxt.total_premium)
             table.add_row(
-                org.ref,
+                Text(org.ref, style=theme.DIM),
                 org.name,
-                org.owner or "—",
-                org.status,
+                org.owner or dash(),
+                status_text(org.status),
                 renewal_cell,
                 days_cell,
                 premium_cell,
-                last.occurred_on if last else "never",
+                last.occurred_on if last else Text("never", style=theme.DIM),
                 key=org.id,
             )
 

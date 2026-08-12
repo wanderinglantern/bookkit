@@ -11,16 +11,17 @@ import subprocess
 from datetime import date
 from pathlib import Path
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Footer, Header, OptionList, Static, TabbedContent, TabPane
+from textual.widgets import Footer, OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
 from ...dates import days_until
-from ...money import format_cents, format_cents_compact
+from ...money import format_cents_compact
 from ...repo import (
     contacts,
     documents,
@@ -32,8 +33,62 @@ from ...repo import (
     submissions,
 )
 from ...repo import tasks as tasks_repo
+from .. import theme
+from ..theme import dash, date_text, days_text, money_text, right
 from ..widgets.tables import ListTable
 from ..widgets.tower_preview import TowerPreview
+
+
+def _pretty(value: str) -> str:
+    """snake_case vocab reads as words in cells ('site_visit' → 'site visit')."""
+    return value.replace("_", " ")
+
+
+def _status(value: str) -> Text:
+    """status_text, plus the snake_case prettify — style keyed on the raw value."""
+    return Text(_pretty(value), style=theme.STATUS_STYLES.get(value, theme.FG))
+
+
+# the visible home for each tab's hidden single-letter keys — only the keys
+# that actually work on that tab (help lists them too)
+TAB_HINTS: dict[str, str] = {
+    "tab-overview": (
+        "[b]a[/b] task · [b]e[/b] edit task/account · [b]d[/b] task done · "
+        "[b]w[/b] assign team · [b]i[/b] paste import · [b]u[/b] undo"
+    ),
+    "tab-contacts": (
+        "[b]a[/b] add · [b]e[/b] edit · [b]p[/b] make primary · "
+        "[b]i[/b] paste import · [b]w[/b] assign team"
+    ),
+    "tab-interactions": (
+        "[b]a[/b] log interaction · [b]e[/b] edit account · [b]i[/b] paste import"
+    ),
+    "tab-placements": (
+        "[b]a[/b] add · [b]e[/b] edit · [b]s[/b] submission · [b]r[/b] renew · "
+        "[b]l[/b]/[b]L[/b] layer · [b]o[/b] towerkit · [b]t[/b] tower file · "
+        "[b]i[/b] paste · [b]w[/b] assign · [b]x[/b] merge"
+    ),
+    "tab-projects": (
+        "[b]a[/b] add project/need · [b]e[/b] edit · "
+        "[b]o[/b] need → opportunity · [b]tab[/b] projects ⇄ needs"
+    ),
+    "tab-pipeline": (
+        "[b]a[/b] opportunity · [b]e[/b] edit opp / record response · "
+        "[b]s[/b] submission · [b]tab[/b] opps ⇄ submissions"
+    ),
+    "tab-documents": "[b]a[/b] add · [b]enter[/b] opens the file · [b]e[/b] edit account",
+}
+
+# where the cursor lands when a tab opens — j/k and the row keys work at once
+TAB_TABLES: dict[str, str] = {
+    "tab-overview": "ov-tasks",
+    "tab-contacts": "contacts-table",
+    "tab-interactions": "interactions-table",
+    "tab-placements": "placements-table",
+    "tab-projects": "projects-table",
+    "tab-pipeline": "pipeline-opps",
+    "tab-documents": "documents-table",
+}
 
 
 class ConfirmRenew(ModalScreen):
@@ -115,6 +170,23 @@ class MergePicker(ModalScreen):
 
 class AccountScreen(Screen):
     app: BookkitApp
+
+    # screen-local polish only; anything bookkit.tcss already styles is set
+    # inline in on_mount instead (shared-file rules would win over these)
+    DEFAULT_CSS = """
+    AccountScreen #tab-hint {
+        height: 1;
+        padding: 0 2;
+        color: $text-muted;
+        background: $panel;
+    }
+    AccountScreen .pane-title {
+        color: $text-muted;
+        text-style: bold;
+        margin-top: 1;
+    }
+    """
+
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
         Binding("a", "add_here", "Add (this tab)"),
@@ -131,6 +203,14 @@ class AccountScreen(Screen):
         Binding("d", "task_done", "Done (task)", show=False),
         Binding("p", "mark_primary", "Primary (contact)", show=False),
         Binding("u", "undo", "Undo"),
+        # tabs answer to their number — no reaching for the tab bar
+        Binding("1", "show_tab('tab-overview')", "Overview", show=False),
+        Binding("2", "show_tab('tab-contacts')", "Contacts", show=False),
+        Binding("3", "show_tab('tab-interactions')", "Interactions", show=False),
+        Binding("4", "show_tab('tab-placements')", "Placements", show=False),
+        Binding("5", "show_tab('tab-projects')", "Projects", show=False),
+        Binding("6", "show_tab('tab-pipeline')", "Pipeline", show=False),
+        Binding("7", "show_tab('tab-documents')", "Documents", show=False),
     ]
 
     def __init__(self, org_id: str) -> None:
@@ -138,10 +218,9 @@ class AccountScreen(Screen):
         self.current_org_id = org_id
 
     def compose(self) -> ComposeResult:
-        yield Header()
         yield Static(id="account-header")
         with TabbedContent():
-            with TabPane("Overview", id="tab-overview"):
+            with TabPane("1 Overview", id="tab-overview"):
                 with VerticalScroll():
                     yield Static("TEAM", classes="pane-title")
                     yield ListTable(id="ov-team")
@@ -153,33 +232,50 @@ class AccountScreen(Screen):
                     yield ListTable(id="ov-tasks")
                     yield Static("OPEN OPPORTUNITIES", classes="pane-title")
                     yield ListTable(id="ov-opps")
-            with TabPane("Contacts", id="tab-contacts"):
+            with TabPane("2 Contacts", id="tab-contacts"):
                 yield ListTable(id="contacts-table")
-            with TabPane("Interactions", id="tab-interactions"):
+            with TabPane("3 Interactions", id="tab-interactions"):
                 yield ListTable(id="interactions-table")
-            with TabPane("Placements", id="tab-placements"):
+            with TabPane("4 Placements", id="tab-placements"):
                 with Horizontal():
                     with Vertical(id="placement-side"):
                         yield ListTable(id="placements-table")
                         yield ListTable(id="carriers-table")
                         yield Static(id="sync-state")
                     yield TowerPreview(id="tower-preview")
-            with TabPane("Projects", id="tab-projects"):
+            with TabPane("5 Projects", id="tab-projects"):
                 with Vertical():
                     yield ListTable(id="projects-table")
                     yield ListTable(id="needs-table")
-            with TabPane("Pipeline", id="tab-pipeline"):
+            with TabPane("6 Pipeline", id="tab-pipeline"):
                 with VerticalScroll():
                     yield Static("OPPORTUNITIES", classes="pane-title")
                     yield ListTable(id="pipeline-opps")
                     yield Static("SUBMISSIONS", classes="pane-title")
                     yield ListTable(id="pipeline-subs")
-            with TabPane("Documents", id="tab-documents"):
+            with TabPane("7 Documents", id="tab-documents"):
                 yield ListTable(id="documents-table")
+        yield Static(id="tab-hint")
         yield Footer()
 
     def on_mount(self) -> None:
+        # bookkit.tcss (shared, off-limits here) styles #account-header for the
+        # old two-line layout; inline styles win, making it a 1-line context bar
+        bar = self.query_one("#account-header", Static)
+        bar.styles.height = 1
+        bar.styles.padding = (0, 2)
+        bar.styles.border_bottom = ("none", "black")
+        # the placements table needs room for status + premium; the shared
+        # 44% width crops them, and the tower preview scrolls anyway
+        self.query_one("#placement-side").styles.width = "52%"
+        # stacked tables inside scrolling panes size to their rows instead of
+        # splitting the viewport into slivers
+        for table_id in ("ov-team", "ov-contacts", "ov-interactions", "ov-tasks",
+                         "ov-opps", "pipeline-opps", "pipeline-subs"):
+            self.query_one(f"#{table_id}", ListTable).styles.height = "auto"
         self.refresh_data()
+        self._render_tab_hint()
+        self._focus_tab_table()
 
     def on_screen_resume(self) -> None:
         self.refresh_data()
@@ -192,21 +288,33 @@ class AccountScreen(Screen):
         from ...services import renewals as renewals_service
 
         nxt_item = renewals_service.next_for_org(conn, org.id, today)
-        nxt = nxt_item.placement if nxt_item else None
-        premium = format_cents(nxt.total_premium) if nxt and nxt.total_premium else "—"
         if nxt_item is None:
-            renewal = "none scheduled"
+            renewal = f"renewal [{theme.DIM}]none scheduled[/]"
         elif nxt_item.days_remaining < 0:
             renewal = (
-                f"{nxt_item.placement.period_to} "
-                f"([red]{-nxt_item.days_remaining}d overdue — "
-                f"{nxt_item.placement.program_name}[/red])"
+                f"renewal [b {theme.RED}]◆ {nxt_item.placement.period_to} · "
+                f"{-nxt_item.days_remaining}d over · "
+                f"{nxt_item.placement.program_name}[/]"
             )
         else:
-            renewal = f"{nxt_item.placement.period_to} ({nxt_item.days_remaining}d)"
+            style = theme.AMBER if nxt_item.days_remaining <= 60 else theme.FG
+            renewal = (
+                f"renewal [{style}]{nxt_item.placement.period_to} · "
+                f"{nxt_item.days_remaining}d[/]"
+            )
+        bound = [p for p in placements.for_org(conn, org.id) if p.status == "bound"]
+        bound_premium = sum(p.total_premium or 0 for p in bound)
+        status_style = theme.STATUS_STYLES.get(org.status, theme.FG)
+        parts = [
+            f"[b {theme.GOLD}]{org.name}[/]  [{theme.DIM}]{org.ref}[/]",
+            f"[{status_style}]{_pretty(org.status)}[/]",
+            f"owner {org.owner or '—'}",
+            renewal,
+            f"[{theme.GREEN}]{format_cents_compact(bound_premium)} bound[/]"
+            f" [{theme.DIM}]({len(bound)} placements)[/]",
+        ]
         self.query_one("#account-header", Static).update(
-            f"[b]{org.name}[/b]  {org.ref}   status: {org.status}   "
-            f"owner: {org.owner or '—'}   premium: {premium}   next renewal: {renewal}"
+            f"  [{theme.RULE}]·[/]  ".join(parts)
         )
 
         team_table = self.query_one("#ov-team", ListTable)
@@ -221,7 +329,8 @@ class AccountScreen(Screen):
             )
             team_table.add_row(
                 f"{row['member_name']} ({row['specialty'] or row['member_title'] or '—'})",
-                row["role"] or "—", row["lines"] or "—", scope,
+                _pretty(row["role"]) if row["role"] else dash(),
+                row["lines"] or dash(), scope,
                 key=row["id"],
             )
 
@@ -232,9 +341,10 @@ class AccountScreen(Screen):
             table.add_columns("", "name", "role", "title", "email", "phone")
             for c in rows:
                 table.add_row(
-                    "p" if c.is_primary else "",
-                    c.name, c.role or "—", c.title or "—", c.email or "—",
-                    c.phone or c.mobile or "—",
+                    Text("★", style=theme.GOLD) if c.is_primary else "",
+                    c.name, _pretty(c.role) if c.role else dash(),
+                    c.title or dash(), c.email or dash(),
+                    c.phone or c.mobile or dash(),
                     key=c.id,
                 )
 
@@ -245,24 +355,32 @@ class AccountScreen(Screen):
             table.add_columns("date", "type", "subject", "who")
             for i in int_rows:
                 who = ", ".join(c.name for c in interactions.attendees(conn, i.id))
-                table.add_row(i.occurred_on, i.type, i.subject, who, key=i.id)
+                table.add_row(
+                    i.occurred_on, Text(_pretty(i.type), style=theme.DIM),
+                    i.subject, who, key=i.id,
+                )
 
         open_tasks = tasks_repo.open_tasks(conn, org_id=org.id)
         table = self.query_one("#ov-tasks", ListTable)
         table.clear(columns=True)
-        table.add_columns("due", "task")
+        table.add_columns("due", right("due in"), "task")
         for t in open_tasks:
-            table.add_row(t.due_on or "—", t.title, key=t.id)
+            if t.due_on:
+                days = days_until(t.due_on, today)
+                due, due_in = date_text(t.due_on, days), days_text(days)
+            else:
+                due, due_in = dash(), Text("", justify="right")
+            table.add_row(due, due_in, t.title, key=t.id)
 
         opps = opportunities.for_org(conn, org.id, open_only=True)
         table = self.query_one("#ov-opps", ListTable)
         table.clear(columns=True)
-        table.add_columns("ref", "title", "stage", "target", "close")
+        table.add_columns("ref", "title", "stage", right("target"), "close")
         for o in opps:
             table.add_row(
-                o.ref, o.title, o.stage,
-                format_cents_compact(o.target_premium) if o.target_premium else "—",
-                o.target_effective or "—",
+                o.ref, o.title, _status(o.stage),
+                money_text(o.target_premium),
+                o.target_effective or dash(),
                 key=o.id,
             )
 
@@ -275,13 +393,37 @@ class AccountScreen(Screen):
         table.clear(columns=True)
         table.add_columns("added", "kind", "title", "path")
         for d in docs:
-            table.add_row(d.added_at[:10], d.kind or "—", d.title, d.path, key=d.id)
+            table.add_row(
+                d.added_at[:10],
+                _pretty(d.kind) if d.kind else dash(),
+                d.title, Text(d.path, style=theme.DIM), key=d.id,
+            )
+        self._settle_tables()
+
+    def _settle_tables(self) -> None:
+        """Workaround for a DataTable paint quirk: rows added before the first
+        idle pass leave the visible tab painted at label-only column widths
+        (the width measure runs on idle, but the stale strips are never
+        invalidated). Flush the pending measurements now and drop the caches
+        so the next paint uses real content widths."""
+        for table in self.query(ListTable):
+            if not table._require_update_dimensions:
+                continue
+            table._require_update_dimensions = False
+            new_rows = table._new_rows.copy()
+            table._new_rows.clear()
+            table._update_dimensions(new_rows)
+            table._clear_caches()
+            table.refresh()
 
     def _refresh_placements(self, org_id: str) -> None:
         conn = self.app.conn
         table = self.query_one("#placements-table", ListTable)
         table.clear(columns=True)
-        table.add_columns("ref", "program", "effective", "expires", "d", "status", "premium")
+        table.add_columns(
+            "ref", "program", "effective", "expires", right("d"), "status",
+            right("premium"),
+        )
         # live placements first, soonest expiry on top; already-expired ones
         # sink below (most recently expired first) instead of pinning forever
         rows = sorted(
@@ -290,14 +432,10 @@ class AccountScreen(Screen):
         )
         for p in rows:
             days = days_until(p.period_to)
-            expires = p.period_to
-            if days < 0:
-                expires = f"[red]{p.period_to}[/red]"
-            elif days <= 60:
-                expires = f"[yellow]{p.period_to}[/yellow]"
             table.add_row(
-                p.ref, p.program_name, p.period_from, expires, str(days), p.status,
-                format_cents_compact(p.total_premium) if p.total_premium else "—",
+                p.ref, p.program_name, p.period_from,
+                date_text(p.period_to, days), days_text(days), _status(p.status),
+                money_text(p.total_premium),
                 key=p.id,
             )
         if rows:
@@ -312,7 +450,7 @@ class AccountScreen(Screen):
         conn = self.app.conn
         table = self.query_one("#projects-table", ListTable)
         table.clear(columns=True)
-        table.add_columns("ref", "project", "status", "start", "end", "open needs")
+        table.add_columns("ref", "project", "status", "start", "end", right("open needs"))
         rows = projects_repo.projects_for_org(conn, org_id)
         for project in rows:
             open_needs = sum(
@@ -321,9 +459,10 @@ class AccountScreen(Screen):
                 if need.status in projects_repo.ATTENTION_STATUSES
             )
             table.add_row(
-                project.ref, project.name, project.status,
-                project.start_on or "—", project.end_on or "—",
-                str(open_needs) if open_needs else "—",
+                project.ref, project.name, _status(project.status),
+                project.start_on or dash(), project.end_on or dash(),
+                Text(str(open_needs), justify="right")
+                if open_needs else Text("—", style=theme.DIM, justify="right"),
                 key=project.id,
             )
         if rows:
@@ -331,7 +470,9 @@ class AccountScreen(Screen):
         else:
             needs = self.query_one("#needs-table", ListTable)
             needs.clear(columns=True)
-            needs.add_columns("line", "needed by", "d", "status", "limit", "linked")
+            needs.add_columns(
+                "line", "needed by", right("d"), "status", right("limit"), "linked"
+            )
 
     def show_project(self, project_id: str) -> None:
         """Fill the needs table for one project, expiry-style styling on the
@@ -340,62 +481,86 @@ class AccountScreen(Screen):
 
         table = self.query_one("#needs-table", ListTable)
         table.clear(columns=True)
-        table.add_columns("line", "needed by", "d", "status", "limit", "linked")
+        table.add_columns(
+            "line", "needed by", right("d"), "status", right("limit"), "linked"
+        )
         for need in projects_repo.needs_for_project(self.app.conn, project_id):
             days = days_until(need.needed_by)
-            needed = need.needed_by
             if need.status in projects_repo.ATTENTION_STATUSES:
-                if days < 0:
-                    needed = f"[red]{need.needed_by}[/red]"
-                elif days <= 60:
-                    needed = f"[yellow]{need.needed_by}[/yellow]"
-            linked = "opp" if need.opportunity_id else ("plc" if need.placement_id else "—")
+                needed, due_in = date_text(need.needed_by, days), days_text(days)
+            else:  # settled needs don't shout about their dates
+                needed = Text(need.needed_by, style=theme.DIM)
+                due_in = Text(f"{days}d", style=theme.DIM, justify="right")
+            linked = (
+                "opp" if need.opportunity_id
+                else ("plc" if need.placement_id else dash())
+            )
             table.add_row(
-                need.line, needed, str(days), need.status,
-                format_cents_compact(need.limit_cents) if need.limit_cents else "—",
+                need.line, needed, due_in, _status(need.status),
+                money_text(need.limit_cents),
                 linked,
                 key=need.id,
             )
+        self._settle_tables()
 
     def _refresh_pipeline(self, org_id: str) -> None:
         conn = self.app.conn
         table = self.query_one("#pipeline-opps", ListTable)
         table.clear(columns=True)
-        table.add_columns("ref", "title", "stage", "target", "prob")
+        table.add_columns("ref", "title", "stage", right("target"), right("prob"))
         for o in opportunities.for_org(conn, org_id):
             table.add_row(
-                o.ref, o.title, o.stage,
-                format_cents_compact(o.target_premium) if o.target_premium else "—",
-                f"{o.probability_pct}%",
+                o.ref, o.title, _status(o.stage),
+                money_text(o.target_premium),
+                Text(f"{o.probability_pct}%", justify="right"),
                 key=o.id,
             )
         table = self.query_one("#pipeline-subs", ListTable)
         table.clear(columns=True)
-        table.add_columns("market", "sent", "status", "quoted", "response")
+        table.add_columns("market", "sent", "status", right("quoted"), "response")
         for p in placements.for_org(conn, org_id):
             for s in submissions.for_placement(conn, p.id):
                 table.add_row(
-                    orgs.get(conn, s.market_org_id).name, s.sent_on, s.status,
-                    format_cents_compact(s.quoted_premium) if s.quoted_premium else "—",
-                    s.response_on or "—",
+                    orgs.get(conn, s.market_org_id).name, s.sent_on, _status(s.status),
+                    money_text(s.quoted_premium),
+                    s.response_on or dash(),
                     key=s.id,
                 )
         for o in opportunities.for_org(conn, org_id):
             for s in submissions.for_opportunity(conn, o.id):
                 table.add_row(
-                    orgs.get(conn, s.market_org_id).name, s.sent_on, s.status,
-                    format_cents_compact(s.quoted_premium) if s.quoted_premium else "—",
-                    s.response_on or "—",
+                    orgs.get(conn, s.market_org_id).name, s.sent_on, _status(s.status),
+                    money_text(s.quoted_premium),
+                    s.response_on or dash(),
                     key=s.id,
                 )
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         """The placements pane lays out at zero size until first shown; re-show
-        the selection once it has a real size."""
+        the selection once it has a real size. Every tab lands the cursor on
+        its table so j/k and the row keys work with no extra tab-presses."""
         if event.pane.id == "tab-placements":
             key = self._selected_key("placements-table")
             if key:
                 self.call_after_refresh(self.show_placement, key)
+        self._render_tab_hint()
+        # focus synchronously: a deferred focus posts TabPane.Focused late,
+        # and TabbedContent would snap `active` back to the pane it names,
+        # eating the next 1–7 tab switch
+        self._focus_tab_table()
+
+    def action_show_tab(self, tab_id: str) -> None:
+        """1–7 jump straight to a tab (and its table)."""
+        self.query_one(TabbedContent).active = tab_id
+
+    def _focus_tab_table(self) -> None:
+        table_id = TAB_TABLES.get(self._active_tab())
+        if table_id:
+            self.query_one(f"#{table_id}", ListTable).focus()
+
+    def _render_tab_hint(self) -> None:
+        hint = TAB_HINTS.get(self._active_tab(), "")
+        self.query_one("#tab-hint", Static).update(f"[{theme.DIM}]{hint}[/]")
 
     def on_data_table_row_highlighted(self, event: ListTable.RowHighlighted) -> None:
         """j/k on the placements table switches the previewed program live."""
@@ -412,7 +577,11 @@ class AccountScreen(Screen):
         """Fill the tower preview, carrier list, and sync-state for one placement."""
         conn = self.app.conn
         placement = placements.get(conn, placement_id)
-        header = f"[b]▸ {placement.ref}  {placement.program_name}[/b]  [{placement.status}]"
+        status_style = theme.STATUS_STYLES.get(placement.status, theme.FG)
+        header = (
+            f"[b]▸ {placement.ref}  {placement.program_name}[/b]  "
+            f"[{status_style}]{placement.status}[/]"
+        )
         from ...repo import team as team_repo
 
         deal_team = [
@@ -425,7 +594,7 @@ class AccountScreen(Screen):
 
         carriers = self.query_one("#carriers-table", ListTable)
         carriers.clear(columns=True)
-        carriers.add_columns("carrier", "layer", "share", "premium")
+        carriers.add_columns("carrier", "layer", right("share"), right("premium"))
         # rows are keyed "<layer_id>:<n>" so `l` can edit the layer under the
         # cursor; participant-less layers get a placeholder row to stay reachable
         seen_layers: set[str] = set()
@@ -433,8 +602,8 @@ class AccountScreen(Screen):
             seen_layers.add(str(row["layer_id"]))
             carriers.add_row(
                 row["carrier"], row["layer_name"],
-                f"{row['share_bps'] / 100:g}%",
-                format_cents_compact(row["premium"]) if row["premium"] else "—",
+                Text(f"{row['share_bps'] / 100:g}%", justify="right"),
+                money_text(row["premium"]),
                 key=f"{row['layer_id']}:{index}",
             )
         from ... import sync as _sync
@@ -442,9 +611,10 @@ class AccountScreen(Screen):
         for layer in _sync.layer_details(conn, placement_id):
             if str(layer["id"]) not in seen_layers:
                 carriers.add_row(
-                    "— to be placed —", layer["name"], "", "",
+                    Text("— to be placed —", style=theme.DIM), layer["name"], "", "",
                     key=f"{layer['id']}:x",
                 )
+        self._settle_tables()
 
         preview = self.query_one("#tower-preview", TowerPreview)
         state = self.query_one("#sync-state", Static)

@@ -20,14 +20,26 @@ from ...repo import search as search_repo
 
 class SearchModal(ModalScreen):
     app: BookkitApp
-    BINDINGS = [Binding("escape", "dismiss_modal", "Close")]
+    # hug the content — an empty result list must not leave an 80%-tall box
+    DEFAULT_CSS = """
+    SearchModal .modal-box {
+        height: auto;
+    }
+    """
+    BINDINGS = [
+        Binding("escape", "dismiss_modal", "Close"),
+        # from the input, down drops straight into the result list
+        Binding("down", "focus_results", "Results", show=False),
+    ]
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="modal-box"):
             yield Static("SEARCH EVERYTHING", classes="modal-title")
             yield Input(placeholder="accounts, contacts, notes…", id="search-input")
             yield OptionList(id="search-results")
-            yield Static("enter opens the account · esc closes", classes="hint")
+            yield Static(
+                "[b]enter[/b] opens the account · [b]esc[/b] closes", classes="hint"
+            )
 
     def on_mount(self) -> None:
         self.query_one("#search-input", Input).focus()
@@ -47,6 +59,9 @@ class SearchModal(ModalScreen):
             results.add_option(Option(f"{hit.title}{snippet}", id=f"{hit.kind}:{hit.org_id}"))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.action_focus_results()
+
+    def action_focus_results(self) -> None:
         results = self.query_one("#search-results", OptionList)
         if results.option_count:
             results.focus()

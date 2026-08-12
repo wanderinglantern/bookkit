@@ -9,20 +9,32 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..app import BookkitApp
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.coordinate import Coordinate
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input
+from textual.widgets import Footer, Header, Input, Static
 
 from ...repo import team
 from ...services.team import find_specialists
+from .. import theme
+from ..theme import dash
 from ..widgets.tables import ListTable
 
 
 class TeamScreen(Screen):
     app: BookkitApp
+
+    DEFAULT_CSS = """
+    TeamScreen #team-hint {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    """
+
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
         Binding("a", "new_member", "New member"),
@@ -98,6 +110,7 @@ class TeamScreen(Screen):
         with Vertical():
             yield Input(placeholder="who do I go to for… (cyber, marine, D&O)", id="team-filter")
             yield ListTable(id="team-table")
+            yield Static(id="team-hint")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -120,10 +133,21 @@ class TeamScreen(Screen):
                 sorted({row["org_name"] for row in assignments if row["org_name"]})
             )
             table.add_row(
-                member.name, member.title or "—", member.specialty or "—",
-                where or "—", match,
+                member.name, member.title or dash(), member.specialty or dash(),
+                where or dash(),
+                Text(match, style=theme.DIM) if match else "",
                 key=member.id,
             )
+        count = f"{len(members)} member" + ("" if len(members) == 1 else "s")
+        if query.strip():
+            from rich.markup import escape
+
+            count = f"{count} match '{escape(query.strip())}'"
+        self.query_one("#team-hint", Static).update(
+            f"[{theme.DIM}]{count} — [b]enter[/b] assignments · [b]a[/b] add · "
+            f"[b]e[/b] edit · [b]w[/b] assign to account · [b]i[/b] paste signature · "
+            f"[b]f[/b] who for…[/]"
+        )
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "team-filter":

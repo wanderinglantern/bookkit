@@ -24,6 +24,16 @@ class SettingsModal(ModalScreen):
     """Dismisses True when roots were saved, None on cancel."""
 
     app: BookkitApp
+    # every other modal is centered via bookkit.tcss; this one was missing
+    # from that list, so it carries its own alignment
+    DEFAULT_CSS = """
+    SettingsModal {
+        align: center middle;
+    }
+    SettingsModal .modal-box {
+        height: auto;
+    }
+    """
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+s", "save", "Save", priority=True),
@@ -38,7 +48,7 @@ class SettingsModal(ModalScreen):
             )
             yield TextArea(id="settings-roots")
             yield Static(id="settings-preview", classes="hint")
-            yield Static("ctrl-s save · esc cancel", classes="hint")
+            yield Static("[b]^s[/b] save · [b]esc[/b] cancel", classes="hint")
             yield Button("Save", variant="primary", id="settings-save")
 
     def on_mount(self) -> None:
