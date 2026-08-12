@@ -248,7 +248,34 @@ class MarketDetailScreen(Screen):
         Binding("escape", "app.pop_screen", "Back"),
         Binding("a", "add_appetite", "Add appetite"),
         Binding("w", "add_underwriter", "Add underwriter"),
+        Binding("i", "import_underwriter", "Import (paste sig)"),
     ]
+
+    def action_import_underwriter(self) -> None:
+        """Paste an underwriter's email signature — same parser as contact
+        capture, defaulting the role to underwriter under this market."""
+        from ...imports.commit import commit_contact_paste
+        from ...imports.mappers.contact_paste import stage_contact_paste
+        from ..widgets.paste_import import PasteImportModal
+
+        conn = self.app.conn
+        org = orgs.get(conn, self.market_org_id)
+
+        def stage(text: str):
+            staged = stage_contact_paste(conn, text, org.id, org.name)
+            for record in staged.records:
+                if record.kind == "contact":
+                    record.fields.setdefault("role", "underwriter")
+            return staged
+
+        def commit(staged) -> str:
+            commit_contact_paste(conn, staged, org.id, self.app.db_file())
+            self._refresh()
+            return f"underwriter captured for {org.name}"
+
+        self.app.push_screen(
+            PasteImportModal(f"paste underwriter signature — {org.name}", stage, commit)
+        )
 
     def __init__(self, market_org_id: str) -> None:
         super().__init__()

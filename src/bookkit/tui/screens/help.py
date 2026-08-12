@@ -54,6 +54,7 @@ HELP = """\
 [b]markets screen[/b]
   a  new market · e  edit · N  nest under a master company (creates
      the master on the spot) · families render as an outline
+  in a market: a appetite · w underwriter · i paste their signature
 
 [b]placements tab[/b]
   j/k switch the previewed program · header names the selection

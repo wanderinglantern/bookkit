@@ -475,3 +475,33 @@ async def test_assign_member_to_account_from_team_screen(seeded_db: Path) -> Non
         await pilot.pause()
         rows = team_repo.for_member(app.conn, member.id)
         assert len(rows) == 1 and rows[0]["org_name"]
+
+
+async def test_paste_underwriter_on_market_detail(seeded_db: Path) -> None:
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.tui.screens.markets import MarketDetailScreen
+    from bookkit.tui.widgets.paste_import import PasteImportModal
+
+    sig = (
+        "Ken Ito\nSenior Underwriter\nken.ito@sompo.example.com | (646) 555-0100\n"
+    )
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        market = orgs.list_orgs(app.conn, kind="market")[0]
+        app.push_screen(MarketDetailScreen(market.id))
+        await pilot.pause()
+        await pilot.press("i")
+        await pilot.pause()
+        assert isinstance(app.screen, PasteImportModal)
+        app.screen.query_one("#paste-text").text = sig
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        assert app.screen._staged is not None and app.screen._staged.ok
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        ken = next(
+            c for c in contacts_repo.for_org(app.conn, market.id)
+            if c.last_name == "Ito"
+        )
+        assert ken.role == "underwriter"
+        assert ken.email == "ken.ito@sompo.example.com"
