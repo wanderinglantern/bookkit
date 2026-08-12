@@ -1,6 +1,7 @@
 """FormSpec builders for every creatable entity, plus the apply helpers the
-screens call on save. Screens stay thin: push FormModal(spec), hand the
-result dict to the matching apply_*."""
+screens call on save. Screens stay thin: push FormModal(spec, commit=...) so
+the matching apply_* runs while the form is still open — a refused or failed
+save keeps the form up for correction (the platform default since 2026-08-12)."""
 
 from __future__ import annotations
 

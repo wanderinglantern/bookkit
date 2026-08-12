@@ -164,12 +164,15 @@ class TodayScreen(Screen):
         from ..widgets.entity_forms import apply_task, task_form
         from ..widgets.forms import FormModal
 
-        def saved(values: dict | None) -> None:
+        def commit(values: dict) -> str | None:
+            apply_task(self.app.conn, values)
+            return None
+
+        def done(values: dict | None) -> None:
             if values is not None:
-                apply_task(self.app.conn, values)
                 self.refresh_data()
 
-        self.app.push_screen(FormModal(task_form()), saved)
+        self.app.push_screen(FormModal(task_form(), commit=commit), done)
 
     def action_edit_task(self) -> None:
         from ..widgets.entity_forms import apply_task, task_form
@@ -180,12 +183,15 @@ class TodayScreen(Screen):
             return
         task = tasks_repo.get(self.app.conn, task_id)
 
-        def saved(values: dict | None) -> None:
+        def commit(values: dict) -> str | None:
+            apply_task(self.app.conn, values, existing=task)
+            return None
+
+        def done(values: dict | None) -> None:
             if values is not None:
-                apply_task(self.app.conn, values, existing=task)
                 self.refresh_data()
 
-        self.app.push_screen(FormModal(task_form(task)), saved)
+        self.app.push_screen(FormModal(task_form(task), commit=commit), done)
 
     def action_undo(self) -> None:
         self.app.show_undo_result()

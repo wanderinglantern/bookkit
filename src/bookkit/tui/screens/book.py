@@ -95,14 +95,16 @@ class BookScreen(Screen):
         from ..widgets.entity_forms import apply_org, org_form
         from ..widgets.forms import FormModal
 
-        def saved(values: dict | None) -> None:
-            if values is None:
-                return
+        def commit(values: dict) -> str | None:
             org = apply_org(self.app.conn, values)
             self.notify(f"created {org.ref} {org.name}")
-            self.refresh_data(self.query_one("#book-filter", Input).value)
+            return None
 
-        self.app.push_screen(FormModal(org_form()), saved)
+        def done(values: dict | None) -> None:
+            if values is not None:
+                self.refresh_data(self.query_one("#book-filter", Input).value)
+
+        self.app.push_screen(FormModal(org_form(), commit=commit), done)
 
     def action_edit_account(self) -> None:
         from ...repo import orgs
@@ -114,14 +116,19 @@ class BookScreen(Screen):
             return
         existing = orgs.get(self.app.conn, org_id)
 
-        def saved(values: dict | None) -> None:
-            if values is None:
-                return
+        def commit(values: dict) -> str | None:
             apply_org(self.app.conn, values, existing)
             self.notify(f"updated {existing.ref}")
-            self.refresh_data(self.query_one("#book-filter", Input).value)
+            return None
 
-        self.app.push_screen(FormModal(org_form_initial_profile(self.app.conn, existing)), saved)
+        def done(values: dict | None) -> None:
+            if values is not None:
+                self.refresh_data(self.query_one("#book-filter", Input).value)
+
+        self.app.push_screen(
+            FormModal(org_form_initial_profile(self.app.conn, existing), commit=commit),
+            done,
+        )
 
     def action_focus_filter(self) -> None:
         self.query_one("#book-filter", Input).focus()

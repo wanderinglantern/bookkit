@@ -81,13 +81,18 @@ class MarketsScreen(Screen):
         from ..widgets.entity_forms import apply_org, org_form
         from ..widgets.forms import FormModal
 
-        def saved(values: dict | None) -> None:
+        def commit(values: dict) -> str | None:
+            org = apply_org(self.app.conn, values)
+            self.notify(f"created {org.name}")
+            return None
+
+        def done(values: dict | None) -> None:
             if values is not None:
-                org = apply_org(self.app.conn, values)
-                self.notify(f"created {org.name}")
                 self._refresh()
 
-        self.app.push_screen(FormModal(org_form(default_kind="market")), saved)
+        self.app.push_screen(
+            FormModal(org_form(default_kind="market"), commit=commit), done
+        )
 
     def action_merge_market(self) -> None:
         """Fold a duplicate market ('Axa XL') into the real one ('AXA XL');
@@ -136,18 +141,17 @@ class MarketsScreen(Screen):
             return
         market = orgs.get(self.app.conn, market_id)
 
-        def saved(values: dict | None) -> None:
-            if values is None:
-                return
+        def commit(values: dict) -> str | None:
             aliases.set_alias(self.app.conn, values["alias"], market_id)
             self.notify(f"{values['alias']!r} now resolves to {market.name}")
+            return None
 
         spec = FormSpec(
             f"alias for {market.name}",
             [Field("alias", "tower spelling", required=True,
                    placeholder="exactly as the file writes it")],
         )
-        self.app.push_screen(FormModal(spec), saved)
+        self.app.push_screen(FormModal(spec, commit=commit))
 
     def action_edit_market(self) -> None:
         from ..widgets.entity_forms import apply_org, org_form_initial_profile
@@ -158,13 +162,17 @@ class MarketsScreen(Screen):
             return
         existing = orgs.get(self.app.conn, market_id)
 
-        def saved(values: dict | None) -> None:
+        def commit(values: dict) -> str | None:
+            apply_org(self.app.conn, values, existing)
+            return None
+
+        def done(values: dict | None) -> None:
             if values is not None:
-                apply_org(self.app.conn, values, existing)
                 self._refresh()
 
         self.app.push_screen(
-            FormModal(org_form_initial_profile(self.app.conn, existing)), saved
+            FormModal(org_form_initial_profile(self.app.conn, existing), commit=commit),
+            done,
         )
 
 
@@ -192,26 +200,32 @@ class MarketDetailScreen(Screen):
         from ..widgets.entity_forms import appetite_form
         from ..widgets.forms import FormModal, dropped
 
-        def saved(values: dict | None) -> None:
+        def commit(values: dict) -> str | None:
+            orgs.add_appetite(self.app.conn, self.market_org_id, **dropped(values))
+            self.notify("appetite recorded")
+            return None
+
+        def done(values: dict | None) -> None:
             if values is not None:
-                orgs.add_appetite(self.app.conn, self.market_org_id, **dropped(values))
-                self.notify("appetite recorded")
                 self._refresh()
 
-        self.app.push_screen(FormModal(appetite_form()), saved)
+        self.app.push_screen(FormModal(appetite_form(), commit=commit), done)
 
     def action_add_underwriter(self) -> None:
         from ..widgets.entity_forms import apply_contact, contact_form
         from ..widgets.forms import FormModal
 
-        def saved(values: dict | None) -> None:
+        def commit(values: dict) -> str | None:
+            values["role"] = values.get("role") or "underwriter"
+            contact = apply_contact(self.app.conn, self.market_org_id, values)
+            self.notify(f"added {contact.name}")
+            return None
+
+        def done(values: dict | None) -> None:
             if values is not None:
-                values["role"] = values.get("role") or "underwriter"
-                contact = apply_contact(self.app.conn, self.market_org_id, values)
-                self.notify(f"added {contact.name}")
                 self._refresh()
 
-        self.app.push_screen(FormModal(contact_form()), saved)
+        self.app.push_screen(FormModal(contact_form(), commit=commit), done)
 
     def compose(self) -> ComposeResult:
         yield Header()

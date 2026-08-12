@@ -109,13 +109,16 @@ class TeamScreen(Screen):
         from ..widgets.entity_forms import member_form
         from ..widgets.forms import FormModal, dropped
 
-        def saved(values: dict | None) -> None:
+        def commit(values: dict) -> str | None:
+            member = team.create_member(self.app.conn, **dropped(values))
+            self.notify(f"added {member.name}")
+            return None
+
+        def done(values: dict | None) -> None:
             if values is not None:
-                member = team.create_member(self.app.conn, **dropped(values))
-                self.notify(f"added {member.name}")
                 self.refresh_data(self.query_one("#team-filter", Input).value)
 
-        self.app.push_screen(FormModal(member_form()), saved)
+        self.app.push_screen(FormModal(member_form(), commit=commit), done)
 
     def action_edit_member(self) -> None:
         from ..widgets.entity_forms import member_form
@@ -126,12 +129,15 @@ class TeamScreen(Screen):
             return
         member = team.get_member(self.app.conn, member_id)
 
-        def saved(values: dict | None) -> None:
+        def commit(values: dict) -> str | None:
+            team.update_member(self.app.conn, member_id, **dropped(values))
+            return None
+
+        def done(values: dict | None) -> None:
             if values is not None:
-                team.update_member(self.app.conn, member_id, **dropped(values))
                 self.refresh_data(self.query_one("#team-filter", Input).value)
 
-        self.app.push_screen(FormModal(member_form(member)), saved)
+        self.app.push_screen(FormModal(member_form(member), commit=commit), done)
 
     def action_focus_filter(self) -> None:
         self.query_one("#team-filter", Input).focus()
