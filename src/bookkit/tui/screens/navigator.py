@@ -71,7 +71,8 @@ CONTACT_INLINE = {
 TASK_INLINE = {
     0: Field("due_on", "due", "date"),
     1: Field("title", "task", required=True),
-    2: Field("description", "description"),
+    2: Field("category", "category"),
+    3: Field("description", "description"),
 }
 
 
@@ -97,6 +98,13 @@ def _task_detail_cell(task: Task) -> Text:
         return dash()
     first = task.detail.strip().splitlines()[0]
     return Text(first[:57] + "…" if len(first) > 58 else first, style=theme.DIM)
+
+
+def _grouped_by_category(tasks: list[Task]) -> list[Task]:
+    """Display-level grouping only — repo ordering (due date, priority)
+    stays authoritative for briefs; this just clusters categories together
+    on screen. "~" sorts uncategorized/undated last."""
+    return sorted(tasks, key=lambda t: ((t.category or "~"), t.due_on or "~"))
 
 
 class NavigatorScreen(Screen):
@@ -435,9 +443,9 @@ class NavigatorScreen(Screen):
                     status_text(need["status"]), key=key,
                 )
         elif which == "tasks":
-            table.add_columns("due", "task", "description", "detail", "account")
+            table.add_columns("due", "task", "category", "description", "detail", "account")
             table.inline_fields = TASK_INLINE
-            for task in self._attention["tasks"]:
+            for task in _grouped_by_category(self._attention["tasks"]):
                 key = f"task:{task.id}"
                 name = ""
                 if task.org_id:
@@ -451,7 +459,9 @@ class NavigatorScreen(Screen):
                     if task.due_on else dash()
                 )
                 table.add_row(
-                    due, task.title, task.description or dash(),
+                    due, task.title,
+                    Text(task.category, style=theme.AMBER) if task.category else dash(),
+                    task.description or dash(),
                     _task_detail_cell(task), name, key=key,
                 )
         elif which == "sla":
@@ -513,10 +523,10 @@ class NavigatorScreen(Screen):
                     Text(f"{o.probability_pct}%", justify="right"), key=key,
                 )
         elif group == "tasks":
-            table.add_columns("due", "task", "description", "detail", "status")
+            table.add_columns("due", "task", "category", "description", "detail", "status")
             table.inline_fields = TASK_INLINE
             today = date.today()
-            for task in tasks_repo.open_tasks(conn, org_id=org_id):
+            for task in _grouped_by_category(tasks_repo.open_tasks(conn, org_id=org_id)):
                 key = f"task:{task.id}"
                 self._row_org[key] = org_id
                 due = (
@@ -524,7 +534,9 @@ class NavigatorScreen(Screen):
                     if task.due_on else dash()
                 )
                 table.add_row(
-                    due, task.title, task.description or dash(),
+                    due, task.title,
+                    Text(task.category, style=theme.AMBER) if task.category else dash(),
+                    task.description or dash(),
                     _task_detail_cell(task), status_text(task.status), key=key,
                 )
         elif group == "projects":

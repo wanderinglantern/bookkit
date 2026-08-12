@@ -613,3 +613,66 @@ async def test_task_tables_show_description_and_detail(seeded_db: Path) -> None:
         assert "description" in headers and "detail" in headers
         row = overview.get_row(task.id)
         assert "brief line" in [str(c) for c in row]
+
+
+async def test_task_tables_group_by_category(seeded_db: Path) -> None:
+    """category surfaces on every task table and rows arrive grouped by it
+    (display-level: repo ordering stays authoritative for briefs)."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.screens.navigator import NavigatorScreen
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    today = date.today().isoformat()
+    task_b = tasks_repo.create(
+        app.conn, "call broker", category="B", due_on=today, org_id=org.id,
+    )
+    task_a1 = tasks_repo.create(
+        app.conn, "send COI", category="A", due_on=today, org_id=org.id,
+    )
+    task_a2 = tasks_repo.create(
+        app.conn, "chase quote", category="A", due_on=today, org_id=org.id,
+    )
+    async with app.run_test(size=(160, 48)) as pilot:
+        assert isinstance(app.screen, NavigatorScreen)
+        nav = app.screen
+
+        # attention: "tasks due" — the two A-category tasks land adjacent,
+        # ahead of the B-category task
+        nav._current = ("att", "tasks")
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        headers = [str(c.label) for c in table.columns.values()]
+        assert "category" in headers
+        idx_a1 = table.get_row_index(f"task:{task_a1.id}")
+        idx_a2 = table.get_row_index(f"task:{task_a2.id}")
+        idx_b = table.get_row_index(f"task:{task_b.id}")
+        assert abs(idx_a1 - idx_a2) == 1
+        assert idx_b > max(idx_a1, idx_a2)
+
+        # per-account tasks group
+        nav._current = ("group", ("tasks", org.id))
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        headers = [str(c.label) for c in table.columns.values()]
+        assert "category" in headers
+        idx_a1 = table.get_row_index(f"task:{task_a1.id}")
+        idx_a2 = table.get_row_index(f"task:{task_a2.id}")
+        idx_b = table.get_row_index(f"task:{task_b.id}")
+        assert abs(idx_a1 - idx_a2) == 1
+        assert idx_b > max(idx_a1, idx_a2)
+
+        # account overview tab
+        app.open_account(org.id)
+        await pilot.pause()
+        overview = app.screen.query_one("#ov-tasks", ListTable)
+        headers = [str(c.label) for c in overview.columns.values()]
+        assert "category" in headers
+        idx_a1 = overview.get_row_index(task_a1.id)
+        idx_a2 = overview.get_row_index(task_a2.id)
+        idx_b = overview.get_row_index(task_b.id)
+        assert abs(idx_a1 - idx_a2) == 1
+        assert idx_b > max(idx_a1, idx_a2)
