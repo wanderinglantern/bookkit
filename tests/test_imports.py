@@ -577,6 +577,8 @@ async def test_import_screen_book_commit(tmp_path: Path) -> None:
     write_template(BOOK_FIELDS, template)
     app = BookkitApp(dbfile)
     async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("t")  # navigator is home; the book importer is on Today
+        await pilot.pause()
         await pilot.press("i")
         assert isinstance(app.screen, ImportScreen)
         path_input = app.screen.query_one("#import-path")

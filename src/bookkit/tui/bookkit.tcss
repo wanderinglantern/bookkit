@@ -148,3 +148,33 @@ ImportChooser, ImportScreen, FormModal, Picker, ConfirmRenew, MergePicker {
 .kanban-column.focused-column {
     border: round $primary;
 }
+
+/* --- navigator (home) ------------------------------------------------------- */
+
+#nav-split {
+    height: 1fr;
+}
+
+#nav-tree {
+    width: 44;
+    min-width: 36;
+    border-right: solid $primary-darken-2;
+    padding: 0 1;
+}
+
+#nav-pane {
+    width: 1fr;
+    padding: 0 1;
+}
+
+#nav-card {
+    height: auto;
+    padding: 1;
+}
+
+#nav-preview {
+    height: 40%;
+    border-top: solid $primary-darken-2;
+    overflow-x: auto;
+    overflow-y: auto;
+}

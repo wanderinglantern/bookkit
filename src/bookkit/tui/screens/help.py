@@ -26,7 +26,14 @@ HELP = """\
   g / G    top / bottom               d       mark task done
   a        add (contextual)           e       edit selected
 
-[b]today screen[/b]
+[b]navigator (home)[/b]
+  the tree drills: attention → accounts → their placements/contacts/
+  opportunities/tasks/projects; the right pane is a working table —
+  a add · e edit · d done · r renew · l layer · enter opens the account
+  t  classic Today dashboard    b/c/p/m/w  book/calendar/pipeline/markets/team
+  ,  setup (where program files live)
+
+[b]today screen (t)[/b]
   b  book        c  renewal calendar        a  new task
   p  pipeline    m  markets                 y  sync program files
   w  team (who to go to for what)            i  import book (xlsx/csv)

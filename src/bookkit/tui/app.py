@@ -31,9 +31,9 @@ class BookkitApp(App):
         return Path(self._db_path) if self._db_path else db.default_db_path()
 
     def on_mount(self) -> None:
-        from .screens.today import TodayScreen
+        from .screens.navigator import NavigatorScreen
 
-        self.push_screen(TodayScreen())
+        self.push_screen(NavigatorScreen())
 
     def on_unmount(self) -> None:
         self.conn.close()

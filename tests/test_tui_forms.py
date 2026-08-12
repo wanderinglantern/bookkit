@@ -183,6 +183,8 @@ async def test_record_market_response(seeded_db: Path) -> None:
 async def test_today_new_task(empty_db: Path) -> None:
     app = BookkitApp(empty_db)
     async with app.run_test(size=(130, 42)) as pilot:
+        await pilot.press("t")  # navigator is home; Today has the a=task key
+        await pilot.pause()
         await pilot.press("a")
         await pilot.pause()
         assert isinstance(app.screen, FormModal)

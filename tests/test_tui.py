@@ -39,6 +39,8 @@ def snapshot(app: BookkitApp, name: str) -> None:
 async def test_today_screen_populates(seeded_db: Path) -> None:
     app = BookkitApp(seeded_db)
     async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("t")  # navigator is home; Today lives behind t
+        await pilot.pause()
         assert isinstance(app.screen, TodayScreen)
         assert app.screen.query_one("#renewals-table", ListTable).row_count > 0
         assert app.screen.query_one("#tasks-table", ListTable).row_count > 0
@@ -176,7 +178,9 @@ async def test_help_screen(seeded_db: Path) -> None:
 
         assert isinstance(app.screen, HelpScreen)
         await pilot.press("escape")
-        assert isinstance(app.screen, TodayScreen)
+        from bookkit.tui.screens.navigator import NavigatorScreen
+
+        assert isinstance(app.screen, NavigatorScreen)
 
 
 async def test_l_edits_layer_under_cursor_and_single_layer_skips_picker(
@@ -329,9 +333,54 @@ async def test_projects_tab_add_edit_and_need_to_opportunity(seeded_db: Path) ->
         # the need shows on Today as attention
         await pilot.press("escape")
         await pilot.pause()
+        await pilot.press("t")  # navigator is home now
+        await pilot.pause()
         assert isinstance(app.screen, TodayScreen)
         app.screen.refresh_data()
         await pilot.pause()
         renewals_table = app.screen.query_one("#renewals-table", ListTable)
         keys = [str(key.value) for key in renewals_table.rows]
         assert any(k.startswith(f"need:{need.id}") for k in keys)
+
+
+async def test_navigator_home_attention_and_group_tables(seeded_db: Path) -> None:
+    from bookkit.repo import placements as placements_repo
+    from bookkit.tui.screens.navigator import NavigatorScreen
+    from bookkit.tui.widgets.forms import FormModal
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(160, 48)) as pilot:
+        assert isinstance(app.screen, NavigatorScreen)
+        nav = app.screen
+        table = nav.query_one("#nav-table", ListTable)
+
+        # attention: the renewals group renders a working table
+        nav._current = ("att", "renewals")
+        nav._render_pane()
+        await pilot.pause()
+        assert table.display and table.row_count > 0
+
+        # an account's placements group: scoped table with expiry columns
+        linked = placements_repo.all_linked(app.conn)[0]
+        nav._current = ("group", ("placements", linked.org_id))
+        nav._render_pane()
+        await pilot.pause()
+        labels = [str(col.label) for col in table.columns.values()]
+        assert "expires" in labels and "d" in labels
+        assert table.row_count > 0
+
+        # e on a placement row opens the commit-in-place form
+        table.focus()
+        table.move_cursor(row=table.get_row_index(f"placement:{linked.id}"))
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        await pilot.press("escape")
+        await pilot.pause()
+
+        # enter on the row opens the full account screen
+        table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, AccountScreen)
+        snapshot(app, "navigator")
