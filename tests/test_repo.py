@@ -293,3 +293,15 @@ def test_task_description_round_trips(conn):
     got = tasks.get(conn, task.id)
     assert got.description == "waiting on Zurich since Monday"
     assert got.detail.startswith("## Notes")
+
+
+def test_outstanding_for_org_joins_market_and_subject(conn):
+    client = orgs.create(conn, kind="client", name="Acme")
+    market = orgs.create(conn, kind="market", name="Zurich")
+    p = placements.create(conn, client.id, "Acme Property 25-26",
+                          "2025-10-01", "2026-10-01")
+    submissions.create(conn, market.id, "2026-08-01", placement_id=p.id)
+    rows = submissions.outstanding_for_org(conn, client.id)
+    assert len(rows) == 1
+    assert rows[0]["market_name"] == "Zurich"
+    assert rows[0]["about"] == "Acme Property 25-26"

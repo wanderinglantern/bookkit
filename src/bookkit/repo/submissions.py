@@ -100,6 +100,26 @@ def reassign_placement(conn: sqlite3.Connection, from_id: str, to_id: str) -> in
     return cur.rowcount
 
 
+def outstanding_for_org(conn: sqlite3.Connection, org_id: str) -> list[sqlite3.Row]:
+    """Everything still out at market for ONE client, joined for display:
+    market name plus what it's about (program name or opportunity title)."""
+    return conn.execute(
+        f"""
+        SELECT s.*, m.name AS market_name,
+               COALESCE(p.program_name, o.title) AS about,
+               COALESCE(p.id, '') AS about_placement_id
+        FROM submission s
+        JOIN org m ON m.id = s.market_org_id
+        LEFT JOIN placement p ON p.id = s.placement_id
+        LEFT JOIN opportunity o ON o.id = s.opportunity_id
+        WHERE s.status = 'out' AND {base.alive('s')}
+          AND (p.org_id = ? OR o.org_id = ?)
+        ORDER BY s.sent_on
+        """,
+        (org_id, org_id),
+    ).fetchall()
+
+
 def market_counts(
     conn: sqlite3.Connection, since: str | None = None, until: str | None = None
 ) -> list[sqlite3.Row]:
