@@ -13,3 +13,4 @@ dist/
 tests/snapshots/
 wheelhouse/
 bookkit-wheelhouse-macos.zip
+.install-pypi.log
