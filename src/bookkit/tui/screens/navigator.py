@@ -114,6 +114,7 @@ class NavigatorScreen(Screen):
         Binding("d", "task_done", "Done (task)", show=False),
         Binding("r", "renew_row", "Renew", show=False),
         Binding("l", "edit_layer_row", "Layer", show=False),
+        Binding("x", "export_row", "Export open items", show=False),
         Binding("u", "undo", "Undo"),
         Binding("R", "refresh", "Refresh", show=False),
         Binding("tab", "hop", "tree ⇄ rows", show=False),
@@ -606,6 +607,17 @@ class NavigatorScreen(Screen):
         kind, _, entity_id = str(value).partition(":")
         return kind, entity_id
 
+    def _export_target_org(self) -> str | None:
+        """Resolve the client under the cursor for x: the account tree node
+        itself, or a focused table row that carries an org (self._row_org)."""
+        if self._current[0] == "account":
+            return str(self._current[1])
+        row = self._selected_row()
+        if row is None:
+            return None
+        kind, entity_id = row
+        return self._row_org.get(f"{kind}:{entity_id}")
+
     def on_data_table_row_selected(self, event: ListTable.RowSelected) -> None:
         key = str(event.row_key.value or "")
         org_id = self._row_org.get(key)
@@ -757,6 +769,21 @@ class NavigatorScreen(Screen):
         if row is None or row[0] != "placement":
             return
         entity_actions.edit_layer(self, placements.get(self.app.conn, row[1]))
+
+    def action_export_row(self) -> None:
+        """x — the open-items workbook for the client under the cursor."""
+        from ...services import export_open_items
+
+        org_id = self._export_target_org()
+        if org_id is None:
+            self.notify("select a client first", severity="warning")
+            return
+        conn = self.app.conn
+        org = orgs.get(conn, org_id)
+        today = date.today()
+        out = Path(f"{org.ref}-open-items-{today.isoformat()}.xlsx")
+        path = export_open_items.write(conn, org_id, out, today)
+        self.notify(f"wrote {path}")
 
     # -- navigation -----------------------------------------------------------------
 

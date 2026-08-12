@@ -411,6 +411,26 @@ async def test_navigator_row_keys_require_table_focus(seeded_db: Path) -> None:
         assert len(tasks_repo.open_tasks(app.conn)) == open_before - 1
 
 
+async def test_navigator_export_row(
+    seeded_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bookkit.repo import placements as placements_repo
+
+    monkeypatch.chdir(tmp_path)
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        org_id = placements_repo.all_linked(app.conn)[0].org_id
+        org = orgs.get(app.conn, org_id)
+        nav._current = ("account", org_id)
+        nav._render_pane()
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+        expected = tmp_path / f"{org.ref}-open-items-{date.today().isoformat()}.xlsx"
+        assert expected.exists()
+
+
 async def test_nest_market_under_new_master(seeded_db: Path) -> None:
     from textual.widgets import Input
 
