@@ -23,10 +23,12 @@ uv run bookctl               # launch the TUI
 program files) and drops you in the TUI. `make check` runs lint + mypy +
 tests.
 
-## Offline install (corporate machine, no PyPI)
+## Install (corporate machine)
 
-Clone **both** repos side by side, then run the installer — the only network
-access it needs is github.com, for the prebuilt wheelhouse:
+Clone **both** repos side by side, then run the installer. It tries PyPI
+first (fast, picks up new dependencies automatically after every pull) and
+falls back to the prebuilt wheelhouse from the GitHub release when there is
+no PyPI access (github.com is the only network needed then):
 
 ```bash
 git clone https://github.com/wanderinglantern/towerkit

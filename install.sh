@@ -1,5 +1,5 @@
 #!/bin/sh
-# Offline installer for corporate machines with no PyPI access.
+# Installer for corporate machines.
 #
 #   ./install.sh
 #
@@ -9,12 +9,14 @@
 #   git clone https://github.com/wanderinglantern/towerkit
 #   git clone https://github.com/wanderinglantern/bookkit
 #
-# Downloads the wheelhouse (every dependency of bookkit AND towerkit,
-# prebuilt for macOS Intel/Apple Silicon, Python 3.12-3.13) from the GitHub
-# release — the only network access needed is github.com — then installs
-# both CURRENT checkouts editable into ./.venv, entirely from local wheels.
-# Re-run after `git pull` (in either repo); the wheelhouse is cached and
-# only re-downloaded if deleted.
+# Tries PyPI first — on machines where pip has network access (directly or
+# through the corporate proxy) every dependency, including newly added ones,
+# resolves in seconds after a `git pull` in either repo. Machines with no
+# PyPI access fall back to the prebuilt wheelhouse from the GitHub release
+# (macOS Intel/Apple Silicon, Python 3.12-3.13; github.com only).
+#
+# Everything installs into ./.venv so the ./bookctl wrapper always works and
+# the system Python is never touched. Re-run after every `git pull`.
 #
 # Afterwards:  ./bookctl
 
@@ -32,30 +34,40 @@ if [ ! -f "$TOWERKIT/pyproject.toml" ]; then
 fi
 
 version=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
-case "$version" in
-    3.12|3.13) ;;
-    *) echo "warning: wheelhouse targets Python 3.12/3.13; found $version" \
-           "(set PYTHON=/path/to/python3.12 to override)" ;;
-esac
-
-if [ ! -d wheelhouse ]; then
-    echo "→ downloading wheelhouse (one time) …"
-    curl -fSL --progress-bar -o wheelhouse.zip "$WHEELHOUSE_URL"
-    mkdir wheelhouse
-    unzip -q wheelhouse.zip -d wheelhouse
-    rm wheelhouse.zip
-fi
 
 echo "→ creating .venv with $PY ($version) …"
 rm -rf .venv
 "$PY" -m venv .venv
 
-echo "→ installing from local wheels (no PyPI) …"
-./.venv/bin/pip install -q --no-index --find-links wheelhouse hatchling editables
-# towerkit first (editable, from the sibling checkout) so bookkit's
-# `towerkit` requirement is already satisfied when bookkit installs.
-./.venv/bin/pip install -q --no-index --find-links wheelhouse --no-build-isolation -e "$TOWERKIT"
-./.venv/bin/pip install -q --no-index --find-links wheelhouse --no-build-isolation -e .
+# towerkit installs first (editable, from the sibling checkout) so bookkit's
+# `towerkit` requirement is satisfied locally and never fetched from an index.
+echo "→ trying PyPI …"
+if ./.venv/bin/pip install -q -e "$TOWERKIT" 2>/dev/null \
+    && ./.venv/bin/pip install -q -e . 2>/dev/null; then
+    echo "✓ installed from PyPI"
+else
+    echo "→ no PyPI access — installing from the local wheelhouse …"
+    case "$version" in
+        3.12|3.13) ;;
+        *) echo "warning: wheelhouse targets Python 3.12/3.13; found $version" \
+               "(set PYTHON=/path/to/python3.12 to override)" ;;
+    esac
+    # refresh when a required wheel is missing — new deps land in the wheelhouse
+    if [ -d wheelhouse ] && ! ls wheelhouse/textual_autocomplete-*.whl >/dev/null 2>&1; then
+        echo "→ wheelhouse is stale (missing textual-autocomplete) — refreshing …"
+        rm -rf wheelhouse
+    fi
+    if [ ! -d wheelhouse ]; then
+        echo "→ downloading wheelhouse (one time) …"
+        curl -fSL --progress-bar -o wheelhouse.zip "$WHEELHOUSE_URL"
+        mkdir wheelhouse
+        unzip -q wheelhouse.zip -d wheelhouse
+        rm wheelhouse.zip
+    fi
+    ./.venv/bin/pip install -q --no-index --find-links wheelhouse hatchling editables
+    ./.venv/bin/pip install -q --no-index --find-links wheelhouse --no-build-isolation -e "$TOWERKIT"
+    ./.venv/bin/pip install -q --no-index --find-links wheelhouse --no-build-isolation -e .
+fi
 
 echo
 echo "✓ installed. Run:"
