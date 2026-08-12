@@ -194,6 +194,7 @@ class Task(Row):
     org_id: str | None = None
     title: str
     description: str | None = None  # brief one-liner; `detail` holds the long notes
+    category: str | None = None  # freeform grouping label, vocab-completed
     detail: str | None = None
     due_on: str | None = None
     status: TaskStatus = TaskStatus.OPEN

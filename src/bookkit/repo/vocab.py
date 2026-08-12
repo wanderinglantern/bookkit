@@ -57,3 +57,7 @@ def lines(conn: sqlite3.Connection) -> list[str]:
         for blob in _column(conn, source_table, column):
             values += [part for part in blob.split(",")]
     return _dedupe(values)
+
+
+def task_categories(conn: sqlite3.Connection) -> list[str]:
+    return _dedupe(_column(conn, "task", "category"))

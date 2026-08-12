@@ -305,3 +305,12 @@ def test_outstanding_for_org_joins_market_and_subject(conn):
     assert len(rows) == 1
     assert rows[0]["market_name"] == "Zurich"
     assert rows[0]["about"] == "Acme Property 25-26"
+
+
+def test_task_category_round_trips_and_feeds_vocab(conn):
+    from bookkit.repo import vocab
+
+    tasks.create(conn, "chase quote", category="Renewal")
+    tasks.create(conn, "send COI", category="Certificates")
+    tasks.create(conn, "misc")  # no category
+    assert vocab.task_categories(conn) == ["Certificates", "Renewal"]

@@ -165,6 +165,8 @@ def task_form(
     fields = [
         Field("title", "title", required=True),
         Field("description", "description", placeholder="one-line summary"),
+        Field("category", "category",
+              suggestions=tuple(vocab.task_categories(conn)) if conn else ()),
         Field("due_on", "due", "date"),
         Field("priority", "priority", "select", _PRIORITY),
     ]
