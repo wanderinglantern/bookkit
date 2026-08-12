@@ -52,7 +52,8 @@ HELP = """\
   enter on a placement shows its tower · enter on a document opens it
 
 [b]markets screen[/b]
-  a  new market · e  edit · in a market: a appetite, w underwriter
+  a  new market · e  edit · N  nest under a master company (creates
+     the master on the spot) · families render as an outline
 
 [b]placements tab[/b]
   j/k switch the previewed program · header names the selection
