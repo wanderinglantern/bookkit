@@ -1,6 +1,6 @@
 """Client-facing open-items list, composed PURELY — rendering is towerkit's
-job (write() in this module glues to towerkit.render.table_xlsx; nothing in
-bookkit imports openpyxl). Sections: General (org-level tasks), one per
+job (write() in this module glues to towerkit.render.table_xlsx; bookkit
+has no xlsx dependency). Sections: General (org-level tasks), one per
 placement (its tasks + outstanding submissions), one per project (unmet
 needs). Determinism: `today` is a parameter, never the wall clock."""
 

@@ -79,7 +79,7 @@ towerkit's job):
   markdown flattening, money/date formatting); one end-to-end test
   writing a real workbook and re-reading it with openpyxl (dev
   dependency only); determinism test (two runs, same bytes).
-- Convention test: no openpyxl import anywhere in bookkit src.
+- Convention test: no openpyxl outside the imports/ package (readers/templates already use it).
 - Gates both repos: pytest, mypy, ruff.
 
 ## Dependencies / deployment
