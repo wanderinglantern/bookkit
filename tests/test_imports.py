@@ -183,6 +183,52 @@ def test_commit_book_reimport_updates_instead_of_duplicating(db_path: Path) -> N
         connection.close()
 
 
+def test_commit_book_rolls_back_everything_on_midway_failure(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bookkit.imports import commit as commit_mod
+
+    connection = db.connect(db_path)
+    try:
+        staged = _staged_book(connection, [dict(_GOOD_ROW)])
+
+        def boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(commit_mod.placements, "create", boom)
+        with pytest.raises(RuntimeError):
+            commit_book(connection, staged, db_path)
+        # org and contact were created BEFORE the failure — a real transaction
+        # must erase them too
+        assert orgs_repo.list_orgs(connection, kind="client") == []
+    finally:
+        connection.close()
+
+
+def test_stage_book_fuzzy_match_keeps_canonical_name(conn) -> None:
+    orgs_repo.create(conn, kind="client", name="Atomic Industries")
+    table, mapping = _book_table([{"account": "Atomic Industries Inc"}])
+    staged = stage_book(conn, table, mapping)
+    record = staged.records[0]
+    assert record.action == "update"
+    assert "name" not in record.fields  # never rename the curated account
+
+
+def test_commit_book_name_only_contacts_do_not_duplicate(db_path: Path) -> None:
+    connection = db.connect(db_path)
+    try:
+        rows = [{"account": "Atomic", "contact_name": "Ken Ito"}]
+        commit_book(connection, _staged_book(connection, list(rows)), db_path)
+        staged = _staged_book(connection, list(rows))
+        contact = next(r for r in staged.records if r.kind == "contact")
+        assert contact.action == "update"
+        commit_book(connection, staged, db_path)
+        org = orgs_repo.find_by_name(connection, "Atomic")
+        assert len(contacts_repo.for_org(connection, org.id)) == 1
+    finally:
+        connection.close()
+
+
 def test_commit_book_refuses_errors_and_writes_nothing(db_path: Path) -> None:
     connection = db.connect(db_path)
     try:
@@ -249,6 +295,14 @@ def test_commit_contact_paste_creates_contact_and_interaction(db_path: Path) -> 
         connection.close()
 
 
+def test_stage_contact_paste_ignores_dates_as_phones(conn) -> None:
+    org = orgs_repo.create(conn, kind="client", name="Atomic Industries")
+    text = "Meeting 2026-08-11 10:30\n\n" + _SIGNATURE
+    staged = stage_contact_paste(conn, text, org.id, org.name)
+    contact = next(r for r in staged.records if r.kind == "contact")
+    assert contact.fields["phone"] == "(312) 555-0142"  # not a formatted date
+
+
 def test_stage_contact_paste_garbage_still_stages_note(conn) -> None:
     org = orgs_repo.create(conn, kind="client", name="Atomic")
     staged = stage_contact_paste(conn, "12 monkeys\n9931", org.id, org.name)
@@ -305,6 +359,34 @@ def test_commit_program_writes_file_links_and_projects(db_path: Path, tmp_path: 
         connection.close()
 
 
+def test_commit_program_failure_cleans_up_file_and_rolls_back(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bookkit import sync as sync_mod
+
+    connection = db.connect(db_path)
+    try:
+        org = orgs_repo.create(connection, kind="client", name="Atomic Industries")
+        placement = placements_repo.create(
+            connection, org.id, "Property", "2026-10-01", "2027-10-01"
+        )
+        staged, draft = stage_program(
+            connection, _TOWER, org.name, "Property", "2026-10-01", "2027-10-01"
+        )
+
+        def boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("projection exploded")
+
+        monkeypatch.setattr(sync_mod, "project", boom)
+        dest = tmp_path / "programs" / "atomic.json"
+        with pytest.raises(RuntimeError):
+            commit_program(connection, staged, draft, placement.id, dest, db_path)
+        assert not dest.exists()  # no orphan blocking the retry
+        assert placements_repo.get(connection, placement.id).program_path is None
+    finally:
+        connection.close()
+
+
 def test_commit_program_refuses_already_linked(db_path: Path, tmp_path: Path) -> None:
     connection = db.connect(db_path)
     try:
@@ -343,7 +425,9 @@ def _linked_placement(connection, tmp_path: Path):
     return placements_repo.get(connection, placement.id)
 
 
-def test_stage_renewal_diffs_by_layer_name(db_path: Path, tmp_path: Path) -> None:
+def test_stage_renewal_diffs_and_matches_by_attachment(
+    db_path: Path, tmp_path: Path
+) -> None:
     connection = db.connect(db_path)
     try:
         placement = _linked_placement(connection, tmp_path)
@@ -358,9 +442,58 @@ def test_stage_renewal_diffs_by_layer_name(db_path: Path, tmp_path: Path) -> Non
         assert "250,000" in str(primary.fields["diff"]) or "$250,000" in str(
             primary.fields["diff"]
         )
-        unmatched = [r for r in staged.records if r.action == "skip"]
-        assert any("20M" in r.key or "$20M" in r.key for r in unmatched)  # new layer
-        assert any("15M" in r.key or "$15M" in r.key for r in unmatched)  # not in paste
+        # pasted '20M xs 10M' matches the existing '$15M xs $10M' by ATTACHMENT
+        # even though the changed limit changes its auto-generated name
+        excess = next(r for r in staged.records if "15M" in r.key)
+        assert excess.action == "update"
+        assert excess.fields["limit_cents"] == 2_000_000_000
+        assert excess.fields["premium_cents"] == 20_000_000
+        assert not [r for r in staged.records if r.action == "skip"]
+    finally:
+        connection.close()
+
+
+def test_stage_renewal_matches_custom_layer_names_by_attachment(
+    db_path: Path, tmp_path: Path
+) -> None:
+    from towerkit.model import dump_program, load_program
+
+    connection = db.connect(db_path)
+    try:
+        placement = _linked_placement(connection, tmp_path)
+        path = Path(placement.program_path)
+        program = load_program(path)  # rename like a real towerkit-authored file
+        program.layers[0].name = "Primary GL"
+        program.layers[1].name = "1st Excess"
+        dump_program(program, path)
+        staged = stage_renewal(connection, placement.id, "Primary 10M — Chubb — 300k\n")
+        assert staged.ok
+        updated = next(r for r in staged.records if r.action == "update")
+        assert updated.fields["layer_name"] == "Primary GL"
+    finally:
+        connection.close()
+
+
+def test_stage_renewal_nothing_matched_is_error(db_path: Path, tmp_path: Path) -> None:
+    connection = db.connect(db_path)
+    try:
+        placement = _linked_placement(connection, tmp_path)
+        staged = stage_renewal(connection, placement.id, "5M xs 50M — Chubb\n")
+        assert not staged.ok  # committing would silently drop the whole paste
+    finally:
+        connection.close()
+
+
+def test_commit_renewal_surfaces_refused_deltas(db_path: Path, tmp_path: Path) -> None:
+    connection = db.connect(db_path)
+    try:
+        placement = _linked_placement(connection, tmp_path)
+        # shrinking Primary to 8M opens a gap under the 15M xs 10M layer, so
+        # write-through refuses the delta — that refusal must be visible
+        staged = stage_renewal(connection, placement.id, "Primary 8M — Chubb — 200k\n")
+        new_id, diags = commit_renewal(connection, staged, placement.id, db_path)
+        assert new_id is not None
+        assert diags.errors
     finally:
         connection.close()
 
@@ -478,10 +611,18 @@ async def test_account_import_chooser_contact_paste(tmp_path: Path) -> None:
         await pilot.press("ctrl+r")
         await pilot.pause()
         assert app.screen._staged is not None and app.screen._staged.ok
+        # edit AFTER previewing: commit must re-stage, never use the stale parse
+        app.screen.query_one("#paste-text").text = _SIGNATURE.replace(
+            "rosa.silva@", "r.silva@"
+        )
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert contacts_repo.for_org(app.conn, org.id) == []  # not committed yet
         await pilot.press("ctrl+s")
         await pilot.pause()
         [contact] = contacts_repo.for_org(app.conn, org.id)
         assert contact.name == "Rosa Silva"
+        assert contact.email == "r.silva@atomic.example.com"  # the EDITED text won
 
 
 def test_imports_package_contains_no_sql() -> None:

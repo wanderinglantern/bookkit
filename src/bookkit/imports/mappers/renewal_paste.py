@@ -32,11 +32,10 @@ def stage_renewal(
     current = load_program(Path(placement.program_path))
     draft = parse_tower(text, insured=current.insured, program=current.program)
     records: list[StagedRecord] = []
-    by_name = {layer.name.strip().lower(): layer for layer in current.layers}
-    seen: set[str] = set()
+    claimed: set[str] = set()  # existing layer ids already matched
+    matched = 0
     for rownum, pasted in enumerate(draft.layers, start=1):
-        name = pasted.name.strip().lower()
-        existing = by_name.get(name)
+        existing = _match_layer(current.layers, pasted, claimed)
         if existing is None:
             record = StagedRecord(
                 "layer", f"{key_base}/{pasted.name}", {}, source_row=rownum,
@@ -45,22 +44,50 @@ def stage_renewal(
             record.warn("layer", "not in the expiring program — build it in towerkit")
             records.append(record)
             continue
-        seen.add(name)
+        claimed.add(existing.id)
+        matched += 1
         diffed = _diff_layer(key_base, existing, pasted, rownum)
         if diffed is not None:
             records.append(diffed)
     for layer in current.layers:
-        if layer.name.strip().lower() not in seen:
+        if layer.id not in claimed:
             record = StagedRecord(
                 "layer", f"{key_base}/{layer.name}", {}, source_row=0, action="skip"
             )
             record.warn("layer", "not in the paste — renews unchanged")
             records.append(record)
+    if draft.layers and matched == 0:
+        broken = StagedRecord("renewal", key_base, {}, source_row=0, action="skip")
+        broken.error(
+            "layers",
+            "nothing in the paste matches the expiring program — committing would "
+            "renew with the OLD terms and silently drop everything pasted",
+        )
+        records.append(broken)
     for diag in draft.diagnostics.errors:
         broken = StagedRecord("renewal", key_base, {}, source_row=0, action="skip")
         broken.error(diag.code, diag.message)
         records.append(broken)
     return StagedImport("paste", "", records, [])
+
+
+def _match_layer(
+    layers: list[Layer], pasted: Layer, claimed: set[str]
+) -> Layer | None:
+    """Pasted layers carry auto-generated band names, real files carry human
+    names ('Primary GL', '1st Excess') — so match by name first, then by the
+    layer's tower identity: its attachment point. Ambiguity means no match,
+    never a guess."""
+    wanted = pasted.name.strip().lower()
+    for layer in layers:
+        if layer.id not in claimed and layer.name.strip().lower() == wanted:
+            return layer
+    by_attach = [
+        layer
+        for layer in layers
+        if layer.id not in claimed and layer.attach == pasted.attach
+    ]
+    return by_attach[0] if len(by_attach) == 1 else None
 
 
 def _diff_layer(

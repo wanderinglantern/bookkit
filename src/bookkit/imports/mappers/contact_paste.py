@@ -12,13 +12,23 @@ import sqlite3
 from datetime import date
 
 from ... import normalize
-from ..matcher import match_contact
+from ..matcher import match_contact, match_contact_by_name
 from ..staging import StagedImport, StagedRecord
 
 _EMAIL_RE = re.compile(r"[^\s<>|,;]+@[^\s<>|,;]+\.[^\s<>|,;]+")
 _PHONE_RE = re.compile(r"[+()\d][\d\s().+-]{6,}\d(?:\s*(?:ext\.?|x)\s*\d+)?")
 _LINKEDIN_RE = re.compile(r"\S*linkedin\.com/\S+", re.IGNORECASE)
 _NAMEISH_RE = re.compile(r"^[A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){1,3}$")
+# a digit run that is actually a date (ISO or a dd Mon-adjacent fragment) must
+# never become a phone number — dates format into plausible-looking phones
+_DATEISH_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b")
+
+
+def _plausible_phone(candidate: str) -> bool:
+    if _DATEISH_RE.search(candidate):
+        return False
+    digits = re.sub(r"\D", "", candidate)
+    return candidate.lstrip().startswith("+") or len(digits) in (10, 11)
 
 
 def stage_contact_paste(
@@ -35,6 +45,8 @@ def stage_contact_paste(
             (_PHONE_RE, "phone", normalize.clean_phone),
         ):
             match = pattern.search(line)
+            if match and field_name == "phone" and not _plausible_phone(match.group()):
+                match = None
             if match and field_name not in contact.fields:
                 try:
                     contact.fields[field_name] = cleaner(match.group())
@@ -48,10 +60,15 @@ def stage_contact_paste(
             remaining_lines.append(line)  # "Rosa Silva | rosa@..." style lines
     _name_and_title(contact, remaining_lines, org_name)
     email = contact.fields.get("email")
-    if isinstance(email, str):
-        existing = match_contact(conn, org_id, email)
-        if existing is not None:
-            contact.action, contact.target_id = "update", existing
+    existing = match_contact(conn, org_id, email) if isinstance(email, str) else None
+    if existing is None and "first_name" in contact.fields:
+        existing = match_contact_by_name(
+            conn, org_id,
+            str(contact.fields.get("first_name") or ""),
+            str(contact.fields.get("last_name") or ""),
+        )
+    if existing is not None:
+        contact.action, contact.target_id = "update", existing
     records = [contact] if _has_identity(contact) else []
     if not records:
         contact = None  # type: ignore[assignment]

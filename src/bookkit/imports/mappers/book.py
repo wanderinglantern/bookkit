@@ -13,7 +13,8 @@ from ... import normalize
 from ...dates import parse_human_date
 from ...models import OrgStatus, PlacementStatus
 from ...money import MoneyParseError, parse_money_cents, parse_share_bps
-from ..matcher import match_contact, match_org, match_placement
+from ...repo import orgs
+from ..matcher import match_contact, match_contact_by_name, match_org, match_placement
 from ..readers import RawTable
 from ..staging import StagedImport, StagedRecord
 from ..tablemap import Mapping, apply_mapping
@@ -82,6 +83,14 @@ def _stage_account(
     target, candidates = match_org(conn, account)
     if target is not None:
         record.action, record.target_id = "update", target
+        current_name = orgs.get(conn, target).name
+        if current_name != account:
+            # a fuzzy hit must never rename the curated account to the
+            # spreadsheet's spelling — the canonical name feeds link matching
+            record.fields.pop("name", None)
+            record.warn(
+                "account", f"matched existing {current_name!r}; keeping its name"
+            )
     elif candidates:
         record.error(
             "account", f"ambiguous match — could be any of {candidates!r}; pick one"
@@ -126,8 +135,16 @@ def _stage_contact(
         except ValueError as exc:
             record.error("contact_phone", str(exc))
     email = record.fields.get("email")
-    if org_id is not None and isinstance(email, str):
-        existing = match_contact(conn, org_id, email)
+    if org_id is not None:
+        existing = None
+        if isinstance(email, str):
+            existing = match_contact(conn, org_id, email)
+        if existing is None and name:
+            existing = match_contact_by_name(
+                conn, org_id,
+                str(record.fields.get("first_name") or ""),
+                str(record.fields.get("last_name") or ""),
+            )
         if existing is not None:
             record.action, record.target_id = "update", existing
     return record

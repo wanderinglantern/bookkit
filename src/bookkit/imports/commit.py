@@ -39,7 +39,7 @@ def commit_book(
     result = CommitResult(backup=_snapshot(conn, db_path))
     note = f"import {staged.source} sha256={staged.sha256}"
     org_ids: dict[str, str] = {}  # org_key → id, for records under new accounts
-    try:
+    with db.transaction(conn):
         for record in staged.records:
             if record.action == "skip":
                 continue
@@ -53,10 +53,6 @@ def commit_book(
                 _apply_contact(conn, record, org_id, note, result)
             elif record.kind == "placement":
                 _apply_placement(conn, record, org_id, note, result)
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
     return result
 
 
@@ -70,7 +66,7 @@ def commit_contact_paste(
         )
     result = CommitResult(backup=_snapshot(conn, db_path))
     note = "import pasted capture"
-    try:
+    with db.transaction(conn):
         contact_ids: list[str] = []
         for record in staged.records:
             if record.kind == "contact":
@@ -93,10 +89,6 @@ def commit_contact_paste(
                     contact_ids=contact_ids,
                 )
                 _count(result, record)
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
     return result
 
 
@@ -135,14 +127,28 @@ def commit_program(
         return None, exc.diagnostics
     _snapshot(conn, db_path)  # projection writes rows; same backup rule applies
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dump_program(program, dest)
-    links.confirm(conn, str(dest), placement.org_id, program.insured, source="import")
-    project_diags = sync.project(conn, dest, placement_id=placement_id)
-    base.log_event(
-        conn, "placement", placement_id, "import", None, dest.name,
-        f"import program from paste sha256={staged.sha256 or 'n/a'}",
-    )
-    conn.commit()
+    wrote_file = False
+    try:
+        with db.transaction(conn):
+            dump_program(program, dest)
+            wrote_file = True
+            links.confirm(
+                conn, str(dest), placement.org_id, program.insured, source="import"
+            )
+            project_diags = sync.project(conn, dest, placement_id=placement_id)
+            if not project_diags.ok:
+                raise _ProjectionFailed(project_diags)
+            base.log_event(
+                conn, "placement", placement_id, "import", None, dest.name,
+                f"import program from paste sha256={staged.sha256 or 'n/a'}",
+            )
+    except _ProjectionFailed as exc:
+        _cleanup_file(dest, wrote_file)
+        return None, exc.diagnostics
+    except BaseException:
+        # never orphan a file the retry guard would then trip over
+        _cleanup_file(dest, wrote_file)
+        raise
     return dest, project_diags
 
 
@@ -162,35 +168,59 @@ def commit_renewal(
         diags.error("staged", f"{len(staged.errors)} staging error(s); commit refused")
         return None, diags
     _snapshot(conn, db_path)
-    new_placement, _new_path, renew_diags = sync.renew(conn, placement_id)
-    if new_placement is None:
-        return None, renew_diags
-    layer_ids = {
-        str(layer["name"]).strip().lower(): str(layer["id"])
-        for layer in sync.layer_details(conn, new_placement.id)
-    }
-    for record in staged.records:
-        if record.kind != "layer" or record.action != "update":
-            continue
-        layer_id = layer_ids.get(str(record.fields["layer_name"]).strip().lower())
-        if layer_id is None:
-            renew_diags.warn(
-                "layer", f"{record.fields['layer_name']!r} missing from the renewed file"
+    new_path = None
+    try:
+        with db.transaction(conn):
+            new_placement, new_path, renew_diags = sync.renew(conn, placement_id)
+            if new_placement is None:
+                raise _ProjectionFailed(renew_diags)
+            layer_ids = {
+                str(layer["name"]).strip().lower(): str(layer["id"])
+                for layer in sync.layer_details(conn, new_placement.id)
+            }
+            for record in staged.records:
+                if record.kind != "layer" or record.action != "update":
+                    continue
+                layer_id = layer_ids.get(
+                    str(record.fields["layer_name"]).strip().lower()
+                )
+                if layer_id is None:
+                    renew_diags.warn(
+                        "layer",
+                        f"{record.fields['layer_name']!r} missing from the renewed file",
+                    )
+                    continue
+                update_diags = sync.update_layer(
+                    conn, new_placement.id, layer_id,
+                    attach_cents=_maybe_int(record.fields.get("attach_cents")),
+                    limit_cents=_maybe_int(record.fields.get("limit_cents")),
+                    premium_cents=_maybe_int(record.fields.get("premium_cents")),
+                )
+                renew_diags.items.extend(update_diags.items)
+            base.log_event(
+                conn, "placement", new_placement.id, "import", None, "renewal paste",
+                "import renewal terms from paste",
             )
-            continue
-        update_diags = sync.update_layer(
-            conn, new_placement.id, layer_id,
-            attach_cents=_maybe_int(record.fields.get("attach_cents")),
-            limit_cents=_maybe_int(record.fields.get("limit_cents")),
-            premium_cents=_maybe_int(record.fields.get("premium_cents")),
-        )
-        renew_diags.items.extend(update_diags.items)
-    base.log_event(
-        conn, "placement", new_placement.id, "import", None, "renewal paste",
-        "import renewal terms from paste",
-    )
-    conn.commit()
+    except _ProjectionFailed as exc:
+        _cleanup_file(new_path, new_path is not None)
+        return None, exc.diagnostics
+    except BaseException:
+        _cleanup_file(new_path, new_path is not None)
+        raise
     return new_placement.id, renew_diags
+
+
+class _ProjectionFailed(Exception):
+    """Internal: unwind the transaction, report diagnostics, not a crash."""
+
+    def __init__(self, diagnostics: Diagnostics) -> None:
+        super().__init__("projection failed")
+        self.diagnostics = diagnostics
+
+
+def _cleanup_file(path: Path | None, wrote: bool) -> None:
+    if wrote and path is not None:
+        Path(path).unlink(missing_ok=True)
 
 
 def _maybe_int(value: object) -> int | None:

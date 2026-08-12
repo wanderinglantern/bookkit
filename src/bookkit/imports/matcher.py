@@ -41,6 +41,20 @@ def match_contact(conn: sqlite3.Connection, org_id: str, email: str) -> str | No
     return None
 
 
+def match_contact_by_name(
+    conn: sqlite3.Connection, org_id: str, first: str, last: str
+) -> str | None:
+    """Fallback for rows without an email — exact name, and only when it's
+    unambiguous. Keeps name-only re-imports idempotent instead of duplicating."""
+    wanted = (first.strip().lower(), last.strip().lower())
+    hits = [
+        contact
+        for contact in contacts.for_org(conn, org_id, active_only=False)
+        if (contact.first_name.lower(), contact.last_name.lower()) == wanted
+    ]
+    return hits[0].id if len(hits) == 1 else None
+
+
 def match_placement(
     conn: sqlite3.Connection,
     org_id: str,

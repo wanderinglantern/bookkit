@@ -660,6 +660,11 @@ class AccountScreen(Screen):
                 first = diags.errors[0] if diags.errors else "unknown error"
                 raise ValueError(str(first))
             self.refresh_data()
+            if diags.errors:  # renewed, but some pasted terms were refused
+                return (
+                    f"renewed, but {len(diags.errors)} term(s) NOT applied — "
+                    f"{diags.errors[0]}"
+                )
             return "renewed with pasted terms — review in the placements tab"
 
         self.app.push_screen(PasteImportModal("paste renewal terms", stage, commit))

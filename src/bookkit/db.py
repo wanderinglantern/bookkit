@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -44,6 +46,20 @@ def migrations_dir() -> Path:
     if repo.is_dir():
         return repo
     raise FileNotFoundError("no migrations directory found")
+
+
+@contextmanager
+def transaction(conn: sqlite3.Connection) -> Iterator[None]:
+    """A REAL write transaction on the autocommit connection. BEGIN IMMEDIATE
+    takes the write lock up front; any exception rolls the whole batch back.
+    Without this, conn.commit()/rollback() are silent no-ops."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
 
 
 def connect(path: Path | str | None = None, migrate: bool = True) -> sqlite3.Connection:

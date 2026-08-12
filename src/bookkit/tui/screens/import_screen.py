@@ -33,6 +33,7 @@ class ImportScreen(ModalScreen):
     def __init__(self) -> None:
         super().__init__()
         self._staged: StagedImport | None = None
+        self._staged_path: Path | None = None
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="modal-box"):
@@ -62,18 +63,34 @@ class ImportScreen(ModalScreen):
             return
         mapping = map_headers(table.headers, BOOK_FIELDS)
         self._staged = stage_book(self.app.conn, table, mapping)
+        self._staged_path = path
         preview.update(self._staged.report())
 
     def action_commit(self) -> None:
         from ...imports.commit import commit_book
 
-        if self._staged is None:
+        if self._staged is None or self._staged_path is None:
             self.notify("preview first (enter on the path)", severity="warning")
+            return
+        try:
+            if read_table(self._staged_path).sha256 != self._staged.sha256:
+                self.notify(
+                    "file changed since the preview — press enter to re-preview",
+                    severity="warning",
+                )
+                self._staged = None
+                return
+        except (ValueError, OSError) as exc:
+            self.notify(f"cannot re-read file: {exc}", severity="error")
             return
         if not self._staged.ok:
             self.notify("fix the errors first (see preview)", severity="error")
             return
-        result = commit_book(self.app.conn, self._staged, self.app.db_file())
+        try:
+            result = commit_book(self.app.conn, self._staged, self.app.db_file())
+        except Exception as exc:  # rollback already happened; never crash the TUI
+            self.notify(f"commit failed (rolled back): {exc}", severity="error")
+            return
         created = sum(result.created.values())
         updated = sum(result.updated.values())
         self.dismiss(None)

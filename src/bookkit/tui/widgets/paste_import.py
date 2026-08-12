@@ -37,6 +37,7 @@ class PasteImportModal(ModalScreen):
         self._stage = stage
         self._commit = commit
         self._staged: StagedImport | None = None
+        self._staged_text: str | None = None  # the exact text _staged came from
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="modal-box"):
@@ -61,9 +62,17 @@ class PasteImportModal(ModalScreen):
         except Exception as exc:  # staging must never crash the app
             self.notify(f"could not stage: {exc}", severity="error")
             return
+        self._staged_text = text
         self.query_one("#paste-preview", Static).update(self._staged.report())
 
     def action_commit(self) -> None:
+        current_text = self.query_one("#paste-text", TextArea).text
+        if self._staged is not None and current_text != self._staged_text:
+            self._staged = None  # text edited since preview — never commit stale
+            self.action_preview()
+            if self._staged is not None:
+                self.notify("text changed — re-previewed; ctrl+s again to commit")
+            return
         if self._staged is None:  # first ctrl+s stages; the second commits
             self.action_preview()
             if self._staged is not None:
