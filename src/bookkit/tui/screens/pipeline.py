@@ -28,6 +28,7 @@ class PipelineScreen(Screen):
         Binding("l,right", "next_column", "column ▶", key_display="l"),
         Binding("greater_than_sign", "advance_card", "Advance card", key_display=">"),
         Binding("less_than_sign", "close_lost", "Mark lost", key_display="<"),
+        Binding("e", "edit_card", "Edit"),
         Binding("u", "undo", "Undo"),
     ]
 
@@ -58,10 +59,16 @@ class PipelineScreen(Screen):
             )
             option_list = self.query_one(f"#list-{stage}", OptionList)
             option_list.clear_options()
-            for o in opps:
+            # target effective is the date the deal marches toward: soonest
+            # first, undated at the bottom
+            for o in sorted(opps, key=lambda o: o.target_effective or "9999"):
                 org = orgs.get(conn, o.org_id)
                 target = format_cents_compact(o.target_premium) if o.target_premium else "—"
-                label = f"{o.ref} {org.name}\n  {o.title} · {target} · {o.probability_pct}%"
+                label = (
+                    f"{o.ref} {org.name}\n"
+                    f"  {o.title} · {target} · {o.probability_pct}%\n"
+                    f"  {o.lines or 'lines —'} · eff {o.target_effective or '—'}"
+                )
                 option_list.add_option(Option(label, id=o.id))
 
     def _focus_column(self, index: int) -> None:
@@ -116,6 +123,29 @@ class PipelineScreen(Screen):
         self.notify(f"{moved.ref} marked lost — u to undo")
         self.refresh_data()
         self._focus_column(self.column)
+
+    def action_edit_card(self) -> None:
+        """Edit the selected opportunity in place — lines and target
+        effective included; the form stays open on a refused save."""
+        from ..widgets.entity_forms import apply_opportunity, opportunity_form
+        from ..widgets.forms import FormModal
+
+        opp_id = self._selected_opp_id()
+        if opp_id is None:
+            return
+        opp = opportunities.get(self.app.conn, opp_id)
+
+        def commit(values: dict) -> str | None:
+            apply_opportunity(self.app.conn, values, opp.org_id, existing=opp)
+            return None
+
+        def done(values: dict | None) -> None:
+            if values is not None:
+                self.notify(f"updated {opp.ref}")
+                self.refresh_data()
+                self._focus_column(self.column)
+
+        self.app.push_screen(FormModal(opportunity_form(opp), commit=commit), done)
 
     def action_undo(self) -> None:
         self.app.show_undo_result()

@@ -26,14 +26,18 @@ def test_seed_is_realistic(seeded) -> None:
 
 def test_renewal_buckets(seeded) -> None:
     buckets = renewals.bucketed(seeded, TODAY)
-    assert set(buckets) == {"0-30", "31-60", "61-90", "91-120"}
+    assert set(buckets) == {"overdue", "0-30", "31-60", "61-90", "91-120"}
     items = renewals.upcoming(seeded, TODAY)
     assert items, "seed should have renewals inside 120 days"
     for item in items:
+        if item.bucket == "overdue":  # expired, never renewed — stays visible
+            assert item.days_remaining < 0
+            continue
         assert 0 <= item.days_remaining <= 120
         lo, hi = (int(x) for x in item.bucket.split("-"))
         assert lo <= item.days_remaining <= hi
-    assert [i.days_remaining for i in items] == sorted(i.days_remaining for i in items)
+    upcoming_only = [i.days_remaining for i in items if i.days_remaining >= 0]
+    assert upcoming_only == sorted(upcoming_only)
 
 
 def test_staleness_weighted_by_premium(seeded) -> None:
@@ -154,3 +158,39 @@ def test_renewal_date_survives_timezones(seeded, monkeypatch) -> None:
     finally:
         os.environ.pop("TZ", None)
         time.tzset()
+
+
+class TestRenewalsScanAllPrograms:
+    def test_overdue_unrenewed_program_stays_on_the_radar(self, conn) -> None:
+        org = orgs.create(conn, kind="client", name="Multi Program Co")
+        placements.create(conn, org.id, "Property", "2025-11-01", "2026-11-01",
+                          status="bound")
+        expired = placements.create(conn, org.id, "Casualty", "2025-06-01",
+                                    "2026-06-01", status="bound")
+        items = renewals.upcoming(conn, TODAY, days=120)
+        by_id = {item.placement.id: item for item in items}
+        assert expired.id in by_id  # expired 2 months ago, never renewed
+        assert by_id[expired.id].bucket == "overdue"
+        assert by_id[expired.id].days_remaining < 0
+
+    def test_renewed_and_lapsed_programs_do_not_nag(self, conn) -> None:
+        org = orgs.create(conn, kind="client", name="Tidy Co")
+        placements.create(conn, org.id, "2025 Casualty Program", "2025-06-01",
+                          "2026-06-01", status="bound")
+        placements.create(conn, org.id, "2026 Casualty Program", "2026-06-01",
+                          "2027-06-01", status="bound")  # renew-at-birth successor
+        placements.create(conn, org.id, "Old Marine", "2024-01-01", "2025-01-01",
+                          status="lapsed")  # deliberately let go
+        items = renewals.upcoming(conn, TODAY, days=120)
+        assert all(item.bucket != "overdue" for item in items)
+
+    def test_next_for_org_prefers_overdue_across_programs(self, conn) -> None:
+        org = orgs.create(conn, kind="client", name="Two Towers Co")
+        placements.create(conn, org.id, "Property", "2025-10-01", "2026-10-01",
+                          status="bound")
+        placements.create(conn, org.id, "Casualty", "2025-06-01", "2026-06-01",
+                          status="bound")
+        nxt = renewals.next_for_org(conn, org.id, TODAY)
+        assert nxt is not None
+        assert nxt.placement.program_name == "Casualty"  # overdue beats upcoming
+        assert nxt.days_remaining < 0

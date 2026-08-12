@@ -16,9 +16,9 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Input
 
-from ...dates import days_until
 from ...money import format_cents_compact
-from ...repo import interactions, orgs, placements
+from ...repo import interactions, orgs
+from ...services import renewals
 from ..widgets.tables import ListTable
 
 
@@ -57,16 +57,29 @@ class BookScreen(Screen):
         for org in orgs.list_orgs(conn, kind="client"):
             if filter_text and not _matches(org, filter_text):
                 continue
-            nxt = placements.next_renewal_for_org(conn, org.id, today.isoformat())
+            nxt_item = renewals.next_for_org(conn, org.id, today)
             last = interactions.last_for_org(conn, org.id)
+            if nxt_item is None:
+                renewal_cell, days_cell, premium_cell = "—", "—", "—"
+            else:
+                nxt = nxt_item.placement
+                renewal_cell = (
+                    f"[red]{nxt.period_to}[/red]"
+                    if nxt_item.days_remaining < 0
+                    else nxt.period_to
+                )
+                days_cell = str(nxt_item.days_remaining)
+                premium_cell = (
+                    format_cents_compact(nxt.total_premium) if nxt.total_premium else "—"
+                )
             table.add_row(
                 org.ref,
                 org.name,
                 org.owner or "—",
                 org.status,
-                nxt.period_to if nxt else "—",
-                str(days_until(nxt.period_to, today)) if nxt else "—",
-                format_cents_compact(nxt.total_premium) if nxt and nxt.total_premium else "—",
+                renewal_cell,
+                days_cell,
+                premium_cell,
                 last.occurred_on if last else "never",
                 key=org.id,
             )

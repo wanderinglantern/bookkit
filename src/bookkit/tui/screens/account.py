@@ -185,11 +185,21 @@ class AccountScreen(Screen):
         today = date.today()
         org = orgs.get(conn, self.current_org_id)
 
-        nxt = placements.next_renewal_for_org(conn, org.id, today.isoformat())
+        from ...services import renewals as renewals_service
+
+        nxt_item = renewals_service.next_for_org(conn, org.id, today)
+        nxt = nxt_item.placement if nxt_item else None
         premium = format_cents(nxt.total_premium) if nxt and nxt.total_premium else "—"
-        renewal = (
-            f"{nxt.period_to} ({days_until(nxt.period_to, today)}d)" if nxt else "none scheduled"
-        )
+        if nxt_item is None:
+            renewal = "none scheduled"
+        elif nxt_item.days_remaining < 0:
+            renewal = (
+                f"{nxt_item.placement.period_to} "
+                f"([red]{-nxt_item.days_remaining}d overdue — "
+                f"{nxt_item.placement.program_name}[/red])"
+            )
+        else:
+            renewal = f"{nxt_item.placement.period_to} ({nxt_item.days_remaining}d)"
         self.query_one("#account-header", Static).update(
             f"[b]{org.name}[/b]  {org.ref}   status: {org.status}   "
             f"owner: {org.owner or '—'}   premium: {premium}   next renewal: {renewal}"
