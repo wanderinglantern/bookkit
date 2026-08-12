@@ -194,6 +194,69 @@ def test_commit_book_refuses_errors_and_writes_nothing(db_path: Path) -> None:
         connection.close()
 
 
+# --- contact paste -------------------------------------------------------------------
+
+from bookkit.imports.commit import commit_contact_paste  # noqa: E402
+from bookkit.imports.mappers.contact_paste import stage_contact_paste  # noqa: E402
+
+_SIGNATURE = """Rosa Silva
+Director of Risk Management
+Atomic Industries, Inc.
+rosa.silva@atomic.example.com | (312) 555-0142
+https://www.linkedin.com/in/rosasilva
+"""
+
+
+def test_stage_contact_paste_parses_signature(conn) -> None:
+    org = orgs_repo.create(conn, kind="client", name="Atomic Industries")
+    staged = stage_contact_paste(conn, _SIGNATURE, org.id, org.name)
+    contact = next(r for r in staged.records if r.kind == "contact")
+    assert contact.fields["first_name"] == "Rosa"
+    assert contact.fields["last_name"] == "Silva"
+    assert contact.fields["title"] == "Director of Risk Management"
+    assert contact.fields["email"] == "rosa.silva@atomic.example.com"
+    assert contact.fields["phone"] == "(312) 555-0142"
+    assert str(contact.fields["linkedin"]).endswith("/in/rosasilva")
+    interaction = next(r for r in staged.records if r.kind == "interaction")
+    assert interaction.fields["body"] == _SIGNATURE
+    assert staged.ok
+
+
+def test_stage_contact_paste_matches_existing_by_email(conn) -> None:
+    org = orgs_repo.create(conn, kind="client", name="Atomic")
+    existing = contacts_repo.create(
+        conn, org.id, first_name="Rosa", last_name="Silva",
+        email="rosa.silva@atomic.example.com",
+    )
+    staged = stage_contact_paste(conn, _SIGNATURE, org.id, org.name)
+    contact = next(r for r in staged.records if r.kind == "contact")
+    assert contact.action == "update" and contact.target_id == existing.id
+
+
+def test_commit_contact_paste_creates_contact_and_interaction(db_path: Path) -> None:
+    connection = db.connect(db_path)
+    try:
+        org = orgs_repo.create(connection, kind="client", name="Atomic")
+        staged = stage_contact_paste(connection, _SIGNATURE, org.id, org.name)
+        commit_contact_paste(connection, staged, org.id, db_path)
+        [contact] = contacts_repo.for_org(connection, org.id)
+        assert contact.name == "Rosa Silva"
+        from bookkit.repo import interactions as interactions_repo
+
+        [interaction] = interactions_repo.for_org(connection, org.id)
+        assert interaction.type == "note"
+    finally:
+        connection.close()
+
+
+def test_stage_contact_paste_garbage_still_stages_note(conn) -> None:
+    org = orgs_repo.create(conn, kind="client", name="Atomic")
+    staged = stage_contact_paste(conn, "12 monkeys\n9931", org.id, org.name)
+    kinds = [r.kind for r in staged.records]
+    assert "interaction" in kinds
+    assert staged.ok  # warnings only — a note is always worth keeping
+
+
 # --- cli ---------------------------------------------------------------------------
 
 from bookkit.cli import main as cli_main  # noqa: E402

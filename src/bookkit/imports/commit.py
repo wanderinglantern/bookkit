@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import db
-from ..repo import base, contacts, orgs, placements
+from ..repo import base, contacts, interactions, orgs, placements
 from .staging import StagedImport, StagedRecord
 
 _KIND_TABLES = {"account": "org", "contact": "contact", "placement": "placement"}
@@ -49,6 +49,46 @@ def commit_book(
                 _apply_contact(conn, record, org_id, note, result)
             elif record.kind == "placement":
                 _apply_placement(conn, record, org_id, note, result)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return result
+
+
+def commit_contact_paste(
+    conn: sqlite3.Connection, staged: StagedImport, org_id: str, db_path: Path
+) -> CommitResult:
+    """Contact (create or update) + the pasted text as a note interaction."""
+    if not staged.ok:
+        raise ValueError(
+            f"staged import has {len(staged.errors)} error(s); commit refused"
+        )
+    result = CommitResult(backup=_snapshot(conn, db_path))
+    note = "import pasted capture"
+    try:
+        contact_ids: list[str] = []
+        for record in staged.records:
+            if record.kind == "contact":
+                fields = _fields(record, "org_id")
+                if record.action == "update" and record.target_id is not None:
+                    contacts.update(conn, record.target_id, note=note, **fields)
+                    contact_ids.append(record.target_id)
+                else:
+                    contact_ids.append(contacts.create(conn, org_id, **fields).id)
+                _count(result, record)
+        for record in staged.records:
+            if record.kind == "interaction":
+                interactions.log(
+                    conn,
+                    org_id,
+                    str(record.fields["type"]),
+                    str(record.fields["subject"]),
+                    str(record.fields["occurred_on"]),
+                    body=str(record.fields.get("body") or "") or None,
+                    contact_ids=contact_ids,
+                )
+                _count(result, record)
         conn.commit()
     except Exception:
         conn.rollback()
