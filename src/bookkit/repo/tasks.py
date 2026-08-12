@@ -41,6 +41,24 @@ def open_tasks(
     return [Task.from_row(r) for r in rows]
 
 
+def open_tasks_for_client(conn: sqlite3.Connection, org_id: str) -> list[Task]:
+    """Open tasks owned by ONE client, directly or via one of its placements —
+    mirrors the ownership join in submissions.outstanding_for_org. Needed
+    because a placement-attached task can carry org_id NULL (legal; see
+    module docstring), so `open_tasks(org_id=...)` alone would drop it."""
+    rows = conn.execute(
+        f"""
+        SELECT task.* FROM task
+        LEFT JOIN placement p ON p.id = task.placement_id
+        WHERE {base.alive('task')} AND task.status = 'open'
+          AND (task.org_id = ? OR p.org_id = ?)
+        ORDER BY task.due_on IS NULL, task.due_on, task.priority
+        """,
+        (org_id, org_id),
+    ).fetchall()
+    return [Task.from_row(r) for r in rows]
+
+
 def reassign_placement(conn: sqlite3.Connection, from_id: str, to_id: str) -> int:
     """Bulk move for placement merges; the service logs the event."""
     cur = conn.execute(

@@ -67,7 +67,7 @@ towerkit's job):
 - Org with zero open items: still writes a valid workbook with an
   explicit "No open items" row — an empty-looking client deliverable
   must say so, not render blank.
-- Unknown org ref: error with near-match candidates via aliases.
+- Unknown org ref: error with near-match client-name candidates (rapidfuzz).
 - Out-path not writable: plain error, nothing partial left behind.
 
 ## Testing

@@ -307,6 +307,11 @@ def test_compose_groups_by_program_project_and_general(conn):
     assert task_row.kind == "Task" and task_row.days_open >= 0
     assert "brief line" in task_row.details  # description first line of the cell
 
+    # a placement-only task (org_id NULL, placement_id set — legal per
+    # repo/tasks.py) must still reach the workbook, in the placement's section
+    placement_section = next(s for s in sections if s.label.startswith("Acme Property"))
+    assert any(r.item == "Confirm bound terms" for r in placement_section.rows)
+
 
 def test_compose_empty_book_returns_no_sections(conn):
     org = orgs.create(conn, kind="client", name="Empty Co", status="active", owner="grant")
@@ -351,6 +356,10 @@ def test_write_open_items_deterministic_and_styled(conn, tmp_path):
     ws = load_workbook(a).active
     assert [c.value for c in ws[1]] == [
         "Item", "Details", "Type", "Due / Needed by", "Status", "Days open"]
+    # the placement-only task (org_id NULL) must actually be in the workbook,
+    # not silently dropped by an org_id-only fetch
+    values = [cell.value for row in ws.iter_rows() for cell in row]
+    assert "Confirm bound terms" in values
 
 
 def test_write_empty_book_says_so(conn, tmp_path):

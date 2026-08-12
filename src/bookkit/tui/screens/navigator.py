@@ -122,7 +122,7 @@ class NavigatorScreen(Screen):
         Binding("d", "task_done", "Done (task)", show=False),
         Binding("r", "renew_row", "Renew", show=False),
         Binding("l", "edit_layer_row", "Layer", show=False),
-        Binding("x", "export_row", "Export open items", show=False),
+        Binding("x", "export_row", "Export open items"),
         Binding("u", "undo", "Undo"),
         Binding("R", "refresh", "Refresh", show=False),
         Binding("tab", "hop", "tree ⇄ rows", show=False),
@@ -791,10 +791,18 @@ class NavigatorScreen(Screen):
             self.notify("select a client first", severity="warning")
             return
         conn = self.app.conn
-        org = orgs.get(conn, org_id)
+        try:
+            org = orgs.get(conn, org_id)
+        except KeyError:
+            self.notify("account no longer exists", severity="error")
+            return
         today = date.today()
         out = Path(f"{org.ref}-open-items-{today.isoformat()}.xlsx")
-        path = export_open_items.write(conn, org_id, out, today)
+        try:
+            path = export_open_items.write(conn, org_id, out, today)
+        except OSError as exc:
+            self.notify(f"export failed: {exc}", severity="error")
+            return
         self.notify(f"wrote {path}")
 
     # -- navigation -----------------------------------------------------------------

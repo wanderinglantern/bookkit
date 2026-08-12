@@ -307,6 +307,27 @@ def test_outstanding_for_org_joins_market_and_subject(conn):
     assert rows[0]["about"] == "Acme Property 25-26"
 
 
+def test_open_tasks_for_client_covers_org_and_placement_ownership(conn):
+    client = orgs.create(conn, kind="client", name="Acme")
+    other = orgs.create(conn, kind="client", name="Other Co")
+    p = placements.create(conn, client.id, "Acme Property 25-26",
+                          "2025-10-01", "2026-10-01")
+    other_p = placements.create(conn, other.id, "Other Co GL",
+                                "2025-10-01", "2026-10-01")
+
+    org_only = tasks.create(conn, "org-only task", org_id=client.id)
+    placement_only = tasks.create(conn, "placement-only task", placement_id=p.id)
+    both = tasks.create(conn, "org and placement task", org_id=client.id, placement_id=p.id)
+    other_org_task = tasks.create(conn, "other client's task", org_id=other.id)
+    other_placement_task = tasks.create(conn, "other client's placement task",
+                                        placement_id=other_p.id)
+
+    got = {t.id for t in tasks.open_tasks_for_client(conn, client.id)}
+    assert got == {org_only.id, placement_only.id, both.id}
+    assert other_org_task.id not in got
+    assert other_placement_task.id not in got
+
+
 def test_task_category_round_trips_and_feeds_vocab(conn):
     from bookkit.repo import vocab
 

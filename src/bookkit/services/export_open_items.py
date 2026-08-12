@@ -77,7 +77,7 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
     org = orgs.get(conn, org_id)
     sections: list[ExportSection] = []
 
-    org_tasks = tasks_repo.open_tasks(conn, org_id=org.id)
+    org_tasks = tasks_repo.open_tasks_for_client(conn, org.id)
     by_category: dict[str, list[Task]] = {}
     uncategorized: list[Task] = []
     for t in org_tasks:

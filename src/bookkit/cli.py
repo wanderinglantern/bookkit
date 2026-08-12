@@ -223,7 +223,11 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
             return 2
         today = date.today()
         out = args.out or Path(f"{org.ref}-open-items-{today.isoformat()}.xlsx")
-        path = export_open_items.write(conn, org.id, out, today)
+        try:
+            path = export_open_items.write(conn, org.id, out, today)
+        except OSError as exc:
+            print(f"could not write {out}: {exc}")
+            return 1
         print(f"wrote {path}")
         return 0
 
