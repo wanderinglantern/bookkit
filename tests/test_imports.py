@@ -125,6 +125,88 @@ def test_staged_report_shows_counts_issues_and_unmapped() -> None:
     assert "book.xlsx" in report
 
 
+# --- committer --------------------------------------------------------------------
+
+from bookkit import db  # noqa: E402
+from bookkit.imports.commit import commit_book  # noqa: E402
+
+
+def _staged_book(conn, rows):
+    table = RawTable("book.csv", "cd" * 32, _BOOK_HEADERS, rows)
+    return stage_book(conn, table, map_headers(_BOOK_HEADERS, BOOK_FIELDS))
+
+
+_GOOD_ROW = {
+    "account": "Atomic Industries", "status": "active",
+    "contact_name": "Rosa Silva", "contact_email": "rosa@atomic.example.com",
+    "program": "Property", "inception": "2026-10-01", "expiry": "2027-10-01",
+    "premium": "250,000", "commission": "15%",
+}
+
+
+def test_commit_book_end_to_end_with_backup_and_provenance(db_path: Path) -> None:
+    connection = db.connect(db_path)
+    try:
+        staged = _staged_book(connection, [dict(_GOOD_ROW)])
+        result = commit_book(connection, staged, db_path)
+        assert result.created == {"account": 1, "contact": 1, "placement": 1}
+        assert result.backup.exists() and result.backup.parent.name == "backups"
+
+        org = orgs_repo.find_by_name(connection, "Atomic Industries")
+        assert org is not None and org.status == "active"
+        [contact] = contacts_repo.for_org(connection, org.id)
+        assert contact.email == "rosa@atomic.example.com"
+        [placement] = placements_repo.for_org(connection, org.id)
+        assert placement.total_premium == 25_000_000
+        note = connection.execute(
+            "SELECT note FROM event_log WHERE note LIKE '%book.csv%'"
+        ).fetchone()
+        assert note is not None and "cd" * 32 in note["note"]
+    finally:
+        connection.close()
+
+
+def test_commit_book_reimport_updates_instead_of_duplicating(db_path: Path) -> None:
+    connection = db.connect(db_path)
+    try:
+        commit_book(connection, _staged_book(connection, [dict(_GOOD_ROW)]), db_path)
+        staged = _staged_book(connection, [{**_GOOD_ROW, "premium": "260,000"}])
+        result = commit_book(connection, staged, db_path)
+        assert result.created == {}
+        assert result.updated["placement"] == 1
+        assert len(orgs_repo.list_orgs(connection, kind="client")) == 1
+        [placement] = placements_repo.for_org(
+            connection, orgs_repo.find_by_name(connection, "Atomic Industries").id
+        )
+        assert placement.total_premium == 26_000_000
+    finally:
+        connection.close()
+
+
+def test_commit_book_refuses_errors_and_writes_nothing(db_path: Path) -> None:
+    connection = db.connect(db_path)
+    try:
+        staged = _staged_book(connection, [{**_GOOD_ROW, "premium": "banana"}])
+        with pytest.raises(ValueError, match="error"):
+            commit_book(connection, staged, db_path)
+        assert orgs_repo.list_orgs(connection, kind="client") == []
+    finally:
+        connection.close()
+
+
+def test_imports_package_contains_no_sql() -> None:
+    import re
+
+    root = Path(__file__).parent.parent / "src" / "bookkit" / "imports"
+    pattern = re.compile(r"\b(SELECT|INSERT INTO|UPDATE \w+ SET|DELETE FROM)\b")
+    offenders = [
+        path.name
+        for path in root.rglob("*.py")
+        if pattern.search(path.read_text(encoding="utf-8"))
+    ]
+    assert offenders == [], f"raw SQL in imports/: {offenders}"
+
+
 # --- matcher --------------------------------------------------------------------
 
 from bookkit.imports.matcher import (  # noqa: E402
