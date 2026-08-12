@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from ...models import Task
     from ..app import BookkitApp
 
 from datetime import date
@@ -70,6 +71,7 @@ CONTACT_INLINE = {
 TASK_INLINE = {
     0: Field("due_on", "due", "date"),
     1: Field("title", "task", required=True),
+    2: Field("description", "description"),
 }
 
 
@@ -86,6 +88,15 @@ def _attention_label(key: str, label: str, count: int) -> str:
     if key == "overdue":
         return f"[b {theme.RED}]◆ {label} · {count}[/]"
     return f"{label} [{theme.DIM}]·[/] [b]{count}[/b]"
+
+
+def _task_detail_cell(task: Task) -> Text:
+    """First line of the long notes, dimmed and clipped — full text lives in
+    the e form; this is for review at a glance."""
+    if not task.detail:
+        return dash()
+    first = task.detail.strip().splitlines()[0]
+    return Text(first[:57] + "…" if len(first) > 58 else first, style=theme.DIM)
 
 
 class NavigatorScreen(Screen):
@@ -423,7 +434,7 @@ class NavigatorScreen(Screen):
                     status_text(need["status"]), key=key,
                 )
         elif which == "tasks":
-            table.add_columns("due", "task", "account")
+            table.add_columns("due", "task", "description", "detail", "account")
             table.inline_fields = TASK_INLINE
             for task in self._attention["tasks"]:
                 key = f"task:{task.id}"
@@ -438,7 +449,10 @@ class NavigatorScreen(Screen):
                     date_text(task.due_on, days_until(task.due_on, today))
                     if task.due_on else dash()
                 )
-                table.add_row(due, task.title, name, key=key)
+                table.add_row(
+                    due, task.title, task.description or dash(),
+                    _task_detail_cell(task), name, key=key,
+                )
         elif which == "sla":
             table.add_columns("market", "account", "sent", right("out"))
             for item in self._attention["sla"]:
@@ -498,7 +512,7 @@ class NavigatorScreen(Screen):
                     Text(f"{o.probability_pct}%", justify="right"), key=key,
                 )
         elif group == "tasks":
-            table.add_columns("due", "task", "status")
+            table.add_columns("due", "task", "description", "detail", "status")
             table.inline_fields = TASK_INLINE
             today = date.today()
             for task in tasks_repo.open_tasks(conn, org_id=org_id):
@@ -508,7 +522,10 @@ class NavigatorScreen(Screen):
                     date_text(task.due_on, days_until(task.due_on, today))
                     if task.due_on else dash()
                 )
-                table.add_row(due, task.title, status_text(task.status), key=key)
+                table.add_row(
+                    due, task.title, task.description or dash(),
+                    _task_detail_cell(task), status_text(task.status), key=key,
+                )
         elif group == "projects":
             table.add_columns("ref", "project", "status", "start", "end")
             for project in projects_repo.projects_for_org(conn, org_id):

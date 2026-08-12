@@ -37,6 +37,7 @@ from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right
 from ..widgets.tables import ListTable
 from ..widgets.tower_preview import TowerPreview
+from .navigator import _task_detail_cell
 
 
 def _pretty(value: str) -> str:
@@ -363,14 +364,17 @@ class AccountScreen(Screen):
         open_tasks = tasks_repo.open_tasks(conn, org_id=org.id)
         table = self.query_one("#ov-tasks", ListTable)
         table.clear(columns=True)
-        table.add_columns("due", right("due in"), "task")
+        table.add_columns("due", right("due in"), "task", "description", "detail")
         for t in open_tasks:
             if t.due_on:
                 days = days_until(t.due_on, today)
                 due, due_in = date_text(t.due_on, days), days_text(days)
             else:
                 due, due_in = dash(), Text("", justify="right")
-            table.add_row(due, due_in, t.title, key=t.id)
+            table.add_row(
+                due, due_in, t.title, t.description or dash(),
+                _task_detail_cell(t), key=t.id,
+            )
 
         opps = opportunities.for_org(conn, org.id, open_only=True)
         table = self.query_one("#ov-opps", ListTable)

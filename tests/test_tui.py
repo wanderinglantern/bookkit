@@ -550,3 +550,46 @@ async def test_navigator_inline_cell_edit(seeded_db: Path) -> None:
         await pilot.press("u")
         await pilot.pause()
         assert contacts_repo.get(conn, contact.id).role == (contact.role or None)
+
+
+async def test_task_tables_show_description_and_detail(seeded_db: Path) -> None:
+    """description + detail surface on every task table: attention "tasks
+    due", an account's task group, and the account overview tab."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.screens.navigator import NavigatorScreen
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    task = tasks_repo.create(
+        app.conn, "call broker", description="brief line", detail="**long** notes",
+        due_on=date.today().isoformat(), org_id=org.id,
+    )
+    async with app.run_test(size=(160, 48)) as pilot:
+        assert isinstance(app.screen, NavigatorScreen)
+        nav = app.screen
+
+        # attention: "tasks due"
+        nav._current = ("att", "tasks")
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        headers = [str(c.label) for c in table.columns.values()]
+        assert "description" in headers and "detail" in headers
+
+        # per-account tasks group
+        nav._current = ("group", ("tasks", org.id))
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        headers = [str(c.label) for c in table.columns.values()]
+        assert "description" in headers and "detail" in headers
+
+        # account overview tab
+        app.open_account(org.id)
+        await pilot.pause()
+        overview = app.screen.query_one("#ov-tasks", ListTable)
+        headers = [str(c.label) for c in overview.columns.values()]
+        assert "description" in headers and "detail" in headers
+        row = overview.get_row(task.id)
+        assert "brief line" in [str(c) for c in row]
