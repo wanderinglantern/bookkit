@@ -348,7 +348,7 @@ def write_soi(
 - [ ] **Step 5: Run the full towerkit suite — the golden test is the verdict**
 
 Run: `uv run pytest -q 2>&1 | tail -3`
-Expected: all pass, `test_refactor_golden_bytes` included. If the golden test fails, DIFF the styles: unzip both workbooks and compare `xl/styles.xml` — the usual culprits are the wrap_text-omitted-vs-False subtlety and alignment argument order. Fix `write_table`, never the hash.
+Expected: all pass, `test_refactor_golden_content` included. If the golden test fails, DIFF the styles: unzip both workbooks and compare `xl/styles.xml` — the usual culprits are the wrap_text-omitted-vs-False subtlety and alignment argument order. Fix `write_table`, never the hash.
 
 - [ ] **Step 6: Gates and commit (towerkit)**
 
