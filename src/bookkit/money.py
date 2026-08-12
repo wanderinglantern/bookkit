@@ -57,24 +57,12 @@ def cents_to_dollars(cents: int) -> int:
 
 
 def parse_share_bps(text: str) -> int:
-    """Share entry: '25%', '25', '12.5', '33.34%' → basis points. Everything
-    is read as a PERCENT (the % sign optional) — brokers speak percent, and
-    one consistent rule beats guessing whether 0.25 meant a quarter share.
-    Sub-basis-point precision and values outside (0, 100] are rejected."""
-    from decimal import Decimal, InvalidOperation
+    """Share entry: '25%', '25', '12.5' → basis points. Percent semantics —
+    delegated to towerkit, which owns the tower-grammar parsers (DRY: one
+    authoritative percent→bps rule across both tools)."""
+    from towerkit.money import parse_share
 
-    cleaned = text.strip().rstrip("%").strip()
-    try:
-        pct = Decimal(cleaned)
-    except InvalidOperation as exc:
-        raise MoneyParseError(f"cannot read a share from {text!r}") from exc
-    scaled = pct * 100  # percent → bps
-    if scaled != scaled.to_integral_value():
-        raise MoneyParseError(f"{text!r} has sub-basis-point precision")
-    bps = int(scaled)
-    if not 0 < bps <= BPS_SCALE:
-        raise MoneyParseError(f"{text!r} is not a share between 0% and 100%")
-    return bps
+    return parse_share(text)
 
 
 def commission_cents(premium_cents: int, commission_bps: int) -> int:
