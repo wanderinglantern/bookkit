@@ -222,3 +222,38 @@ class TestProjects:
         assert [row["id"] for row in rows] == [overdue.id, soon.id]
         assert rows[0]["project_name"] == "Plant Expansion"
         assert rows[0]["org_name"] == "Atomic"
+
+
+class TestMarketFamilies:
+    def test_nest_unnest_and_outline(self, conn) -> None:
+        axa = orgs.create(conn, kind="market", name="AXA XL")
+        indian = orgs.create(conn, kind="market", name="Indian Harbor Ins Co")
+        orgs.create(conn, kind="market", name="Chubb")
+        orgs.set_parent(conn, indian.id, axa.id)
+        assert [c.id for c in orgs.children(conn, axa.id)] == [indian.id]
+        families = dict(
+            (top.name, [k.name for k in kids])
+            for top, kids in orgs.market_families(conn)
+        )
+        assert families == {"AXA XL": ["Indian Harbor Ins Co"], "Chubb": []}
+        orgs.set_parent(conn, indian.id, None)  # unnest
+        assert orgs.children(conn, axa.id) == []
+
+    def test_cycles_and_self_nesting_refused(self, conn) -> None:
+        import pytest as _pytest
+
+        a = orgs.create(conn, kind="market", name="A Co")
+        b = orgs.create(conn, kind="market", name="B Co")
+        orgs.set_parent(conn, b.id, a.id)
+        with _pytest.raises(ValueError):
+            orgs.set_parent(conn, a.id, b.id)  # cycle
+        with _pytest.raises(ValueError):
+            orgs.set_parent(conn, a.id, a.id)  # self
+
+    def test_deleted_parent_floats_child_to_top(self, conn) -> None:
+        axa = orgs.create(conn, kind="market", name="AXA XL")
+        indian = orgs.create(conn, kind="market", name="Indian Harbor Ins Co")
+        orgs.set_parent(conn, indian.id, axa.id)
+        orgs.delete(conn, axa.id)
+        tops = [top.name for top, _ in orgs.market_families(conn)]
+        assert "Indian Harbor Ins Co" in tops

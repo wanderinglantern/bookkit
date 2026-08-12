@@ -409,3 +409,40 @@ async def test_navigator_row_keys_require_table_focus(seeded_db: Path) -> None:
         await pilot.press("d")  # table focused: acts
         await pilot.pause()
         assert len(tasks_repo.open_tasks(app.conn)) == open_before - 1
+
+
+async def test_nest_market_under_new_master(seeded_db: Path) -> None:
+    from textual.widgets import Input
+
+    from bookkit.tui.screens.markets import MarketsScreen
+    from bookkit.tui.widgets.forms import FormModal
+    from bookkit.tui.widgets.picker import Picker
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        indian = orgs.create(app.conn, kind="market", name="Indian Harbor Ins Co")
+        await pilot.press("m")
+        await pilot.pause()
+        assert isinstance(app.screen, MarketsScreen)
+        table = app.screen.query_one("#markets-table", ListTable)
+        table.move_cursor(row=table.get_row_index(indian.id))
+        await pilot.press("N")
+        await pilot.pause()
+        assert isinstance(app.screen, Picker)
+        # option 2 is "create new master…"
+        await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        app.screen.query_one("#form-name", Input).value = "AXA XL"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        refreshed = orgs.get(app.conn, indian.id)
+        assert refreshed.parent_org_id is not None
+        assert orgs.get(app.conn, refreshed.parent_org_id).name == "AXA XL"
+        # the outline shows the child indented under its master
+        table = app.screen.query_one("#markets-table", ListTable)
+        rows = [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+        child_row = next(i for i, r in enumerate(rows) if "Indian Harbor" in r)
+        assert "└" in rows[child_row]          # indented as a family member
+        assert "AXA XL" in rows[child_row - 1]  # directly under its master

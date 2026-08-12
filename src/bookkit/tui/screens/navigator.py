@@ -115,8 +115,13 @@ class NavigatorScreen(Screen):
             node = accounts.add(f"{badge}{org.name}", data=("account", org.id))
             node.allow_expand = True
         markets_root = tree.root.add("MARKETS", data=("markets-root", None))
-        for org in orgs.list_orgs(conn, kind="market"):
-            markets_root.add_leaf(org.name, data=("market", org.id))
+        for master, kids in orgs.market_families(conn):
+            if kids:  # a family: master expands to its issuing companies
+                family = markets_root.add(master.name, data=("market", master.id))
+                for kid in kids:
+                    family.add_leaf(kid.name, data=("market", kid.id))
+            else:
+                markets_root.add_leaf(master.name, data=("market", master.id))
         self._render_pane()
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:

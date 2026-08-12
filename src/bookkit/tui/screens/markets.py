@@ -27,8 +27,64 @@ class MarketsScreen(Screen):
         Binding("a", "new_market", "New market"),
         Binding("e", "edit_market", "Edit"),
         Binding("x", "merge_market", "Merge duplicate"),
+        Binding("N", "nest_market", "Nest under…", show=False),
         Binding("A", "add_alias", "Alias", show=False),
     ]
+
+    def action_nest_market(self) -> None:
+        """Nest the selected market under a master company — creating the
+        master on the spot when it doesn't exist yet (the AXA XL case).
+        Organizational only: aliases and towers keep the issuing entity."""
+        from ..widgets.forms import Field, FormModal, FormSpec
+        from ..widgets.picker import Picker
+
+        market_id = self._selected_market_id()
+        if market_id is None:
+            return
+        conn = self.app.conn
+        market = orgs.get(conn, market_id)
+        options: list[tuple[str, str]] = [
+            ("— no parent (unnest) —", "__none__"),
+            ("create new master…", "__new__"),
+        ]
+        for candidate in orgs.list_orgs(conn, kind="market"):
+            if candidate.id != market_id:
+                options.append((candidate.name, candidate.id))
+
+        def picked(choice: str | None) -> None:
+            if choice is None:
+                return
+            if choice == "__new__":
+                spec = FormSpec(
+                    f"new master company for {market.name}",
+                    [Field("name", "master company name", required=True)],
+                )
+
+                def commit(values: dict) -> str | None:
+                    master = orgs.create(
+                        conn, kind="market", name=values["name"], status="active"
+                    )
+                    orgs.set_parent(conn, market_id, master.id)
+                    return None
+
+                def done(values: dict | None) -> None:
+                    if values is not None:
+                        self.notify(f"{market.name} nested under {values['name']}")
+                        self._refresh()
+
+                self.app.push_screen(FormModal(spec, commit=commit), done)
+                return
+            try:
+                parent = None if choice == "__none__" else choice
+                orgs.set_parent(conn, market_id, parent)
+            except ValueError as exc:
+                self.notify(str(exc), severity="error")
+                return
+            label = "unnested" if parent is None else f"nested under {orgs.get(conn, parent).name}"
+            self.notify(f"{market.name} {label}")
+            self._refresh()
+
+        self.app.push_screen(Picker(f"nest {market.name} under…", options), picked)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -42,14 +98,15 @@ class MarketsScreen(Screen):
         table.add_columns(
             "market", "type", "rating", "appetite", "subs out", "quote rate", "bind rate"
         )
-        for org in orgs.list_orgs(conn, kind="market"):
+        def add(org, depth: int) -> None:
             profile = orgs.get_market_profile(conn, org.id)
             appetite = orgs.appetite_for_market(conn, org.id)
             targets = [a.line for a in appetite if a.appetite == "target"]
             rate = rates.get(org.id)
             out = len(submissions.for_market(conn, org.id, status="out"))
+            name = f"  └ {org.name}" if depth else org.name
             table.add_row(
-                org.name,
+                name,
                 profile.market_type if profile and profile.market_type else "—",
                 profile.am_best_rating if profile and profile.am_best_rating else "—",
                 ", ".join(targets) or "—",
@@ -58,6 +115,12 @@ class MarketsScreen(Screen):
                 f"{rate.bind_rate:.0%}" if rate else "—",
                 key=org.id,
             )
+
+        # outline: master companies first, issuing companies nested beneath
+        for master, kids in orgs.market_families(conn):
+            add(master, 0)
+            for kid in kids:
+                add(kid, 1)
         table.focus()
 
     def on_data_table_row_selected(self, event: ListTable.RowSelected) -> None:

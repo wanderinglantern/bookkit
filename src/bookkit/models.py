@@ -113,6 +113,7 @@ class Org(Row):
     ref: str
     kind: OrgKind
     name: str
+    parent_org_id: str | None = None  # market families: issuing co → master co
     legal_name: str | None = None
     domain: str | None = None
     status: OrgStatus = OrgStatus.PROSPECT

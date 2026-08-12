@@ -164,3 +164,47 @@ def markets_for_line(
                 continue
         out.append((get(conn, row["o_id"]), appetite))
     return out
+
+
+# --- market families -----------------------------------------------------------
+
+
+def set_parent(conn: sqlite3.Connection, org_id: str, parent_org_id: str | None) -> Org:
+    """Nest an underwriting company under a master company (or unnest with
+    None). Organizational only — nothing that references the org moves.
+    Refuses self-nesting and cycles."""
+    if parent_org_id is not None:
+        if parent_org_id == org_id:
+            raise ValueError("cannot nest a company under itself")
+        ancestor: str | None = parent_org_id
+        while ancestor is not None:
+            if ancestor == org_id:
+                raise ValueError("cannot nest a company under its own descendant")
+            row = conn.execute(
+                "SELECT parent_org_id FROM org WHERE id = ?", (ancestor,)
+            ).fetchone()
+            ancestor = row["parent_org_id"] if row else None
+    return update(conn, org_id, parent_org_id=parent_org_id)
+
+
+def children(conn: sqlite3.Connection, org_id: str) -> list[Org]:
+    rows = conn.execute(
+        f"SELECT * FROM org WHERE parent_org_id = ? AND {base.alive()} ORDER BY name",
+        (org_id,),
+    ).fetchall()
+    return [Org.from_row(r) for r in rows]
+
+
+def market_families(conn: sqlite3.Connection) -> list[tuple[Org, list[Org]]]:
+    """Markets as an outline: (top-level market, nested children) pairs,
+    alphabetical. A child whose parent is deleted floats back to the top."""
+    markets = list_orgs(conn, kind="market")
+    by_id = {org.id: org for org in markets}
+    kids: dict[str, list[Org]] = {}
+    tops: list[Org] = []
+    for org in markets:
+        if org.parent_org_id and org.parent_org_id in by_id:
+            kids.setdefault(org.parent_org_id, []).append(org)
+        else:
+            tops.append(org)
+    return [(top, kids.get(top.id, [])) for top in tops]
