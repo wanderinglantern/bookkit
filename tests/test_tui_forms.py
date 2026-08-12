@@ -193,3 +193,46 @@ async def test_today_new_task(empty_db: Path) -> None:
         tasks = tasks_repo.open_tasks(app.conn)
         assert [t.title for t in tasks] == ["Call the accountant"]
         assert tasks[0].due_on is not None
+
+
+async def test_form_commit_refusal_keeps_form_open(empty_db: Path) -> None:
+    from bookkit.tui.widgets.forms import Field, FormSpec
+
+    app = BookkitApp(empty_db)
+    outcomes: list[str | None] = ["refused: gap under layer", None]
+    committed: list[dict] = []
+
+    def commit(values: dict) -> str | None:
+        committed.append(values)
+        return outcomes.pop(0)
+
+    spec = FormSpec("edit layer", [Field("name", "name", required=True)])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(FormModal(spec, commit=commit))
+        await pilot.pause()
+        app.screen.query_one("#form-name", Input).value = "Primary"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)  # refused → still open
+        assert app.screen.query_one("#form-name", Input).value == "Primary"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert not isinstance(app.screen, FormModal)  # success → dismissed
+        assert len(committed) == 2
+
+
+async def test_form_commit_exception_is_an_error_not_a_crash(empty_db: Path) -> None:
+    from bookkit.tui.widgets.forms import Field, FormSpec
+
+    app = BookkitApp(empty_db)
+
+    def commit(values: dict) -> str | None:
+        raise RuntimeError("db locked")
+
+    spec = FormSpec("x", [Field("name", "name")])
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(FormModal(spec, commit=commit))
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)  # still alive

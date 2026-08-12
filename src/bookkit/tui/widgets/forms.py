@@ -9,6 +9,7 @@ as ISO YYYY-MM-DD.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import TYPE_CHECKING, Any
@@ -56,7 +57,12 @@ class FormSpec:
 
 
 class FormModal(ModalScreen):
-    """Dismisses with a {key: parsed_value} dict, or None on cancel."""
+    """Dismisses with a {key: parsed_value} dict, or None on cancel.
+
+    With `commit` set (the default wiring across the app), the save itself
+    runs while the form is still open: an error string or exception keeps
+    the form up with every field intact, so a refusal is corrected in place
+    instead of retyped from scratch."""
 
     app: BookkitApp
     BINDINGS = [
@@ -64,9 +70,14 @@ class FormModal(ModalScreen):
         Binding("ctrl+s", "save", "Save", priority=True),
     ]
 
-    def __init__(self, spec: FormSpec) -> None:
+    def __init__(
+        self,
+        spec: FormSpec,
+        commit: Callable[[dict[str, Any]], str | None] | None = None,
+    ) -> None:
         super().__init__()
         self.spec = spec
+        self._commit = commit
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="modal-box"):
@@ -129,6 +140,14 @@ class FormModal(ModalScreen):
             if f.required and values[f.key] in (None, ""):
                 self.notify(f"{f.label} is required", severity="error")
                 self.query_one(f"#form-{f.key}").focus()
+                return
+        if self._commit is not None:
+            try:
+                error = self._commit(values)
+            except Exception as exc:  # a failed save must never crash the TUI
+                error = str(exc)
+            if error is not None:
+                self.notify(error, severity="error")
                 return
         self.dismiss(values)
 
