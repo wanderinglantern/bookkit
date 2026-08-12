@@ -16,8 +16,10 @@ from textual.widgets import Static
 HELP = """\
 [b]everywhere[/b]
   /        search everything          n   log an interaction (quick capture)
+  ctrl+t   new task (attaches to the account you're viewing)
   ?        this help                  u   undo last change
   esc      back / close               ctrl+q  quit
+  forms save in place: a refused save keeps the form open to fix
 
 [b]lists[/b]
   j / k    move                       enter   open
@@ -27,7 +29,7 @@ HELP = """\
 [b]today screen[/b]
   b  book        c  renewal calendar        a  new task
   p  pipeline    m  markets                 y  sync program files
-  w  team (who to go to for what)
+  w  team (who to go to for what)            i  import book (xlsx/csv)
   ,  setup (where program files live — first y opens it for you)
 
 [b]book screen[/b]
@@ -50,8 +52,10 @@ HELP = """\
   r  renew into next period (file-backed placements clone next
      year's towerkit file, linked at birth)
   e  edit — dates/name write to the file, status/commission to bookkit
-  l  edit a layer (premium, policy no., attach/limit, policy dates)
+  l  edit a layer — the one under the cursor in the carriers table,
+     straight to the form when there's only one, else a picker
   L  add a pending layer · o  open the file in towerkit's editor
+  i  paste imports: contact/signature, program schedule, renewal terms
   t  create the towerkit file FROM this placement (nothing typed twice)
   w  assign a team member to this placement
   x  merge a duplicate into another placement
