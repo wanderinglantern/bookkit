@@ -66,7 +66,7 @@ class TeamScreen(Screen):
 
             self.app.push_screen(
                 FormModal(
-                    assignment_form(title=f"{member.name} → {org.name}"),
+                    assignment_form(title=f"{member.name} → {org.name}", conn=conn),
                     commit=commit,
                 ),
                 done,
@@ -181,7 +181,9 @@ class TeamScreen(Screen):
             if values is not None:
                 self.refresh_data(self.query_one("#team-filter", Input).value)
 
-        self.app.push_screen(FormModal(member_form(), commit=commit), done)
+        self.app.push_screen(
+            FormModal(member_form(conn=self.app.conn), commit=commit), done
+        )
 
     def action_edit_member(self) -> None:
         from ..widgets.entity_forms import member_form
@@ -200,7 +202,9 @@ class TeamScreen(Screen):
             if values is not None:
                 self.refresh_data(self.query_one("#team-filter", Input).value)
 
-        self.app.push_screen(FormModal(member_form(member), commit=commit), done)
+        self.app.push_screen(
+            FormModal(member_form(member, conn=self.app.conn), commit=commit), done
+        )
 
     def action_focus_filter(self) -> None:
         self.query_one("#team-filter", Input).focus()

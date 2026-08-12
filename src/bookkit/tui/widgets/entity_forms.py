@@ -24,7 +24,7 @@ from ...models import (
     Task,
     TeamMember,
 )
-from ...repo import contacts, opportunities, orgs, placements, submissions
+from ...repo import contacts, opportunities, orgs, placements, submissions, vocab
 from ...repo import projects as projects_repo
 from ...repo import tasks as tasks_repo
 from .forms import Field, FormSpec, dropped
@@ -44,16 +44,23 @@ _RESPONSE = tuple((s, s) for s in ("quoted", "declined", "bound", "withdrawn"))
 # --- org ----------------------------------------------------------------------
 
 
-def org_form(existing: Org | None = None, default_kind: str = "client") -> FormSpec:
+def org_form(
+    existing: Org | None = None,
+    default_kind: str = "client",
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> FormSpec:
     profile_initial: dict[str, Any] = {}
+    owner_sugg = tuple(vocab.owners(conn)) if conn else ()
+    industry_sugg = tuple(vocab.industries(conn)) if conn else ()
     return FormSpec(
         "edit account" if existing else "new account",
         [
             Field("name", "name", required=True),
             Field("kind", "kind", "select", _KINDS),
             Field("status", "status", "select", _STATUS),
-            Field("owner", "owner"),
-            Field("industry", "industry"),
+            Field("owner", "owner", suggestions=owner_sugg),
+            Field("industry", "industry", suggestions=industry_sugg),
             Field("naics", "naics", "naics"),
             Field("hq_city", "hq city"),
             Field("hq_country", "hq country"),
@@ -96,7 +103,7 @@ def apply_org(
 
 def org_form_initial_profile(conn: sqlite3.Connection, existing: Org) -> FormSpec:
     """org_form for an edit, with the market profile fields pre-filled."""
-    spec = org_form(existing)
+    spec = org_form(existing, conn=conn)
     profile = orgs.get_market_profile(conn, existing.id)
     if profile:
         spec.initial["market_type"] = profile.market_type
@@ -194,11 +201,15 @@ def apply_task(
 # --- placement ----------------------------------------------------------------
 
 
-def placement_form(existing: Placement | None = None) -> FormSpec:
+def placement_form(
+    existing: Placement | None = None, *, conn: sqlite3.Connection | None = None
+) -> FormSpec:
+    program_sugg = tuple(vocab.program_names(conn)) if conn else ()
     return FormSpec(
         "edit placement" if existing else "new placement",
         [
-            Field("program_name", "program name", required=True),
+            Field("program_name", "program name", required=True,
+                  suggestions=program_sugg),
             Field("period_from", "period from", "date", required=True),
             Field("period_to", "period to (expiry)", "date", required=True),
             Field("status", "status", "select", _PLACEMENT_STATUS),
@@ -232,12 +243,15 @@ def apply_placement(
 # --- opportunity --------------------------------------------------------------
 
 
-def opportunity_form(existing: Opportunity | None = None) -> FormSpec:
+def opportunity_form(
+    existing: Opportunity | None = None, *, conn: sqlite3.Connection | None = None
+) -> FormSpec:
+    line_sugg = tuple(vocab.lines(conn)) if conn else ()
     return FormSpec(
         "edit opportunity" if existing else "new opportunity",
         [
             Field("title", "title", required=True),
-            Field("lines", "lines (cyber, casualty…)"),
+            Field("lines", "lines (cyber, casualty…)", suggestions=line_sugg),
             Field("target_premium", "target premium", "money"),
             Field("target_effective", "target effective", "date"),
             Field("probability_pct", "probability %", "int"),
@@ -327,13 +341,19 @@ def apply_response(
 # --- team ---------------------------------------------------------------------
 
 
-def member_form(existing: TeamMember | None = None) -> FormSpec:
+def member_form(
+    existing: TeamMember | None = None, *, conn: sqlite3.Connection | None = None
+) -> FormSpec:
+    specialty_sugg = tuple(vocab.specialties(conn)) if conn else ()
+    line_sugg = tuple(vocab.lines(conn)) if conn else ()
     return FormSpec(
         "edit team member" if existing else "new team member",
         [
             Field("name", "name", required=True),
             Field("title", "title"),
-            Field("specialty", "specialty / lines", placeholder="cyber, tech E&O, property"),
+            Field("specialty", "specialty / lines",
+                  placeholder="cyber, tech E&O, property",
+                  suggestions=specialty_sugg or line_sugg),
             Field("email", "email", "email"),
             Field("phone", "phone", "phone"),
             Field("notes", "notes", "textarea"),
@@ -346,7 +366,9 @@ def assignment_form(
     member_options: tuple[tuple[str, str], ...] = (),
     *,
     title: str = "assign team member",
+    conn: sqlite3.Connection | None = None,
 ) -> FormSpec:
+    line_sugg = tuple(vocab.lines(conn)) if conn else ()
     """With member_options, the form picks WHO; without, the caller already
     knows the member (the Team screen's assign-to-account flow)."""
     fields = []
@@ -358,7 +380,8 @@ def assignment_form(
         [
             Field("role", "role", "select", tuple((r, r) for r in TEAM_ROLES),
                   optional_select=True),
-            Field("lines", "lines they're placing", placeholder="cyber, D&O"),
+            Field("lines", "lines they're placing", placeholder="cyber, D&O",
+                  suggestions=line_sugg),
             Field("notes", "notes", "textarea"),
         ]
     )
@@ -382,11 +405,14 @@ def document_form() -> FormSpec:
 # --- appetite -----------------------------------------------------------------
 
 
-def appetite_form(existing: Appetite | None = None) -> FormSpec:
+def appetite_form(
+    existing: Appetite | None = None, *, conn: sqlite3.Connection | None = None
+) -> FormSpec:
+    line_sugg = tuple(vocab.lines(conn)) if conn else ()
     return FormSpec(
         "edit appetite" if existing else "add appetite",
         [
-            Field("line", "line", required=True),
+            Field("line", "line", required=True, suggestions=line_sugg),
             Field("appetite", "appetite", "select", _APPETITE, required=True),
             Field("class_of_business", "class of business"),
             Field("min_premium", "min premium", "money"),
@@ -430,12 +456,16 @@ def apply_project(
     return projects_repo.create_project(conn, org_id, name, **core)
 
 
-def need_form(existing: ProjectNeed | None = None) -> FormSpec:
+def need_form(
+    existing: ProjectNeed | None = None, *, conn: sqlite3.Connection | None = None
+) -> FormSpec:
+    line_sugg = tuple(vocab.lines(conn)) if conn else ()
     initial = existing.model_dump() if existing else {"status": "identified"}
     return FormSpec(
         "edit insurance need" if existing else "new insurance need",
         [
-            Field("line", "line of cover", required=True, placeholder="Builder's Risk"),
+            Field("line", "line of cover", required=True,
+                  placeholder="Builder's Risk", suggestions=line_sugg),
             Field("needed_by", "insurance needed by", "date", required=True),
             Field("limit_cents", "limit", "money"),
             Field("premium_indication_cents", "premium indication", "money"),

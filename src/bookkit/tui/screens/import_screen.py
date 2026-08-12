@@ -42,6 +42,10 @@ class ImportScreen(ModalScreen):
                 placeholder="path to spreadsheet — enter previews",
                 id="import-path",
             )
+            from textual_autocomplete import PathAutoComplete
+
+            # enter must still preview even with the dropdown open
+            yield PathAutoComplete("#import-path", prevent_default_enter=False)
             yield Static(
                 "tip: bookctl template book book.xlsx writes a fill-in template",
                 classes="hint",

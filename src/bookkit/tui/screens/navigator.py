@@ -383,12 +383,12 @@ class NavigatorScreen(Screen):
             )
         elif group == "placements":
             entity_actions.push_form(
-                self, ef.placement_form(),
+                self, ef.placement_form(conn=conn),
                 lambda v: self.notify(f"created {ef.apply_placement(conn, v, org_id).ref}"),
             )
         elif group == "opportunities":
             entity_actions.push_form(
-                self, ef.opportunity_form(),
+                self, ef.opportunity_form(conn=conn),
                 lambda v: self.notify(f"created {ef.apply_opportunity(conn, v, org_id).ref}"),
             )
         elif group == "tasks":
@@ -422,7 +422,7 @@ class NavigatorScreen(Screen):
         elif kind == "opportunity":
             opp = opportunities.get(conn, entity_id)
             entity_actions.push_form(
-                self, ef.opportunity_form(opp),
+                self, ef.opportunity_form(opp, conn=conn),
                 lambda v: ef.apply_opportunity(conn, v, opp.org_id, opp),
             )
         elif kind == "task":

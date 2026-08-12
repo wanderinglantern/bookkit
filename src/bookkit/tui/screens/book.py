@@ -117,7 +117,9 @@ class BookScreen(Screen):
             if values is not None:
                 self.refresh_data(self.query_one("#book-filter", Input).value)
 
-        self.app.push_screen(FormModal(org_form(), commit=commit), done)
+        self.app.push_screen(
+            FormModal(org_form(conn=self.app.conn), commit=commit), done
+        )
 
     def action_edit_account(self) -> None:
         from ...repo import orgs

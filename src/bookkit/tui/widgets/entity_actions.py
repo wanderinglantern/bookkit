@@ -52,7 +52,7 @@ def edit_placement(screen: Screen, placement: Placement) -> None:
     if not placement.program_path:
         push_form(
             screen,
-            ef.placement_form(placement),
+            ef.placement_form(placement, conn=conn),
             lambda v: ef.apply_placement(conn, v, placement.org_id, placement),
         )
         return

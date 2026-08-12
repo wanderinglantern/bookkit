@@ -55,9 +55,12 @@ class MarketsScreen(Screen):
             if choice is None:
                 return
             if choice == "__new__":
+                from ...repo import vocab
+
                 spec = FormSpec(
                     f"new master company for {market.name}",
-                    [Field("name", "master company name", required=True)],
+                    [Field("name", "master company name", required=True,
+                           suggestions=tuple(vocab.market_names(conn)))],
                 )
 
                 def commit(values: dict) -> str | None:
@@ -154,7 +157,7 @@ class MarketsScreen(Screen):
                 self._refresh()
 
         self.app.push_screen(
-            FormModal(org_form(default_kind="market"), commit=commit), done
+            FormModal(org_form(default_kind="market", conn=self.app.conn), commit=commit), done
         )
 
     def action_merge_market(self) -> None:
@@ -209,10 +212,12 @@ class MarketsScreen(Screen):
             self.notify(f"{values['alias']!r} now resolves to {market.name}")
             return None
 
+        unresolved = tuple(aliases.unresolved_carriers(self.app.conn))
         spec = FormSpec(
             f"alias for {market.name}",
             [Field("alias", "tower spelling", required=True,
-                   placeholder="exactly as the file writes it")],
+                   placeholder="exactly as the file writes it",
+                   suggestions=unresolved)],
         )
         self.app.push_screen(FormModal(spec, commit=commit))
 
@@ -299,7 +304,9 @@ class MarketDetailScreen(Screen):
             if values is not None:
                 self._refresh()
 
-        self.app.push_screen(FormModal(appetite_form(), commit=commit), done)
+        self.app.push_screen(
+            FormModal(appetite_form(conn=self.app.conn), commit=commit), done
+        )
 
     def action_add_underwriter(self) -> None:
         from ..widgets.entity_forms import apply_contact, contact_form

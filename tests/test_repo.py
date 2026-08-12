@@ -257,3 +257,28 @@ class TestMarketFamilies:
         orgs.delete(conn, axa.id)
         tops = [top.name for top, _ in orgs.market_families(conn)]
         assert "Indian Harbor Ins Co" in tops
+
+
+class TestVocab:
+    def test_lines_union_and_dedupe(self, conn) -> None:
+        from bookkit.repo import projects as projects_repo
+        from bookkit.repo import vocab
+
+        market = orgs.create(conn, kind="market", name="Chubb")
+        orgs.add_appetite(conn, market.id, line="Cyber", appetite="target")
+        org = orgs.create(conn, kind="client", name="Atomic")
+        opportunities.create(conn, org.id, "Cyber+DO", lines="cyber, D&O")
+        project = projects_repo.create_project(conn, org.id, "Build")
+        projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-10-01")
+        assert vocab.lines(conn) == ["Builder's Risk", "Cyber", "D&O"]
+
+    def test_owner_program_and_market_vocab(self, conn) -> None:
+        from bookkit.repo import vocab
+
+        org = orgs.create(conn, kind="client", name="Atomic", owner="grant")
+        orgs.create(conn, kind="client", name="Borealis", owner="Grant")  # dupe, case
+        orgs.create(conn, kind="market", name="AXA XL")
+        placements.create(conn, org.id, "2026 Property", "2026-01-01", "2027-01-01")
+        assert vocab.owners(conn) == ["grant"]
+        assert vocab.program_names(conn) == ["2026 Property"]
+        assert vocab.market_names(conn) == ["AXA XL"]

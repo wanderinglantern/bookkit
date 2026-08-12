@@ -47,6 +47,9 @@ class Field:
     required: bool = False
     placeholder: str = ""
     optional_select: bool = False  # allow_blank for selects
+    # existing-record vocabulary: dropdown menu (tab/enter picks) plus inline
+    # ghost text (right arrow accepts) — data consistency by completion
+    suggestions: tuple[str, ...] = ()
 
 
 @dataclass
@@ -100,11 +103,24 @@ class FormModal(ModalScreen):
                     area.text = str(initial) if initial else ""
                     yield area
                 else:
+                    from textual.suggester import SuggestFromList
+
                     yield Input(
                         value=self._initial_text(f, initial),
                         placeholder=f.placeholder or _PLACEHOLDERS.get(f.kind, ""),
                         id=f"form-{f.key}",
+                        suggester=(
+                            SuggestFromList(f.suggestions, case_sensitive=False)
+                            if f.suggestions
+                            else None
+                        ),
                     )
+                    if f.suggestions:
+                        from textual_autocomplete import AutoComplete
+
+                        yield AutoComplete(
+                            f"#form-{f.key}", candidates=list(f.suggestions)
+                        )
             yield Static("ctrl-s save · esc cancel", classes="hint")
             yield Button("Save", variant="primary", id="form-save")
 

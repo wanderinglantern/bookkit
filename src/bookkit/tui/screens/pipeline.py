@@ -145,7 +145,9 @@ class PipelineScreen(Screen):
                 self.refresh_data()
                 self._focus_column(self.column)
 
-        self.app.push_screen(FormModal(opportunity_form(opp), commit=commit), done)
+        self.app.push_screen(
+            FormModal(opportunity_form(opp, conn=self.app.conn), commit=commit), done
+        )
 
     def action_undo(self) -> None:
         self.app.show_undo_result()

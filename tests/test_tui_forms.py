@@ -238,3 +238,20 @@ async def test_form_commit_exception_is_an_error_not_a_crash(empty_db: Path) -> 
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert isinstance(app.screen, FormModal)  # still alive
+
+
+async def test_form_fields_carry_dropdown_and_ghost_suggestions(seeded_db: Path) -> None:
+    from textual_autocomplete import AutoComplete
+
+    from bookkit.tui.widgets.entity_forms import placement_form
+    from bookkit.tui.widgets.forms import FormModal
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(130, 42)) as pilot:
+        spec = placement_form(conn=app.conn)
+        program_field = next(f for f in spec.fields if f.key == "program_name")
+        assert program_field.suggestions  # existing program names flow in
+        app.push_screen(FormModal(spec))
+        await pilot.pause()
+        assert app.screen.query(AutoComplete)  # dropdown mounted
+        assert app.screen.query_one("#form-program_name", Input).suggester is not None

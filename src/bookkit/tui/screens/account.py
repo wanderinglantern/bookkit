@@ -545,14 +545,14 @@ class AccountScreen(Screen):
             )
         elif tab == "tab-placements":
             self._push_form(
-                ef.placement_form(),
+                ef.placement_form(conn=conn),
                 lambda v: self.notify(
                     f"created {ef.apply_placement(conn, v, org_id).ref}"
                 ),
             )
         elif tab == "tab-pipeline":
             self._push_form(
-                ef.opportunity_form(),
+                ef.opportunity_form(conn=conn),
                 lambda v: self.notify(
                     f"created {ef.apply_opportunity(conn, v, org_id).ref}"
                 ),
@@ -574,7 +574,7 @@ class AccountScreen(Screen):
             if self.focused is needs_table and project_id:
                 project = projects_repo.get_project(conn, project_id)
                 self._push_form(
-                    ef.need_form(),
+                    ef.need_form(conn=conn),
                     lambda v: self.notify(
                         f"need added to {project.name}: "
                         f"{ef.apply_need(conn, v, project.id).line}"
@@ -632,7 +632,7 @@ class AccountScreen(Screen):
                 if key:
                     opp = opps_repo.get(conn, key)
                     self._push_form(
-                        ef.opportunity_form(opp),
+                        ef.opportunity_form(opp, conn=conn),
                         lambda v: ef.apply_opportunity(conn, v, opp.org_id, opp),
                     )
         elif tab == "tab-projects":
@@ -643,7 +643,7 @@ class AccountScreen(Screen):
             if self.focused is needs_table and need_key:
                 need = projects_repo.get_need(conn, need_key)
                 self._push_form(
-                    ef.need_form(need),
+                    ef.need_form(need, conn=conn),
                     lambda v: ef.apply_need(conn, v, need.project_id, need),
                 )
             else:
@@ -1101,7 +1101,7 @@ class AccountScreen(Screen):
             (f"{m.name} ({m.specialty})" if m.specialty else m.name, m.id)
             for m in members
         )
-        self.app.push_screen(FormModal(assignment_form(options), commit=commit), done)
+        self.app.push_screen(FormModal(assignment_form(options, conn=conn), commit=commit), done)
 
     def action_merge_placement(self) -> None:
         """Merge the selected (duplicate) placement into another of this org's
