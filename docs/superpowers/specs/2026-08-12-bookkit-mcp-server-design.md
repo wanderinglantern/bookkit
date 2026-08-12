@@ -70,7 +70,7 @@ overdue renewals and unmet needs never fall off.
 | Tool | Behavior |
 | --- | --- |
 | `log_activity(entity_ref, note, follow_up_date=None)` | append an interaction/note via `services/capture.py`; optional follow-up parses via `dates.py` |
-| `task_create(title, detail=None, due_date=None, entity_ref=None)` | append a task; append-only. `detail` is long-form text (markdown allowed — stored as-is in the existing `Task.detail` column); `open_items` returns it so the work assistant sees full context |
+| `task_create(title, description=None, detail=None, due_date=None, entity_ref=None)` | append a task; append-only. `detail` is long-form text (markdown allowed — stored as-is in the existing `Task.detail` column); `open_items` returns it so the work assistant sees full context |
 | `task_complete(task_ref)` | status flip to done, nothing else editable |
 | `client_create(name, kind, contacts=[], note=None, tasks=[])` | create org + contacts + opening note + follow-up tasks in ONE additive transaction. Duplicate guard first: name matched against existing orgs via `repo/aliases.py`; a likely duplicate REFUSES with candidates instead of creating. Creates the client only — program structure is TUI-wizard territory (towerkit sync pipeline), never work-model-driven. |
 | `enrich_field(entity_ref, field, value)` | fill-blanks-only: sets a field ONLY if currently empty; if a value exists, refuses and returns it ("bookkit already has 555-0142"). Vocab-controlled fields validate against the models.py tuples. Never overwrites anything Grant typed. |
