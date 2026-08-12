@@ -282,3 +282,14 @@ class TestVocab:
         assert vocab.owners(conn) == ["grant"]
         assert vocab.program_names(conn) == ["2026 Property"]
         assert vocab.market_names(conn) == ["AXA XL"]
+
+
+def test_task_description_round_trips(conn):
+    task = tasks.create(
+        conn, "chase GL quote",
+        description="waiting on Zurich since Monday",
+        detail="## Notes\n- called 8/10, no answer\n- try the London desk",
+    )
+    got = tasks.get(conn, task.id)
+    assert got.description == "waiting on Zurich since Monday"
+    assert got.detail.startswith("## Notes")

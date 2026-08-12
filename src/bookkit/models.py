@@ -193,6 +193,7 @@ class Task(Row):
     id: str
     org_id: str | None = None
     title: str
+    description: str | None = None  # brief one-liner; `detail` holds the long notes
     detail: str | None = None
     due_on: str | None = None
     status: TaskStatus = TaskStatus.OPEN

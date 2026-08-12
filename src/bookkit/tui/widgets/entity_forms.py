@@ -164,6 +164,7 @@ def task_form(
     # most tasks are title + due — the detail textarea goes last
     fields = [
         Field("title", "title", required=True),
+        Field("description", "description", placeholder="one-line summary"),
         Field("due_on", "due", "date"),
         Field("priority", "priority", "select", _PRIORITY),
     ]
