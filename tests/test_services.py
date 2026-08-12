@@ -313,6 +313,16 @@ def test_compose_empty_book_returns_no_sections(conn):
     assert compose(conn, org.id, date(2026, 8, 12)) == []
 
 
+def test_compose_sections_org_tasks_by_category(conn):
+    org = orgs.create(conn, name="Cat Co", kind="client")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    tasks.create(conn, "renew AL", org_id=org.id, category="Renewal")
+    tasks.create(conn, "send COI", org_id=org.id, category="Certificates")
+    tasks.create(conn, "misc", org_id=org.id)
+    labels = [s.label for s in compose(conn, org.id, date(2026, 8, 12))]
+    assert labels == ["Certificates — Cat Co", "Renewal — Cat Co", "General — Cat Co"]
+
+
 def test_write_open_items_deterministic_and_styled(conn, tmp_path):
     from bookkit.services.export_open_items import write
 

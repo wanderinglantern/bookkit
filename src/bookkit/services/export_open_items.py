@@ -1,8 +1,10 @@
 """Client-facing open-items list, composed PURELY — rendering is towerkit's
 job (write() in this module glues to towerkit.render.table_xlsx; bookkit
-has no xlsx dependency). Sections: General (org-level tasks), one per
-placement (its tasks + outstanding submissions), one per project (unmet
-needs). Determinism: `today` is a parameter, never the wall clock."""
+has no xlsx dependency). Sections: org-level tasks split by category
+(SOV-style, alphabetical) plus a trailing General for uncategorized tasks
+and loose submissions, one per placement (its tasks + outstanding
+submissions), one per project (unmet needs). Determinism: `today` is a
+parameter, never the wall clock."""
 
 from __future__ import annotations
 
@@ -76,7 +78,15 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
     sections: list[ExportSection] = []
 
     org_tasks = tasks_repo.open_tasks(conn, org_id=org.id)
-    general = tuple(_task_row(t, today) for t in org_tasks if not t.placement_id)
+    by_category: dict[str, list[Task]] = {}
+    uncategorized: list[Task] = []
+    for t in org_tasks:
+        if t.placement_id:
+            continue
+        if t.category:
+            by_category.setdefault(t.category, []).append(t)
+        else:
+            uncategorized.append(t)
     by_placement: dict[str, list[Task]] = {}
     for t in org_tasks:
         if t.placement_id:
@@ -91,7 +101,15 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
         else:
             loose_subs.append(row)
 
-    general_rows = list(general) + [
+    # SOV-style: one section per category (alphabetical, case-insensitive);
+    # uncategorized org-level tasks + loose submissions land in General last.
+    for category in sorted(by_category, key=str.lower):
+        sections.append(ExportSection(
+            f"{category} — {org.name}",
+            tuple(_task_row(t, today) for t in by_category[category]),
+        ))
+
+    general_rows = [_task_row(t, today) for t in uncategorized] + [
         ExportRow(
             item=f"Submission to {row['market_name']}",
             details=row["about"] or "", kind="Submission", due="",
