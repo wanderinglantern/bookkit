@@ -172,7 +172,7 @@ class TodayScreen(Screen):
             if values is not None:
                 self.refresh_data()
 
-        self.app.push_screen(FormModal(task_form(), commit=commit), done)
+        self.app.push_screen(FormModal(task_form(conn=self.app.conn), commit=commit), done)
 
     def action_edit_task(self) -> None:
         from ..widgets.entity_forms import apply_task, task_form
@@ -191,7 +191,7 @@ class TodayScreen(Screen):
             if values is not None:
                 self.refresh_data()
 
-        self.app.push_screen(FormModal(task_form(task), commit=commit), done)
+        self.app.push_screen(FormModal(task_form(task, conn=self.app.conn), commit=commit), done)
 
     def action_undo(self) -> None:
         self.app.show_undo_result()

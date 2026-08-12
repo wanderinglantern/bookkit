@@ -258,3 +258,29 @@ async def test_deal_team_shows_under_placement(seeded_db: Path) -> None:
         await pilot.pause()
         state = str(app.screen.query_one("#sync-state", Static).render())
         assert "Rosa Silva" in state and "placement_specialist" in state
+
+
+async def test_ctrl_t_task_from_anywhere_attaches_current_client(
+    seeded_db: Path,
+) -> None:
+    from textual.widgets import Input, Select
+
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets.forms import FormModal
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        org = orgs.list_orgs(app.conn, kind="client")[0]
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        assert app.screen.query_one("#form-org_id", Select).value == org.id
+        app.screen.query_one("#form-title", Input).value = "chase COI"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        task = next(
+            t for t in tasks_repo.open_tasks(app.conn) if t.title == "chase COI"
+        )
+        assert task.org_id == org.id

@@ -498,7 +498,7 @@ class AccountScreen(Screen):
             self.app.action_quick_capture()
         else:  # overview → a new task for this account
             self._push_form(
-                ef.task_form(),
+                ef.task_form(conn=conn, default_org_id=org_id),
                 lambda v: ef.apply_task(conn, v, org_id=org_id),
             )
 
@@ -554,7 +554,7 @@ class AccountScreen(Screen):
             if key and self.focused is not None and self.focused.id == "ov-tasks":
                 task = tasks_repo.get(conn, key)
                 self._push_form(
-                    ef.task_form(task), lambda v: ef.apply_task(conn, v, existing=task)
+                    ef.task_form(task, conn=conn), lambda v: ef.apply_task(conn, v, existing=task)
                 )
             else:  # otherwise e edits the account itself
                 self._edit_org()

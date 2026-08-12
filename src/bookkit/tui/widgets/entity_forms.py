@@ -135,18 +135,37 @@ def apply_contact(
 # --- task ---------------------------------------------------------------------
 
 
-def task_form(existing: Task | None = None) -> FormSpec:
+def task_form(
+    existing: Task | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
+    default_org_id: str | None = None,
+) -> FormSpec:
+    """With `conn`, the form carries an account select so a task can attach
+    to a client from anywhere (ctrl+t); `default_org_id` pre-selects the
+    account you were looking at."""
     initial = existing.model_dump() if existing else {"priority": "2"}
     if existing:
         initial["priority"] = str(existing.priority)
+    fields = [
+        Field("title", "title", required=True),
+        Field("detail", "detail", "textarea"),
+        Field("due_on", "due", "date"),
+        Field("priority", "priority", "select", _PRIORITY),
+    ]
+    if conn is not None:
+        client_options = tuple(
+            (org.name, org.id) for org in orgs.list_orgs(conn, kind="client")
+        )
+        if client_options:
+            fields.append(
+                Field("org_id", "account", "select", client_options, optional_select=True)
+            )
+            if default_org_id is not None:
+                initial.setdefault("org_id", default_org_id)
     return FormSpec(
         "edit task" if existing else "new task",
-        [
-            Field("title", "title", required=True),
-            Field("detail", "detail", "textarea"),
-            Field("due_on", "due", "date"),
-            Field("priority", "priority", "select", _PRIORITY),
-        ],
+        fields,
         initial=initial,
     )
 
@@ -157,13 +176,14 @@ def apply_task(
     org_id: str | None = None,
     existing: Task | None = None,
 ) -> Task:
-    core = dropped(values)
+    core = dropped(values)  # org_id present only when the form chose an account
     if "priority" in core:
         core["priority"] = int(core["priority"])
     if existing:
         return tasks_repo.update(conn, existing.id, **core)
     title = core.pop("title")
-    return tasks_repo.create(conn, title, org_id=org_id, **core)
+    core.setdefault("org_id", org_id)
+    return tasks_repo.create(conn, title, **core)
 
 
 # --- placement ----------------------------------------------------------------

@@ -16,6 +16,7 @@ class BookkitApp(App):
     BINDINGS = [
         Binding("slash", "global_search", "Search", key_display="/"),
         Binding("n", "quick_capture", "Log interaction"),
+        Binding("ctrl+t", "new_task", "Task", priority=True),
         Binding("question_mark", "help", "Help", key_display="?"),
         Binding("ctrl+q", "quit", "Quit", priority=True),
     ]
@@ -58,6 +59,35 @@ class BookkitApp(App):
             return
         org_id = getattr(self.screen, "current_org_id", None)
         self.push_screen(QuickCapture(default_org_id=org_id))
+
+    def action_new_task(self) -> None:
+        """ctrl+t anywhere: a task, attached to the client you're looking at."""
+        from .widgets.entity_forms import apply_task, task_form
+        from .widgets.forms import FormModal
+
+        if self._modal_open():
+            return
+        default_org_id = getattr(self.screen, "current_org_id", None)
+        origin = self.screen
+
+        def commit(values: dict) -> str | None:
+            apply_task(self.conn, values)
+            return None
+
+        def done(values: dict | None) -> None:
+            if values is not None:
+                self.notify("task saved")
+                refresh = getattr(origin, "refresh_data", None)
+                if refresh is not None:
+                    refresh()
+
+        self.push_screen(
+            FormModal(
+                task_form(conn=self.conn, default_org_id=default_org_id),
+                commit=commit,
+            ),
+            done,
+        )
 
     def action_help(self) -> None:
         from .screens.help import HelpScreen
