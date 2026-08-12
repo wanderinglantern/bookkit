@@ -384,3 +384,28 @@ async def test_navigator_home_attention_and_group_tables(seeded_db: Path) -> Non
         await pilot.pause()
         assert isinstance(app.screen, AccountScreen)
         snapshot(app, "navigator")
+
+
+async def test_navigator_row_keys_require_table_focus(seeded_db: Path) -> None:
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets.forms import FormModal
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav._current = ("att", "tasks")
+        nav._render_pane()
+        await pilot.pause()
+        open_before = len(tasks_repo.open_tasks(app.conn))
+        assert open_before > 0
+        nav.query_one("#nav-tree").focus()
+        await pilot.press("d")  # tree focused: must NOT touch the table's row
+        await pilot.press("e")
+        await pilot.pause()
+        assert len(tasks_repo.open_tasks(app.conn)) == open_before
+        assert not isinstance(app.screen, FormModal)
+        table = nav.query_one("#nav-table", ListTable)
+        table.focus()
+        await pilot.press("d")  # table focused: acts
+        await pilot.pause()
+        assert len(tasks_repo.open_tasks(app.conn)) == open_before - 1

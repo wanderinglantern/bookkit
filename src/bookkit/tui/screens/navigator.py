@@ -208,9 +208,13 @@ class NavigatorScreen(Screen):
             table.add_columns("due", "task", "account")
             for task in self._attention["tasks"]:
                 key = f"task:{task.id}"
+                name = ""
                 if task.org_id:
                     self._row_org[key] = task.org_id
-                name = orgs.get(conn, task.org_id).name if task.org_id else ""
+                    try:  # a task can outlive its soft-deleted account
+                        name = orgs.get(conn, task.org_id).name
+                    except KeyError:
+                        name = "(deleted account)"
                 table.add_row(task.due_on or "—", task.title, name, key=key)
         elif which == "sla":
             table.add_columns("market", "account", "sent", "out")
@@ -319,7 +323,14 @@ class NavigatorScreen(Screen):
         from textual.coordinate import Coordinate
 
         table = self.query_one("#nav-table", ListTable)
-        if not table.display or table.cursor_row is None or table.row_count == 0:
+        # row actions require the TABLE to hold focus — pressing e/d/r/l while
+        # browsing the tree must never mutate a row the user isn't looking at
+        if (
+            not table.display
+            or not table.has_focus
+            or table.cursor_row is None
+            or table.row_count == 0
+        ):
             return None
         value = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
         if not value:
@@ -338,7 +349,11 @@ class NavigatorScreen(Screen):
         key = str(event.row_key.value or "") if event.row_key else ""
         kind, _, entity_id = key.partition(":")
         if kind == "placement":
-            placement = placements.get(self.app.conn, entity_id)
+            try:  # row keys can go stale mid-rebuild (undo, deletes)
+                placement = placements.get(self.app.conn, entity_id)
+            except KeyError:
+                preview.display = False
+                return
             if placement.program_path and Path(placement.program_path).exists():
                 preview.display = True
                 preview.show_program(Path(placement.program_path))

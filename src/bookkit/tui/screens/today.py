@@ -83,7 +83,10 @@ class TodayScreen(Screen):
             if task.org_id:
                 from ...repo import orgs
 
-                org_name = orgs.get(conn, task.org_id).name
+                try:  # a task can outlive its soft-deleted account
+                    org_name = orgs.get(conn, task.org_id).name
+                except KeyError:
+                    org_name = "(deleted account)"
             row_key = f"task:{task.id}:{task.org_id or ''}"
             tasks_table.add_row(label, task.title, org_name, key=row_key)
 
