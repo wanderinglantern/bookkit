@@ -96,6 +96,52 @@ def commit_contact_paste(
     return result
 
 
+def commit_program(
+    conn: sqlite3.Connection,
+    staged: StagedImport,
+    draft: object,
+    placement_id: str,
+    dest: Path,
+    db_path: Path,
+) -> tuple[Path | None, object]:
+    """Write-through order: towerkit file first (validated by to_program),
+    then link + projection. Returns (path, Diagnostics)."""
+    from towerkit.ingest import DraftProgram
+    from towerkit.model import dump_program
+    from towerkit.validate import Diagnostics, ProgramInvalidError
+
+    from .. import sync
+    from ..repo import links
+
+    assert isinstance(draft, DraftProgram)
+    diags = Diagnostics()
+    if not staged.ok:
+        diags.error("staged", f"{len(staged.errors)} staging error(s); commit refused")
+        return None, diags
+    placement = placements.get(conn, placement_id)
+    if placement.program_path:
+        diags.error("linked", f"{placement.ref} already has a program file")
+        return None, diags
+    if dest.exists():
+        diags.error("exists", f"{dest} already exists — refusing to overwrite")
+        return None, diags
+    try:
+        program = draft.to_program()
+    except ProgramInvalidError as exc:
+        return None, exc.diagnostics
+    _snapshot(conn, db_path)  # projection writes rows; same backup rule applies
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dump_program(program, dest)
+    links.confirm(conn, str(dest), placement.org_id, program.insured, source="import")
+    project_diags = sync.project(conn, dest, placement_id=placement_id)
+    base.log_event(
+        conn, "placement", placement_id, "import", None, dest.name,
+        f"import program from paste sha256={staged.sha256 or 'n/a'}",
+    )
+    conn.commit()
+    return dest, project_diags
+
+
 def _snapshot(conn: sqlite3.Connection, db_path: Path) -> Path:
     backups = db_path.parent / "backups"
     backups.mkdir(parents=True, exist_ok=True)

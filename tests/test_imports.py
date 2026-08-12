@@ -257,6 +257,73 @@ def test_stage_contact_paste_garbage_still_stages_note(conn) -> None:
     assert staged.ok  # warnings only — a note is always worth keeping
 
 
+# --- program from schedule ------------------------------------------------------------
+
+from bookkit.imports.commit import commit_program  # noqa: E402
+from bookkit.imports.mappers.program_paste import stage_program  # noqa: E402
+from bookkit.repo import aliases as aliases_repo  # noqa: E402
+
+_TOWER = "Primary 10M — Chubb 100% — 250,000\n15M xs 10M — AXA XL 60%, Sompo 40% — 180k\n"
+
+
+def test_stage_program_flags_known_and_unknown_carriers(conn) -> None:
+    market = orgs_repo.create(conn, kind="market", name="Chubb")
+    aliases_repo.set_alias(conn, "Chubb", market.id)
+    staged, draft = stage_program(
+        conn, _TOWER, "Atomic Industries", "Property", "2026-10-01", "2027-10-01"
+    )
+    assert staged.ok
+    carriers = {r.key: r for r in staged.records if r.kind == "carrier"}
+    assert carriers["Chubb"].action == "update"  # resolves to an existing market
+    assert any(i.field == "carrier" for i in carriers["AXA XL"].issues)  # warning only
+    assert draft.period is not None and draft.period.start.isoformat() == "2026-10-01"
+
+
+def test_commit_program_writes_file_links_and_projects(db_path: Path, tmp_path: Path) -> None:
+    connection = db.connect(db_path)
+    try:
+        org = orgs_repo.create(connection, kind="client", name="Atomic Industries")
+        placement = placements_repo.create(
+            connection, org.id, "Property", "2026-10-01", "2027-10-01"
+        )
+        staged, draft = stage_program(
+            connection, _TOWER, org.name, "Property", "2026-10-01", "2027-10-01"
+        )
+        dest = tmp_path / "programs" / "atomic-property-2026.json"
+        path, diags = commit_program(
+            connection, staged, draft, placement.id, dest, db_path
+        )
+        assert path == dest and dest.exists()
+        assert diags.ok
+        refreshed = placements_repo.get(connection, placement.id)
+        assert refreshed.program_path == str(dest)
+        from bookkit import sync
+
+        layers = sync.layer_details(connection, placement.id)
+        assert {layer["name"] for layer in layers} == {"Primary", "$15M xs $10M"}
+    finally:
+        connection.close()
+
+
+def test_commit_program_refuses_already_linked(db_path: Path, tmp_path: Path) -> None:
+    connection = db.connect(db_path)
+    try:
+        org = orgs_repo.create(connection, kind="client", name="Atomic")
+        placement = placements_repo.create(
+            connection, org.id, "Property", "2026-10-01", "2027-10-01",
+            program_path="/somewhere/else.json",
+        )
+        staged, draft = stage_program(
+            connection, _TOWER, org.name, "Property", "2026-10-01", "2027-10-01"
+        )
+        path, diags = commit_program(
+            connection, staged, draft, placement.id, tmp_path / "x.json", db_path
+        )
+        assert path is None and not diags.ok
+    finally:
+        connection.close()
+
+
 # --- cli ---------------------------------------------------------------------------
 
 from bookkit.cli import main as cli_main  # noqa: E402
