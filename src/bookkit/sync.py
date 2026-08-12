@@ -29,6 +29,7 @@ import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -861,6 +862,32 @@ def line_labels(program_path: str | None) -> str:
     except Exception:
         return ""
     return ", ".join(line.label for line in program.lines)
+
+
+def line_ends(program_path: str | None) -> list[tuple[str, date]]:
+    """(label, end date) per line of cover, soonest first — the date each
+    LINE actually needs renewing, which is not always the program period end:
+    policies are issued per layer, and a line's cover runs out when the first
+    layer that applies to it expires. Lines with no layers (TBD, unplaced)
+    are omitted — there is no policy to expire. Empty when unlinked or
+    unreadable (never raises: home must render)."""
+    if not program_path:
+        return []
+    try:
+        program = load_program(Path(program_path))
+    except Exception:
+        return []
+    out: list[tuple[str, date]] = []
+    for line in program.lines:
+        covering = [layer for layer in program.layers if line.id in layer.applies_to]
+        if not covering:
+            continue
+        end = min(
+            layer.period.end if layer.period else program.period.end
+            for layer in covering
+        )
+        out.append((line.label, end))
+    return sorted(out, key=lambda pair: pair[1])
 
 
 def program_lines(conn: sqlite3.Connection, placement_id: str) -> list[tuple[str, str]]:

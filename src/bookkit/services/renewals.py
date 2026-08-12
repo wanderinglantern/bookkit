@@ -24,9 +24,15 @@ OVERDUE = "overdue"
 class RenewalItem:
     placement: Placement
     org: Org
-    days_remaining: int  # negative when overdue
+    days_remaining: int  # negative when overdue — counted to renewal_on
     bucket: str  # 'overdue' | '0-30' | '31-60' | '61-90' | '91-120'
     lines: str = ""  # compact cover labels ("GL, AL, EL"); "" when unlinked
+    # per-line renewal dates (label, iso end), soonest first — policies are
+    # issued per layer, so a LINE can run out before its program does
+    line_ends: tuple[tuple[str, str], ...] = ()
+    # the date days_remaining counts to: the earliest live line end when the
+    # placement is file-linked, else the program period end
+    renewal_on: str = ""
 
 
 def _renewed(placement: Placement, others: list[Placement]) -> bool:
@@ -53,6 +59,28 @@ def _labels(program_path: str | None, cache: dict[str, str]) -> str:
     return cache[program_path]
 
 
+def _line_ends(
+    program_path: str | None, cache: dict[str, tuple[tuple[str, str], ...]]
+) -> tuple[tuple[str, str], ...]:
+    from .. import sync
+
+    if not program_path:
+        return ()
+    if program_path not in cache:
+        cache[program_path] = tuple(
+            (label, end.isoformat()) for label, end in sync.line_ends(program_path)
+        )
+    return cache[program_path]
+
+
+def _renewal_on(placement: Placement, ends: tuple[tuple[str, str], ...]) -> str:
+    """The date this placement actually needs attention: the earliest line
+    end when one is known, capped by the program period end."""
+    if ends:
+        return min(ends[0][1], placement.period_to)
+    return placement.period_to
+
+
 def _bucket(remaining: int) -> str:
     if remaining < 0:
         return OVERDUE
@@ -65,17 +93,27 @@ def _bucket(remaining: int) -> str:
 def upcoming(
     conn: sqlite3.Connection, today: date | None = None, days: int = 120
 ) -> list[RenewalItem]:
-    """Placements expiring within `days` — plus overdue unrenewed ones —
-    soonest first, with bucket labels."""
+    """Placements needing renewal attention within `days` — plus overdue
+    unrenewed ones — soonest first, with bucket labels.
+
+    Attention is counted to the earliest LINE end, not the program end: the
+    scan covers every live placement because an Inland Marine layer can run
+    out months before its program period does, and it must surface here the
+    moment ITS window opens."""
     today = today or date.today()
-    horizon = today + timedelta(days=days)
+    horizon_iso = (today + timedelta(days=days)).isoformat()
     by_org: dict[str, list[Placement]] = {}
     label_cache: dict[str, str] = {}
+    ends_cache: dict[str, tuple[tuple[str, str], ...]] = {}
     items: list[RenewalItem] = []
-    for placement in placements.expiring_between(conn, "0001-01-01", horizon.isoformat()):
+    for placement in placements.expiring_between(conn, "0001-01-01", "9999-12-31"):
         if placement.status == "lapsed":
             continue
-        remaining = days_until(placement.period_to, today)
+        ends = _line_ends(placement.program_path, ends_cache)
+        renewal_on = _renewal_on(placement, ends)
+        remaining = days_until(renewal_on, today)
+        if remaining >= 0 and renewal_on > horizon_iso:
+            continue
         if remaining < 0:
             others = by_org.setdefault(
                 placement.org_id, placements.for_org(conn, placement.org_id)
@@ -86,9 +124,10 @@ def upcoming(
             RenewalItem(
                 placement, orgs.get(conn, placement.org_id), remaining,
                 _bucket(remaining), _labels(placement.program_path, label_cache),
+                ends, renewal_on,
             )
         )
-    return items
+    return sorted(items, key=lambda item: item.days_remaining)
 
 
 def next_for_org(
@@ -98,18 +137,21 @@ def next_for_org(
     unrenewed one first, else the soonest upcoming expiry."""
     today = today or date.today()
     candidates = [p for p in placements.for_org(conn, org_id) if p.status != "lapsed"]
-    live: list[tuple[int, Placement]] = []
+    ends_cache: dict[str, tuple[tuple[str, str], ...]] = {}
+    live: list[tuple[int, Placement, tuple[tuple[str, str], ...], str]] = []
     for placement in candidates:
-        remaining = days_until(placement.period_to, today)
+        ends = _line_ends(placement.program_path, ends_cache)
+        renewal_on = _renewal_on(placement, ends)
+        remaining = days_until(renewal_on, today)
         if remaining < 0 and _renewed(placement, candidates):
             continue
-        live.append((remaining, placement))
+        live.append((remaining, placement, ends, renewal_on))
     if not live:
         return None
-    remaining, placement = min(live, key=lambda pair: pair[0])
+    remaining, placement, ends, renewal_on = min(live, key=lambda entry: entry[0])
     return RenewalItem(
         placement, orgs.get(conn, org_id), remaining, _bucket(remaining),
-        _labels(placement.program_path, {}),
+        _labels(placement.program_path, {}), ends, renewal_on,
     )
 
 

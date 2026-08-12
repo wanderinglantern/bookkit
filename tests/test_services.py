@@ -212,3 +212,58 @@ def test_renewal_items_carry_line_labels(tmp_path) -> None:
         assert all(item.lines == "" for item in unlinked)
     finally:
         connection.close()
+
+
+def test_line_of_cover_drives_renewal_clock(conn, tmp_path) -> None:
+    """A line whose layer expires before the program period must surface on
+    ITS clock: the IM policy dying in 30 days pulls the placement into the
+    renewal radar even though the program end is 180 days out."""
+    from datetime import timedelta
+
+    from towerkit.model import Layer, Line, Participant, Period, Program, dump_program
+    from towerkit.model import Placement as TkPlacement
+
+    org = orgs.create(conn, name="Line Clock Co", kind="client", status="active")
+    start = TODAY - timedelta(days=185)
+    end = TODAY + timedelta(days=180)
+    p = placements.create(
+        conn, org.id, "2026 Package Program",
+        start.isoformat(), end.isoformat(), status="bound",
+    )
+    im_end = TODAY + timedelta(days=30)
+    program = Program(
+        insured=org.name, program="Package Program", placement=TkPlacement.BOUND,
+        period=Period(start=start, end=end),
+        lines=[
+            Line(id="pr", name="Property", abbr="PR"),
+            Line(id="im", name="Inland Marine", abbr="IM"),
+        ],
+        layers=[
+            Layer(
+                id="pr1", name="Primary Property", applies_to=["pr"],
+                attach=0, limit=1_000_000,
+                participants=[Participant(carrier="Zurich", share_bps=10_000)],
+            ),
+            Layer(
+                id="im1", name="Primary IM", applies_to=["im"],
+                period=Period(start=start, end=im_end),
+                attach=0, limit=1_000_000,
+                participants=[Participant(carrier="CNA", share_bps=10_000)],
+            ),
+        ],
+    )
+    path = tmp_path / "line-clock.json"
+    dump_program(program, path)
+    placements.update(conn, p.id, program_path=str(path))
+
+    items = [i for i in renewals.upcoming(conn, TODAY) if i.org.id == org.id]
+    assert len(items) == 1, "the IM line's clock must pull the placement in"
+    item = items[0]
+    assert item.renewal_on == im_end.isoformat()
+    assert item.days_remaining == 30
+    assert item.bucket == "0-30"
+    assert item.line_ends[0] == ("IM", im_end.isoformat())
+    assert dict(item.line_ends)["PR"] == end.isoformat()
+
+    nxt = renewals.next_for_org(conn, org.id, TODAY)
+    assert nxt is not None and nxt.renewal_on == im_end.isoformat()

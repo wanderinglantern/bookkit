@@ -321,8 +321,21 @@ def _demo_program(insured: str, period_from: str, period_to: str, rng: Random) -
         lines=[
             Line(id="gl", name="General Liability", abbr="GL"),
             Line(id="al", name="Auto Liability", abbr="AL"),
+            Line(id="im", name="Inland Marine", abbr="IM"),
         ],
         layers=[
+            # the IM policy runs out 90 days before the program period does —
+            # per-layer periods are the norm, and the renewal radar must track
+            # the LINE's clock, not the program's
+            Layer(
+                id="primary-im", name="Primary Inland Marine", applies_to=["im"],
+                period=Period(
+                    start=period.start,
+                    end=period.end - timedelta(days=90),
+                ),
+                attach=0, limit=5_000_000, premium=180_000,
+                participants=[Participant(carrier="CNA", share_bps=10_000)],
+            ),
             Layer(
                 id="primary-gl", name="Primary GL", applies_to=["gl"],
                 attach=0, limit=2_000_000, premium=rng.choice([900_000, 1_200_000]),

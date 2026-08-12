@@ -38,9 +38,11 @@ def test_project_populates_cache(synced) -> None:
     assert placement is not None
     assert placement.source_sha256 and placement.synced_at
     layers = projection.layers_for_placement(conn, placement.id)
-    assert [row["layer_id"] for row in layers] == ["primary-gl", "primary-al", "umbrella"]
+    assert [row["layer_id"] for row in layers] == [
+        "primary-im", "primary-gl", "primary-al", "umbrella"
+    ]
     # money crossed the boundary as cents
-    assert layers[0]["lim"] == 2_000_000 * 100
+    assert layers[0]["lim"] == 5_000_000 * 100  # primary-im
     parts = projection.participants_for_placement(conn, placement.id)
     assert any(row["carrier"] == "Swiss Re" and row["share_bps"] == 6_000 for row in parts)
     # placement totals refreshed from the file
