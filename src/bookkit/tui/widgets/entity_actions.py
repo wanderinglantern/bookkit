@@ -1,0 +1,208 @@
+"""Entity action FLOWS shared by AccountScreen and NavigatorScreen — the
+placement dual-owner edit, renew confirm, and layer edit. One implementation,
+two callers; forms commit in place (the platform default). `screen` is any
+Screen: it supplies .app (conn, push_screen), .notify, and refresh_data()."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from textual.screen import Screen
+
+    from ...models import Placement
+    from ..app import BookkitApp
+
+
+def _app(screen: Screen) -> BookkitApp:
+    return cast("BookkitApp", screen.app)
+
+
+def _refresh(screen: Screen) -> None:
+    refresh = getattr(screen, "refresh_data", None)
+    if refresh is not None:
+        refresh()
+
+
+def push_form(screen: Screen, spec: Any, on_save: Any) -> None:
+    """The commit/done wrapper: on_save runs while the form is open; any
+    raise keeps the form up with the input intact."""
+    from .forms import FormModal
+
+    def commit(values: dict) -> str | None:
+        on_save(values)
+        return None
+
+    def done(values: dict | None) -> None:
+        if values is not None:
+            _refresh(screen)
+
+    _app(screen).push_screen(FormModal(spec, commit=commit), done)
+
+
+def edit_placement(screen: Screen, placement: Placement) -> None:
+    """Dual-owner edit for linked placements (name/dates write through the
+    towerkit file), plain form for unlinked ones."""
+    from ... import sync
+    from ...repo import placements
+    from . import entity_forms as ef
+    from .forms import Field, FormModal, FormSpec
+
+    conn = _app(screen).conn
+    if not placement.program_path:
+        push_form(
+            screen,
+            ef.placement_form(placement),
+            lambda v: ef.apply_placement(conn, v, placement.org_id, placement),
+        )
+        return
+
+    spec = FormSpec(
+        f"edit {placement.ref} (dates/name write to the towerkit file)",
+        [
+            Field("program_name", "program name", required=True),
+            Field("period_from", "effective", "date", required=True),
+            Field("period_to", "expiry", "date", required=True),
+            Field(
+                "status", "status", "select",
+                tuple((s, s) for s in
+                      ("prospective", "submitted", "quoted", "bound", "lapsed")),
+            ),
+            Field("commission_bps", "commission (bps)", "int"),
+        ],
+        initial={
+            "program_name": placement.program_name,
+            "period_from": placement.period_from,
+            "period_to": placement.period_to,
+            "status": placement.status,
+            "commission_bps": placement.commission_bps,
+        },
+    )
+
+    def commit(values: dict) -> str | None:
+        file_changes = {
+            key: values[key]
+            for key in ("program_name", "period_from", "period_to")
+            if values.get(key) is not None
+            and values[key] != getattr(placement, key)
+        }
+        if file_changes:
+            diags = sync.update_program(conn, placement.id, **file_changes)
+            if not diags.ok:
+                return f"refused: {diags.errors[0]}"
+        book_changes = {
+            key: values[key]
+            for key in ("status", "commission_bps")
+            if values.get(key) is not None and values[key] != getattr(placement, key)
+        }
+        if book_changes:
+            placements.update(conn, placement.id, **book_changes)
+        return None
+
+    def done(values: dict | None) -> None:
+        if values is None:
+            return
+        screen.notify(f"updated {placement.ref}")
+        _refresh(screen)
+
+    _app(screen).push_screen(FormModal(spec, commit=commit), done)
+
+
+def renew_placement(screen: Screen, placement: Placement) -> None:
+    """ConfirmRenew → sync.renew: next period, file cloned + linked at birth."""
+    from ..screens.account import ConfirmRenew
+
+    def confirmed(answer: bool | None) -> None:
+        if not answer:
+            return
+        from ... import sync
+
+        new_placement, new_path, diags = sync.renew(_app(screen).conn, placement.id)
+        if new_placement is None:
+            screen.notify(f"renew refused: {diags.errors[0]}", severity="error")
+            return
+        note = f" + {new_path.name}" if new_path else ""
+        screen.notify(f"created {new_placement.ref} ({new_placement.period_to}){note}")
+        _refresh(screen)
+
+    _app(screen).push_screen(ConfirmRenew(placement), confirmed)
+
+
+def edit_layer(screen: Screen, placement: Placement, layer_id: str | None = None) -> None:
+    """Edit one layer of a linked placement through write-through. With no
+    layer_id: straight to the form when there's one layer, else the picker."""
+    from ... import sync
+    from ...money import format_cents_compact
+    from .forms import Field, FormModal, FormSpec
+    from .picker import Picker
+
+    conn = _app(screen).conn
+    layers = sync.layer_details(conn, placement.id)
+    if not layers:
+        screen.notify("no layers yet — L adds one", severity="warning")
+        return
+
+    def picked(chosen: str | None) -> None:
+        if chosen is None:
+            return
+        layer = next(ly for ly in layers if str(ly["id"]) == chosen)
+        spec = FormSpec(
+            f"edit layer — {layer['name']}",
+            [
+                Field("name", "name", required=True),
+                Field("policy_number", "policy number"),
+                Field("attach", "attach", "money", required=True),
+                Field("limit", "limit", "money", required=True),
+                Field("premium", "premium", "money"),
+                Field("period_from", "policy effective", "date"),
+                Field("period_to", "policy expiry", "date"),
+            ],
+            initial={
+                "name": layer["name"],
+                "policy_number": layer["policy_number"],
+                "attach": layer["attach_cents"],
+                "limit": layer["limit_cents"],
+                "premium": layer["premium_cents"],
+                "period_from": layer["period_from"],
+                "period_to": layer["period_to"],
+            },
+        )
+
+        def commit(values: dict) -> str | None:
+            diags = sync.update_layer(
+                conn,
+                placement.id,
+                chosen,
+                name=values.get("name"),
+                policy_number=values.get("policy_number"),
+                attach_cents=values.get("attach"),
+                limit_cents=values.get("limit"),
+                premium_cents=values.get("premium"),
+                period_from=values.get("period_from"),
+                period_to=values.get("period_to"),
+            )
+            return f"refused: {diags.errors[0]}" if not diags.ok else None
+
+        def done(values: dict | None) -> None:
+            if values is None:
+                return
+            screen.notify(f"updated {layer['name']}")
+            _refresh(screen)
+
+        _app(screen).push_screen(FormModal(spec, commit=commit), done)
+
+    if layer_id is not None and any(str(ly["id"]) == layer_id for ly in layers):
+        picked(layer_id)
+        return
+    if len(layers) == 1:
+        picked(str(layers[0]["id"]))
+        return
+    options = [
+        (
+            f"{ly['name']}  {format_cents_compact(ly['limit_cents'])} xs "
+            f"{format_cents_compact(ly['attach_cents'])}  ({ly['signed_pct']:g}% placed)",
+            str(ly["id"]),
+        )
+        for ly in layers
+    ]
+    _app(screen).push_screen(Picker("edit which layer?", options), picked)

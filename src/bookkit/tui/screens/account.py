@@ -610,14 +610,9 @@ class AccountScreen(Screen):
         elif tab == "tab-placements":
             key = self._selected_key("placements-table")
             if key:
-                placement = placements.get(conn, key)
-                if placement.program_path:
-                    self._edit_linked_placement(placement)
-                else:
-                    self._push_form(
-                        ef.placement_form(placement),
-                        lambda v: ef.apply_placement(conn, v, placement.org_id, placement),
-                    )
+                from ..widgets import entity_actions
+
+                entity_actions.edit_placement(self, placements.get(conn, key))
         elif tab == "tab-pipeline":
             focused = self.focused
             if focused is not None and focused.id == "pipeline-subs":
@@ -690,24 +685,9 @@ class AccountScreen(Screen):
         key = self._selected_key("placements-table")
         if key is None:
             return
-        placement = placements.get(self.app.conn, key)
-        self.app.push_screen(ConfirmRenew(placement), self._renew_confirmed(placement.id))
+        from ..widgets import entity_actions
 
-    def _renew_confirmed(self, placement_id: str):
-        def done(confirmed: bool | None) -> None:
-            if not confirmed:
-                return
-            from ... import sync
-
-            new_placement, new_path, diags = sync.renew(self.app.conn, placement_id)
-            if new_placement is None:
-                self.notify(f"renew refused: {diags.errors[0]}", severity="error")
-                return
-            note = f" + {new_path.name}" if new_path else ""
-            self.notify(f"created {new_placement.ref} ({new_placement.period_to}){note}")
-            self.refresh_data()
-
-        return done
+        entity_actions.renew_placement(self, placements.get(self.app.conn, key))
 
     def action_import_here(self) -> None:
         """Paste imports for this account: contact/signature, a program
@@ -866,66 +846,6 @@ class AccountScreen(Screen):
         )
         self.app.push_screen(FormModal(spec, commit=commit), done)
 
-    def _edit_linked_placement(self, placement) -> None:
-        """Dual-owner edit: name and effective dates go through the file
-        (write-through, towerkit-validated); status and commission are
-        bookkit-owned and update directly."""
-        from ... import sync
-        from ..widgets.forms import Field, FormModal, FormSpec
-
-        conn = self.app.conn
-        spec = FormSpec(
-            f"edit {placement.ref} (dates/name write to the towerkit file)",
-            [
-                Field("program_name", "program name", required=True),
-                Field("period_from", "effective", "date", required=True),
-                Field("period_to", "expiry", "date", required=True),
-                Field(
-                    "status", "status", "select",
-                    tuple((s, s) for s in
-                          ("prospective", "submitted", "quoted", "bound", "lapsed")),
-                ),
-                Field("commission_bps", "commission (bps)", "int"),
-            ],
-            initial={
-                "program_name": placement.program_name,
-                "period_from": placement.period_from,
-                "period_to": placement.period_to,
-                "status": placement.status,
-                "commission_bps": placement.commission_bps,
-            },
-        )
-
-        def commit(values: dict) -> str | None:
-            file_changes = {
-                key: values[key]
-                for key in ("program_name", "period_from", "period_to")
-                if values.get(key) is not None
-                and values[key] != getattr(placement, key)
-            }
-            if file_changes:
-                diags = sync.update_program(conn, placement.id, **file_changes)
-                if not diags.ok:
-                    return f"refused: {diags.errors[0]}"
-            book_changes = {
-                key: values[key]
-                for key in ("status", "commission_bps")
-                if values.get(key) is not None and values[key] != getattr(placement, key)
-            }
-            if book_changes:
-                placements.update(conn, placement.id, **book_changes)
-            return None
-
-        def done(values: dict | None) -> None:
-            if values is None:
-                return
-            self.notify(f"updated {placement.ref}")
-            self.refresh_data()
-
-        self.app.push_screen(FormModal(spec, commit=commit), done)
-
-    # --- transactional program edits (write-through) --------------------------
-
     def _selected_linked_placement(self):
         """The selected placement when it has a program file, else None+notify."""
         if self._active_tab() != "tab-placements":
@@ -945,16 +865,10 @@ class AccountScreen(Screen):
         return placement
 
     def action_edit_layer(self) -> None:
-        from ... import sync
-        from ..widgets.forms import Field, FormModal, FormSpec
-        from ..widgets.picker import Picker
+        from ..widgets import entity_actions
 
         placement = self._selected_linked_placement()
         if placement is None:
-            return
-        layers = sync.layer_details(self.app.conn, placement.id)
-        if not layers:
-            self.notify("no layers yet — L adds one", severity="warning")
             return
 
         def _layer_under_cursor() -> str | None:
@@ -966,71 +880,7 @@ class AccountScreen(Screen):
             row_key = cell_key.row_key.value
             return str(row_key).partition(":")[0] if row_key else None
 
-        def picked(layer_id: str | None) -> None:
-            if layer_id is None:
-                return
-            layer = next(ly for ly in layers if ly["id"] == layer_id)
-            spec = FormSpec(
-                f"edit layer — {layer['name']}",
-                [
-                    Field("name", "name", required=True),
-                    Field("policy_number", "policy number"),
-                    Field("attach", "attach", "money", required=True),
-                    Field("limit", "limit", "money", required=True),
-                    Field("premium", "premium", "money"),
-                    Field("period_from", "policy effective", "date"),
-                    Field("period_to", "policy expiry", "date"),
-                ],
-                initial={
-                    "name": layer["name"],
-                    "policy_number": layer["policy_number"],
-                    "attach": layer["attach_cents"],
-                    "limit": layer["limit_cents"],
-                    "premium": layer["premium_cents"],
-                    "period_from": layer["period_from"],
-                    "period_to": layer["period_to"],
-                },
-            )
-
-            def commit(values: dict) -> str | None:
-                diags = sync.update_layer(
-                    self.app.conn,
-                    placement.id,
-                    layer_id,
-                    name=values.get("name"),
-                    policy_number=values.get("policy_number"),
-                    attach_cents=values.get("attach"),
-                    limit_cents=values.get("limit"),
-                    premium_cents=values.get("premium"),
-                    period_from=values.get("period_from"),
-                    period_to=values.get("period_to"),
-                )
-                return f"refused: {diags.errors[0]}" if not diags.ok else None
-
-            def done(values: dict | None) -> None:
-                if values is None:
-                    return
-                self.notify(f"updated {layer['name']}")
-                self.refresh_data()
-
-            self.app.push_screen(FormModal(spec, commit=commit), done)
-
-        options = [
-            (
-                f"{ly['name']}  {format_cents_compact(ly['limit_cents'])} xs "
-                f"{format_cents_compact(ly['attach_cents'])}  ({ly['signed_pct']:g}% placed)",
-                str(ly["id"]),
-            )
-            for ly in layers
-        ]
-        direct = _layer_under_cursor()
-        if direct is not None and any(str(ly["id"]) == direct for ly in layers):
-            picked(direct)  # the layer under the cursor — no picker needed
-            return
-        if len(layers) == 1:
-            picked(str(layers[0]["id"]))  # only one choice — don't ask
-            return
-        self.app.push_screen(Picker("edit which layer?", options), picked)
+        entity_actions.edit_layer(self, placement, layer_id=_layer_under_cursor())
 
     def action_add_layer(self) -> None:
         from ... import sync
