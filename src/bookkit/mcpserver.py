@@ -6,13 +6,39 @@ db.transaction, all event-logged with source=mcp. stdout is protocol;
 anything human goes to stderr (never print here).
 
 NOTE ON SDK NAMING: the brief this module was built from named the
-FastMCP-era API (`mcp.server.fastmcp.FastMCP`). The installed SDK
-(mcp==1.28.1) has renamed that class to `MCPServer`, moved to
+FastMCP-era API (`mcp.server.fastmcp.FastMCP`). The installed SDK (now
+mcp==2.0.0; this module was originally built against 1.28.1, which had
+already renamed the class) exposes it as `MCPServer`, at
 `mcp.server.mcpserver.MCPServer` (also re-exported as `mcp.server.MCPServer`).
 The constructor kwargs used here (`name`, `instructions`), the `.tool()`
 decorator, `._tool_manager.list_tools()`, and `.run()` (stdio by default)
 are unchanged in shape — only the class name and import path moved, so this
 module follows the installed SDK rather than the brief's example.
+
+NOTE ON `async def` TOOL WRAPPERS: every `@server.tool()`-registered
+closure below is declared `async def`, even though its body is a plain
+synchronous call into a `_verb(conn, ...)` helper with no `await`. This
+is required, not stylistic. The SDK's tool dispatcher (see
+`mcp/server/mcpserver/tools/base.py` + `utilities/func_metadata.py` in
+the installed package) runs a *sync* tool callable via
+`anyio.to_thread.run_sync` — off the event-loop thread — to avoid
+blocking it; an `async def` callable is instead awaited directly on the
+event-loop thread. Both `ro` and `rw` are opened once, in
+`build_server()`, on whatever thread calls it (the event loop's thread
+under `serve()`/stdio). `sqlite3` connections are single-thread-bound by
+default (`check_same_thread=True`, unset here), so a sync tool handed to
+`to_thread.run_sync` raises "SQLite objects created in a thread can only
+be used in that same thread" on its very first read or write — this
+reproduced on every call once exercised through a real protocol
+round-trip (`tests/test_mcp_roundtrip.py`), not through the
+call-the-`_verb`-function-directly unit tests in `test_mcpserver.py`,
+which never go through the SDK's dispatcher. Keeping the wrappers
+`async def` (with sync bodies) is the minimal fix that stays inside this
+module: it does not touch `db.py`'s `check_same_thread` default (shared
+by tui/repo/imports, out of this module's scope) and does not introduce
+real concurrency — SQLite calls still run synchronously, just on the
+loop thread that owns the connections, matching this server's
+single-client stdio usage.
 """
 
 from __future__ import annotations
@@ -56,13 +82,13 @@ def build_server(db_path: Path | str | None = None) -> MCPServer:
 
 def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
     @server.tool()
-    def today_brief() -> dict[str, Any]:
+    async def today_brief() -> dict[str, Any]:
         """Today's working brief: due tasks, renewals in the 120-day window,
         project needs, stale accounts, submissions past SLA."""
         return _today_brief(ro)
 
     @server.tool()
-    def renewals_due(days: int = 120) -> list[dict[str, Any]]:
+    async def renewals_due(days: int = 120) -> list[dict[str, Any]]:
         """Placements needing renewal attention within `days` (default 120),
         soonest first, plus anything already overdue and not yet renewed.
         Each entry names its lines of cover — a program name alone is never
@@ -71,7 +97,7 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         return _renewals_due(ro, days=days)
 
     @server.tool()
-    def search(query: str) -> list[dict[str, Any]]:
+    async def search(query: str) -> list[dict[str, Any]]:
         """Full-text search across orgs, contacts, and interactions, ranked
         and grouped by kind ('org' | 'contact' | 'interaction'). Use this
         FIRST to resolve a client/market/person name or a fuzzy topic into
@@ -80,7 +106,7 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         return _search(ro, query)
 
     @server.tool()
-    def list_programs() -> list[dict[str, Any]]:
+    async def list_programs() -> list[dict[str, Any]]:
         """Every client program (placement) on the book: ref, account,
         program name, period end, and status. Use this to get an overview of
         the whole book or to find a program's ref for program_summary when
@@ -88,7 +114,7 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         return _list_programs(ro)
 
     @server.tool()
-    def program_summary(ref: str) -> dict[str, Any]:
+    async def program_summary(ref: str) -> dict[str, Any]:
         """Posture on ONE program: account, period, status, lines of cover,
         premium, plus counts of its open tasks and outstanding submissions.
         Deliberately slim — it does NOT dump the full program structure or
@@ -98,7 +124,7 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         return _program_summary(ro, ref)
 
     @server.tool()
-    def staleness_report() -> list[dict[str, Any]]:
+    async def staleness_report() -> list[dict[str, Any]]:
         """Active client accounts that have gone quiet: no logged interaction
         in over 60 days, sorted with the most neglected (days stale × premium)
         first. Use this to find who needs a check-in call before they lapse
@@ -106,7 +132,7 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         return _staleness_report(ro)
 
     @server.tool()
-    def open_items(client: str | None = None) -> dict[str, Any]:
+    async def open_items(client: str | None = None) -> dict[str, Any]:
         """Open items for ONE client (`client` = name, ref, or fuzzy —
         resolved the same way as every other client-scoped tool) — the same
         composition used for the client export deliverable, so this matches
@@ -117,7 +143,7 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         return _open_items(ro, client=client)
 
     @server.tool()
-    def pipeline_status() -> dict[str, Any]:
+    async def pipeline_status() -> dict[str, Any]:
         """Opportunity pipeline health: count, total and probability-weighted
         premium, and average days-in-stage per stage (identified through
         won/lost); win rate and per-gate advance rates; count of submissions
@@ -127,7 +153,7 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
 
 def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
     @server.tool()
-    def log_activity(
+    async def log_activity(
         client: str, note: str, follow_up: str | None = None
     ) -> dict[str, Any]:
         """Log a client interaction (call, email, meeting, site note) — additive
@@ -139,7 +165,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         return _log_activity(rw, client, note, follow_up=follow_up)
 
     @server.tool()
-    def task_create(
+    async def task_create(
         title: str,
         client: str | None = None,
         description: str | None = None,
@@ -159,14 +185,14 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         )
 
     @server.tool()
-    def task_complete(task_ref: str) -> dict[str, Any]:
+    async def task_complete(task_ref: str) -> dict[str, Any]:
         """Mark a task done — a status flip only, event-logged. `task_ref` MUST
         be the exact id read from open_items or today_brief; this tool never
         fuzzy-matches a title — guessing a ref risks completing the wrong task."""
         return _task_complete(rw, task_ref)
 
     @server.tool()
-    def client_create(
+    async def client_create(
         name: str,
         contacts: list[dict[str, Any]] | None = None,
         note: str | None = None,
@@ -185,7 +211,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         return _client_create(rw, name, contacts_in=contacts, note=note, tasks_in=tasks)
 
     @server.tool()
-    def enrich_field(
+    async def enrich_field(
         client: str, field: str, value: str, contact: str | None = None
     ) -> dict[str, Any]:
         """Fill ONE blank field on a client org (or, with `contact`, on one of

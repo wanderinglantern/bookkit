@@ -18,3 +18,8 @@ def test_no_raw_sql_in_tui_or_imports():
         for path in (SRC / pkg).rglob("*.py"):
             assert ".execute(" not in path.read_text(), \
                 f"raw SQL in {path.relative_to(SRC)} — queries live in repo/"
+
+
+def test_no_raw_sql_in_mcpserver():
+    text = (SRC / "mcpserver.py").read_text()
+    assert ".execute(" not in text, "mcpserver must consume repo/services only"
