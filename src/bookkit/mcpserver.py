@@ -225,7 +225,7 @@ def _program_summary(conn: sqlite3.Connection, ref: str) -> dict[str, Any]:
         "lines_of_cover": sync.line_labels(placement.program_path),
         "premium": format_cents(placement.total_premium)
         if placement.total_premium else None,
-        "open_tasks": len([t for t in tasks_repo.open_tasks(conn, org_id=org.id)
+        "open_tasks": len([t for t in tasks_repo.open_tasks_for_client(conn, org.id)
                            if t.placement_id == placement.id]),
         "outstanding_submissions": len([
             s for s in submissions.outstanding_for_org(conn, org.id)

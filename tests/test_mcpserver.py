@@ -97,6 +97,23 @@ def test_program_summary_by_ref(server_db):
     assert out["outstanding_submissions"] == 1
 
 
+def test_program_summary_counts_placement_task_with_null_org_id(server_db):
+    """A placement-attached task can legally carry org_id NULL (see tasks.py
+    module docstring) — program_summary must still count it via the
+    placement-aware join, not drop it because it filtered on org_id alone."""
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    placement = placements.create(
+        conn, org_id=org.id, program_name="Acme Property 26-27",
+        period_from="2026-01-01", period_to="2026-10-01", status="bound",
+    )
+    tasks.create(conn, "Chase loss runs", placement_id=placement.id)
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    out = mcpserver._program_summary(ro, placement.ref)
+    assert out["open_tasks"] == 1
+
+
 def test_program_summary_by_name(server_db):
     conn = db.connect(server_db)
     org = orgs.create(conn, name="Acme", kind="client")
