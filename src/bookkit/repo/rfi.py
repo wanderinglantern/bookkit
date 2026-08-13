@@ -8,7 +8,7 @@ import sqlite3
 from typing import Any
 
 from ..ids import RFI_REF, next_ref
-from ..models import RfiRequest
+from ..models import RfiItem, RfiRequest
 from . import base
 
 
@@ -50,3 +50,44 @@ def update_request(
 
 def delete_request(conn: sqlite3.Connection, request_id: str) -> None:
     base.soft_delete(conn, "rfi_request", request_id)
+
+
+# --- items ---------------------------------------------------------------------
+
+
+def add_item(
+    conn: sqlite3.Connection, request_id: str, prompt: str, **fields: Any
+) -> RfiItem:
+    item_id = base.insert(
+        conn, "rfi_item", {"request_id": request_id, "prompt": prompt, **fields}
+    )
+    return get_item(conn, item_id)
+
+
+def get_item(conn: sqlite3.Connection, item_id: str) -> RfiItem:
+    row = base.get(conn, "rfi_item", item_id)
+    if row is None:
+        raise KeyError(f"rfi item {item_id} not found")
+    return RfiItem.from_row(row)
+
+
+def items_for_request(conn: sqlite3.Connection, request_id: str) -> list[RfiItem]:
+    """Category groups first (uncategorised last), creation order within —
+    the same order the client's sheet renders, so screen and export agree."""
+    rows = conn.execute(
+        f"""SELECT * FROM rfi_item WHERE request_id = ? AND {base.alive()}
+            ORDER BY category IS NULL, category, created_at, id""",
+        (request_id,),
+    ).fetchall()
+    return [RfiItem.from_row(r) for r in rows]
+
+
+def update_item(
+    conn: sqlite3.Connection, item_id: str, note: str | None = None, **changes: Any
+) -> RfiItem:
+    base.update(conn, "rfi_item", item_id, changes, note)
+    return get_item(conn, item_id)
+
+
+def delete_item(conn: sqlite3.Connection, item_id: str) -> None:
+    base.soft_delete(conn, "rfi_item", item_id)

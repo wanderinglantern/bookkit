@@ -61,3 +61,7 @@ def lines(conn: sqlite3.Connection) -> list[str]:
 
 def task_categories(conn: sqlite3.Connection) -> list[str]:
     return _dedupe(_column(conn, "task", "category"))
+
+
+def rfi_categories(conn: sqlite3.Connection) -> list[str]:
+    return _dedupe(_column(conn, "rfi_item", "category"))

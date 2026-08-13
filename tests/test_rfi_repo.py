@@ -103,3 +103,66 @@ def test_get_request_raises_for_unknown(conn) -> None:
 
     with pytest.raises(KeyError):
         rfi.get_request(conn, "nope")
+
+
+def test_items_order_by_category_then_creation(conn) -> None:
+    from bookkit.repo import rfi
+
+    org_id = _org(conn)
+    req = rfi.create_request(conn, org_id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "safety manual", category="Safety")
+    rfi.add_item(conn, req.id, "audited financials", category="Financials")
+    rfi.add_item(conn, req.id, "tax return", category="Financials")
+    rfi.add_item(conn, req.id, "anything else")  # uncategorised sorts last
+    prompts = [i.prompt for i in rfi.items_for_request(conn, req.id)]
+    assert prompts == [
+        "audited financials", "tax return", "safety manual", "anything else",
+    ]
+
+
+def test_item_defaults_are_question_and_outstanding(conn) -> None:
+    from bookkit.repo import rfi
+
+    org_id = _org(conn)
+    req = rfi.create_request(conn, org_id, "q", "2026-08-05")
+    item = rfi.add_item(conn, req.id, "how many vehicles?")
+    assert item.kind == "question"
+    assert item.status == "outstanding"
+    assert item.received_on is None
+
+
+def test_update_item_records_a_response(conn) -> None:
+    from bookkit.repo import rfi
+
+    org_id = _org(conn)
+    req = rfi.create_request(conn, org_id, "q", "2026-08-05")
+    item = rfi.add_item(conn, req.id, "how many vehicles?")
+    rfi.update_item(
+        conn, item.id, response="42, all owned", received_on="2026-08-12",
+        status="received",
+    )
+    got = rfi.get_item(conn, item.id)
+    assert got.response == "42, all owned"
+    assert got.received_on == "2026-08-12"
+    assert got.status == "received"
+
+
+def test_deleted_items_disappear(conn) -> None:
+    from bookkit.repo import rfi
+
+    org_id = _org(conn)
+    req = rfi.create_request(conn, org_id, "q", "2026-08-05")
+    item = rfi.add_item(conn, req.id, "gone")
+    rfi.delete_item(conn, item.id)
+    assert rfi.items_for_request(conn, req.id) == []
+
+
+def test_rfi_categories_vocabulary(conn) -> None:
+    from bookkit.repo import rfi, vocab
+
+    org_id = _org(conn)
+    req = rfi.create_request(conn, org_id, "docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "a", category="Financials")
+    rfi.add_item(conn, req.id, "b", category="Safety")
+    rfi.add_item(conn, req.id, "c")
+    assert vocab.rfi_categories(conn) == ["Financials", "Safety"]
