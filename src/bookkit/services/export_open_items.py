@@ -1,19 +1,22 @@
-"""The client-facing export: a three-tab workbook — Open Items · Projects ·
-Schedule of Insurance — composed PURELY, with rendering left to towerkit
-(write() in this module glues to towerkit.render.table_xlsx /
-render.soi_xlsx; bookkit has no xlsx dependency). Sheet 1 (Open Items):
-org-level tasks split by category (SOV-style, alphabetical) plus a
-trailing General for uncategorized tasks and loose submissions, one
-section per placement (its tasks + outstanding submissions), one per
-project (unmet needs) — always present, even when empty. Sheet 2
-(Projects): every need on every live project, omitted (not blank) when
-the org has none. Sheet 3 (Schedule of Insurance): towerkit's SOI
-machinery per linked placement with a book-data fallback, present
-whenever any placement exists. Determinism: `today` is a parameter, never
-the wall clock."""
+"""The client-facing export: a four-tab workbook — Open Items ·
+Information Requests · Projects · Schedule of Insurance — composed
+PURELY, with rendering left to towerkit (write() in this module glues to
+towerkit.render.table_xlsx / render.soi_xlsx; bookkit has no xlsx
+dependency). Sheet 1 (Open Items): org-level tasks split by category
+(SOV-style, alphabetical) plus a trailing General for uncategorized tasks
+and loose submissions, one section per placement (its tasks + outstanding
+submissions), one per project (unmet needs) — always present, even when
+empty. Sheet 2 (Information Requests): what the client still owes us,
+composed by services/export_rfi.py — omitted (not blank) when nothing is
+outstanding. Sheet 3 (Projects): every need on every live project,
+omitted (not blank) when the org has none. Sheet 4 (Schedule of
+Insurance): towerkit's SOI machinery per linked placement with a
+book-data fallback, present whenever any placement exists. Determinism:
+`today` is a parameter, never the wall clock."""
 
 from __future__ import annotations
 
+import math
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -299,7 +302,7 @@ def compose_soi(conn: sqlite3.Connection, org_id: str) -> list[SoiSection]:
 
 
 _COLUMNS: tuple[tuple[str, float], ...] = (
-    ("Item", 30.0), ("Description", 40.0), ("Detail", 44.0), ("Type", 12.0),
+    ("Item", 30.0), ("Description", 50.0), ("Detail", 75.0), ("Type", 12.0),
     ("Due / Needed by", 16.0), ("Status", 14.0),
 )
 
@@ -308,13 +311,43 @@ _PROJECT_COLUMNS: tuple[tuple[str, float], ...] = (
     ("Status", 14.0), ("Limit", 16.0),
 )
 
+_RFI_COLUMNS: tuple[tuple[str, float], ...] = (
+    ("Item", 34.0), ("Detail", 75.0), ("Type", 12.0), ("Needed by", 16.0),
+)
+
+_RFI_HEADER_LABEL = "Items we need from you"
+
+
+def _wrapped_line_count(text: str, width: float) -> int:
+    """How many wrapped lines `text` needs at `width` characters — an
+    ESTIMATE, not true Excel autofit (the xlsx library behind this has no
+    autofit API; Excel wraps by rendered glyph width, not character
+    count). Each newline-separated
+    segment wraps on its own, minimum one line, so embedded line breaks
+    (flatten_markdown's bullets, multi-paragraph descriptions) count for
+    real instead of being flattened into one long division."""
+    if not text:
+        return 1
+    return sum(max(1, math.ceil(len(segment) / width)) for segment in text.split("\n"))
+
+
+def _prose_row_height(*columns: tuple[str, float]) -> float:
+    """18px-per-line row height from the widest wrap among the given
+    (text, width) prose columns, floored at 2 lines. Mirrors towerkit's
+    soi_xlsx._row_height precedent (same per-column division, same 2-line
+    floor); extended here to respect embedded newlines, which the SOI's
+    single-paragraph columns never needed."""
+    lines = max((_wrapped_line_count(text, width) for text, width in columns), default=1)
+    return 18.0 * max(lines, 2)
+
 
 def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) -> Path:
-    """The three-tab client deliverable — Open Items · Projects · Schedule of
-    Insurance — rendered via towerkit so every sheet carries SOI formatting
-    exactly (the money.parse_share pattern: formatting authority in one
-    place). Projects appears only when live projects exist; the SOI sheet
-    whenever any placement exists; finalize runs ONCE."""
+    """The client deliverable — Open Items · Information Requests · Projects
+    · Schedule of Insurance — rendered via towerkit so every sheet carries
+    SOI formatting exactly (the money.parse_share pattern: formatting
+    authority in one place). Information Requests appears only when the
+    client has outstanding items; Projects only when live projects exist;
+    the SOI sheet whenever any placement exists; finalize runs ONCE."""
     from towerkit.render.soi_xlsx import render_soi_sheet
     from towerkit.render.table_xlsx import (
         TableColumn,
@@ -325,6 +358,8 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
         sanitize_sheet_title,
     )
     from towerkit.theme import load_theme
+
+    from .export_rfi import compose_information_requests
 
     org = orgs.get(conn, org_id)
     theme = load_theme(None)
@@ -346,11 +381,33 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
     ws.title = sanitize_sheet_title(f"Open Items — {org.name}"[:31])
     render_table_sheet(
         ws, columns, sections, theme=theme,
-        # Detail is the only multi-line column; two-line floor like the SOI
-        row_height=lambda values: 18.0 * max(2, str(values[2]).count("\n") + 1),
+        # Description and Detail both wrap; the taller of the two wins.
+        row_height=lambda values: _prose_row_height(
+            (str(values[1]), _COLUMNS[1][1]), (str(values[2]), _COLUMNS[2][1]),
+        ),
     )
 
-    # Sheet 2 — Projects: omitted (not blank) when no live projects.
+    # Sheet 2 — Information Requests: omitted (not blank) when the client
+    # has nothing outstanding. The leading merged row is a label-only
+    # section — the same mechanism every other section header uses, just
+    # with no rows under it.
+    rfi_sections = compose_information_requests(conn, org_id, today)
+    if rfi_sections:
+        ws_rfi = wb.create_sheet(sanitize_sheet_title("Information Requests"))
+        rfi_columns = [TableColumn(h, w) for h, w in _RFI_COLUMNS]
+        render_table_sheet(
+            ws_rfi, rfi_columns,
+            [TableSection(_RFI_HEADER_LABEL, ())] +
+            [TableSection(s.label, s.rows) for s in rfi_sections],
+            theme=theme,
+            # Detail is the only multi-line column here; same estimate,
+            # same family as sheet 1's row-height rule.
+            row_height=lambda values: _prose_row_height(
+                (str(values[1]), _RFI_COLUMNS[1][1]),
+            ),
+        )
+
+    # Sheet 3 — Projects: omitted (not blank) when no live projects.
     project_sections = compose_projects(conn, org_id)
     if project_sections:
         ws_projects = wb.create_sheet(sanitize_sheet_title("Projects"))
@@ -364,7 +421,7 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
             row_height=lambda values: 18.0 * max(2, str(values[1]).count("\n") + 1),
         )
 
-    # Sheet 3 — Schedule of Insurance: whenever any placement exists
+    # Sheet 4 — Schedule of Insurance: whenever any placement exists
     # (compose_soi is non-empty exactly then). The client's own program:
     # show_premiums=True.
     soi_sections = compose_soi(conn, org_id)

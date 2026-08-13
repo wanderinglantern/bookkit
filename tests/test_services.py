@@ -6,7 +6,7 @@ from datetime import date
 import pytest
 
 from bookkit import seed
-from bookkit.repo import contacts, events, opportunities, orgs, placements, submissions, tasks
+from bookkit.repo import contacts, events, opportunities, orgs, placements, rfi, submissions, tasks
 from bookkit.repo import projects as projects_repo
 from bookkit.services import book, capture, hit_rate, pipeline, renewals, sla, staleness, undo
 from bookkit.services.export_open_items import compose
@@ -658,3 +658,133 @@ def test_premium_dollars_delegates_then_floors_for_display():
     # sub-dollar cents: money.cents_to_dollars refuses; the SOI's whole-dollar
     # display column floors instead (format_cents_compact's documented rule)
     assert _premium_dollars(500_000_50) == 500_000
+
+
+# --- sheet 2 (assembler): Information Requests -----------------------------
+
+
+def test_write_four_sheet_order_when_rfi_outstanding(conn, tmp_path):
+    from bookkit.services.export_open_items import write
+
+    client = orgs.create(conn, kind="client", name="Acme", status="active", owner="grant")
+    tasks.create(conn, "Chase updated loss runs", org_id=client.id)
+    placements.create(
+        conn, client.id, "Acme Property 25-26", "2025-10-01", "2026-10-01",
+        status="bound", total_premium=250_000_00,
+    )
+    live = projects_repo.create_project(conn, client.id, "Warehouse Expansion")
+    projects_repo.add_need(conn, live.id, "Builder's Risk", "2026-09-01")
+
+    market = orgs.create(conn, name="Sompo", kind="market")
+    req = rfi.create_request(
+        conn, client.id, "property questions", "2026-08-05", due_on="2026-08-19",
+        market_org_id=market.id,
+    )
+    rfi.add_item(conn, req.id, "how many locations?", detail="Please **list** them all.")
+
+    path = write(conn, client.id, tmp_path / "w.xlsx", date(2026, 8, 13))
+    from openpyxl import load_workbook  # test-only import; src never imports it
+    wb = load_workbook(path)
+    assert wb.sheetnames == [
+        "Open Items — Acme", "Information Requests", "Projects",
+        "Schedule of Insurance",
+    ]
+    ws = wb["Information Requests"]
+    assert [c.value for c in ws[1]] == ["Item", "Detail", "Type", "Needed by"]
+    # row 2 is the leading merged header line
+    assert ws["A2"].value == "Items we need from you"
+    values = [cell.value for row in ws.iter_rows() for cell in row]
+    assert "how many locations?" in values
+    assert "Please list them all." in values
+    assert "Sompo — property questions · asked 5 Aug · due 19 Aug" in values
+
+
+def test_write_omits_information_requests_sheet_when_nothing_outstanding(conn, tmp_path):
+    """An RFI request that exists but has no outstanding items (received or
+    waived) must not add a 4th tab — omitted, not rendered blank, matching
+    the Projects sheet rule."""
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Solo Co", kind="client")
+    tasks.create(conn, "one open task", org_id=org.id)
+    req = rfi.create_request(conn, org.id, "closed ask", "2026-08-05")
+    item = rfi.add_item(conn, req.id, "already answered")
+    rfi.update_item(conn, item.id, status="received", received_on="2026-08-12")
+
+    path = write(conn, org.id, tmp_path / "s.xlsx", date(2026, 8, 13))
+    from openpyxl import load_workbook
+    assert load_workbook(path).sheetnames == ["Open Items — Solo Co"]
+
+
+def test_write_four_sheet_deterministic(conn, tmp_path):
+    from bookkit.services.export_open_items import write
+
+    client = orgs.create(conn, kind="client", name="Det Co", status="active")
+    placements.create(conn, client.id, "Det Program", "2025-01-01", "2026-01-01")
+    live = projects_repo.create_project(conn, client.id, "Det Project")
+    projects_repo.add_need(conn, live.id, "GL", "2026-09-01")
+    req = rfi.create_request(conn, client.id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "audited financials", category="Financials")
+    rfi.add_item(conn, req.id, "anything else")
+
+    a = write(conn, client.id, tmp_path / "a.xlsx", date(2026, 8, 13))
+    b = write(conn, client.id, tmp_path / "b.xlsx", date(2026, 8, 13))
+    assert a.read_bytes() == b.read_bytes()  # four sheets, one finalize, same bytes
+
+
+# --- sheet 1 / sheet 2 row-height estimate (Grant scope-add, mid-flight) ---
+
+
+def test_open_items_column_widths_widened(conn, tmp_path):
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Widths Co", kind="client")
+    tasks.create(conn, "one open task", org_id=org.id)
+    path = write(conn, org.id, tmp_path / "w.xlsx", date(2026, 8, 13))
+    from openpyxl import load_workbook
+    ws = load_workbook(path).active
+    assert ws.column_dimensions["B"].width == 50.0  # Description
+    assert ws.column_dimensions["C"].width == 75.0  # Detail
+
+
+def test_open_items_long_unbroken_description_gets_three_line_height(conn, tmp_path):
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Long Co", kind="client")
+    tasks.create(
+        conn, "chase loss runs", org_id=org.id,
+        description="x" * 101,  # ceil(101 / 50) == 3 lines at the new width
+    )
+    path = write(conn, org.id, tmp_path / "w.xlsx", date(2026, 8, 13))
+    from openpyxl import load_workbook
+    ws = load_workbook(path).active
+    # row 1 header, row 2 the "General — Long Co" section label, row 3 the task
+    assert ws.row_dimensions[3].height >= 54.0
+
+
+def test_open_items_short_row_keeps_two_line_floor(conn, tmp_path):
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Short Co", kind="client")
+    tasks.create(conn, "short one", org_id=org.id, description="brief")
+    path = write(conn, org.id, tmp_path / "w.xlsx", date(2026, 8, 13))
+    from openpyxl import load_workbook
+    ws = load_workbook(path).active
+    # row 1 header, row 2 the "General — Short Co" section label, row 3 the task
+    assert ws.row_dimensions[3].height == 36.0
+
+
+def test_information_requests_detail_column_matches_open_items_width(conn, tmp_path):
+    from bookkit.services.export_open_items import write
+
+    client = orgs.create(conn, kind="client", name="Family Co", status="active")
+    req = rfi.create_request(conn, client.id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "audited financials", detail="y" * 151)  # ceil(151/75)==3
+    path = write(conn, client.id, tmp_path / "w.xlsx", date(2026, 8, 13))
+    from openpyxl import load_workbook
+    wb = load_workbook(path)
+    ws = wb["Information Requests"]
+    assert ws.column_dimensions["B"].width == 75.0  # Detail
+    # row 1 header, row 2 the leading "Items we need from you" label,
+    # row 3 the request's own section label, row 4 the item row
+    assert ws.row_dimensions[4].height >= 54.0
