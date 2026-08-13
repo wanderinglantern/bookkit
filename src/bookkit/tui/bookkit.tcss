@@ -225,3 +225,17 @@ ImportChooser, ImportScreen, FormModal, Picker, ConfirmRenew, MergePicker {
 .kanban-column.focused-column {
     border: round $primary;
 }
+
+/* --- onboarding wizard ------------------------------------------------------ */
+
+#onboard-split {
+    height: 1fr;
+}
+
+#onboard-steps {
+    width: 38;
+}
+
+#onboard-pane {
+    padding: 1 2;
+}

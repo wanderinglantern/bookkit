@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from textual.widgets import Label, ListView
 
 from bookkit import db, seed
 from bookkit.repo import interactions, orgs
@@ -17,6 +18,13 @@ from bookkit.tui.screens.today import TodayScreen
 from bookkit.tui.widgets.tables import ListTable
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
+
+
+@pytest.fixture
+def empty_db(tmp_path: Path) -> Path:
+    path = tmp_path / "empty.db"
+    db.connect(path).close()
+    return path
 
 
 @pytest.fixture
@@ -676,3 +684,21 @@ async def test_task_tables_group_by_category(seeded_db: Path) -> None:
         idx_b = overview.get_row_index(task_b.id)
         assert abs(idx_a1 - idx_a2) == 1
         assert idx_b > max(idx_a1, idx_a2)
+
+
+async def test_onboarding_screen_lists_steps_with_state(empty_db: Path) -> None:
+    from bookkit.tui.screens.onboarding import OnboardingScreen
+
+    app = BookkitApp(empty_db)
+    org = orgs.create(app.conn, name="Newco", kind="client")
+    async with app.run_test(size=(130, 42)) as pilot:
+        app.push_screen(OnboardingScreen(org.id))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, OnboardingScreen)
+        labels = [str(item.query_one(Label).render()) for item in
+                  screen.query_one("#onboard-steps", ListView).children]
+        assert len(labels) == 5
+        assert "account basics" in labels[0]
+        # highlight starts on the first incomplete step
+        assert screen.query_one("#onboard-steps", ListView).index == 0
