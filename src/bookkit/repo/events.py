@@ -76,7 +76,7 @@ def last_mutation(conn: sqlite3.Connection) -> EventLogEntry | None:
     it must be skipped the same way 'created' is."""
     row = conn.execute(
         "SELECT * FROM event_log WHERE field NOT IN ('created', 'source')"
-        " AND (note IS NULL OR note NOT IN ('undo', 'undelete'))"
+        " AND (note IS NULL OR note NOT IN ('undo', 'undelete', 'revert'))"
         " ORDER BY rowid DESC LIMIT 1"
     ).fetchone()
     return EventLogEntry.from_row(row) if row else None
