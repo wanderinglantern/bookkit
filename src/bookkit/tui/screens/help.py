@@ -63,6 +63,7 @@ HELP = """\
   response (quote / decline / bind).
   p  mark contact primary (contacts tab)
   enter on a placement shows its tower · enter on a document opens it
+  8  open items · i in-cell edit · x export
 
 [b]markets screen[/b]
   a  new market · e  edit · N  nest under a master company (creates

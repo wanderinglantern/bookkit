@@ -1094,3 +1094,49 @@ async def test_open_items_tab_datasheet(seeded_db: Path, tmp_path, monkeypatch) 
         await pilot.press("x")
         await pilot.pause()
         assert list(tmp_path.glob("*-open-items-*.xlsx"))
+
+
+async def test_open_items_tab_inline_cell_edit_regroups(seeded_db: Path) -> None:
+    """i on the open-items datasheet edits a task in place, same as the
+    navigator table: enter commits through the field parsers, and the next
+    refresh regroups the row under its new category."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets.inline_edit import CellEditor, InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    # two categorized tasks, ordered so the edit below swaps which one leads
+    anchor = tasks_repo.create(app.conn, "anchor task", org_id=org.id, category="Mango")
+    task = tasks_repo.create(app.conn, "edited task", org_id=org.id, category="Zulu")
+    async with app.run_test(size=(150, 44)) as pilot:
+        app.push_screen(AccountScreen(org.id))
+        await pilot.pause()
+        await pilot.press("8")
+        await pilot.pause()
+        table = app.screen.query_one("#open-items-table", InlineTable)
+        assert table.has_focus
+        # before the edit, Mango sorts ahead of Zulu
+        assert table.get_row_index(anchor.id) < table.get_row_index(task.id)
+        table.move_cursor(row=table.get_row_index(task.id))
+        await pilot.pause()
+
+        await pilot.press("i")  # editor opens over the first editable column (due)
+        await pilot.pause()
+        await pilot.press("tab")  # due -> title, unchanged
+        await pilot.pause()
+        await pilot.press("tab")  # title -> category, unchanged
+        await pilot.pause()
+        editor = app.screen.query_one(CellEditor)
+        assert editor.value == "Zulu"
+        editor.value = "Apple"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert tasks_repo.get(app.conn, task.id).category == "Apple"
+        assert not app.screen.query(CellEditor), "editor closes on commit"
+
+        # a refresh regroups the row under its new category — Apple now
+        # leads Mango, reversing the pair's on-screen order
+        table = app.screen.query_one("#open-items-table", InlineTable)
+        assert table.get_row_index(task.id) < table.get_row_index(anchor.id)
+        assert str(table.get_row_at(table.get_row_index(task.id))[2]) == "Apple"
