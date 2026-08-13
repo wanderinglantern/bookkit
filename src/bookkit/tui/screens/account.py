@@ -208,7 +208,7 @@ class AccountScreen(Screen):
         # x is screen-wide (Grant's call 2026-08-13): the placements tab still
         # merges under it (unchanged flow), every other tab exports open items —
         # see action_export_open_items
-        Binding("x", "export_open_items", "Export open items"),
+        Binding("x", "export_open_items", "Export / merge"),
         Binding("i", "import_here", "Import (paste)"),
         Binding("d", "task_done", "Done (task)", show=False),
         Binding("p", "mark_primary", "Primary (contact)", show=False),

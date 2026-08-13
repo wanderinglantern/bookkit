@@ -55,10 +55,15 @@ version of the same flow is phase 2 (see the MCP server spec).
 ## Attention tie-in (what makes it durable)
 
 An incompletely-onboarded client is an OPEN ITEM: unmet onboarding steps
-surface in the Navigator attention tree and in the MCP `open_items` tool,
-and — like overdue renewals and unmet needs — they never fall off until
-resolved. The wizard makes thorough capture easy; attention makes
-abandoning it visible; the work assistant can nag too.
+surface in the Navigator attention tree and in the MCP `open_items` tool.
+While the client is status 'prospect' they never fall off, matching overdue
+renewals and unmet needs; once a client is created, incomplete onboarding
+also nags for a 90-day window (decided by Grant 2026-08-13) so legacy
+clients missing an owner don't flood attention forever — a client that
+flips to active and is never finished onboarding drops out of attention
+after day 90 unless it's still 'prospect'. The wizard makes thorough
+capture easy; attention makes abandoning it visible; the work assistant can
+nag too.
 
 ## Error handling
 

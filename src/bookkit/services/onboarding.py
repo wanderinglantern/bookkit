@@ -7,8 +7,11 @@ resuming (or filling a gap out-of-band) needs no bookkeeping.
 
 Attention scope: a client nags in incomplete_clients() only while it's
 plausibly still being onboarded — status 'prospect', or created within the
-last 60 days. Without that fence every legacy client missing an owner would
-flood attention forever.  ← REVIEW POINT (Grant): is 60 days right?"""
+last 90 days (decided by Grant 2026-08-13). Without that fence every legacy
+client missing an owner would flood attention forever. A client that flips
+to active and is never finished onboarding falls out of attention after day
+90 — deliberate: 'prospect' status is the lever that never falls off, so
+leaving prospect is what has to happen before the fence applies."""
 
 from __future__ import annotations
 
@@ -25,7 +28,7 @@ COMPLETE = "complete"
 PARTIAL = "partial"
 UNTOUCHED = "untouched"
 
-ONBOARDING_WINDOW_DAYS = 60
+ONBOARDING_WINDOW_DAYS = 90
 
 
 @dataclass(frozen=True)

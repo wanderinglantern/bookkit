@@ -54,7 +54,7 @@ HELP = """\
   ◆ overdue · current month in gold · enter opens the account
 
 [b]account screen[/b]
-  1–7 jump straight to a tab; the cursor lands on its rows, so
+  1–8 jump straight to a tab; the cursor lands on its rows, so
   j/k and e work immediately — each tab's hint line names its keys
   a adds whatever the open tab holds: task (overview), contact,
   placement, opportunity, document; e edits the selected row
