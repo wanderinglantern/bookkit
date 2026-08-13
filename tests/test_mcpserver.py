@@ -4,13 +4,14 @@ test_mcp_roundtrip.py."""
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from bookkit import db, mcpserver
 from bookkit.mcpserver import build_server
-from bookkit.repo import orgs, placements, projects, submissions, tasks
+from bookkit.repo import interactions, orgs, placements, projects, submissions, tasks
 
 
 @pytest.fixture
@@ -199,3 +200,80 @@ def test_staleness_report_shape(server_db):
     assert out[0]["account"] == "Acme"
     assert out[0]["last_touch"] is None
     assert out[0]["days_stale"] > 60
+
+
+def test_log_activity_appends_interaction_with_provenance(server_db):
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+    out = mcpserver._log_activity(rw, "Acme", "spoke to Ann re GL renewal",
+                                   follow_up="friday")
+    got = interactions.for_org(rw, out["org_id"])
+    assert got[0].body == "spoke to Ann re GL renewal"
+    events = rw.execute(  # test-only SQL is fine
+        "SELECT * FROM event_log WHERE entity_id = ? AND field = 'source'",
+        (got[0].id,)).fetchall()
+    assert events and events[0]["new_value"] == "mcp"
+    assert out["follow_up_task"] is not None
+
+
+def test_log_activity_without_follow_up_creates_no_task(server_db):
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+    out = mcpserver._log_activity(rw, "Acme", "left a voicemail")
+    assert out["follow_up_task"] is None
+
+
+def test_task_create_carries_description_and_category(server_db):
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+    out = mcpserver._task_create(
+        rw, "Chase loss runs", client="Acme", description="need 5yr history",
+        detail="ask broker portal first", category="submissions", due="+1w",
+    )
+    task = tasks.get(rw, out["task_ref"])
+    assert task.description == "need 5yr history"
+    assert task.category == "submissions"
+    assert task.detail == "ask broker portal first"
+    assert task.due_on == out["due"]
+    events = rw.execute(
+        "SELECT * FROM event_log WHERE entity_id = ? AND field = 'source'",
+        (task.id,)).fetchall()
+    assert events and events[0]["new_value"] == "mcp"
+
+
+def test_task_complete_flips_status_with_provenance(server_db):
+    conn = db.connect(server_db)
+    task = tasks.create(conn, "Chase loss runs")
+    conn.close()
+    rw = db.connect(server_db)
+    out = mcpserver._task_complete(rw, task.id)
+    assert out["status"] == "done"
+    assert out["completed_at"] is not None
+    events = rw.execute(
+        "SELECT * FROM event_log WHERE entity_id = ? AND field = 'source'",
+        (task.id,)).fetchall()
+    assert events and events[0]["new_value"] == "mcp"
+
+
+def test_task_complete_requires_exact_ref(server_db):
+    rw = db.connect(server_db)
+    with pytest.raises(KeyError):
+        mcpserver._task_complete(rw, "not-a-real-id")
+
+
+def test_write_tools_never_touch_ro_connection(server_db):
+    ro = db.connect_readonly(server_db)
+    with pytest.raises(sqlite3.OperationalError):
+        mcpserver._task_create(ro, "should fail")
+
+
+def test_build_server_registers_write_tools(server_db):
+    server = build_server(server_db)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    assert {"log_activity", "task_create", "task_complete"} <= names

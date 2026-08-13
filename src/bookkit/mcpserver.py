@@ -116,7 +116,44 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
 
 
 def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
-    pass  # Task 4
+    @server.tool()
+    def log_activity(
+        client: str, note: str, follow_up: str | None = None
+    ) -> dict[str, Any]:
+        """Log a client interaction (call, email, meeting, site note) — additive
+        and event-logged; nothing existing is touched. `client` resolves the same
+        way as every other client-scoped tool (name, ref, or fuzzy match — never
+        guess an id). Pass `follow_up` as any human date ("friday", "+2w",
+        "2026-09-01") to also create a follow-up task in the same transaction;
+        omit it to just log the note."""
+        return _log_activity(rw, client, note, follow_up=follow_up)
+
+    @server.tool()
+    def task_create(
+        title: str,
+        client: str | None = None,
+        description: str | None = None,
+        detail: str | None = None,
+        category: str | None = None,
+        due: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a task — additive and event-logged. `client` links it to an
+        account (name/ref/fuzzy; omit for a book-wide task). `description` is a
+        short one-line summary; `detail` holds longer markdown notes. `category`
+        is a freeform grouping label — prefer an existing one over inventing a
+        new one; call open_items first to see what's already in use. `due`
+        accepts any human date ("friday", "+2w", "2026-09-01")."""
+        return _task_create(
+            rw, title, client=client, description=description, detail=detail,
+            category=category, due=due,
+        )
+
+    @server.tool()
+    def task_complete(task_ref: str) -> dict[str, Any]:
+        """Mark a task done — a status flip only, event-logged. `task_ref` MUST
+        be the exact id read from open_items or today_brief; this tool never
+        fuzzy-matches a title — guessing a ref risks completing the wrong task."""
+        return _task_complete(rw, task_ref)
 
 
 def _today_brief(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -279,6 +316,83 @@ def _resolve_client(conn: sqlite3.Connection, ref_or_name: str) -> Any:
     close = process.extract(ref_or_name, names, limit=3, score_cutoff=60)
     hint = ", ".join(m[0] for m in close) if close else "none close"
     raise ValueError(f"no client matching {ref_or_name!r} — nearest: {hint}")
+
+
+def _provenance(conn: sqlite3.Connection, entity: str, entity_id: str) -> None:
+    from .repo import base
+
+    base.log_event(conn, entity, entity_id, "source", None, "mcp")
+
+
+def _log_activity(
+    conn: sqlite3.Connection, client: str, note: str, follow_up: str | None = None
+) -> dict[str, Any]:
+    from .dates import parse_human_date
+    from .repo import interactions
+    from .repo import tasks as tasks_repo
+
+    org = _resolve_client(conn, client)
+    due = None
+    if follow_up:
+        parsed = parse_human_date(follow_up)
+        if parsed is None:
+            raise ValueError(f"cannot read a date from {follow_up!r}")
+        due = parsed.isoformat()
+    with db.transaction(conn):
+        interaction = interactions.log(
+            conn, org.id, type="note",
+            occurred_on=date.today().isoformat(),
+            subject=note[:80], body=note,
+        )
+        _provenance(conn, "interaction", interaction.id)
+        task = None
+        if due:
+            task = tasks_repo.create(
+                conn, f"Follow up: {note[:60]}", org_id=org.id, due_on=due)
+            _provenance(conn, "task", task.id)
+    return {"org_id": org.id, "interaction_ref": interaction.id,
+            "follow_up_task": task.id if task else None}
+
+
+def _task_create(
+    conn: sqlite3.Connection, title: str, client: str | None = None,
+    description: str | None = None, detail: str | None = None,
+    category: str | None = None, due: str | None = None,
+) -> dict[str, Any]:
+    from .dates import parse_human_date
+    from .repo import tasks as tasks_repo
+
+    fields: dict[str, Any] = {}
+    if client:
+        fields["org_id"] = _resolve_client(conn, client).id
+    if description:
+        fields["description"] = description
+    if detail:
+        fields["detail"] = detail  # markdown stored as-is
+    if category:
+        fields["category"] = category  # freeform grouping label; suggest existing
+        # values to the model: the tool docstring says "prefer an existing
+        # category — call open_items first to see what's in use"
+    if due:
+        parsed = parse_human_date(due)
+        if parsed is None:
+            raise ValueError(f"cannot read a date from {due!r}")
+        fields["due_on"] = parsed.isoformat()
+    with db.transaction(conn):
+        task = tasks_repo.create(conn, title, **fields)
+        _provenance(conn, "task", task.id)
+    return {"task_ref": task.id, "title": task.title, "due": task.due_on}
+
+
+def _task_complete(conn: sqlite3.Connection, task_ref: str) -> dict[str, Any]:
+    """Status flip only. task_ref must be an exact id the model READ from
+    open_items/today_brief — no fuzzy title matching, by design."""
+    from .repo import tasks as tasks_repo
+
+    with db.transaction(conn):
+        task = tasks_repo.complete(conn, task_ref)  # KeyError on unknown → tool error
+        _provenance(conn, "task", task.id)
+    return {"task_ref": task.id, "status": task.status, "completed_at": task.completed_at}
 
 
 def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict[str, Any]:
