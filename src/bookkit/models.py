@@ -244,6 +244,43 @@ PROJECT_STATUSES = ("planned", "active", "completed", "cancelled")
 NEED_STATUSES = ("identified", "quoted", "placed", "not_needed")
 
 
+class RfiRequest(Row):
+    id: str
+    ref: str
+    org_id: str
+    placement_id: str | None = None
+    project_id: str | None = None
+    market_org_id: str | None = None
+    title: str
+    requested_on: str
+    due_on: str | None = None
+    notes: str | None = None
+    cancelled_at: str | None = None
+    created_at: str
+    updated_at: str
+    deleted_at: str | None = None
+
+
+class RfiItem(Row):
+    id: str
+    request_id: str
+    kind: str = "question"
+    prompt: str
+    detail: str | None = None
+    category: str | None = None
+    due_on: str | None = None
+    response: str | None = None
+    received_on: str | None = None
+    status: str = "outstanding"
+    created_at: str
+    updated_at: str
+    deleted_at: str | None = None
+
+
+RFI_ITEM_STATUSES = ("outstanding", "received", "waived")
+RFI_ITEM_KINDS = ("question", "document")
+
+
 class Placement(Row):
     id: str
     ref: str
