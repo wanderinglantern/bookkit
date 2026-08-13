@@ -32,9 +32,11 @@ from ...repo import (
     projection,
     submissions,
 )
+from ...repo import rfi as rfi_repo
 from ...repo import tasks as tasks_repo
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
+from ..widgets.forms import Field
 from ..widgets.inline_edit import InlineTable
 from ..widgets.tables import ListTable, grouped_by_category, task_detail_cell
 from ..widgets.tower_preview import TowerPreview
@@ -83,6 +85,18 @@ TAB_HINTS: dict[str, str] = {
         "[b]i[/b] edit in cell · [b]a[/b] task · [b]e[/b] edit form · "
         "[b]d[/b] done · [b]x[/b] export · needs/submissions edit in their tabs"
     ),
+    "tab-requests": (
+        "[b]i[/b] edit in cell · [b]a[/b] add · [b]P[/b] paste list · "
+        "[b]e[/b] edit form · [b]d[/b] received · [b]u[/b] undo"
+    ),
+}
+
+# the items datasheet's editable columns — the same Field parsers the modal
+# form uses, so an in-cell date reads "next fri" exactly as the form does
+RFI_ITEM_INLINE = {
+    0: Field("prompt", "item", required=True),
+    2: Field("category", "group"),
+    3: Field("due_on", "needed by", "date"),
 }
 
 # where the cursor lands when a tab opens — j/k and the row keys work at once
@@ -95,6 +109,7 @@ TAB_TABLES: dict[str, str] = {
     "tab-pipeline": "pipeline-opps",
     "tab-documents": "documents-table",
     "tab-open-items": "open-items-table",
+    "tab-requests": "rfi-requests",
 }
 
 
@@ -192,6 +207,10 @@ class AccountScreen(Screen):
         text-style: bold;
         margin-top: 1;
     }
+    /* master/detail: the request list is the index, the items are the work */
+    AccountScreen #rfi-requests {
+        height: 40%;
+    }
     """
 
     BINDINGS = [
@@ -212,6 +231,8 @@ class AccountScreen(Screen):
         Binding("i", "import_here", "Import (paste)"),
         Binding("d", "task_done", "Done (task)", show=False),
         Binding("p", "mark_primary", "Primary (contact)", show=False),
+        # p is taken; paste-a-litany takes the shift key, as L does for layers
+        Binding("P", "paste_items", "Paste items", show=False),
         Binding("u", "undo", "Undo"),
         # tabs answer to their number — no reaching for the tab bar
         Binding("1", "show_tab('tab-overview')", "Overview", show=False),
@@ -222,12 +243,14 @@ class AccountScreen(Screen):
         Binding("6", "show_tab('tab-pipeline')", "Pipeline", show=False),
         Binding("7", "show_tab('tab-documents')", "Documents", show=False),
         Binding("8", "show_tab('tab-open-items')", "Open items", show=False),
+        Binding("9", "show_tab('tab-requests')", "Requests", show=False),
     ]
 
     def __init__(self, org_id: str) -> None:
         super().__init__()
         self.current_org_id = org_id
         self._refresh_pending = False  # a refresh deferred while a cell edit is open
+        self._rfi_request_id: str | None = None  # master row of the requests tab
 
     def compose(self) -> ComposeResult:
         yield Static(id="account-header")
@@ -274,6 +297,11 @@ class AccountScreen(Screen):
                         "other open items — edit in their tabs", classes="pane-title"
                     )
                     yield ListTable(id="open-items-context")
+            with TabPane("9 Requests", id="tab-requests"):
+                with Vertical():
+                    yield ListTable(id="rfi-requests")
+                    yield Static(id="rfi-hint", classes="pane-title")
+                    yield InlineTable(id="rfi-items")
         yield Static(id="tab-hint")
         yield Footer()
 
@@ -296,6 +324,9 @@ class AccountScreen(Screen):
         # form would show, keyed by the row's task id
         self.query_one("#open-items-table", InlineTable).inline_initial = (
             self._open_items_inline_initial
+        )
+        self.query_one("#rfi-items", InlineTable).inline_initial = (
+            self._rfi_item_inline_initial
         )
         self.refresh_data()
         self._render_tab_hint()
@@ -431,6 +462,7 @@ class AccountScreen(Screen):
             )
 
         self._refresh_open_items(org.id)
+        self._fill_requests_tab()
         self._settle_tables()
 
     def _refresh_open_items(self, org_id: str) -> None:
@@ -479,6 +511,69 @@ class AccountScreen(Screen):
                 date_text(row["sent_on"], days), status_text(row["status"]),
                 days_text(days), key=f"submission:{row['id']}",
             )
+
+    # -- requests (master) / items (detail) -------------------------------------
+
+    def _fill_requests_tab(self) -> None:
+        """The client's information requests up top, the selected one's items
+        below. The selection survives a refresh: rebuilding the master table
+        must not silently re-point the datasheet at the first request."""
+        conn = self.app.conn
+        table = self.query_one("#rfi-requests", ListTable)
+        table.clear(columns=True)
+        table.add_columns("ref", "request", "asked", "due", "open")
+        requests = rfi_repo.requests_for_org(conn, self.current_org_id)
+        for request in requests:
+            open_count = rfi_repo.open_item_count(conn, request.id)
+            table.add_row(
+                request.ref, request.title, request.requested_on,
+                request.due_on or dash(),
+                Text(str(open_count), style=theme.AMBER if open_count else theme.DIM),
+                key=f"rfi:{request.id}",
+            )
+        ids = [r.id for r in requests]
+        keep = self._rfi_request_id if self._rfi_request_id in ids else None
+        target = keep or (ids[0] if ids else None)
+        if target is not None:
+            table.move_cursor(row=ids.index(target))
+        self._fill_request_items(target)
+
+    def _fill_request_items(self, request_id: str | None) -> None:
+        conn = self.app.conn
+        items = self.query_one("#rfi-items", InlineTable)
+        items.clear(columns=True)
+        items.add_columns("item", "type", "group", "needed by", "status", "received")
+        self._rfi_request_id = request_id
+        title = self.query_one("#rfi-hint", Static)
+        if request_id is None:
+            items.inline_fields = {}
+            title.update("no request selected")
+            return
+        request = rfi_repo.get_request(conn, request_id)
+        title.update(f"{request.ref} — {request.title}")
+        items.inline_fields = RFI_ITEM_INLINE
+        for item in rfi_repo.items_for_request(conn, request_id):
+            items.add_row(
+                item.prompt, item.kind, item.category or dash(),
+                item.due_on or dash(), status_text(item.status),
+                item.received_on or dash(), key=item.id,
+            )
+
+    def _rfi_item_inline_initial(self, row_key: str, field_key: str) -> str:
+        try:
+            return getattr(rfi_repo.get_item(self.app.conn, row_key), field_key) or ""
+        except KeyError:
+            return ""
+
+    def _rfi_focus(self) -> str | None:
+        """Which of the tab's two tables is live: 'requests', 'items', or None.
+        Row actions require table focus, so the same key can mean 'the request'
+        or 'the item' without a mode."""
+        if self.query_one("#rfi-requests", ListTable).has_focus:
+            return "requests"
+        if self.query_one("#rfi-items", InlineTable).has_focus:
+            return "items"
+        return None
 
     def _settle_tables(self) -> None:
         """Workaround for a DataTable paint quirk: rows added before the first
@@ -626,11 +721,11 @@ class AccountScreen(Screen):
         self._render_tab_hint()
         # focus synchronously: a deferred focus posts TabPane.Focused late,
         # and TabbedContent would snap `active` back to the pane it names,
-        # eating the next 1–7 tab switch
+        # eating the next 1–9 tab switch
         self._focus_tab_table()
 
     def action_show_tab(self, tab_id: str) -> None:
-        """1–7 jump straight to a tab (and its table)."""
+        """1–9 jump straight to a tab (and its table)."""
         self.query_one(TabbedContent).active = tab_id
 
     def _focus_tab_table(self) -> None:
@@ -652,6 +747,11 @@ class AccountScreen(Screen):
             key = event.row_key.value
             if key:
                 self.show_project(key)
+        elif event.data_table.id == "rfi-requests" and event.row_key is not None:
+            # j/k down the request list re-points the items datasheet
+            _, _, request_id = str(event.row_key.value or "").partition(":")
+            if request_id != self._rfi_request_id:
+                self._fill_request_items(request_id or None)
 
     def show_placement(self, placement_id: str) -> None:
         """Fill the tower preview, carrier list, and sync-state for one placement."""
@@ -738,9 +838,13 @@ class AccountScreen(Screen):
             return ""
 
     def on_inline_table_cell_edited(self, event: InlineTable.CellEdited) -> None:
-        if event.table.id != "open-items-table":
+        conn = self.app.conn
+        if event.table.id == "open-items-table":
+            tasks_repo.update(conn, event.row_key, **{event.field.key: event.value})
+        elif event.table.id == "rfi-items":
+            rfi_repo.update_item(conn, event.row_key, **{event.field.key: event.value})
+        else:
             return
-        tasks_repo.update(self.app.conn, event.row_key, **{event.field.key: event.value})
         self.notify(f"{event.field.label} saved — u undoes")
         # a refresh mid-edit (e.g. tab hopping across editable cells) would
         # pull rows out from under the editor; flush once it closes and focus
@@ -751,8 +855,15 @@ class AccountScreen(Screen):
             self.refresh_data()
 
     def on_descendant_focus(self, event) -> None:
-        table = self.query_one("#open-items-table", InlineTable)
-        if not self._refresh_pending or table.editing:
+        # the CellEditor is mounted on the SCREEN, so opening one fires this;
+        # with two inline tables the flush must wait on BOTH, or an edit on
+        # one datasheet rebuilds the other out from under its open editor
+        if not self._refresh_pending:
+            return
+        if any(
+            self.query_one(f"#{table_id}", InlineTable).editing
+            for table_id in ("open-items-table", "rfi-items")
+        ):
             return
         self._refresh_pending = False
         self.refresh_data()
@@ -768,6 +879,12 @@ class AccountScreen(Screen):
             self.refresh_data()
 
     def action_task_done(self) -> None:
+        # the requests tab claims d FIRST and returns: falling through would
+        # reach the task path below, which defaults to ov-tasks and would
+        # complete a task the cursor is nowhere near
+        if self._active_tab() == "tab-requests":
+            self._mark_item_received()
+            return
         table_id = (
             "open-items-table" if self._active_tab() == "tab-open-items" else "ov-tasks"
         )
@@ -779,6 +896,31 @@ class AccountScreen(Screen):
             tasks_repo.complete(self.app.conn, key)
             self.notify("task done — u to undo")
             self.refresh_data()
+
+    def _mark_item_received(self) -> None:
+        """d on the items datasheet: received, dated today. One field write,
+        so u undoes it — 'done' means the same thing here as everywhere."""
+        from ...services import rfi as rfi_svc
+
+        if self._rfi_focus() != "items":
+            return
+        item_id = self._selected_key("rfi-items")
+        if not item_id:
+            return
+        rfi_svc.mark_received(self.app.conn, str(item_id), date.today().isoformat())
+        self.notify("received — u undoes")
+        self.refresh_data()
+
+    def action_paste_items(self) -> None:
+        """One pasted block of underwriter questions → one item per line."""
+        from ..widgets import entity_actions
+
+        if self._active_tab() != "tab-requests" or self._rfi_focus() != "items":
+            return
+        if not self._rfi_request_id:
+            self.notify("pick a request first", severity="warning")
+            return
+        entity_actions.paste_rfi_items(self, self._rfi_request_id)
 
     def action_undo(self) -> None:
         self.app.show_undo_result()
@@ -873,6 +1015,14 @@ class AccountScreen(Screen):
                 ef.task_form(conn=conn, default_org_id=org_id),
                 lambda v: ef.apply_task(conn, v, org_id=org_id),
             )
+        elif tab == "tab-requests":
+            from ..widgets import entity_actions
+
+            where = self._rfi_focus()
+            if where == "requests":
+                entity_actions.add_request(self, org_id)
+            elif where == "items" and self._rfi_request_id:
+                entity_actions.add_rfi_item(self, self._rfi_request_id)
         else:  # overview → a new task for this account
             self._push_form(
                 ef.task_form(conn=conn, default_org_id=org_id),
@@ -958,6 +1108,28 @@ class AccountScreen(Screen):
                 )
             else:  # otherwise e edits the account itself
                 self._edit_org()
+        elif tab == "tab-requests":
+            from ..widgets import entity_actions
+
+            where = self._rfi_focus()
+            try:
+                if where == "requests":
+                    key = self._selected_key("rfi-requests")
+                    _, _, request_id = str(key or "").partition(":")
+                    if request_id:
+                        entity_actions.edit_request(
+                            self, rfi_repo.get_request(conn, request_id)
+                        )
+                elif where == "items":
+                    item_id = self._selected_key("rfi-items")
+                    if item_id:
+                        entity_actions.edit_rfi_item(
+                            self, rfi_repo.get_item(conn, str(item_id))
+                        )
+                else:  # neither table focused → e edits the account itself
+                    self._edit_org()
+            except KeyError:
+                self.notify("no longer exists", severity="error")
         else:
             self._edit_org()
 

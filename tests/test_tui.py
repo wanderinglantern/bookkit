@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from textual.coordinate import Coordinate
-from textual.widgets import Input, Label, ListView
+from textual.widgets import Input, Label, ListView, TextArea
 
 from bookkit import db, seed
 from bookkit.repo import interactions, orgs
@@ -1176,3 +1176,79 @@ async def test_navigator_rfi_chase_bucket_and_group(seeded_db: Path) -> None:
         await pilot.pause()
         table = nav.query_one("#nav-table", InlineTable)
         assert table.get_row_index(f"rfi:{req.id}") == 0
+
+
+async def test_account_requests_tab(seeded_db: Path) -> None:
+    """Tab 9 is master/detail: picking a request fills the items datasheet;
+    d marks an item received and dates it; paste adds one item per line."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.inline_edit import InlineTable
+    from bookkit.tui.widgets.tables import ListTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(app.conn, org.id, "Sompo questions", "2026-08-05")
+    item = rfi.add_item(app.conn, req.id, "how many vehicles?")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+
+        requests = app.screen.query_one("#rfi-requests", ListTable)
+        assert requests.get_row_index(f"rfi:{req.id}") == 0
+
+        items = app.screen.query_one("#rfi-items", InlineTable)
+        assert items.get_row_index(item.id) == 0
+
+        items.focus()
+        items.move_cursor(row=0)
+        await pilot.press("d")
+        await pilot.pause()
+        got = rfi.get_item(app.conn, item.id)
+        assert got.status == "received"
+        assert got.received_on == date.today().isoformat()
+
+
+async def test_account_requests_tab_empty_paste_stays_open(seeded_db: Path) -> None:
+    """P over the items datasheet opens the paste form; saving an empty paste
+    is refused in place — the form stays up (input intact) and no item is
+    created. Commit-in-place: a refusal is corrected, never retyped."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.forms import FormModal
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(app.conn, org.id, "Sompo questions", "2026-08-05")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+
+        app.screen.query_one("#rfi-items", InlineTable).focus()
+        await pilot.pause()
+        await pilot.press("P")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+
+        form = app.screen
+        form.query_one("#form-pasted", TextArea).text = "   \n\n  "
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert app.screen is form, "an empty paste keeps the form open"
+        assert rfi.items_for_request(app.conn, req.id) == []
+
+        # and the refusal is a RAISE, not a returned string: push_form's
+        # wrapper discards whatever on_save returns, so a returned message
+        # would close the form and silently add nothing. The form's own
+        # required check fires first from the keyboard, so this is the only
+        # way to reach the guard behind it.
+        assert form._commit is not None
+        with pytest.raises(ValueError):
+            form._commit({"pasted": ""})
+        assert rfi.items_for_request(app.conn, req.id) == []
