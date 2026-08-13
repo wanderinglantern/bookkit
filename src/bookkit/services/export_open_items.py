@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from ..models import Task
+from ..models import Project, Task
 from ..money import format_cents
 from ..repo import orgs, placements, submissions
 from ..repo import projects as projects_repo
@@ -163,6 +163,54 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
                     for n in needs
                 ),
             ))
+    return sections
+
+
+# --- sheet 2: Projects — the full projects report, not the unmet slice ---------
+
+_LIVE_EXCLUDED = ("completed", "cancelled")  # spec's "non-completed" = live only
+
+
+@dataclass(frozen=True)
+class SheetSection:
+    """A styled-table section as plain data — label plus ready-to-render
+    string rows. Pure counterpart of towerkit's TableSection (which lives in
+    render/ and must not be imported at module level)."""
+
+    label: str | None
+    rows: tuple[tuple[str, ...], ...]
+
+
+def _project_label(project: Project) -> str:
+    label = f"{project.name} — {_status_label(project.status)}"
+    if project.start_on and project.end_on:
+        label += f" ({project.start_on} → {project.end_on})"
+    elif project.start_on:
+        label += f" (starts {project.start_on})"
+    elif project.end_on:
+        label += f" (ends {project.end_on})"
+    return label
+
+
+def compose_projects(conn: sqlite3.Connection, org_id: str) -> list[SheetSection]:
+    """One section per live project, EVERY need regardless of status — the
+    client's projects data in full (sheet 1 keeps only the unmet slice).
+    Empty list ⇒ the Projects sheet is omitted, not rendered blank."""
+    sections: list[SheetSection] = []
+    for project in projects_repo.projects_for_org(conn, org_id):
+        if project.status in _LIVE_EXCLUDED:
+            continue
+        rows = tuple(
+            (
+                n.line,
+                n.notes or "",
+                n.needed_by,
+                _status_label(n.status),
+                format_cents(n.limit_cents) if n.limit_cents else "",
+            )
+            for n in projects_repo.needs_for_project(conn, project.id)
+        )
+        sections.append(SheetSection(_project_label(project), rows))
     return sections
 
 

@@ -460,3 +460,51 @@ def test_incomplete_clients_lists_missing_labels(conn):
     assert [o.id for o, _ in got] == [org.id]
     _, missing = got[0]
     assert "contacts" in missing and "program" in missing
+
+
+def test_compose_projects_full_report_live_projects_only(conn):
+    from bookkit.services.export_open_items import compose_projects
+
+    org = orgs.create(conn, name="Proj Co", kind="client", status="active", owner="grant")
+    live = projects_repo.create_project(
+        conn, org.id, "Warehouse Expansion", status="active",
+        start_on="2026-06-01", end_on="2027-06-01",
+    )
+    projects_repo.add_need(
+        conn, live.id, "Builder's Risk", "2026-09-01",
+        limit_cents=25_000_000_00, notes="GC requires evidence",
+    )
+    projects_repo.add_need(conn, live.id, "GL", "2026-09-15", status="placed")
+    done = projects_repo.create_project(conn, org.id, "Old HQ Fit-out", status="completed")
+    projects_repo.add_need(conn, done.id, "Property", "2025-01-01")
+    projects_repo.create_project(conn, org.id, "Shelved", status="cancelled")
+
+    sections = compose_projects(conn, org.id)
+    assert len(sections) == 1  # completed and cancelled projects are not live
+    section = sections[0]
+    assert section.label == "Warehouse Expansion — Active (2026-06-01 → 2027-06-01)"
+    # every need regardless of status; line, notes, needed-by, prettified
+    # status, formatted limit — and NO days-open (five columns, no date math)
+    assert section.rows == (
+        ("Builder's Risk", "GC requires evidence", "2026-09-01", "Identified", "$25,000,000"),
+        ("GL", "", "2026-09-15", "Placed", ""),
+    )
+
+
+def test_compose_projects_needless_live_project_still_sections(conn):
+    from bookkit.services.export_open_items import compose_projects
+
+    org = orgs.create(conn, name="Plan Co", kind="client")
+    projects_repo.create_project(conn, org.id, "Planning Stage")  # status "planned"
+    sections = compose_projects(conn, org.id)
+    assert sections[0].label == "Planning Stage — Planned"
+    assert sections[0].rows == ()
+
+
+def test_compose_projects_empty_when_no_live_projects(conn):
+    from bookkit.services.export_open_items import compose_projects
+
+    org = orgs.create(conn, name="No Proj Co", kind="client")
+    assert compose_projects(conn, org.id) == []
+    projects_repo.create_project(conn, org.id, "Done", status="completed")
+    assert compose_projects(conn, org.id) == []
