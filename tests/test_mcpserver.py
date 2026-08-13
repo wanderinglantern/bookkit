@@ -827,3 +827,51 @@ def test_undo_after_an_mcp_write_reverts_the_write_not_the_provenance(server_db)
     assert result is not None
     assert result.field == "website"
     assert orgs.get(rw, org.id).website is None
+
+
+# -- batching: one call, one undo unit ----------------------------------------
+
+
+def test_every_write_tool_returns_a_batch_ref(server_db):
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+
+    logged = mcpserver._log_activity(rw, "Acme", "a note")
+    assert logged["batch"].startswith("MCP-")
+
+    made = mcpserver._task_create(rw, "chase the quote", client="Acme")
+    assert made["batch"].startswith("MCP-")
+    assert made["batch"] != logged["batch"]
+
+
+def test_one_mcp_call_is_one_batch(server_db):
+    """log_activity writes an interaction AND a follow-up task. Both must land
+    in the same batch, or reverting it would unwind half."""
+    from bookkit.repo import batches as batches_repo
+
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+
+    out = mcpserver._log_activity(rw, "Acme", "spoke to Ann", follow_up="friday")
+    batch = batches_repo.get_by_ref(rw, out["batch"])
+    touched = {e.entity_type for e in batches_repo.events_for(rw, batch.id)}
+    assert touched == {"interaction", "task"}
+
+
+def test_a_batch_records_the_tool_and_the_account(server_db):
+    from bookkit.repo import batches as batches_repo
+
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+
+    out = mcpserver._enrich_field(rw, "Acme", "website", "https://acme.example")
+    batch = batches_repo.get_by_ref(rw, out["batch"])
+    assert batch.tool == "enrich_field"
+    assert batch.org_id == org.id
+    assert batch.source == "mcp"
