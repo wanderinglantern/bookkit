@@ -6,7 +6,7 @@ from datetime import date
 import pytest
 
 from bookkit import seed
-from bookkit.repo import events, opportunities, orgs, placements, submissions, tasks
+from bookkit.repo import contacts, events, opportunities, orgs, placements, submissions, tasks
 from bookkit.repo import projects as projects_repo
 from bookkit.services import book, capture, hit_rate, pipeline, renewals, sla, staleness, undo
 from bookkit.services.export_open_items import compose
@@ -396,3 +396,49 @@ def test_write_empty_book_says_so(conn, tmp_path):
     path = write(conn, org.id, tmp_path / "e.xlsx", date(2026, 8, 12))
     from openpyxl import load_workbook
     assert load_workbook(path).active["A2"].value == "No open items as of 2026-08-12"
+
+
+def test_onboarding_completeness_derives_from_data(conn):
+    from bookkit.services import onboarding
+
+    org = orgs.create(conn, name="Newco", kind="client")
+    states = {s.step.key: s.state for s in onboarding.completeness(conn, org.id)}
+    assert states == {
+        "org": onboarding.PARTIAL,       # name/kind exist by construction
+        "contacts": onboarding.UNTOUCHED,
+        "program": onboarding.UNTOUCHED,
+        "projects": onboarding.UNTOUCHED,
+        "followups": onboarding.UNTOUCHED,
+    }
+    assert onboarding.first_incomplete(conn, org.id) == "org"
+    assert not onboarding.is_complete(conn, org.id)
+
+    orgs.update(conn, org.id, owner="grant", industry="construction")
+    contacts.create(conn, org.id, first_name="Ann", last_name="Lee",
+                    email="ann@newco.com")
+    placements.create(conn, org_id=org.id, program_name="Newco Package 26-27",
+                      period_from="2026-09-01", period_to="2027-09-01")
+    states = {s.step.key: s.state for s in onboarding.completeness(conn, org.id)}
+    assert states["org"] == states["contacts"] == states["program"] == onboarding.COMPLETE
+    assert onboarding.is_complete(conn, org.id)  # optional steps don't gate
+    assert onboarding.first_incomplete(conn, org.id) == "projects"
+
+
+def test_onboarding_contact_without_reach_is_partial(conn):
+    from bookkit.services import onboarding
+
+    org = orgs.create(conn, name="Newco2", kind="client")
+    contacts.create(conn, org.id, first_name="Bo", last_name="Nil")  # no email/phone
+    status = {s.step.key: s for s in onboarding.completeness(conn, org.id)}
+    assert status["contacts"].state == onboarding.PARTIAL
+    assert "email or phone" in status["contacts"].summary
+
+
+def test_incomplete_clients_lists_missing_labels(conn):
+    from bookkit.services import onboarding
+
+    org = orgs.create(conn, name="Fresh LLC", kind="client")  # status defaults to prospect
+    got = onboarding.incomplete_clients(conn, date(2026, 8, 12))
+    assert [o.id for o, _ in got] == [org.id]
+    _, missing = got[0]
+    assert "contacts" in missing and "program" in missing
