@@ -837,3 +837,35 @@ async def test_navigator_onboarding_attention_and_resume(seeded_db: Path) -> Non
         await pilot.pause()
         assert isinstance(app.screen, OnboardingScreen)
         assert app.screen.org_id == org.id
+
+
+async def test_navigator_onboarding_row_enter_resumes_wizard(seeded_db: Path) -> None:
+    """enter on a row in the onboarding-attention table pushes OnboardingScreen
+    for that client, not AccountScreen — the row-resume branch in
+    on_data_table_row_selected must special-case the onboarding attention
+    list, since every other attention/group table's rows still open the
+    account (see test_navigator_home_attention_and_group_tables)."""
+    from bookkit.tui.screens.navigator import NavigatorScreen
+    from bookkit.tui.screens.onboarding import OnboardingScreen
+
+    app = BookkitApp(seeded_db)
+    org = orgs.create(app.conn, name="Row Resume Co", kind="client")
+    async with app.run_test(size=(160, 48)) as pilot:
+        assert isinstance(app.screen, NavigatorScreen)
+        nav = app.screen
+        nav.refresh_data()
+        await pilot.pause()
+
+        nav._current = ("att", "onboarding")
+        nav._render_pane()
+        await pilot.pause()
+
+        table = nav.query_one("#nav-table", ListTable)
+        assert table.row_count > 0
+        table.focus()
+        table.move_cursor(row=table.get_row_index(f"org:{org.id}"))
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, OnboardingScreen)
+        assert app.screen.org_id == org.id
