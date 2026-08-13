@@ -39,9 +39,12 @@ towerkit's job):
   needs, pending submissions.
 - Markdown in `Task.detail` is flattened to clean plain text for cells
   (bullets survive as text lines; emphasis markers stripped).
-- Proposed columns (REVIEW POINT — adjust to what clients should see):
-  Item | Details | Type (Task / Need / Submission) | Due / Needed by |
-  Status | Days open.
+- Columns (revised per Grant 2026-08-13): Item | Description | Detail |
+  Type (Task / Need / Submission) | Due / Needed by | Status.
+  Description maps to the brief `description` field; Detail carries the
+  flattened-markdown long `detail`. Needs/submissions put their notes/
+  subject in Description and leave Detail empty. Days-open was removed
+  (and with it the export's only created_at date math).
 - Task categories (added 2026-08-12): Task gains a freeform `category`
   column — vocabulary-completed like lines (`vocab.task_categories` +
   `Field.suggestions`), never an enum. Org-level tasks in the export are
@@ -62,7 +65,7 @@ projects data in full, not just the unmet-need slice sheet 1 shows:
 - One section per non-completed project; section label carries the
   project name, status, and period (start → end).
 - Rows: every need on the project regardless of status — line, notes,
-  needed-by, prettified status, limit (formatted dollars), days open.
+  needed-by, prettified status, limit (formatted dollars).
 - Sheet included automatically whenever the client has any non-completed
   project; omitted (not blank) otherwise. No toggle.
 - The Open Items sheet keeps its unmet-need rows (open-items focus);

@@ -982,3 +982,24 @@ async def test_open_items_tab_datasheet(seeded_db: Path, tmp_path, monkeypatch) 
 - [ ] **Step 4: Full gates** — `uv run pytest -q`, `uv run mypy src`, `uv run ruff check src tests` → all green.
 
 - [ ] **Step 5: Commit** — `git commit -m "account: open-items inline-edit guard + help"`
+
+---
+
+### Task 11: export column revision (Grant 2026-08-13)
+
+Sheet-1 columns become: Item | Description | Detail | Type | Due / Needed by | Status. Description ← `Task.description` (brief line); Detail ← flattened `Task.detail`. Days-open is REMOVED entirely.
+
+**Files:**
+- Modify: `src/bookkit/services/export_open_items.py`
+- Test: `tests/test_services.py` (update existing assertions)
+
+**Interfaces:**
+- Produces: `ExportRow(item, description, detail, kind, due, status)` — `details` and `days_open` fields are GONE. Downstream: the MCP plan's `open_items` uses `asdict(ExportRow)`, which tracks this automatically; nothing else consumes the dataclass.
+
+- [ ] **Step 1: Update the tests first (failing)** — in `tests/test_services.py`: header assertion becomes `["Item", "Description", "Detail", "Type", "Due / Needed by", "Status"]`; task-row assertions split: `row.description == "brief line"` and the flattened markdown in `row.detail`; DELETE every `days_open` assertion and any now-unneeded reference-date plumbing that existed only for days_open math. Run to verify failure.
+
+- [ ] **Step 2: Implement** — in `export_open_items.py`: `ExportRow` fields `item, description, detail, kind, due, status`; `_task_row` sets `description=task.description or ""` and `detail=flatten_markdown(task.detail or "")` (no joining); need rows: `description="\n".join(...notes/limit parts...)`, `detail=""`; submission rows: `description=row["about"] or ""`, `detail=""`; `_days_since` deleted if now unused; `_COLUMNS` becomes `(("Item", 30.0), ("Description", 40.0), ("Detail", 44.0), ("Type", 12.0), ("Due / Needed by", 16.0), ("Status", 14.0))` — all left-aligned, no right-aligned numeric column remains; `write()`'s row tuple mapping and its `row_height` lambda move to the Detail column index (2). Empty-book row becomes a 6-tuple.
+
+- [ ] **Step 3: Run** — `uv run pytest tests/test_services.py -q 2>&1 | tail -3` then full gates → green.
+
+- [ ] **Step 4: Commit** — `git commit -m "export: Description + Detail columns, days-open removed"`
