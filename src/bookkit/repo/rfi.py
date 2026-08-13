@@ -31,6 +31,35 @@ def get_request(conn: sqlite3.Connection, request_id: str) -> RfiRequest:
     return RfiRequest.from_row(row)
 
 
+def find_request(conn: sqlite3.Connection, ref_or_id: str) -> RfiRequest | None:
+    """Resolve a request by its ref (case-insensitively) or its id.
+
+    Refs are what a human — or the MCP assistant reading a chase list — types
+    back, and they arrive as "rfi-0001" as often as "RFI-0001"; ids are exact
+    by construction. NOCASE is ASCII-only, which is all a ref ever is."""
+    row = conn.execute(
+        f"""SELECT * FROM rfi_request
+            WHERE (id = ? OR ref = ? COLLATE NOCASE) AND {base.alive()}""",
+        (ref_or_id, ref_or_id),
+    ).fetchone()
+    return RfiRequest.from_row(row) if row else None
+
+
+def known_refs(conn: sqlite3.Connection, limit: int = 10) -> list[str]:
+    """"REF Account" labels to name in a "no such request" error, newest
+    first. Callers that refuse to guess at a ref still owe the caller real
+    ones to retry with."""
+    rows = conn.execute(
+        f"""SELECT r.ref || ' ' || o.name AS label
+            FROM rfi_request r JOIN org o ON o.id = r.org_id
+            WHERE {base.alive('r')} AND {base.alive('o')}
+            ORDER BY r.requested_on DESC, r.ref
+            LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [str(r["label"]) for r in rows]
+
+
 def requests_for_org(conn: sqlite3.Connection, org_id: str) -> list[RfiRequest]:
     rows = conn.execute(
         f"""SELECT * FROM rfi_request WHERE org_id = ? AND {base.alive()}

@@ -51,6 +51,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from . import db
+from .models import RfiItem, RfiRequest
 from .services.renewals import RenewalItem
 
 # score_cutoff for the client_create duplicate guard (rapidfuzz WRatio,
@@ -142,8 +143,33 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         ALL open tasks (undated and future-due included, not just due-today),
         unmet project needs, submissions past SLA, and incomplete onboarding,
         across the whole book (project needs use the same 120-day attention
-        window as today_brief)."""
+        window as today_brief). Also carries "information_requests": the
+        outstanding questions and documents the client still owes us."""
         return _open_items(ro, client=client)
+
+    @server.tool()
+    async def requests_to_chase(days: int = 120) -> list[dict[str, Any]]:
+        """Information requests whose answers are still OUTSTANDING within
+        `days` (default 120), soonest first, plus anything already overdue.
+        These are things the CLIENT owes US — questions and documents an
+        underwriter asked for — NOT our own tasks: nothing here gets done at
+        this desk, it gets chased. One entry is one REQUEST, which is what you
+        chase with one email; `open_count`/`total_count` say how much of it is
+        still outstanding and `days` goes negative once it is overdue. Call
+        request_items with a request_ref to see the individual asks inside
+        one."""
+        return _requests_to_chase(ro, days=days)
+
+    @server.tool()
+    async def request_items(request_ref: str) -> dict[str, Any]:
+        """Everything on ONE information request — the header plus every item
+        (question or document), answered or not — so you can say exactly what
+        a client is still owing. `request_ref` MUST be a ref read from
+        requests_to_chase or open_items ("RFI-0001", case-insensitive); an
+        unknown ref raises with real refs to retry with, never a guess. Each
+        item's `item_ref` is what request_item_received takes; `needed_by` is
+        the effective due (the item's own, else the request's)."""
+        return _request_items(ro, request_ref)
 
     @server.tool()
     async def pipeline_status() -> dict[str, Any]:
@@ -230,6 +256,47 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         legal_name, notes. Enrichable contact fields: email, phone, mobile,
         title, linkedin, notes."""
         return _enrich_field(rw, client, field, value, contact=contact)
+
+    @server.tool()
+    async def request_item_received(
+        item_ref: str, response: str | None = None
+    ) -> dict[str, Any]:
+        """Record that ONE item on an information request came back: marks it
+        received and dates it today, event-logged. `item_ref` MUST be the
+        exact id read from request_items or open_items; this tool never
+        fuzzy-matches a prompt — guessing risks closing out the wrong ask.
+        Pass `response` to store the client's actual answer alongside it (a
+        document just arriving needs no response). Returns the parent
+        request's remaining open_count/total_count, so you can report "3 of 12
+        still outstanding" without a second call."""
+        return _request_item_received(rw, item_ref, response=response)
+
+    @server.tool()
+    async def request_create(
+        client: str,
+        title: str,
+        items: list[str],
+        market: str | None = None,
+        due_on: str | None = None,
+        placement_ref: str | None = None,
+        project_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """File a new information request against a client — additive and
+        event-logged. This is what an underwriter's list of questions becomes:
+        `items` is that list, one ask per string, and a single string holding a
+        pasted numbered or bulleted block is split into one item per line with
+        its "1." / "-" markers stripped. `client` resolves the same way as
+        every other client-scoped tool. `market` names the market that asked
+        (on a miss the error lists the nearest markets — never guess).
+        `due_on` accepts any human date ("friday", "+2w", "2026-09-01") and
+        becomes the whole request's deadline. `placement_ref` and
+        `project_ref` scope the ask to one program or one project and are
+        mutually exclusive; each must belong to that client. Everything lands
+        in ONE transaction, so a bad date leaves nothing behind."""
+        return _request_create(
+            rw, client, title, items, market=market, due_on=due_on,
+            placement_ref=placement_ref, project_ref=project_ref,
+        )
 
 
 def _today_brief(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -584,6 +651,252 @@ def _enrich_field(
     return {"set": True, "entity": kind, "field": field, "value": cleaned}
 
 
+def _request_item_received(
+    conn: sqlite3.Connection, item_ref: str, response: str | None = None
+) -> dict[str, Any]:
+    """Status flip (plus an optional answer) on ONE item. item_ref must be an
+    exact id the model READ from request_items/open_items — no fuzzy prompt
+    matching, same contract as _task_complete."""
+    from .repo import rfi as rfi_repo
+    from .services import rfi as rfi_svc
+
+    with db.transaction(conn):
+        # KeyError on an unknown id (base.update) → tool error, never a
+        # silently-created row
+        item = rfi_svc.mark_received(conn, item_ref, date.today().isoformat())
+        if response:
+            item = rfi_repo.update_item(conn, item.id, response=response)
+        _provenance(conn, "rfi_item", item.id)
+        request = rfi_repo.get_request(conn, item.request_id)
+        open_count = rfi_repo.open_item_count(conn, request.id)
+        total_count = rfi_repo.item_count(conn, request.id)
+    return {
+        "item_ref": item.id,
+        "status": item.status,
+        "received_on": item.received_on,
+        "response": item.response,
+        "request_ref": request.ref,
+        "open_count": open_count,
+        "total_count": total_count,
+    }
+
+
+def _resolve_market(conn: sqlite3.Connection, ref_or_name: str) -> Any:
+    """_resolve_client's twin for the other side of the book: a market is
+    named, never guessed, and a miss comes back with the nearest markets."""
+    from rapidfuzz import process
+
+    from .repo import orgs
+
+    org = orgs.find(conn, ref_or_name) or orgs.find_by_name(conn, ref_or_name)
+    if org is not None and org.kind == "market":
+        return org
+    names = [o.name for o in orgs.list_orgs(conn, kind="market")]
+    close = process.extract(ref_or_name, names, limit=3, score_cutoff=60)
+    hint = ", ".join(m[0] for m in close) if close else "none close"
+    raise ValueError(f"no market matching {ref_or_name!r} — nearest: {hint}")
+
+
+def _request_create(
+    conn: sqlite3.Connection, client: str, title: str, items: list[str],
+    market: str | None = None, due_on: str | None = None,
+    placement_ref: str | None = None, project_ref: str | None = None,
+) -> dict[str, Any]:
+    """An underwriter's emailed list, filed. Request and every item land in
+    ONE transaction, so a bad date or an unknown market never leaves a headless
+    request behind."""
+    from .dates import parse_human_date
+    from .repo import placements
+    from .repo import projects as projects_repo
+    from .repo import rfi as rfi_repo
+
+    # A pasted numbered list must be cleaned identically here and in the TUI's
+    # paste box, so this shares that splitter rather than re-deriving the
+    # regex. rfi_paste is pure `re` — importing it pulls in no TUI machinery.
+    from .tui.widgets.rfi_paste import split_items
+
+    if placement_ref and project_ref:
+        raise ValueError(
+            "a request is scoped to a placement OR a project, never both")
+    org = _resolve_client(conn, client)
+    fields: dict[str, Any] = {}
+    if market:
+        fields["market_org_id"] = _resolve_market(conn, market).id
+    if due_on:
+        parsed = parse_human_date(due_on)
+        if parsed is None:
+            raise ValueError(f"cannot read a date from {due_on!r}")
+        fields["due_on"] = parsed.isoformat()
+    if placement_ref:
+        placement = placements.find(conn, placement_ref)
+        if placement is None or placement.org_id != org.id:
+            have = [p.ref for p in placements.for_org(conn, org.id)]
+            raise ValueError(
+                f"no placement {placement_ref!r} on {org.name} — it has: {have}")
+        fields["placement_id"] = placement.id
+    if project_ref:
+        # Scanning the client's own projects IS the ownership check: another
+        # client's ref simply is not in this list.
+        wanted = project_ref.lower()
+        project = next(
+            (p for p in projects_repo.projects_for_org(conn, org.id)
+             if p.ref.lower() == wanted or p.name.lower() == wanted),
+            None,
+        )
+        if project is None:
+            have = [f"{p.ref} {p.name}" for p in projects_repo.projects_for_org(conn, org.id)]
+            raise ValueError(
+                f"no project {project_ref!r} on {org.name} — it has: {have}")
+        fields["project_id"] = project.id
+
+    prompts = [prompt for text in items for prompt in split_items(text)]
+    with db.transaction(conn):
+        request = rfi_repo.create_request(
+            conn, org.id, title, date.today().isoformat(), **fields)
+        _provenance(conn, "rfi_request", request.id)
+        for prompt in prompts:
+            # insertion order is paste order: items_for_request breaks the
+            # created_at tie on rowid, so a whole list pasted in one second
+            # still reads back in the order the underwriter wrote it
+            item = rfi_repo.add_item(conn, request.id, prompt)
+            _provenance(conn, "rfi_item", item.id)
+    return {"request_ref": request.ref, "account": org.name,
+            "item_count": len(prompts)}
+
+
+def _requests_to_chase(conn: sqlite3.Connection, days: int = 120) -> list[dict[str, Any]]:
+    """One entry per REQUEST — the unit you chase with one email — not per
+    item. Order is the service's (earliest effective due, then ref)."""
+    from .services import rfi as rfi_svc
+
+    return [
+        {
+            "request_ref": chase.request.ref,
+            "account": chase.org_name,
+            "title": chase.request.title,
+            "asked_by": chase.market_name,
+            "scope": rfi_svc.scope_label(conn, chase.request),
+            "needed_by": chase.earliest_due,
+            "days": chase.days_remaining,
+            "open_count": chase.open_count,
+            "total_count": chase.total_count,
+        }
+        for chase in rfi_svc.outstanding_requests(conn, date.today(), days=days)
+    ]
+
+
+def _resolve_request(conn: sqlite3.Connection, request_ref: str) -> RfiRequest:
+    """Refs only, case-insensitively — the same never-guess discipline as
+    _resolve_client, with real refs named on a miss."""
+    from .repo import rfi as rfi_repo
+
+    request = rfi_repo.find_request(conn, request_ref)
+    if request is None:
+        known = rfi_repo.known_refs(conn)
+        raise ValueError(
+            f"no information request matching {request_ref!r} — "
+            f"known: {known if known else 'none on the book'}")
+    return request
+
+
+def _rfi_open_item(
+    request: RfiRequest, item: RfiItem, market_name: str | None,
+    account: str | None = None,
+) -> dict[str, Any]:
+    """One outstanding ask, as open_items lists it. `account` is set only on
+    the book-wide branch (the per-client branch already names the account)."""
+    row: dict[str, Any] = {"request_ref": request.ref}
+    if account is not None:
+        row["account"] = account
+    row.update({
+        "title": request.title,
+        "item_ref": item.id,
+        "prompt": item.prompt,
+        "kind": item.kind,
+        "needed_by": item.due_on or request.due_on,  # effective due
+        "asked_by": market_name,
+    })
+    return row
+
+
+def _client_information_requests(
+    conn: sqlite3.Connection, org_id: str
+) -> list[dict[str, Any]]:
+    """EVERY outstanding ask this client owes, undated ones included — this
+    branch is the client-facing composition, and an undated question is still
+    something they owe. (The book-wide branch below uses the 120-day attention
+    window instead, matching its other keys.)"""
+    from .repo import orgs
+    from .repo import rfi as rfi_repo
+
+    out: list[dict[str, Any]] = []
+    for request in rfi_repo.requests_for_org(conn, org_id):
+        if request.cancelled_at:
+            continue
+        market = (orgs.find(conn, request.market_org_id)
+                  if request.market_org_id else None)
+        out.extend(
+            _rfi_open_item(request, item, market.name if market else None)
+            for item in rfi_repo.items_for_request(conn, request.id)
+            if item.status == "outstanding"
+        )
+    return out
+
+
+def _book_information_requests(
+    conn: sqlite3.Connection, today: date
+) -> list[dict[str, Any]]:
+    from .repo import rfi as rfi_repo
+    from .services import rfi as rfi_svc
+
+    out: list[dict[str, Any]] = []
+    for chase in rfi_svc.outstanding_requests(conn, today, days=120):
+        out.extend(
+            _rfi_open_item(chase.request, item, chase.market_name,
+                           account=chase.org_name)
+            for item in rfi_repo.items_for_request(conn, chase.request.id)
+            if item.status == "outstanding"
+        )
+    return out
+
+
+def _request_items(conn: sqlite3.Connection, request_ref: str) -> dict[str, Any]:
+    """One request, whole: header plus every item, answered or not."""
+    from .repo import orgs
+    from .repo import rfi as rfi_repo
+    from .services import rfi as rfi_svc
+
+    request = _resolve_request(conn, request_ref)
+    org = orgs.get(conn, request.org_id)
+    # find, not get: a merged-away market blanks the name rather than
+    # exploding the whole read (repo/rfi.outstanding_rows makes the same call)
+    market = orgs.find(conn, request.market_org_id) if request.market_org_id else None
+    return {
+        "request_ref": request.ref,
+        "account": org.name,
+        "title": request.title,
+        "asked_by": market.name if market else None,
+        "scope": rfi_svc.scope_label(conn, request),
+        "requested_on": request.requested_on,
+        "due_on": request.due_on,
+        "cancelled": request.cancelled_at is not None,
+        "items": [
+            {
+                "item_ref": item.id,
+                "kind": item.kind,
+                "prompt": item.prompt,
+                "detail": item.detail,
+                "category": item.category,
+                "needed_by": item.due_on or request.due_on,  # effective due
+                "status": item.status,
+                "received_on": item.received_on,
+                "response": item.response,
+            }
+            for item in rfi_repo.items_for_request(conn, request.id)
+        ],
+    }
+
+
 def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict[str, Any]:
     from dataclasses import asdict
 
@@ -598,6 +911,7 @@ def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict[str
                 {"label": s.label, "rows": [asdict(r) for r in s.rows]}
                 for s in export_open_items.compose(conn, org.id, today)
             ],
+            "information_requests": _client_information_requests(conn, org.id),
         }
 
     from .dates import days_until
@@ -630,6 +944,9 @@ def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict[str
             {"account": org.name, "missing": missing}
             for org, missing in onboarding.incomplete_clients(conn, today)
         ],
+        # what clients owe US, not what we owe them — same 120-day attention
+        # window as project_needs above
+        "information_requests": _book_information_requests(conn, today),
     }
 
 

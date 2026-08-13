@@ -11,7 +11,16 @@ import pytest
 
 from bookkit import db, mcpserver
 from bookkit.mcpserver import build_server
-from bookkit.repo import contacts, interactions, orgs, placements, projects, submissions, tasks
+from bookkit.repo import (
+    contacts,
+    interactions,
+    orgs,
+    placements,
+    projects,
+    rfi,
+    submissions,
+    tasks,
+)
 from bookkit.repo import tasks as tasks_repo
 
 
@@ -153,7 +162,7 @@ def test_open_items_bookwide_matches_attention_windows(server_db):
     ro = db.connect_readonly(server_db)
     out = mcpserver._open_items(ro, client=None)
     assert set(out) == {"tasks_due", "project_needs", "submissions_past_sla",
-                        "onboarding_incomplete"}
+                        "onboarding_incomplete", "information_requests"}
 
 
 def test_open_items_bookwide_includes_undated_and_future_due_tasks(server_db):
@@ -416,3 +425,248 @@ def test_build_server_registers_client_create_and_enrich_field(server_db):
     server = build_server(server_db)
     names = {t.name for t in server._tool_manager.list_tools()}
     assert {"client_create", "enrich_field"} <= names
+
+
+# --- information requests (RFI) ---------------------------------------------
+
+
+def _iso(days: int) -> str:
+    from datetime import date, timedelta
+
+    return (date.today() + timedelta(days=days)).isoformat()
+
+
+def _seed_request(conn, account="Acme", title="Sompo questions", market=None, **fields):
+    """A client + one request; returns (org, request)."""
+    org = orgs.find_by_name(conn, account) or orgs.create(conn, name=account, kind="client")
+    if market is not None:
+        market_org = (orgs.find_by_name(conn, market)
+                      or orgs.create(conn, name=market, kind="market"))
+        fields.setdefault("market_org_id", market_org.id)
+    request = rfi.create_request(
+        conn, org.id, title, _iso(-3), **fields)
+    return org, request
+
+
+def test_requests_to_chase_is_one_row_per_request_with_counts(server_db):
+    conn = db.connect(server_db)
+    org, request = _seed_request(conn, market="Sompo", due_on=_iso(10))
+    done = rfi.add_item(conn, request.id, "loss runs")
+    rfi.add_item(conn, request.id, "vehicle schedule")
+    rfi.add_item(conn, request.id, "payroll")
+    rfi.update_item(conn, done.id, status="received", received_on=_iso(-1))
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    out = mcpserver._requests_to_chase(ro, days=120)
+    assert len(out) == 1                       # one entry per REQUEST, not per item
+    assert out[0]["request_ref"] == request.ref
+    assert out[0]["account"] == "Acme"
+    assert out[0]["title"] == "Sompo questions"
+    assert out[0]["asked_by"] == "Sompo"
+    assert out[0]["scope"] == "—"              # account-level ask
+    assert out[0]["needed_by"] == _iso(10)
+    assert out[0]["days"] == 10
+    assert (out[0]["open_count"], out[0]["total_count"]) == (2, 3)
+
+
+def test_requests_to_chase_shows_overdue_with_negative_days(server_db):
+    conn = db.connect(server_db)
+    _, request = _seed_request(conn, due_on=_iso(-40))
+    rfi.add_item(conn, request.id, "ancient ask")
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    out = mcpserver._requests_to_chase(ro, days=120)
+    assert [r["request_ref"] for r in out] == [request.ref]
+    assert out[0]["days"] == -40
+
+
+def test_request_items_resolves_ref_case_insensitively(server_db):
+    conn = db.connect(server_db)
+    _, request = _seed_request(conn, market="Sompo", due_on=_iso(14))
+    early = rfi.add_item(conn, request.id, "loss runs", kind="document",
+                         due_on=_iso(2), category="Underwriting")
+    rfi.add_item(conn, request.id, "how many vehicles?")
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    out = mcpserver._request_items(ro, request.ref.lower())
+    assert out["request_ref"] == request.ref
+    assert out["account"] == "Acme"
+    assert out["asked_by"] == "Sompo"
+    assert out["cancelled"] is False
+    assert out["due_on"] == _iso(14)
+    first = next(i for i in out["items"] if i["item_ref"] == early.id)
+    assert first["kind"] == "document"
+    assert first["category"] == "Underwriting"
+    assert first["needed_by"] == _iso(2)            # the item's own due wins
+    assert first["status"] == "outstanding"
+    other = next(i for i in out["items"] if i["item_ref"] != early.id)
+    assert other["needed_by"] == _iso(14)           # falls back to the request's
+
+
+def test_request_items_unknown_ref_raises_naming_real_refs(server_db):
+    conn = db.connect(server_db)
+    _, request = _seed_request(conn)
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    with pytest.raises(ValueError, match="no information request matching") as excinfo:
+        mcpserver._request_items(ro, "RFI-9999")
+    assert request.ref in str(excinfo.value)        # never guesses; names real ones
+
+
+def test_open_items_scoped_lists_outstanding_information_requests(server_db):
+    conn = db.connect(server_db)
+    _, request = _seed_request(conn, market="Sompo", due_on=_iso(9))
+    outstanding = rfi.add_item(conn, request.id, "1. loss runs")
+    received = rfi.add_item(conn, request.id, "signed application")
+    rfi.update_item(conn, received.id, status="received", received_on=_iso(-1))
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    rows = mcpserver._open_items(ro, client="Acme")["information_requests"]
+    assert [r["item_ref"] for r in rows] == [outstanding.id]   # received one absent
+    assert rows[0]["request_ref"] == request.ref
+    assert rows[0]["title"] == "Sompo questions"
+    assert rows[0]["kind"] == "question"
+    assert rows[0]["needed_by"] == _iso(9)
+    assert rows[0]["asked_by"] == "Sompo"
+    assert "account" not in rows[0]        # the per-client branch already names it
+
+
+def test_open_items_bookwide_lists_information_requests_with_account(server_db):
+    conn = db.connect(server_db)
+    _, request = _seed_request(conn, market="Sompo", due_on=_iso(9))
+    outstanding = rfi.add_item(conn, request.id, "loss runs")
+    received = rfi.add_item(conn, request.id, "signed application")
+    rfi.update_item(conn, received.id, status="received", received_on=_iso(-1))
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    rows = mcpserver._open_items(ro, client=None)["information_requests"]
+    assert [r["item_ref"] for r in rows] == [outstanding.id]
+    assert rows[0]["account"] == "Acme"
+    assert rows[0]["request_ref"] == request.ref
+    assert rows[0]["asked_by"] == "Sompo"
+
+
+def test_request_item_received_flips_status_and_drops_the_open_count(server_db):
+    conn = db.connect(server_db)
+    _, request = _seed_request(conn, due_on=_iso(5))
+    item = rfi.add_item(conn, request.id, "how many vehicles?")
+    rfi.add_item(conn, request.id, "payroll")
+    conn.close()
+    rw = db.connect(server_db)
+    out = mcpserver._request_item_received(rw, item.id, response="41 vehicles")
+    assert out["item_ref"] == item.id
+    assert out["status"] == "received"
+    assert out["received_on"] == _iso(0)
+    assert out["response"] == "41 vehicles"
+    assert out["request_ref"] == request.ref
+    assert (out["open_count"], out["total_count"]) == (1, 2)
+    stored = rfi.get_item(rw, item.id)
+    assert stored.response == "41 vehicles"
+
+
+def test_request_item_received_requires_exact_ref(server_db):
+    rw = db.connect(server_db)
+    with pytest.raises(KeyError):
+        mcpserver._request_item_received(rw, "not-a-real-id")
+
+
+def test_request_create_files_items_in_paste_order_stripped(server_db):
+    rw = db.connect(server_db)
+    orgs.create(rw, name="Acme", kind="client")
+    orgs.create(rw, name="Sompo", kind="market")
+    out = mcpserver._request_create(
+        rw, "Acme", "Sompo questions",
+        ["1. loss runs\n2) vehicle schedule\n- payroll figures\n\n"],
+        market="Sompo", due_on="+2w",
+    )
+    assert out["account"] == "Acme"
+    assert out["item_count"] == 3
+    request = rfi.find_request(rw, out["request_ref"])
+    assert request.requested_on == _iso(0)          # defaults to today
+    assert request.due_on == _iso(14)
+    assert [i.prompt for i in rfi.items_for_request(rw, request.id)] == [
+        "loss runs", "vehicle schedule", "payroll figures",
+    ]
+
+
+def test_request_create_refuses_both_placement_and_project(server_db):
+    rw = db.connect(server_db)
+    org = orgs.create(rw, name="Acme", kind="client")
+    placement = placements.create(
+        rw, org_id=org.id, program_name="Acme Property 26-27",
+        period_from="2026-01-01", period_to="2026-10-01", status="bound",
+    )
+    project = projects.create_project(rw, org.id, "New warehouse")
+    with pytest.raises(ValueError, match="never both"):
+        mcpserver._request_create(
+            rw, "Acme", "Scoped", ["loss runs"],
+            placement_ref=placement.ref, project_ref=project.ref,
+        )
+    assert rfi.requests_for_org(rw, org.id) == []
+
+
+def test_request_create_scopes_to_a_placement_of_that_client(server_db):
+    rw = db.connect(server_db)
+    org = orgs.create(rw, name="Acme", kind="client")
+    placement = placements.create(
+        rw, org_id=org.id, program_name="Acme Property 26-27",
+        period_from="2026-01-01", period_to="2026-10-01", status="bound",
+    )
+    out = mcpserver._request_create(
+        rw, "Acme", "Property questions", ["loss runs"],
+        placement_ref=placement.ref,
+    )
+    assert mcpserver._request_items(rw, out["request_ref"])["scope"] == placement.ref
+
+
+def test_request_create_refuses_another_clients_placement(server_db):
+    rw = db.connect(server_db)
+    orgs.create(rw, name="Acme", kind="client")
+    other = orgs.create(rw, name="Beta Co", kind="client")
+    placement = placements.create(
+        rw, org_id=other.id, program_name="Beta Property 26-27",
+        period_from="2026-01-01", period_to="2026-10-01", status="bound",
+    )
+    with pytest.raises(ValueError, match="no placement"):
+        mcpserver._request_create(
+            rw, "Acme", "Wrong scope", ["loss runs"], placement_ref=placement.ref,
+        )
+
+
+def test_request_create_unknown_market_raises_with_candidates(server_db):
+    rw = db.connect(server_db)
+    orgs.create(rw, name="Acme", kind="client")
+    orgs.create(rw, name="Sompo", kind="market")
+    with pytest.raises(ValueError, match="no market matching"):
+        mcpserver._request_create(
+            rw, "Acme", "Questions", ["loss runs"], market="Sompoo Insurance",
+        )
+    assert rfi.requests_for_org(rw, orgs.find_by_name(rw, "Acme").id) == []
+
+
+def test_rfi_writes_are_event_logged_with_mcp_provenance(server_db):
+    rw = db.connect(server_db)
+    orgs.create(rw, name="Acme", kind="client")
+    out = mcpserver._request_create(
+        rw, "Acme", "Sompo questions", ["loss runs\nvehicle schedule"])
+    request = rfi.find_request(rw, out["request_ref"])
+    items = rfi.items_for_request(rw, request.id)
+    mcpserver._request_item_received(rw, items[0].id, response="attached")
+
+    def stamped(entity_id):
+        return [
+            r["new_value"] for r in rw.execute(   # test-only SQL is fine
+                "SELECT * FROM event_log WHERE entity_id = ? AND field = 'source'",
+                (entity_id,)).fetchall()
+        ]
+
+    assert stamped(request.id) == ["mcp"]
+    assert all(stamped(item.id) for item in items)
+    assert stamped(items[0].id) == ["mcp", "mcp"]  # created, then received
+
+
+def test_build_server_registers_rfi_tools(server_db):
+    server = build_server(server_db)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    assert {"requests_to_chase", "request_items", "request_item_received",
+            "request_create"} <= names
