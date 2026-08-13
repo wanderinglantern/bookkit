@@ -207,10 +207,6 @@ class AccountScreen(Screen):
         text-style: bold;
         margin-top: 1;
     }
-    /* master/detail: the request list is the index, the items are the work */
-    AccountScreen #rfi-requests {
-        height: 40%;
-    }
     """
 
     BINDINGS = [
@@ -328,6 +324,10 @@ class AccountScreen(Screen):
         self.query_one("#rfi-items", InlineTable).inline_initial = (
             self._rfi_item_inline_initial
         )
+        # master/detail: the request list is the index, the items are the work.
+        # bookkit.tcss gives every DataTable height 1fr, so this has to be an
+        # inline style to win (same reason #account-header is set here)
+        self.query_one("#rfi-requests", ListTable).styles.height = "40%"
         self.refresh_data()
         self._render_tab_hint()
         self._focus_tab_table()
@@ -543,16 +543,24 @@ class AccountScreen(Screen):
         items = self.query_one("#rfi-items", InlineTable)
         items.clear(columns=True)
         items.add_columns("item", "type", "group", "needed by", "status", "received")
-        self._rfi_request_id = request_id
         title = self.query_one("#rfi-hint", Static)
-        if request_id is None:
+        # this runs from a RowHighlighted handler; a request that vanished
+        # under the cursor must empty the datasheet, never raise out of a
+        # keypress and take the app down
+        request = None
+        if request_id is not None:
+            try:
+                request = rfi_repo.get_request(conn, request_id)
+            except KeyError:
+                request_id = None
+        self._rfi_request_id = request_id
+        if request is None:
             items.inline_fields = {}
             title.update("no request selected")
             return
-        request = rfi_repo.get_request(conn, request_id)
         title.update(f"{request.ref} — {request.title}")
         items.inline_fields = RFI_ITEM_INLINE
-        for item in rfi_repo.items_for_request(conn, request_id):
+        for item in rfi_repo.items_for_request(conn, request.id):
             items.add_row(
                 item.prompt, item.kind, item.category or dash(),
                 item.due_on or dash(), status_text(item.status),
