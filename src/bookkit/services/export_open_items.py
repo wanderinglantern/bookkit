@@ -38,6 +38,10 @@ class ExportRow:
     kind: str      # "Task" | "Need" | "Submission"
     due: str       # ISO or ""
     status: str
+    ref: str = ""  # task/need/submission id — MCP's per-client open_items
+    # needs this to satisfy task_complete's "exact ref you read" contract;
+    # the xlsx writer's explicit column tuple in write() does NOT include
+    # it, so refs never reach the client-facing workbook (see write()).
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,7 @@ def _task_row(task: Task, today: date) -> ExportRow:
         detail=flatten_markdown(task.detail or ""),
         kind="Task", due=task.due_on or "",
         status="Overdue" if overdue else "Open",
+        ref=task.id,
     )
 
 
@@ -127,7 +132,7 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
         ExportRow(
             item=f"Submission to {row['market_name']}",
             description=row["about"] or "", detail="", kind="Submission", due="",
-            status="Out at market",
+            status="Out at market", ref=row["id"],
         )
         for row in loose_subs
     ]
@@ -142,7 +147,7 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
             ExportRow(
                 item=f"Submission to {row['market_name']}",
                 description=row["about"] or "", detail="", kind="Submission", due="",
-                status="Out at market",
+                status="Out at market", ref=row["id"],
             )
             for row in subs_by_placement.get(placement.id, [])
         ]
@@ -168,6 +173,7 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
                         ) if part),
                         detail="",
                         kind="Need", due=n.needed_by, status=_status_label(n.status),
+                        ref=n.id,
                     )
                     for n in needs
                 ),

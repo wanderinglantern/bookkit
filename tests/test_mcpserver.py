@@ -156,6 +156,53 @@ def test_open_items_bookwide_matches_attention_windows(server_db):
                         "onboarding_incomplete"}
 
 
+def test_open_items_bookwide_includes_undated_and_future_due_tasks(server_db):
+    """Book-wide open_items is the full open-task list, per spec — unlike
+    today_brief's due-by-today slice, it must not drop undated or far-future
+    tasks (repo/tasks.py's open_tasks(due_by=...) filter excludes both)."""
+    from datetime import date, timedelta
+
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    undated = tasks.create(conn, "Undated task", org_id=org.id)
+    far_future_due = (date.today() + timedelta(days=200)).isoformat()
+    future = tasks.create(conn, "Far-future task", org_id=org.id, due_on=far_future_due)
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    out = mcpserver._open_items(ro, client=None)
+    refs = {t["ref"] for t in out["tasks_due"]}
+    assert undated.id in refs
+    assert future.id in refs
+    # repo ordering (due_on IS NULL, due_on, priority) already puts the
+    # undated task last — no additional sort needed here
+    assert out["tasks_due"][-1]["ref"] == undated.id
+
+
+def test_open_items_scoped_rows_carry_refs(server_db):
+    """Per-client open_items rows must carry the exact ref task_complete
+    requires — export_open_items.ExportRow has no id of its own otherwise."""
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    task = tasks.create(conn, "Chase loss runs", org_id=org.id)
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    out = mcpserver._open_items(ro, client="Acme")
+    row = out["sections"][0]["rows"][0]
+    assert row["ref"] == task.id
+
+
+def test_task_complete_works_on_ref_harvested_from_scoped_open_items(server_db):
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    tasks.create(conn, "Chase loss runs", org_id=org.id)
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    ref = mcpserver._open_items(ro, client="Acme")["sections"][0]["rows"][0]["ref"]
+    rw = db.connect(server_db)
+    out = mcpserver._task_complete(rw, ref)
+    assert out["status"] == "done"
+
+
 def test_open_items_unknown_client_raises_with_hint(server_db):
     conn = db.connect(server_db)
     orgs.create(conn, name="Acme Corp", kind="client")

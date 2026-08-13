@@ -14,7 +14,7 @@ dependencies = [
     "dateparser>=1.4.2",
     "humanize>=4.9",
     "textual-autocomplete>=4.0",
-    "mcp>=1.2",
+    "mcp>=2.0",
 ]
 
 [project.scripts]

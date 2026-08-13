@@ -83,8 +83,10 @@ def build_server(db_path: Path | str | None = None) -> MCPServer:
 def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
     @server.tool()
     async def today_brief() -> dict[str, Any]:
-        """Today's working brief: due tasks, renewals in the 120-day window,
-        project needs, stale accounts, submissions past SLA."""
+        """Today's working brief: tasks due or overdue today, renewals in the
+        120-day window, project needs, stale accounts, submissions past SLA.
+        tasks_due here is due-or-overdue-today only; use open_items for the
+        full task list (including undated and future-due tasks)."""
         return _today_brief(ro)
 
     @server.tool()
@@ -133,13 +135,14 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
 
     @server.tool()
     async def open_items(client: str | None = None) -> dict[str, Any]:
-        """Open items for ONE client (`client` = name, ref, or fuzzy —
-        resolved the same way as every other client-scoped tool) — the same
+        """Open items for ONE client (`client` = exact client name or ref; on
+        a miss the error lists the nearest candidates) — the same
         composition used for the client export deliverable, so this matches
         what a client would be handed. Omit `client` for the book-wide view:
-        tasks due, unmet project needs, submissions past SLA, and incomplete
-        onboarding, across the whole book (the same 120-day attention
-        windows as today_brief)."""
+        ALL open tasks (undated and future-due included, not just due-today),
+        unmet project needs, submissions past SLA, and incomplete onboarding,
+        across the whole book (project needs use the same 120-day attention
+        window as today_brief)."""
         return _open_items(ro, client=client)
 
     @server.tool()
@@ -158,10 +161,11 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
     ) -> dict[str, Any]:
         """Log a client interaction (call, email, meeting, site note) — additive
         and event-logged; nothing existing is touched. `client` resolves the same
-        way as every other client-scoped tool (name, ref, or fuzzy match — never
-        guess an id). Pass `follow_up` as any human date ("friday", "+2w",
-        "2026-09-01") to also create a follow-up task in the same transaction;
-        omit it to just log the note."""
+        way as every other client-scoped tool (exact client name or ref; on a
+        miss the error lists the nearest candidates — never guess an id). Pass
+        `follow_up` as any human date ("friday", "+2w", "2026-09-01") to also
+        create a follow-up task in the same transaction; omit it to just log
+        the note."""
         return _log_activity(rw, client, note, follow_up=follow_up)
 
     @server.tool()
@@ -174,7 +178,8 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         due: str | None = None,
     ) -> dict[str, Any]:
         """Create a task — additive and event-logged. `client` links it to an
-        account (name/ref/fuzzy; omit for a book-wide task). `description` is a
+        account (exact client name or ref; on a miss the error lists the
+        nearest candidates; omit for a book-wide task). `description` is a
         short one-line summary; `detail` holds longer markdown notes. `category`
         is a freeform grouping label — prefer an existing one over inventing a
         new one; call open_items first to see what's already in use. `due`
@@ -601,10 +606,14 @@ def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict[str
     from .services import sla
 
     return {
+        # ALL open tasks — undated and future-due included, not filtered to
+        # due-by-today (that narrower view is today_brief's job). due may be
+        # null; repo ordering (due_on IS NULL, due_on, priority) already
+        # puts undated tasks last.
         "tasks_due": [
             {"ref": t.id, "title": t.title, "description": t.description,
              "category": t.category, "due": t.due_on}
-            for t in tasks_repo.open_tasks(conn, due_by=today.isoformat())
+            for t in tasks_repo.open_tasks(conn)
         ],
         "project_needs": [
             {"needed_by": n["needed_by"], "days": days_until(n["needed_by"], today),

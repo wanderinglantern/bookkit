@@ -284,7 +284,7 @@ def test_compose_groups_by_program_project_and_general(conn):
     client = orgs.create(conn, kind="client", name="Acme", status="active", owner="grant")
     market = orgs.create(conn, kind="market", name="Zurich", status="active")
 
-    tasks.create(
+    org_task = tasks.create(
         conn, "Chase updated loss runs", org_id=client.id,
         description="waiting on brief line from the client",
         detail="**Please** call the broker",
@@ -293,11 +293,11 @@ def test_compose_groups_by_program_project_and_general(conn):
     p = placements.create(
         conn, client.id, "Acme Property 25-26", "2025-10-01", "2026-10-01"
     )
-    tasks.create(conn, "Confirm bound terms", placement_id=p.id)
-    submissions.create(conn, market.id, "2026-07-01", placement_id=p.id)
+    placement_task = tasks.create(conn, "Confirm bound terms", placement_id=p.id)
+    sub = submissions.create(conn, market.id, "2026-07-01", placement_id=p.id)
 
     project = projects_repo.create_project(conn, client.id, "Warehouse Expansion")
-    projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-09-01")
+    need = projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-09-01")
 
     today = date.today()
     sections = compose(conn, client.id, today)
@@ -309,16 +309,26 @@ def test_compose_groups_by_program_project_and_general(conn):
     assert task_row.kind == "Task"
     assert task_row.description == "waiting on brief line from the client"
     assert task_row.detail == "Please call the broker"  # markdown flattened
+    # per-client rows carry a ref — the exact id an MCP caller reads and
+    # later hands to task_complete (task_complete has no ref of its own to
+    # offer from the export path otherwise)
+    assert task_row.ref == org_task.id
 
     # a placement-only task (org_id NULL, placement_id set — legal per
     # repo/tasks.py) must still reach the workbook, in the placement's section
     placement_section = next(s for s in sections if s.label.startswith("Acme Property"))
     assert any(r.item == "Confirm bound terms" for r in placement_section.rows)
+    placement_task_row = next(
+        r for r in placement_section.rows if r.item == "Confirm bound terms")
+    assert placement_task_row.ref == placement_task.id
+    submission_row = next(r for r in placement_section.rows if r.kind == "Submission")
+    assert submission_row.ref == sub.id
 
     # need status is client-facing prose, not raw vocab ("identified", not
     # the DB's underscored form)
     project_section = next(s for s in sections if s.label.startswith("Project — "))
     assert project_section.rows[0].status == "Identified"
+    assert project_section.rows[0].ref == need.id
 
 
 def test_status_label_prettifies_underscored_vocab():
