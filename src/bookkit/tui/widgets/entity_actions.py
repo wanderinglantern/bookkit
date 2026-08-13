@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 if TYPE_CHECKING:
     from textual.screen import Screen
 
-    from ...models import Placement
+    from ...models import Placement, RfiItem, RfiRequest
     from ..app import BookkitApp
 
 
@@ -240,3 +240,78 @@ def export_open_items_flow(screen: Screen, org_id: str) -> None:
         screen.notify(f"export failed: {exc}", severity="error")
         return
     screen.notify(f"wrote {path}")
+
+
+def add_request(screen: Screen, org_id: str) -> None:
+    from . import entity_forms as ef
+
+    conn = _app(screen).conn
+    push_form(
+        screen,
+        ef.request_form(conn=conn),
+        lambda v: screen.notify(f"created {ef.apply_request(conn, v, org_id).ref}"),
+    )
+
+
+def edit_request(screen: Screen, request: RfiRequest) -> None:
+    from . import entity_forms as ef
+
+    conn = _app(screen).conn
+    push_form(
+        screen,
+        ef.request_form(request, conn=conn),
+        lambda v: ef.apply_request(conn, v, request.org_id, existing=request),
+    )
+
+
+def add_rfi_item(screen: Screen, request_id: str) -> None:
+    from . import entity_forms as ef
+
+    conn = _app(screen).conn
+    push_form(
+        screen,
+        ef.rfi_item_form(conn=conn),
+        lambda v: ef.apply_rfi_item(conn, v, request_id),
+    )
+
+
+def edit_rfi_item(screen: Screen, item: RfiItem) -> None:
+    from . import entity_forms as ef
+
+    conn = _app(screen).conn
+    push_form(
+        screen,
+        ef.rfi_item_form(item, conn=conn),
+        lambda v: ef.apply_rfi_item(conn, v, item.request_id, existing=item),
+    )
+
+
+def paste_rfi_items(screen: Screen, request_id: str) -> None:
+    """One pasted block → one item per line. Refuses an empty paste in place
+    (commit-in-place: the form stays up with the text intact)."""
+    from ...repo import rfi as rfi_repo
+    from .forms import Field, FormSpec
+    from .rfi_paste import split_items
+
+    conn = _app(screen).conn
+
+    def commit(values: dict) -> None:
+        # push_form's contract is raise-to-refuse (see its docstring): its
+        # inner commit wrapper calls on_save(values) and discards whatever
+        # it returns, so a returned string here would vanish silently and
+        # the form would close on an empty paste instead of staying open.
+        prompts = split_items(values.get("pasted") or "")
+        if not prompts:
+            raise ValueError("nothing to add — paste one item per line")
+        for prompt in prompts:
+            rfi_repo.add_item(conn, request_id, prompt)
+        screen.notify(f"added {len(prompts)} items — u undoes the last")
+
+    push_form(
+        screen,
+        FormSpec(
+            "paste items — one per line",
+            [Field("pasted", "items", "textarea", required=True)],
+        ),
+        commit,
+    )
