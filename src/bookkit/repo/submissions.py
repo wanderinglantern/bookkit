@@ -102,7 +102,12 @@ def reassign_placement(conn: sqlite3.Connection, from_id: str, to_id: str) -> in
 
 def outstanding_for_org(conn: sqlite3.Connection, org_id: str) -> list[sqlite3.Row]:
     """Everything still out at market for ONE client, joined for display:
-    market name plus what it's about (program name or opportunity title)."""
+    market name plus what it's about (program name or opportunity title).
+
+    Aliveness on both subjects sits in the ON clause (see the same rule in
+    tasks.open_tasks_for_client): a submission whose only tie to the client
+    is a soft-deleted placement or opportunity drops out, while one that
+    still has a live subject keeps it."""
     return conn.execute(
         f"""
         SELECT s.*, m.name AS market_name,
@@ -110,8 +115,8 @@ def outstanding_for_org(conn: sqlite3.Connection, org_id: str) -> list[sqlite3.R
                COALESCE(p.id, '') AS about_placement_id
         FROM submission s
         JOIN org m ON m.id = s.market_org_id
-        LEFT JOIN placement p ON p.id = s.placement_id
-        LEFT JOIN opportunity o ON o.id = s.opportunity_id
+        LEFT JOIN placement p ON p.id = s.placement_id AND {base.alive('p')}
+        LEFT JOIN opportunity o ON o.id = s.opportunity_id AND {base.alive('o')}
         WHERE s.status = 'out' AND {base.alive('s')}
           AND (p.org_id = ? OR o.org_id = ?)
         ORDER BY s.sent_on

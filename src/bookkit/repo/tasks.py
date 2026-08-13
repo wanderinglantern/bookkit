@@ -45,11 +45,18 @@ def open_tasks_for_client(conn: sqlite3.Connection, org_id: str) -> list[Task]:
     """Open tasks owned by ONE client, directly or via one of its placements —
     mirrors the ownership join in submissions.outstanding_for_org. Needed
     because a placement-attached task can carry org_id NULL (legal; see
-    module docstring), so `open_tasks(org_id=...)` alone would drop it."""
+    module docstring), so `open_tasks(org_id=...)` alone would drop it.
+
+    Aliveness on the placement sits in the ON clause, not the WHERE: a
+    soft-deleted placement must not carry its tasks onto a client-facing
+    surface, but a task that also names the org directly is still the
+    client's and must survive its placement being deleted. In the ON clause
+    the join simply yields p.* NULL, so ownership falls back to task.org_id
+    instead of dropping the row outright."""
     rows = conn.execute(
         f"""
         SELECT task.* FROM task
-        LEFT JOIN placement p ON p.id = task.placement_id
+        LEFT JOIN placement p ON p.id = task.placement_id AND {base.alive('p')}
         WHERE {base.alive('task')} AND task.status = 'open'
           AND (task.org_id = ? OR p.org_id = ?)
         ORDER BY task.due_on IS NULL, task.due_on, task.priority

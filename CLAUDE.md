@@ -60,3 +60,10 @@
   in towerkit's CLAUDE.md (wheel download, re-zip, release --clobber).
 - Dates: numeric entry is MDY, two-digit years are 20xx (towerkit fast
   path). Never let dateparser century-bump a past date.
+- CONCURRENT PHASES GET THEIR OWN WORKTREE. Two sessions sharing one
+  working directory bit us on 2026-08-13: a peer session ran `git
+  checkout main` mid-edit and another session's commit landed on main
+  instead of its feature branch (caught, cherry-picked, reset — see the
+  RFI phase-4 report). One session per worktree, `.claude/worktrees/<name>`,
+  removed when the branch merges. Also: redirect gate output to the
+  scratchpad, not /tmp — concurrent pytest runs interleave there.

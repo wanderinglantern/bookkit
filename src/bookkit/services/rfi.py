@@ -11,9 +11,13 @@ from datetime import date, timedelta
 
 from ..dates import days_until
 from ..models import RfiItem, RfiRequest
-from ..repo import placements
+from ..repo import orgs, placements
 from ..repo import projects as projects_repo
 from ..repo import rfi as rfi_repo
+
+# What asker_name returns when there is no market name to show. The TUI dims
+# these and leaves a real name plain, so the set is part of the contract.
+ASKER_PLACEHOLDERS = frozenset({"—", "(merged market)"})
 
 
 @dataclass(frozen=True)
@@ -57,6 +61,31 @@ def scope_label(conn: sqlite3.Connection, request: RfiRequest) -> str:
         except KeyError:
             return "(deleted project)"
     return "—"
+
+
+def asker_name(conn: sqlite3.Connection, request: RfiRequest) -> str:
+    """Who to chase for a response: the market's name, an em dash for an
+    internal ask (onboarding) that names no market, or "(merged market)" when
+    the market was merged away underneath the request.
+
+    One helper, three surfaces (the chase queue, the account tab, the client
+    sheet) — the resolution rule is not duplicated. Callers that style their
+    output dim the ASKER_PLACEHOLDERS and leave a real name plain."""
+    if not request.market_org_id:
+        return "—"
+    try:
+        return orgs.get(conn, request.market_org_id).name
+    except KeyError:
+        return "(merged market)"
+
+
+def effective_due(item: RfiItem, request: RfiRequest) -> str | None:
+    """When an item is actually needed: its own due date, falling back to its
+    request's. One rule, used by the queue, the tab, and the sheet.
+
+    None means neither side set one — an undated ask, which still has to
+    appear everywhere (no date window drops it)."""
+    return item.due_on or request.due_on
 
 
 def outstanding_requests(

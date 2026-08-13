@@ -328,6 +328,47 @@ def test_open_tasks_for_client_covers_org_and_placement_ownership(conn):
     assert other_placement_task.id not in got
 
 
+def test_open_tasks_for_client_drops_tasks_held_only_by_a_dead_placement(conn):
+    """A soft-deleted placement must not carry its tasks onto a client-facing
+    surface (the export sheet, the account tab, MCP open_items). A task that
+    ALSO names the org directly still belongs to the client and stays."""
+    client = orgs.create(conn, kind="client", name="Acme")
+    dead_p = placements.create(conn, client.id, "Acme Property 25-26",
+                               "2025-10-01", "2026-10-01")
+    placement_only = tasks.create(conn, "orphaned by the delete",
+                                  placement_id=dead_p.id)
+    also_org = tasks.create(conn, "still the client's",
+                            org_id=client.id, placement_id=dead_p.id)
+    placements.delete(conn, dead_p.id)
+
+    got = {t.id for t in tasks.open_tasks_for_client(conn, client.id)}
+    assert placement_only.id not in got
+    assert also_org.id in got
+
+
+def test_outstanding_for_org_drops_submissions_held_only_by_a_dead_placement(conn):
+    """Same rule on the submissions side — the two ownership joins are meant
+    to mirror each other."""
+    client = orgs.create(conn, kind="client", name="Acme")
+    market = orgs.create(conn, kind="market", name="Zurich")
+    dead_p = placements.create(conn, client.id, "Acme Property 25-26",
+                               "2025-10-01", "2026-10-01")
+    submissions.create(conn, market.id, "2026-08-01", placement_id=dead_p.id)
+    placements.delete(conn, dead_p.id)
+
+    assert submissions.outstanding_for_org(conn, client.id) == []
+
+
+def test_outstanding_for_org_drops_submissions_held_only_by_a_dead_opportunity(conn):
+    client = orgs.create(conn, kind="client", name="Acme")
+    market = orgs.create(conn, kind="market", name="Zurich")
+    dead_o = opportunities.create(conn, client.id, "Acme GL 26-27")
+    submissions.create(conn, market.id, "2026-08-01", opportunity_id=dead_o.id)
+    opportunities.delete(conn, dead_o.id)
+
+    assert submissions.outstanding_for_org(conn, client.id) == []
+
+
 def test_task_category_round_trips_and_feeds_vocab(conn):
     from bookkit.repo import vocab
 

@@ -38,7 +38,13 @@ from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.forms import Field
 from ..widgets.inline_edit import InlineTable
-from ..widgets.tables import ListTable, grouped_by_category, task_detail_cell
+from ..widgets.tables import (
+    ListTable,
+    grouped_by_category,
+    rfi_asker_cell,
+    rfi_due_cell,
+    task_detail_cell,
+)
 from ..widgets.tower_preview import TowerPreview
 from .navigator import TASK_INLINE
 
@@ -537,14 +543,8 @@ class AccountScreen(Screen):
         requests = rfi_repo.requests_for_org(conn, self.current_org_id)
         for request in requests:
             open_count = rfi_repo.open_item_count(conn, request.id)
-            asker: str | Text = dash()
-            if request.market_org_id:
-                try:  # a request can outlive a merged-away market
-                    asker = orgs.get(conn, request.market_org_id).name
-                except KeyError:
-                    asker = Text("(merged market)", style=theme.DIM)
             table.add_row(
-                request.ref, request.title, asker,
+                request.ref, request.title, rfi_asker_cell(conn, request),
                 Text(rfi_svc.scope_label(conn, request), style=theme.DIM),
                 request.requested_on,
                 request.due_on or dash(),
@@ -585,7 +585,7 @@ class AccountScreen(Screen):
         for item in rfi_repo.items_for_request(conn, request.id):
             items.add_row(
                 item.prompt, item.kind, item.category or dash(),
-                item.due_on or dash(), status_text(item.status),
+                rfi_due_cell(item, request), status_text(item.status),
                 item.received_on or dash(), item.response or dash(),
                 key=item.id,
             )

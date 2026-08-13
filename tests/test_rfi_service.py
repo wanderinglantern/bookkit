@@ -124,3 +124,48 @@ def test_every_rfi_item_status_is_themed(conn) -> None:
     assert theme.STATUS_STYLES["outstanding"] == theme.AMBER
     assert theme.STATUS_STYLES["received"] == theme.GREEN
     assert theme.STATUS_STYLES["waived"] == theme.DIM
+
+
+# -- the two rules that were duplicated across surfaces ----------------------
+
+
+def test_effective_due_prefers_the_item_then_falls_back_to_the_request(conn) -> None:
+    """The design doc's 'one rule, used by the queue, the tab, and the sheet'
+    — it now has exactly one implementation for all three to call."""
+    req = _request(conn, due_on="2026-08-19")
+    own = rfi.add_item(conn, req.id, "loss runs", due_on="2026-08-15")
+    inherited = rfi.add_item(conn, req.id, "how many vehicles?")
+
+    assert rfi_svc.effective_due(own, req) == "2026-08-15"
+    assert rfi_svc.effective_due(inherited, req) == "2026-08-19"
+
+
+def test_effective_due_is_none_when_neither_side_sets_one(conn) -> None:
+    req = _request(conn)
+    item = rfi.add_item(conn, req.id, "loss runs")
+    assert rfi_svc.effective_due(item, req) is None
+
+
+def test_asker_name_resolves_market_missing_and_merged(conn) -> None:
+    """Three-way display convention, previously copy-pasted into navigator.py,
+    account.py and export_rfi.py."""
+    org = orgs.create(conn, name="Endeavour Energy", kind="client")
+    market = orgs.create(conn, name="Sompo", kind="market")
+
+    named = rfi.create_request(
+        conn, org.id, "Sompo questions", "2026-08-05", market_org_id=market.id
+    )
+    internal = rfi.create_request(conn, org.id, "onboarding", "2026-08-05")
+
+    assert rfi_svc.asker_name(conn, named) == "Sompo"
+    assert rfi_svc.asker_name(conn, internal) == "—"
+
+    orgs.delete(conn, market.id)
+    merged = rfi.get_request(conn, named.id)
+    assert rfi_svc.asker_name(conn, merged) == "(merged market)"
+
+
+def test_asker_placeholders_are_exactly_the_non_name_results(conn) -> None:
+    """The TUI dims a placeholder and leaves a real market name plain; that
+    test is only honest if the placeholder set stays in sync with the rule."""
+    assert rfi_svc.ASKER_PLACEHOLDERS == frozenset({"—", "(merged market)"})

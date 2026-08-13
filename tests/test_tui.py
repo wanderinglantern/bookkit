@@ -1469,3 +1469,70 @@ async def test_add_on_the_requests_tab_never_does_nothing(seeded_db: Path) -> No
         await pilot.pause()
         assert isinstance(app.screen, FormModal)
         assert "task" in app.screen.spec.title.lower()
+
+
+async def test_rfi_items_show_an_inherited_due_date_dimmed(seeded_db: Path) -> None:
+    """The effective-due rule reaches the tab, not just the queue and the
+    sheet. An item with no due of its own shows its request's date DIM, so the
+    user can tell an inherited date from one that is really on the item; an
+    item with neither still reads as an em dash."""
+    from bookkit.repo import rfi
+    from bookkit.tui import theme
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(
+        app.conn, org.id, "Sompo questions", "2026-08-05", due_on="2026-08-19"
+    )
+    own = rfi.add_item(app.conn, req.id, "loss runs", due_on="2026-08-15")
+    inherited = rfi.add_item(app.conn, req.id, "how many vehicles?")
+
+    undated_req = rfi.create_request(app.conn, org.id, "no dates", "2026-08-05")
+    undated = rfi.add_item(app.conn, undated_req.id, "anything")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+
+        items = app.screen.query_one("#rfi-items", InlineTable)
+        own_cell = items.get_row(own.id)[3]
+        inherited_cell = items.get_row(inherited.id)[3]
+
+        assert str(own_cell) == "2026-08-15"
+        assert str(inherited_cell) == "2026-08-19"
+        # the whole point: the inherited one is visibly not the item's own
+        assert theme.DIM in str(getattr(inherited_cell, "style", ""))
+        assert theme.DIM not in str(getattr(own_cell, "style", ""))
+
+        # a request with no date either: em dash, nothing inherited
+        requests = app.screen.query_one("#rfi-requests", ListTable)
+        requests.move_cursor(row=requests.get_row_index(f"rfi:{undated_req.id}"))
+        await pilot.pause()
+        assert str(items.get_row(undated.id)[3]) == "—"
+
+
+async def test_rfi_inline_edit_of_an_inherited_due_starts_blank(seeded_db: Path) -> None:
+    """Displaying the inherited date must not turn it into a stored override
+    by accident: the edit buffer is seeded from the ITEM, so opening the cell
+    on an inherited date offers an empty field, and saving is a deliberate act."""
+    from bookkit.repo import rfi
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(
+        app.conn, org.id, "Sompo questions", "2026-08-05", due_on="2026-08-19"
+    )
+    item = rfi.add_item(app.conn, req.id, "how many vehicles?")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+
+        screen = app.screen
+        assert screen._rfi_item_inline_initial(item.id, "due_on") == ""
+        assert rfi.get_item(app.conn, item.id).due_on is None

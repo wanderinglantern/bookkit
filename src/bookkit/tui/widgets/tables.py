@@ -14,7 +14,9 @@ from .. import theme
 from ..theme import dash
 
 if TYPE_CHECKING:
-    from ...models import Task
+    import sqlite3
+
+    from ...models import RfiItem, RfiRequest, Task
 
 
 class ListTable(DataTable):
@@ -29,6 +31,31 @@ class ListTable(DataTable):
         kwargs.setdefault("cursor_type", "row")
         kwargs.setdefault("zebra_stripes", True)
         super().__init__(**kwargs)
+
+
+def rfi_asker_cell(conn: sqlite3.Connection, request: RfiRequest) -> str | Text:
+    """The 'asked by' column, shared by the chase queue and the account tab.
+    The rule lives in services.rfi.asker_name; this only decides the styling —
+    a real market name reads plain, a placeholder (no market, or one merged
+    away) is dimmed because it names no one to chase."""
+    from ...services import rfi as rfi_svc
+
+    name = rfi_svc.asker_name(conn, request)
+    return Text(name, style=theme.DIM) if name in rfi_svc.ASKER_PLACEHOLDERS else name
+
+
+def rfi_due_cell(item: RfiItem, request: RfiRequest) -> str | Text:
+    """The 'needed by' column for an RFI item. An item's own date reads plain;
+    one inherited from its request is DIM, so an inherited date is never
+    mistaken for one stored on the item (the cell is inline-editable, and its
+    edit buffer is seeded from the item, so editing an inherited date starts
+    blank and saving is a deliberate override)."""
+    from ...services import rfi as rfi_svc
+
+    if item.due_on:
+        return item.due_on
+    inherited = rfi_svc.effective_due(item, request)
+    return Text(inherited, style=theme.DIM) if inherited else dash()
 
 
 def task_detail_cell(task: Task) -> Text:

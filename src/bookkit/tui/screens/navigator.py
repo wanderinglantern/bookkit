@@ -33,7 +33,12 @@ from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.forms import Field
 from ..widgets.inline_edit import InlineTable
-from ..widgets.tables import ListTable, grouped_by_category, task_detail_cell
+from ..widgets.tables import (
+    ListTable,
+    grouped_by_category,
+    rfi_asker_cell,
+    task_detail_cell,
+)
 from ..widgets.tower_preview import TowerPreview
 
 NodeData = tuple[str, Any]
@@ -632,15 +637,10 @@ class NavigatorScreen(Screen):
             for request in rfi_repo.requests_for_org(conn, org_id):
                 key = f"rfi:{request.id}"
                 self._row_org[key] = org_id
-                asker: str | Text = dash()
-                if request.market_org_id:
-                    try:  # a request can outlive a merged-away market
-                        asker = orgs.get(conn, request.market_org_id).name
-                    except KeyError:
-                        asker = Text("(merged market)", style=theme.DIM)
                 open_count = rfi_repo.open_item_count(conn, request.id)
                 table.add_row(
-                    request.ref, request.title, asker, request.requested_on,
+                    request.ref, request.title, rfi_asker_cell(conn, request),
+                    request.requested_on,
                     date_text(request.due_on, days_until(request.due_on))
                     if request.due_on else dash(),
                     Text(str(open_count), style=theme.AMBER if open_count else theme.DIM),

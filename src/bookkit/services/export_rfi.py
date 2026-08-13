@@ -18,8 +18,8 @@ from itertools import groupby
 from babel.dates import format_date
 
 from ..models import RfiItem, RfiRequest
-from ..repo import orgs
 from ..repo import rfi as rfi_repo
+from . import rfi as rfi_svc
 from .export_open_items import SheetSection, _status_label, flatten_markdown
 
 
@@ -29,29 +29,14 @@ def _fmt_date(iso: str) -> str:
     return format_date(date.fromisoformat(iso), format="d MMM", locale="en_US")
 
 
-def _asker_name(conn: sqlite3.Connection, request: RfiRequest) -> str:
-    """Who to chase for a response. Mirrors the TUI's requests-group and
-    chase-queue rendering (tui/screens/navigator.py, account.py): a
-    merged-away market reads as '(merged market)' rather than raising, and
-    an onboarding/internal ask with no market_org_id reads as an em dash —
-    there is no repo/services helper for this yet, so this reproduces the
-    existing display convention rather than inventing a new one."""
-    if not request.market_org_id:
-        return "—"
-    try:
-        return orgs.get(conn, request.market_org_id).name
-    except KeyError:
-        return "(merged market)"
-
-
-def _effective_due(item: RfiItem, request: RfiRequest) -> str:
-    """The one effective-due rule from the design doc: an item's own due,
-    falling back to its request's. Returns "" when neither is set."""
-    return item.due_on or request.due_on or ""
+def _due_cell(item: RfiItem, request: RfiRequest) -> str:
+    """services.rfi.effective_due rendered for a spreadsheet cell — an undated
+    ask is a blank cell, not the em dash the TUI uses."""
+    return rfi_svc.effective_due(item, request) or ""
 
 
 def _earliest_due(items: list[RfiItem], request: RfiRequest) -> str | None:
-    dues = [d for i in items if (d := _effective_due(i, request))]
+    dues = [d for i in items if (d := rfi_svc.effective_due(i, request))]
     return min(dues) if dues else None
 
 
@@ -60,7 +45,7 @@ def _item_row(item: RfiItem, request: RfiRequest) -> tuple[str, str, str, str]:
         item.prompt,
         flatten_markdown(item.detail or ""),
         _status_label(item.kind),
-        _effective_due(item, request),
+        _due_cell(item, request),
     )
 
 
@@ -70,7 +55,7 @@ def _request_sections(
     """`items` is already outstanding-only, in items_for_request's order
     (category, nulls last, then creation) — exactly the order the spec asks
     for, so no re-sort happens here."""
-    prefix = f"{_asker_name(conn, request)} — {request.title}"
+    prefix = f"{rfi_svc.asker_name(conn, request)} — {request.title}"
     if not any(item.category for item in items):
         # No sub-grouping: one section carries the full request context.
         label = f"{prefix} · asked {_fmt_date(request.requested_on)}"
