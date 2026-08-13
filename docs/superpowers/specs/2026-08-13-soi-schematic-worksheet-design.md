@@ -1,7 +1,7 @@
 # SOI schematic worksheet (towerkit) — design
 
 Date: 2026-08-13
-Status: approved in conversation; queued as phase 4 (after MCP server)
+Status: approved in conversation; queued as phase 3 (before MCP server, per Grant 2026-08-13)
 
 ## Goal
 
