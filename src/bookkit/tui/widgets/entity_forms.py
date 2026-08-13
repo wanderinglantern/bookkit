@@ -6,12 +6,15 @@ save keeps the form up for correction (the platform default since 2026-08-12).""
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 from typing import Any
 
 from ...models import (
     CONTACT_ROLES,
     NEED_STATUSES,
     PROJECT_STATUSES,
+    RFI_ITEM_KINDS,
+    RFI_ITEM_STATUSES,
     TEAM_ROLES,
     Appetite,
     Contact,
@@ -20,12 +23,15 @@ from ...models import (
     Placement,
     Project,
     ProjectNeed,
+    RfiItem,
+    RfiRequest,
     Submission,
     Task,
     TeamMember,
 )
 from ...repo import contacts, opportunities, orgs, placements, submissions, vocab
 from ...repo import projects as projects_repo
+from ...repo import rfi as rfi_repo
 from ...repo import tasks as tasks_repo
 from .forms import Field, FormSpec, dropped
 
@@ -501,3 +507,90 @@ def apply_need(
     line = core.pop("line")
     needed_by = core.pop("needed_by")
     return projects_repo.add_need(conn, project_id, line, needed_by, **core)
+
+
+def request_form(
+    existing: RfiRequest | None = None, *, conn: sqlite3.Connection | None = None
+) -> FormSpec:
+    markets: tuple[tuple[str, str], ...] = ()
+    if conn is not None:
+        markets = tuple(
+            (o.name, o.id) for o in orgs.list_orgs(conn, kind="market")
+        )
+    initial = (
+        existing.model_dump()
+        if existing
+        else {"requested_on": date.today().isoformat()}
+    )
+    return FormSpec(
+        "edit information request" if existing else "new information request",
+        [
+            Field("title", "request", required=True,
+                  placeholder="Sompo — property questions"),
+            Field("requested_on", "asked on", "date", required=True),
+            Field("due_on", "response due", "date"),
+            Field("market_org_id", "asked by", "select", markets,
+                  optional_select=True),
+            # withdrawal lives here, not on a key: `d` already means "done"
+            # app-wide. Blank = live; a date = withdrawn.
+            Field("cancelled_at", "cancelled on", "date"),
+            Field("notes", "notes", "textarea"),
+        ],
+        initial=initial,
+    )
+
+
+def apply_request(
+    conn: sqlite3.Connection,
+    values: dict[str, Any],
+    org_id: str,
+    existing: RfiRequest | None = None,
+) -> RfiRequest:
+    core = dropped(values)
+    if existing:
+        return rfi_repo.update_request(conn, existing.id, **core)
+    title = core.pop("title")
+    requested_on = core.pop("requested_on")
+    return rfi_repo.create_request(conn, org_id, title, requested_on, **core)
+
+
+def rfi_item_form(
+    existing: RfiItem | None = None, *, conn: sqlite3.Connection | None = None
+) -> FormSpec:
+    category_sugg = tuple(vocab.rfi_categories(conn)) if conn else ()
+    initial = (
+        existing.model_dump()
+        if existing
+        else {"kind": "question", "status": "outstanding"}
+    )
+    return FormSpec(
+        "edit item" if existing else "new item",
+        [
+            Field("prompt", "item", required=True,
+                  placeholder="loss runs 2021-2025"),
+            Field("kind", "type", "select",
+                  tuple((k, k) for k in RFI_ITEM_KINDS)),
+            Field("category", "group", suggestions=category_sugg,
+                  placeholder="Financials"),
+            Field("due_on", "needed by", "date"),
+            Field("detail", "detail", "textarea"),
+            Field("status", "status", "select",
+                  tuple((s, s) for s in RFI_ITEM_STATUSES)),
+            Field("received_on", "received on", "date"),
+            Field("response", "response", "textarea"),
+        ],
+        initial=initial,
+    )
+
+
+def apply_rfi_item(
+    conn: sqlite3.Connection,
+    values: dict[str, Any],
+    request_id: str,
+    existing: RfiItem | None = None,
+) -> RfiItem:
+    core = dropped(values)
+    if existing:
+        return rfi_repo.update_item(conn, existing.id, **core)
+    prompt = core.pop("prompt")
+    return rfi_repo.add_item(conn, request_id, prompt, **core)
