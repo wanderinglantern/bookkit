@@ -87,7 +87,10 @@ def _projects_state(conn: sqlite3.Connection, org: Org) -> tuple[str, str]:
 
 
 def _followups_state(conn: sqlite3.Connection, org: Org) -> tuple[str, str]:
-    open_tasks = tasks_repo.open_tasks(conn, org_id=org.id)
+    # open_tasks_for_client (not open_tasks) — a placement-attached task can
+    # carry org_id NULL, so org_id=-filtering alone would drop it. See that
+    # function's docstring in repo/tasks.py.
+    open_tasks = tasks_repo.open_tasks_for_client(conn, org.id)
     if open_tasks:
         return COMPLETE, f"{len(open_tasks)} open task(s)"
     return UNTOUCHED, "no follow-up task (optional)"

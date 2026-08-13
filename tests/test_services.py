@@ -434,6 +434,22 @@ def test_onboarding_contact_without_reach_is_partial(conn):
     assert "email or phone" in status["contacts"].summary
 
 
+def test_onboarding_followups_sees_placement_attached_task(conn):
+    from bookkit.services import onboarding
+
+    org = orgs.create(conn, name="Newco3", kind="client")
+    p = placements.create(conn, org_id=org.id, program_name="Newco3 Package 26-27",
+                          period_from="2026-09-01", period_to="2027-09-01")
+    # placement-attached only: org_id NULL, placement_id set — legal per
+    # tasks_repo.open_tasks_for_client's docstring. open_tasks(org_id=...)
+    # alone drops this row; the followups step must not.
+    tasks.create(conn, "Confirm bound terms", placement_id=p.id)
+
+    status = {s.step.key: s for s in onboarding.completeness(conn, org.id)}
+    assert status["followups"].state == onboarding.COMPLETE
+    assert "1 open task" in status["followups"].summary
+
+
 def test_incomplete_clients_lists_missing_labels(conn):
     from bookkit.services import onboarding
 
