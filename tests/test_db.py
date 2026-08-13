@@ -88,3 +88,12 @@ def test_pragmas(db_path: Path) -> None:
     assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     connection.close()
+
+
+def test_connect_readonly_refuses_writes(tmp_path):
+    path = tmp_path / "ro.db"
+    db.connect(path).close()  # create + migrate
+    ro = db.connect_readonly(path)
+    with pytest.raises(sqlite3.OperationalError):
+        ro.execute("INSERT INTO setting (key, value) VALUES ('x', 'y')")
+    ro.close()

@@ -32,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("today", help="today's brief as plain text")
 
+    sub.add_parser("mcp", help="stdio MCP server (work-machine cowork connector)")
+
     renew_p = sub.add_parser("renewals", help="upcoming renewals")
     renew_p.add_argument("--days", type=int, default=90)
 
@@ -102,6 +104,12 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
 
     if args.command == "today":
         _print_today(conn)
+        return 0
+
+    if args.command == "mcp":
+        from .mcpserver import serve
+
+        serve(args.db)
         return 0
 
     if args.command == "renewals":

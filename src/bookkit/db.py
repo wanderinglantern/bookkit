@@ -79,6 +79,15 @@ def connect(path: Path | str | None = None, migrate: bool = True) -> sqlite3.Con
     return conn
 
 
+def connect_readonly(path: Path | str | None = None) -> sqlite3.Connection:
+    """A mode=ro URI connection: read-only enforced by SQLite itself, not by
+    convention — the MCP server's read tools use this."""
+    target = Path(path) if path else default_db_path()
+    conn = sqlite3.connect(f"file:{target}?mode=ro", uri=True, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def schema_version(conn: sqlite3.Connection) -> int:
     row = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
