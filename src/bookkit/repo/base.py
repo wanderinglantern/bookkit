@@ -48,9 +48,14 @@ def log_event(
     new_value: Any,
     note: str | None = None,
 ) -> None:
+    from .. import db  # function-level: db imports nothing from repo, but keep the seam thin
+
+    batch = db.current_batch()
+    if batch is not None:
+        batch.touch(entity_id)
     conn.execute(
         "INSERT INTO event_log (id, entity_type, entity_id, field, old_value, new_value,"
-        " changed_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        " changed_at, note, batch_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             new_ulid(),
             entity_type,
@@ -60,6 +65,7 @@ def log_event(
             None if new_value is None else str(new_value),
             utc_now(),
             note,
+            None if batch is None else batch.batch_id,
         ),
     )
 

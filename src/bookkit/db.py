@@ -15,10 +15,60 @@ import re
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from datetime import UTC, datetime
 from pathlib import Path
 
 _MIGRATION_RE = re.compile(r"^(\d{3})_.+\.sql$")
+
+BLAST_CAP = 25
+"""Most entities one batched writer action may touch before it is refused.
+A judgement, not a derivation — REVIEW POINT in the batch-undo design doc."""
+
+
+class BlastRadiusExceeded(Exception):
+    """A batched write tried to touch more entities than its cap allows."""
+
+
+@dataclass
+class BatchState:
+    """Ambient state for one batched action: which batch events belong to, and
+    how many distinct entities it has touched so far."""
+
+    batch_id: str
+    cap: int = BLAST_CAP
+    entities: set[str] = dc_field(default_factory=set)
+
+    def touch(self, entity_id: str) -> None:
+        """Count a distinct entity against the cap. Raising here rides the
+        existing ROLLBACK in transaction(), so an over-cap write leaves NOTHING
+        behind — and the check cannot be forgotten by a future write tool,
+        because it lives under log_event rather than in any tool."""
+        if entity_id in self.entities:
+            return
+        if len(self.entities) >= self.cap:
+            raise BlastRadiusExceeded(
+                f"this action would touch more than {self.cap} records; "
+                "narrow it and try again"
+            )
+        self.entities.add(entity_id)
+
+
+_current_batch: ContextVar[BatchState | None] = ContextVar(
+    "bookkit_current_batch", default=None
+)
+
+
+def current_batch() -> BatchState | None:
+    """The batch events written right now belong to, or None.
+
+    A ContextVar rather than an attribute on the connection: sqlite3.Connection
+    is a C type with no __dict__ and rejects attribute assignment. It is also
+    the right scope for the MCP server's async tool wrappers, where a module
+    global would bleed between concurrent calls."""
+    return _current_batch.get()
 
 
 def utc_now() -> str:
@@ -49,17 +99,27 @@ def migrations_dir() -> Path:
 
 
 @contextmanager
-def transaction(conn: sqlite3.Connection) -> Iterator[None]:
+def transaction(
+    conn: sqlite3.Connection, batch: BatchState | None = None
+) -> Iterator[None]:
     """A REAL write transaction on the autocommit connection. BEGIN IMMEDIATE
     takes the write lock up front; any exception rolls the whole batch back.
-    Without this, conn.commit()/rollback() are silent no-ops."""
-    conn.execute("BEGIN IMMEDIATE")
+    Without this, conn.commit()/rollback() are silent no-ops.
+
+    `batch` groups every event written inside the block under one id, so one
+    writer action becomes one undoable unit. It defaults to None, which is why
+    imports/commit.py stays unbatched without needing a special case."""
+    token = _current_batch.set(batch)
     try:
-        yield
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-    conn.execute("COMMIT")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        conn.execute("COMMIT")
+    finally:
+        _current_batch.reset(token)
 
 
 def connect(path: Path | str | None = None, migrate: bool = True) -> sqlite3.Connection:
