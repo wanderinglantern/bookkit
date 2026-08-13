@@ -400,6 +400,55 @@ def test_write_empty_book_says_so(conn, tmp_path):
     assert load_workbook(path).active["A2"].value == "No open items as of 2026-08-12"
 
 
+def test_write_three_tab_order_and_headers(conn, tmp_path):
+    from bookkit.services.export_open_items import write
+
+    client = orgs.create(conn, kind="client", name="Acme", status="active", owner="grant")
+    tasks.create(conn, "Chase updated loss runs", org_id=client.id)
+    placements.create(
+        conn, client.id, "Acme Property 25-26", "2025-10-01", "2026-10-01",
+        status="bound", total_premium=250_000_00,
+    )
+    live = projects_repo.create_project(conn, client.id, "Warehouse Expansion")
+    projects_repo.add_need(conn, live.id, "Builder's Risk", "2026-09-01")
+
+    path = write(conn, client.id, tmp_path / "w.xlsx", date(2026, 8, 13))
+    from openpyxl import load_workbook  # test-only import; src never imports it
+    wb = load_workbook(path)
+    # spec-fixed sheet order; sheet 1 title unchanged from the single-sheet era
+    assert wb.sheetnames == ["Open Items — Acme", "Projects", "Schedule of Insurance"]
+    assert [c.value for c in wb["Projects"][1]] == [
+        "Line", "Notes", "Needed by", "Status", "Limit"]
+    assert [c.value for c in wb["Schedule of Insurance"][1]] == [
+        "Insured", "Line of Coverage", "Carrier", "Policy Number", "Effective Date",
+        "Expiration Date", "Limits", "Deductible / SIR / Retention", "Premium"]
+    # show_premiums=True end to end: the book-data premium in whole dollars
+    soi_values = [c.value for row in wb["Schedule of Insurance"].iter_rows() for c in row]
+    assert 250_000 in soi_values
+
+
+def test_write_omits_sheets_without_data(conn, tmp_path):
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Solo Co", kind="client")
+    tasks.create(conn, "one open task", org_id=org.id)
+    path = write(conn, org.id, tmp_path / "s.xlsx", date(2026, 8, 13))
+    from openpyxl import load_workbook
+    assert load_workbook(path).sheetnames == ["Open Items — Solo Co"]
+
+
+def test_write_three_tab_deterministic(conn, tmp_path):
+    from bookkit.services.export_open_items import write
+
+    client = orgs.create(conn, kind="client", name="Det Co", status="active")
+    placements.create(conn, client.id, "Det Program", "2025-01-01", "2026-01-01")
+    live = projects_repo.create_project(conn, client.id, "Det Project")
+    projects_repo.add_need(conn, live.id, "GL", "2026-09-01")
+    a = write(conn, client.id, tmp_path / "a.xlsx", date(2026, 8, 13))
+    b = write(conn, client.id, tmp_path / "b.xlsx", date(2026, 8, 13))
+    assert a.read_bytes() == b.read_bytes()  # three sheets, one finalize, same bytes
+
+
 def test_onboarding_completeness_derives_from_data(conn):
     from bookkit.services import onboarding
 

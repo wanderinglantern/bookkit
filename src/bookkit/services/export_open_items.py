@@ -1,10 +1,16 @@
-"""Client-facing open-items list, composed PURELY — rendering is towerkit's
-job (write() in this module glues to towerkit.render.table_xlsx; bookkit
-has no xlsx dependency). Sections: org-level tasks split by category
-(SOV-style, alphabetical) plus a trailing General for uncategorized tasks
-and loose submissions, one per placement (its tasks + outstanding
-submissions), one per project (unmet needs). Determinism: `today` is a
-parameter, never the wall clock."""
+"""The client-facing export: a three-tab workbook — Open Items · Projects ·
+Schedule of Insurance — composed PURELY, with rendering left to towerkit
+(write() in this module glues to towerkit.render.table_xlsx /
+render.soi_xlsx; bookkit has no xlsx dependency). Sheet 1 (Open Items):
+org-level tasks split by category (SOV-style, alphabetical) plus a
+trailing General for uncategorized tasks and loose submissions, one
+section per placement (its tasks + outstanding submissions), one per
+project (unmet needs) — always present, even when empty. Sheet 2
+(Projects): every need on every live project, omitted (not blank) when
+the org has none. Sheet 3 (Schedule of Insurance): towerkit's SOI
+machinery per linked placement with a book-data fallback, present
+whenever any placement exists. Determinism: `today` is a parameter, never
+the wall clock."""
 
 from __future__ import annotations
 
@@ -291,16 +297,35 @@ _COLUMNS: tuple[tuple[str, float], ...] = (
     ("Due / Needed by", 16.0), ("Status", 14.0),
 )
 
+_PROJECT_COLUMNS: tuple[tuple[str, float], ...] = (
+    ("Line", 28.0), ("Notes", 50.0), ("Needed by", 16.0),
+    ("Status", 14.0), ("Limit", 16.0),
+)
+
 
 def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) -> Path:
-    """Render via towerkit so the workbook carries SOI formatting exactly —
-    formatting authority stays in one place (the money.parse_share pattern)."""
-    from towerkit.render.table_xlsx import TableColumn, TableSection, write_table
+    """The three-tab client deliverable — Open Items · Projects · Schedule of
+    Insurance — rendered via towerkit so every sheet carries SOI formatting
+    exactly (the money.parse_share pattern: formatting authority in one
+    place). Projects appears only when live projects exist; the SOI sheet
+    whenever any placement exists; finalize runs ONCE."""
+    from towerkit.render.soi_xlsx import render_soi_sheet
+    from towerkit.render.table_xlsx import (
+        TableColumn,
+        TableSection,
+        finalize_workbook,
+        new_workbook,
+        render_table_sheet,
+        sanitize_sheet_title,
+    )
     from towerkit.theme import load_theme
 
     org = orgs.get(conn, org_id)
-    columns = [TableColumn(h, w) for h, w in _COLUMNS]
+    theme = load_theme(None)
+    wb = new_workbook()
 
+    # Sheet 1 — Open Items: content identical to the single-sheet era.
+    columns = [TableColumn(h, w) for h, w in _COLUMNS]
     sections = [
         TableSection(
             s.label,
@@ -310,11 +335,35 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
         for s in compose(conn, org_id, today)
     ] or [TableSection(None, ((f"No open items as of {today.isoformat()}",
                                "", "", "", "", ""),))]
-
-    return write_table(
-        columns, sections,
-        title=f"Open Items — {org.name}"[:31],  # Excel sheet-title cap
-        theme=load_theme(None), out_path=out_path,
+    ws = wb.active
+    assert ws is not None
+    ws.title = sanitize_sheet_title(f"Open Items — {org.name}"[:31])
+    render_table_sheet(
+        ws, columns, sections, theme=theme,
         # Detail is the only multi-line column; two-line floor like the SOI
         row_height=lambda values: 18.0 * max(2, str(values[2]).count("\n") + 1),
     )
+
+    # Sheet 2 — Projects: omitted (not blank) when no live projects.
+    project_sections = compose_projects(conn, org_id)
+    if project_sections:
+        ws_projects = wb.create_sheet(sanitize_sheet_title("Projects"))
+        project_columns = [TableColumn(h, w) for h, w in _PROJECT_COLUMNS[:-1]]
+        project_columns.append(TableColumn("Limit", 16.0, align="right"))
+        render_table_sheet(
+            ws_projects, project_columns,
+            [TableSection(s.label, s.rows) for s in project_sections],
+            theme=theme,
+            # Notes is the only multi-line column; same two-line floor
+            row_height=lambda values: 18.0 * max(2, str(values[1]).count("\n") + 1),
+        )
+
+    # Sheet 3 — Schedule of Insurance: whenever any placement exists
+    # (compose_soi is non-empty exactly then). The client's own program:
+    # show_premiums=True.
+    soi_sections = compose_soi(conn, org_id)
+    if soi_sections:
+        ws_soi = wb.create_sheet(sanitize_sheet_title("Schedule of Insurance"))
+        render_soi_sheet(ws_soi, soi_sections, theme=theme, show_premiums=True)
+
+    return finalize_workbook(wb, out_path)
