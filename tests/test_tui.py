@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from textual.coordinate import Coordinate
 from textual.widgets import Input, Label, ListView
 
 from bookkit import db, seed
@@ -586,6 +587,176 @@ async def test_navigator_inline_cell_edit(seeded_db: Path) -> None:
         await pilot.press("u")
         await pilot.pause()
         assert contacts_repo.get(conn, contact.id).role == (contact.role or None)
+
+
+async def _open_account_group(pilot, nav, org_id: str, group: str):
+    """Drive the tree the way a user does: expand the account, land on one of
+    its group leaves. Returns the (tree, account node) pair."""
+    from textual.widgets import Tree
+
+    tree = nav.query_one("#nav-tree", Tree)
+    tree.focus()
+    await pilot.pause()
+    node = next(
+        n for n in tree.root.children[1].children if n.data == ("account", org_id)
+    )
+    tree.cursor_line = node.line
+    await pilot.pause()
+    node.expand()
+    await pilot.pause()
+    leaf = next(n for n in node.children if n.data[1][0] == group)
+    tree.cursor_line = leaf.line
+    await pilot.pause()
+    assert nav._current == ("group", (group, org_id))
+    return tree, node
+
+
+async def test_navigator_refresh_keeps_your_place_in_the_tree(seeded_db: Path) -> None:
+    """A refresh rebuilds the tree without moving the user. tree.clear() drops
+    expansion, which shortens the tree, which makes Textual clamp cursor_line
+    onto an unrelated node — the pane then swapped out from under whatever the
+    user had open (this is what crashed inline editing)."""
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        org = orgs.list_orgs(app.conn, kind="client")[-1]
+        tree, _node = await _open_account_group(pilot, nav, org.id, "tasks")
+
+        nav.refresh_data()
+        await pilot.pause()
+
+        assert nav._current == ("group", ("tasks", org.id)), "pane moved on refresh"
+        rebuilt = next(
+            n for n in tree.root.children[1].children if n.data == ("account", org.id)
+        )
+        assert rebuilt.is_expanded, "the account collapsed under the user"
+        assert tree.cursor_node is not None
+        assert tree.cursor_node.data == ("group", ("tasks", org.id))
+        assert nav.query_one("#nav-table", InlineTable).inline_fields
+
+
+async def test_inline_edit_defers_refresh_until_the_editor_closes(
+    seeded_db: Path,
+) -> None:
+    """tab hops across the row without a refresh landing mid-edit — the editor
+    is mounted on the SCREEN, so its own focus fires on_descendant_focus and
+    used to flush the deferred refresh straight into the open editor."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets.inline_edit import CellEditor, InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[-1]
+    task = tasks_repo.create(
+        app.conn, "call broker", due_on=date.today().isoformat(), org_id=org.id
+    )
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        await _open_account_group(pilot, nav, org.id, "tasks")
+        table = nav.query_one("#nav-table", InlineTable)
+
+        refreshes: list[bool] = []
+        real_refresh = nav.refresh_data
+        nav.refresh_data = lambda: (refreshes.append(table.editing), real_refresh())
+
+        table.focus()
+        table.move_cursor(row=table.get_row_index(f"task:{task.id}"))
+        await pilot.pause()
+        await pilot.press("i")  # opens on due (column 0)
+        await pilot.pause()
+        nav.query_one(CellEditor).value = date.today().isoformat()
+
+        await pilot.press("tab")  # commit due, hop to title (column 1)
+        await pilot.pause()
+        assert refreshes == [], "a refresh landed while the editor was open"
+        assert nav.query_one(CellEditor)._coordinate.column == 1
+
+        nav.query_one(CellEditor).value = "call broker back"
+        await pilot.press("enter")  # commit + close — now the refresh may land
+        await pilot.pause()
+        assert not nav.query(CellEditor)
+        assert refreshes and not any(refreshes), "refreshed with an editor open"
+        assert tasks_repo.get(app.conn, task.id).title == "call broker back"
+
+
+async def test_inline_edit_hop_survives_a_table_rebuild(seeded_db: Path) -> None:
+    """Belt and braces: if the table is rebuilt under a live editor anyway,
+    the hop closes the editor instead of raising ValueError."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets.inline_edit import CellEditor, InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[-1]
+    task = tasks_repo.create(
+        app.conn, "call broker", due_on=date.today().isoformat(), org_id=org.id
+    )
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav._current = ("group", ("tasks", org.id))
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(f"task:{task.id}"))
+        await pilot.pause()
+        await pilot.press("i")
+        await pilot.pause()
+        assert nav.query(CellEditor)
+
+        # the pane swaps to a view with no editable columns at all
+        nav._current = ("att", "overdue")
+        nav._render_pane()
+        await pilot.pause()
+        assert not table.inline_fields
+        assert not nav.query(CellEditor), "rebuilding the table abandons the editor"
+
+        # and the card panes, which hide the table without ever clearing it
+        nav._current = ("group", ("tasks", org.id))
+        nav._render_pane()
+        await pilot.pause()
+        table.focus()
+        table.move_cursor(row=table.get_row_index(f"task:{task.id}"))
+        await pilot.pause()
+        await pilot.press("i")
+        await pilot.pause()
+        assert nav.query(CellEditor)
+        nav._current = ("account", org.id)
+        nav._render_pane()
+        await pilot.pause()
+        assert not table.display
+        assert not nav.query(CellEditor), "editor left floating over a hidden table"
+
+        # a hop from a stale coordinate is a no-op, not a crash
+        table.inline_fields = {}
+        table._hop(Coordinate(0, 1), +1)
+        assert not nav.query(CellEditor)
+
+
+async def test_export_row_reports_a_stale_towerkit(seeded_db: Path) -> None:
+    """x must not take the app down when the installed towerkit predates the
+    workbook renderer — say so and stay up."""
+    from bookkit.services import export_open_items
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        org = orgs.list_orgs(app.conn, kind="client")[0]
+        nav._current = ("account", org.id)
+        nav._render_pane()
+        await pilot.pause()
+
+        def boom(*a, **k):
+            raise ModuleNotFoundError("No module named 'towerkit.render.table_xlsx'")
+
+        original, export_open_items.write = export_open_items.write, boom
+        try:
+            await pilot.press("x")
+            await pilot.pause()
+        finally:
+            export_open_items.write = original
+        assert app.is_running
+        assert any("towerkit" in str(n.message) for n in app._notifications)
 
 
 async def test_task_tables_show_description_and_detail(seeded_db: Path) -> None:

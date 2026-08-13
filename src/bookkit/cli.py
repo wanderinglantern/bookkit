@@ -225,6 +225,9 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
         out = args.out or Path(f"{org.ref}-open-items-{today.isoformat()}.xlsx")
         try:
             path = export_open_items.write(conn, org.id, out, today)
+        except ImportError as exc:
+            print(f"export needs a newer towerkit — update it ({exc})")
+            return 1
         except OSError as exc:
             print(f"could not write {out}: {exc}")
             return 1

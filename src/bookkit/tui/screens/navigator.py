@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from ..app import BookkitApp
 
+from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Static, Tree
+from textual.widgets.tree import TreeNode
 
 from ...dates import days_until
 from ...money import format_cents_compact
@@ -80,6 +82,14 @@ def _section(label: str, count: int | None = None) -> str:
     """A tree section header: quiet bold caps, count in dim."""
     suffix = f" [{theme.DIM}]· {count}[/]" if count is not None else ""
     return f"[b {theme.DIM}]{label}[/]{suffix}"
+
+
+def _walk(node: TreeNode) -> Iterator[TreeNode]:
+    """Every node under `node`, depth-first. Children added while walking are
+    visited (the restore pass fills accounts in as it expands them)."""
+    for child in node.children:
+        yield child
+        yield from _walk(child)
 
 
 def _attention_label(key: str, label: str, count: int) -> str:
@@ -147,6 +157,12 @@ class NavigatorScreen(Screen):
         conn = self.app.conn
         today = date.today()
         tree = self.query_one("#nav-tree", Tree)
+        # tree.clear() throws away expansion, which shortens the tree, which
+        # makes Textual clamp cursor_line onto whatever node now sits there —
+        # silently teleporting the user (and swapping the pane out from under
+        # anything open on it). Put them back once the rebuild is done.
+        was_expanded = {n.data for n in _walk(tree.root) if n.is_expanded and n.data}
+        was_on = self._current
         tree.clear()
         tree.show_root = False
         tree.root.expand()
@@ -192,10 +208,29 @@ class NavigatorScreen(Screen):
                     family.add_leaf(kid.name, data=("market", kid.id))
             else:
                 markets_root.add_leaf(master.name, data=("market", master.id))
+        self._restore_tree_place(tree, was_expanded, was_on)
         self._summary = book.summary(conn)
         self._n_clients = len(clients)
         self._render_status_bar()
         self._render_pane()
+
+    def _restore_tree_place(
+        self, tree: Tree, was_expanded: set, was_on: NodeData
+    ) -> None:
+        """Re-expand what the user had open and put the cursor back on the
+        node it was on. Nodes that no longer exist (a deleted account) simply
+        do not come back — the cursor then lands wherever Textual puts it."""
+        for node in _walk(tree.root):
+            if node.data in was_expanded and not node.is_expanded:
+                if node.data and node.data[0] == "account":
+                    # group leaves normally arrive via on_tree_node_expanded,
+                    # which is a message — too late for the cursor lookup below
+                    self._add_account_groups(node)
+                node.expand()
+        target = next((n for n in _walk(tree.root) if n.data == was_on), None)
+        if target is not None and target.line >= 0:
+            self._current = was_on
+            tree.cursor_line = target.line
 
     def _render_status_bar(self) -> None:
         s = self._summary
@@ -222,10 +257,16 @@ class NavigatorScreen(Screen):
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         data = event.node.data
-        if data is None or data[0] != "account" or event.node.children:
+        if data is None or data[0] != "account":
+            return
+        self._add_account_groups(event.node)
+
+    def _add_account_groups(self, node: TreeNode) -> None:
+        """The lazy children of an account node: its lists, with counts."""
+        if node.children or not node.data:
             return
         conn = self.app.conn
-        org_id = data[1]
+        org_id = node.data[1]
         counts = (
             ("placements", len(placements.for_org(conn, org_id))),
             ("contacts", len(contacts.for_org(conn, org_id))),
@@ -234,7 +275,7 @@ class NavigatorScreen(Screen):
             ("projects", len(projects_repo.projects_for_org(conn, org_id))),
         )
         for group, count in counts:
-            event.node.add_leaf(f"{group} ({count})", data=("group", (group, org_id)))
+            node.add_leaf(f"{group} ({count})", data=("group", (group, org_id)))
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._current = event.node.data or ("none", None)
@@ -261,10 +302,20 @@ class NavigatorScreen(Screen):
     def on_descendant_focus(self, event) -> None:
         # focus lands asynchronously — the hint re-renders when it does,
         # so "tab into rows" flips to "esc back to tree" at the right moment
-        if self._refresh_pending:
-            self._refresh_pending = False
-            self.refresh_data()
+        self._flush_pending_refresh()
         self._render_hint_for_current()
+
+    def _flush_pending_refresh(self) -> None:
+        """A refresh deferred by a live cell edit lands once the editor is
+        gone. The editor is mounted on the SCREEN, so its own focus fires
+        on_descendant_focus — without the `editing` check the refresh flushed
+        straight into the open editor, mid-tab-hop, which is exactly what the
+        deferral exists to prevent."""
+        table = self.query_one("#nav-table", InlineTable)
+        if not self._refresh_pending or table.editing:
+            return
+        self._refresh_pending = False
+        self.refresh_data()
 
     def on_descendant_blur(self, event) -> None:
         self._render_hint_for_current()
@@ -303,6 +354,9 @@ class NavigatorScreen(Screen):
         new_key = (kind, payload)
         keep = table.cursor_row if new_key == self._fill_key and table.display else None
         self._fill_key = new_key
+        # the table is about to point at different rows — an open editor is
+        # anchored to a cell that will not survive it (card panes never clear())
+        table.cancel_edit()
         table.inline_fields = {}
         if kind == "att":
             card.display = False
@@ -682,10 +736,10 @@ class NavigatorScreen(Screen):
         self.notify(f"{event.field.label} saved — u undoes")
         # refreshing mid-edit would pull rows out from under the editor while
         # tab walks the row; flush when the editor closes and focus returns
-        if event.table._editor is None:
-            self.refresh_data()
-        else:
+        if event.table.editing:
             self._refresh_pending = True
+        else:
+            self.refresh_data()
 
     # -- row actions ---------------------------------------------------------------
 
@@ -804,6 +858,14 @@ class NavigatorScreen(Screen):
         out = Path(f"{org.ref}-open-items-{today.isoformat()}.xlsx")
         try:
             path = export_open_items.write(conn, org_id, out, today)
+        except ImportError as exc:
+            # the workbook renderer lives in towerkit; an older towerkit on
+            # this machine must not take the whole app down
+            self.notify(
+                f"export needs a newer towerkit — update it ({exc})",
+                severity="error",
+            )
+            return
         except OSError as exc:
             self.notify(f"export failed: {exc}", severity="error")
             return

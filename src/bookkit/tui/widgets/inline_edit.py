@@ -12,6 +12,7 @@ after each fill, then handles CellEdited by writing to the repo."""
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Self
 
 from textual.binding import Binding
 from textual.coordinate import Coordinate
@@ -56,6 +57,12 @@ class InlineTable(ListTable):
         self.inline_initial: Callable[[str, str], str] = lambda _rk, _fk: ""
         self._editor: CellEditor | None = None
 
+    @property
+    def editing(self) -> bool:
+        """A cell editor is open over this table. Screens check this before
+        rebuilding rows — a refresh mid-edit yanks the cell out from under it."""
+        return self._editor is not None
+
     # -- opening ---------------------------------------------------------------
 
     def action_inline_edit(self) -> None:
@@ -72,11 +79,13 @@ class InlineTable(ListTable):
         return str(value) if value else None
 
     def _open_editor(self, coordinate: Coordinate) -> None:
+        # opening always supersedes: never leave the previous editor floating
+        # over a cell we have already decided to move off of
+        self._close_editor()
         row_key = self._row_key_at(coordinate.row)
         field = self.inline_fields.get(coordinate.column)
         if row_key is None or field is None:
             return
-        self._close_editor()
         try:
             region = self._get_cell_region(coordinate)
         except Exception:
@@ -117,19 +126,44 @@ class InlineTable(ListTable):
         return True
 
     def _hop(self, coordinate: Coordinate, direction: int) -> None:
-        """Move the editor to the next/previous editable column in the row."""
+        """Move the editor to the next/previous editable column in the row.
+
+        The screen owns inline_fields and can swap it (a refresh landing
+        mid-edit, the pane switching to a different list). When the column we
+        started on is no longer editable there is nowhere to hop to, so close
+        — never raise out of a keypress and take the app down."""
         columns = sorted(self.inline_fields)
+        if coordinate.column not in columns:
+            self._close_editor()
+            return
         pos = columns.index(coordinate.column) + direction
         if 0 <= pos < len(columns):
             self._open_editor(Coordinate(coordinate.row, columns[pos]))
         else:
             self._close_editor()
 
+    def cancel_edit(self) -> None:
+        """Abandon any open editor. Screens call this before re-pointing the
+        table at different rows — esc semantics, so nothing is written.
+        Call it while the table is still visible: the editor hands focus back
+        to the table, and a hidden table cannot take it."""
+        self._close_editor()
+
+    def clear(self, columns: bool = False) -> Self:
+        # the rows the editor is anchored to are about to stop existing —
+        # abandon the edit rather than float over a stale cell (esc semantics)
+        self._close_editor()
+        return super().clear(columns=columns)
+
     def _close_editor(self) -> None:
         if self._editor is not None:
             editor, self._editor = self._editor, None
+            # only pull focus back if the editor still had it — when the user
+            # clicked away, focus already belongs somewhere they chose
+            had_focus = editor.has_focus
             editor.remove()
-            self.focus()
+            if had_focus:
+                self.focus()
 
 
 class CellEditor(Input):
