@@ -51,11 +51,13 @@ towerkit's job):
 - Money (need limits/indications) formatted in whole dollars via the
   existing cents→dollars boundary; dates client-readable.
 
-## Projects worksheet (added 2026-08-13)
+## Additional worksheets (added 2026-08-13): a three-tab workbook
 
-The workbook gains a second worksheet, "Projects", in the same styled-
-table formatting — the client's projects data in full, not just the
-unmet-need slice the Open Items sheet shows:
+The export becomes a three-sheet client deliverable, in this order:
+**Open Items · Projects · Schedule of Insurance.**
+
+**Sheet 2 — "Projects"**, same styled-table formatting — the client's
+projects data in full, not just the unmet-need slice sheet 1 shows:
 
 - One section per non-completed project; section label carries the
   project name, status, and period (start → end).
@@ -66,10 +68,24 @@ unmet-need slice the Open Items sheet shows:
 - The Open Items sheet keeps its unmet-need rows (open-items focus);
   the Projects sheet is the fuller report. REVIEW POINT: drop the
   "Project —" sections from sheet 1 once sheet 2 exists?
-- DEPENDS ON: towerkit's multi-sheet workbook composition API (built by
-  the SOI-schematic phase — sheet-level writer + single finalize). This
-  addition executes as a small bookkit follow-up plan once that API
-  lands and merges.
+**Sheet 3 — "Schedule of Insurance"** — the policy list, pulled straight
+from towerkit's SOI machinery:
+
+- towerkit's SOI is per-PROGRAM; this workbook is per-CLIENT. The sheet
+  concatenates `build_soi(program)` sections for EVERY linked placement
+  (bookkit loads each `placement.program_path`), each program's sections
+  under a program-name label, standard SOI columns, `show_premiums=True`
+  (it is the client's own program).
+- UNLINKED placements (no towerkit file) still appear: a minimal section
+  from book data — program name, period, status, premium — so the policy
+  list is complete, never silently partial.
+- Sheet included whenever the client has any placement.
+
+Both additions DEPEND ON towerkit's multi-sheet workbook composition API
+(built by the SOI-schematic phase — public sheet-level writers for both
+the generic table sheet AND the SOI sheet, plus single finalize; the
+plan-writer has been instructed accordingly). They execute as one small
+bookkit follow-up plan once that API lands and merges.
 
 ## Entry points
 
