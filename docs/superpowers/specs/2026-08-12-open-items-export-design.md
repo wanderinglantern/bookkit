@@ -51,6 +51,26 @@ towerkit's job):
 - Money (need limits/indications) formatted in whole dollars via the
   existing cents→dollars boundary; dates client-readable.
 
+## Projects worksheet (added 2026-08-13)
+
+The workbook gains a second worksheet, "Projects", in the same styled-
+table formatting — the client's projects data in full, not just the
+unmet-need slice the Open Items sheet shows:
+
+- One section per non-completed project; section label carries the
+  project name, status, and period (start → end).
+- Rows: every need on the project regardless of status — line, notes,
+  needed-by, prettified status, limit (formatted dollars), days open.
+- Sheet included automatically whenever the client has any non-completed
+  project; omitted (not blank) otherwise. No toggle.
+- The Open Items sheet keeps its unmet-need rows (open-items focus);
+  the Projects sheet is the fuller report. REVIEW POINT: drop the
+  "Project —" sections from sheet 1 once sheet 2 exists?
+- DEPENDS ON: towerkit's multi-sheet workbook composition API (built by
+  the SOI-schematic phase — sheet-level writer + single finalize). This
+  addition executes as a small bookkit follow-up plan once that API
+  lands and merges.
+
 ## Entry points
 
 - `bookctl export open-items <org-ref> [--out FILE]` — default filename
