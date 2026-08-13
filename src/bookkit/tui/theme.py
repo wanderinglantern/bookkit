@@ -86,6 +86,10 @@ STATUS_STYLES: dict[str, str] = {
     "cancelled": DIM,
     "placed": GREEN,
     "not_needed": DIM,
+    # rfi items
+    "outstanding": AMBER,
+    "received": GREEN,
+    "waived": DIM,
 }
 
 

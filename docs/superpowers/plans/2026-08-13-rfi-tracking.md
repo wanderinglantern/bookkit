@@ -73,16 +73,26 @@ def test_migration_is_idempotent(conn) -> None:
 
 
 def test_request_scope_is_exclusive(conn) -> None:
-    """A request points at a placement OR a project, never both."""
+    """A request points at a placement OR a project, never both.
+
+    FK enforcement is off for this one insert on purpose: db.connect sets
+    PRAGMA foreign_keys=ON, so the fake org/placement/project ids below would
+    raise IntegrityError on the FOREIGN KEY before SQLite ever evaluated the
+    CHECK — and the test would still pass with the CHECK deleted. Scoping it
+    to the CHECK is the whole point of the test."""
     import sqlite3
 
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute(
-            "INSERT INTO rfi_request "
-            "(id, ref, org_id, placement_id, project_id, title, requested_on,"
-            " created_at, updated_at) "
-            "VALUES ('x','RFI-9999','o','p','pr','t','2026-08-13','n','n')"
-        )
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+            conn.execute(
+                "INSERT INTO rfi_request "
+                "(id, ref, org_id, placement_id, project_id, title, requested_on,"
+                " created_at, updated_at) "
+                "VALUES ('x','RFI-9999','o','p','pr','t','2026-08-13','n','n')"
+            )
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
 
 
 def test_models_expose_rfi_vocabularies() -> None:
@@ -554,6 +564,8 @@ will render, so the datasheet and the export never disagree."
   - `services.rfi.is_open(conn, request_id: str) -> bool`
   - `services.rfi.outstanding_requests(conn, today: date, days: int = 120) -> list[RfiChase]`
   - `services.rfi.mark_received(conn, item_id: str, on: str) -> RfiItem`
+  - `repo.rfi.open_item_count(conn, request_id: str) -> int` — outstanding items only
+  - `repo.rfi.item_count(conn, request_id: str) -> int` — every live item
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1614,7 +1626,7 @@ Add a fill method, called from the same place the other tabs are filled (follow 
         table = self.query_one("#rfi-requests", ListTable)
         table.clear(columns=True)
         table.add_columns("ref", "request", "asked", "due", "open")
-        requests = rfi_repo.requests_for_org(conn, self.org_id)
+        requests = rfi_repo.requests_for_org(conn, self.current_org_id)
         for request in requests:
             open_count = rfi_repo.open_item_count(conn, request.id)
             table.add_row(

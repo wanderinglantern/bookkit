@@ -16,6 +16,7 @@ ORG_REF = "ACC"
 OPPORTUNITY_REF = "OPP"
 PLACEMENT_REF = "PLC"
 PROJECT_REF = "PRJ"
+RFI_REF = "RFI"
 
 
 def new_ulid() -> str:

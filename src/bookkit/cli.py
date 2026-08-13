@@ -285,6 +285,24 @@ def _print_today(conn: sqlite3.Connection) -> None:
     if not needs:
         print("  none")
 
+    from .services import rfi as rfi_svc
+
+    chases = rfi_svc.outstanding_requests(conn, today, days=120)
+    print(f"\nREQUESTS TO CHASE ({len(chases)})")
+    for chase in chases[:15]:
+        when = (
+            f"{-chase.days_remaining}d overdue"
+            if chase.days_remaining < 0
+            else f"{chase.days_remaining:>3}d"
+        )
+        asker = f" ({chase.market_name})" if chase.market_name else ""
+        print(
+            f"  [{when:>10}] {chase.org_name} — {chase.request.title}{asker} "
+            f"· {chase.open_count} of {chase.total_count} open"
+        )
+    if not chases:
+        print("  none")
+
     stale = staleness.stale_accounts(conn, today)
     print(f"\nSTALE ACCOUNTS ({len(stale)})")
     for account in stale[:10]:

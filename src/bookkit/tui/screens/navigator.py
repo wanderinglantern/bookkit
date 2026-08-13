@@ -26,6 +26,7 @@ from ...dates import days_until
 from ...money import format_cents_compact
 from ...repo import contacts, opportunities, orgs, placements
 from ...repo import projects as projects_repo
+from ...repo import rfi as rfi_repo
 from ...repo import tasks as tasks_repo
 from ...services import book, renewals, sla
 from .. import theme
@@ -59,8 +60,10 @@ ROW_HINTS = {
     "needs": "[b]enter[/b] opens account",
     "sla": "[b]enter[/b] opens account",
     "onboarding": "[b]enter[/b] resume onboarding",
+    "requests": "[b]a[/b] add · [b]e[/b] edit · [b]enter[/b] opens account",
+    "rfi": "[b]e[/b] edit request · [b]enter[/b] opens account",
 }
-ADDABLE = ("placements", "contacts", "opportunities", "tasks", "projects")
+ADDABLE = ("placements", "contacts", "opportunities", "tasks", "projects", "requests")
 
 # columns editable straight in the table (i) — values parse exactly like the
 # modal forms, and each commit is one undoable field write
@@ -174,11 +177,14 @@ class NavigatorScreen(Screen):
         due_tasks = tasks_repo.open_tasks(conn, due_by=today.isoformat())
         late = sla.past_sla(conn, today)
         from ...services import onboarding as onboarding_svc
+        from ...services import rfi as rfi_svc
 
         pending_onboarding = onboarding_svc.incomplete_clients(conn, today)
+        chases = rfi_svc.outstanding_requests(conn, today, days=120)
         self._attention = {
             "overdue": overdue, "renewals": soon, "needs": needs,
             "tasks": due_tasks, "sla": late, "onboarding": pending_onboarding,
+            "rfi": chases,
         }
         att = tree.root.add(_section("ATTENTION"), expand=True, data=("att-root", None))
         for key, label, count in (
@@ -188,6 +194,7 @@ class NavigatorScreen(Screen):
             ("tasks", "tasks due", len(due_tasks)),
             ("sla", "submissions past SLA", len(late)),
             ("onboarding", "onboarding incomplete", len(pending_onboarding)),
+            ("rfi", "requests to chase", len(chases)),
         ):
             att.add_leaf(_attention_label(key, label, count), data=("att", key))
 
@@ -273,6 +280,7 @@ class NavigatorScreen(Screen):
             ("opportunities", len(opportunities.for_org(conn, org_id))),
             ("tasks", len(tasks_repo.open_tasks(conn, org_id=org_id))),
             ("projects", len(projects_repo.projects_for_org(conn, org_id))),
+            ("requests", len(rfi_repo.requests_for_org(conn, org_id))),
         )
         for group, count in counts:
             node.add_leaf(f"{group} ({count})", data=("group", (group, org_id)))
@@ -526,6 +534,25 @@ class NavigatorScreen(Screen):
                     org.name, Text(missing, style=theme.AMBER),
                     org.created_at[:10], key=key,
                 )
+        elif which == "rfi":
+            table.add_columns(
+                "response due", right("due in"), "account", "request",
+                "asked by", "scope", "open",
+            )
+            from ...services import rfi as rfi_svc
+
+            for chase in self._attention["rfi"]:
+                key = f"rfi:{chase.request.id}"
+                self._row_org[key] = chase.request.org_id
+                table.add_row(
+                    date_text(chase.earliest_due, chase.days_remaining),
+                    days_text(chase.days_remaining), chase.org_name,
+                    chase.request.title,
+                    Text(chase.market_name or "—", style=theme.DIM),
+                    Text(rfi_svc.scope_label(conn, chase.request), style=theme.DIM),
+                    f"{chase.open_count} of {chase.total_count}",
+                    key=key,
+                )
 
     def _fill_group_table(self, table: InlineTable, group: str, org_id: str) -> None:
         conn = self.app.conn
@@ -599,6 +626,25 @@ class NavigatorScreen(Screen):
                 table.add_row(
                     project.ref, project.name, status_text(project.status),
                     project.start_on or dash(), project.end_on or dash(), key=key,
+                )
+        elif group == "requests":
+            table.add_columns("ref", "request", "asked by", "asked", "due", "open")
+            for request in rfi_repo.requests_for_org(conn, org_id):
+                key = f"rfi:{request.id}"
+                self._row_org[key] = org_id
+                asker: str | Text = dash()
+                if request.market_org_id:
+                    try:  # a request can outlive a merged-away market
+                        asker = orgs.get(conn, request.market_org_id).name
+                    except KeyError:
+                        asker = Text("(merged market)", style=theme.DIM)
+                open_count = rfi_repo.open_item_count(conn, request.id)
+                table.add_row(
+                    request.ref, request.title, asker, request.requested_on,
+                    date_text(request.due_on, days_until(request.due_on))
+                    if request.due_on else dash(),
+                    Text(str(open_count), style=theme.AMBER if open_count else theme.DIM),
+                    key=key,
                 )
 
     def _account_card(self, org_id: str) -> str:
@@ -777,6 +823,8 @@ class NavigatorScreen(Screen):
                 self, ef.project_form(),
                 lambda v: self.notify(f"created {ef.apply_project(conn, v, org_id).ref}"),
             )
+        elif group == "requests":
+            entity_actions.add_request(self, org_id)
 
     def action_edit_row(self) -> None:
         from ..widgets import entity_actions
@@ -813,6 +861,14 @@ class NavigatorScreen(Screen):
                 self, ef.project_form(project),
                 lambda v: ef.apply_project(conn, v, project.org_id, project),
             )
+        elif kind == "rfi":
+            try:
+                request = rfi_repo.get_request(conn, entity_id)
+            except KeyError:
+                self.notify("request no longer exists", severity="error")
+                return
+            entity_actions.edit_request(self, request)
+            return
 
     def action_task_done(self) -> None:
         row = self._selected_row()

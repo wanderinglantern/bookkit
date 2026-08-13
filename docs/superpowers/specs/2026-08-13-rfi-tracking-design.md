@@ -162,11 +162,26 @@ model requires:
 - Top: the client's requests — ref · title · asked by · scope ·
   requested · due · *n* open.
 - Bottom: an `InlineTable` of the selected request's items, `i`-editable
-  on prompt, category, due, status, received-on and response — the same
-  datasheet feel as the Open Items tab. `a` adds an item, `d` marks it
-  received (stamping `received_on` with today — the one `d` binding in
-  this feature, and it reads as "done" consistently with the rest of
-  the app), `u` undoes.
+  on prompt, category, due and response — the same datasheet feel as the
+  Open Items tab. `a` adds an item, `d` marks it received (stamping
+  `received_on` with today — the one `d` binding in this feature, and it
+  reads as "done" consistently with the rest of the app).
+
+  **Amended 2026-08-13 (controller ruling, final review).** The list
+  above originally included **status** and **received-on** as inline
+  columns. They are not: `d` owns that transition, setting both fields
+  together through `services.rfi.mark_received`, and the edit form can
+  set them explicitly when a correction is needed. Two ways to make one
+  state change is exactly the coupling this spec warns against
+  elsewhere, and an inline status edit that left `received_on` NULL
+  would close an item and strip its date. **Response** was added to the
+  inline set in the same pass: an answer you cannot see on the datasheet
+  defeats the point of the tab.
+
+  Also amended: `u` is not advertised on this tab. `d` is two field
+  writes and a paste is a batch of creates, so neither is a single
+  undoable mutation — `u` still works for `i` cell edits (one field
+  write each), but promising it over the tab as a whole was false.
 
 **Paste-to-create items.** A paste action on the items table opens a
 `TextArea`; each pasted line becomes an item, with leading `1.` / `1)` /

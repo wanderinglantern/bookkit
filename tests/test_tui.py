@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from textual.coordinate import Coordinate
-from textual.widgets import Input, Label, ListView
+from textual.widgets import Input, Label, ListView, TextArea
 
 from bookkit import db, seed
 from bookkit.repo import interactions, orgs
@@ -1140,3 +1140,332 @@ async def test_open_items_tab_inline_cell_edit_regroups(seeded_db: Path) -> None
         table = app.screen.query_one("#open-items-table", InlineTable)
         assert table.get_row_index(task.id) < table.get_row_index(anchor.id)
         assert str(table.get_row_at(table.get_row_index(task.id))[2]) == "Apple"
+
+
+async def test_navigator_rfi_chase_bucket_and_group(seeded_db: Path) -> None:
+    """A request with an outstanding item shows in the attention feed as ONE
+    row carrying its open count, and under its account as a group."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(
+        app.conn, org.id, "Sompo — property questions", "2026-08-05",
+        due_on=date.today().isoformat(),
+    )
+    rfi.add_item(app.conn, req.id, "how many vehicles?")
+    rfi.add_item(app.conn, req.id, "loss runs", kind="document")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        await pilot.pause()
+
+        nav._current = ("att", "rfi")
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        assert table.row_count == 1, "one row per request, not per item"
+        row = [str(c) for c in table.get_row(f"rfi:{req.id}")]
+        assert any("Sompo — property questions" in c for c in row)
+        assert any("2 of 2" in c for c in row)
+
+        nav._current = ("group", ("requests", org.id))
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        assert table.get_row_index(f"rfi:{req.id}") == 0
+
+
+async def test_request_scope_shows_on_both_surfaces(seeded_db: Path) -> None:
+    """The spec's scope link is only real if you can see it: the placement's
+    ref lands in the scope column on tab 9 and in the chase feed."""
+    from bookkit.repo import placements, rfi
+    from bookkit.tui.widgets.inline_edit import InlineTable
+    from bookkit.tui.widgets.tables import ListTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    placement = placements.for_org(app.conn, org.id)[0]
+    market = orgs.create(app.conn, name="Sompo", kind="market")
+    req = rfi.create_request(
+        app.conn, org.id, "Sompo — property questions", "2026-08-05",
+        due_on=date.today().isoformat(), market_org_id=market.id,
+        placement_id=placement.id,
+    )
+    rfi.add_item(app.conn, req.id, "how many vehicles?")
+
+    async with app.run_test(size=(170, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        await pilot.pause()
+        nav._current = ("att", "rfi")
+        nav._render_pane()
+        await pilot.pause()
+        row = [str(c) for c in nav.query_one("#nav-table", InlineTable).get_row(
+            f"rfi:{req.id}"
+        )]
+        assert any(placement.ref in c for c in row), "chase feed shows the scope"
+
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        table = app.screen.query_one("#rfi-requests", ListTable)
+        row = [str(c) for c in table.get_row(f"rfi:{req.id}")]
+        assert any(placement.ref in c for c in row), "tab 9 shows the scope"
+        assert any("Sompo" == c for c in row), "tab 9 shows who asked"
+
+
+async def test_request_survives_a_merged_away_market(seeded_db: Path) -> None:
+    """A market merge soft-deletes the loser. A request still pointing at a
+    dead market must not take the app down: the navigator's requests group
+    renders it, and its edit form builds instead of handing Select a dead id."""
+    from bookkit.repo import base as repo_base
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets import entity_forms as ef
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    dupe = orgs.create(app.conn, name="Axa XL", kind="market")
+    req = rfi.create_request(
+        app.conn, org.id, "Sompo — property questions", "2026-08-05",
+        market_org_id=dupe.id,
+    )
+    repo_base.soft_delete(app.conn, "org", dupe.id)
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        await pilot.pause()
+
+        nav._current = ("group", ("requests", org.id))
+        nav._render_pane()  # KeyError here used to kill the app
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        row = [str(c) for c in table.get_row(f"rfi:{req.id}")]
+        assert any("merged market" in c for c in row)
+
+        spec = ef.request_form(
+            rfi.get_request(app.conn, req.id), conn=app.conn, org_id=org.id
+        )
+        assert spec.initial["market_org_id"] is None, (
+            "a dead market id would raise InvalidSelectValueError"
+        )
+
+
+async def test_account_requests_tab(seeded_db: Path) -> None:
+    """Tab 9 is master/detail: the request list fills the items datasheet
+    below it, and d on an item marks it received and dates it today."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.inline_edit import InlineTable
+    from bookkit.tui.widgets.tables import ListTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(app.conn, org.id, "Sompo questions", "2026-08-05")
+    item = rfi.add_item(app.conn, req.id, "how many vehicles?")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+
+        requests = app.screen.query_one("#rfi-requests", ListTable)
+        assert requests.get_row_index(f"rfi:{req.id}") == 0
+
+        items = app.screen.query_one("#rfi-items", InlineTable)
+        assert items.get_row_index(item.id) == 0
+
+        items.focus()
+        items.move_cursor(row=0)
+        await pilot.press("d")
+        await pilot.pause()
+        got = rfi.get_item(app.conn, item.id)
+        assert got.status == "received"
+        assert got.received_on == date.today().isoformat()
+
+
+async def test_account_requests_tab_empty_paste_stays_open(seeded_db: Path) -> None:
+    """P over the items datasheet opens the paste form; saving an empty paste
+    is refused in place — the form stays up (input intact) and no item is
+    created. Commit-in-place: a refusal is corrected, never retyped."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.forms import FormModal
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(app.conn, org.id, "Sompo questions", "2026-08-05")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+
+        app.screen.query_one("#rfi-items", InlineTable).focus()
+        await pilot.pause()
+        await pilot.press("P")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+
+        form = app.screen
+        form.query_one("#form-pasted", TextArea).text = "   \n\n  "
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert app.screen is form, "an empty paste keeps the form open"
+        assert rfi.items_for_request(app.conn, req.id) == []
+
+        # and the refusal is a RAISE, not a returned string: push_form's
+        # wrapper discards whatever on_save returns, so a returned message
+        # would close the form and silently add nothing. The form's own
+        # required check fires first from the keyboard, so this is the only
+        # way to reach the guard behind it.
+        assert form._commit is not None
+        with pytest.raises(ValueError):
+            form._commit({"pasted": ""})
+        assert rfi.items_for_request(app.conn, req.id) == []
+
+        # the happy path: a real paste creates one item per line, in order,
+        # on the request the datasheet is pointed at
+        form.query_one("#form-pasted", TextArea).text = (
+            "1. how many vehicles?\n2. loss runs"
+        )
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert app.screen is not form, "an accepted paste closes the form"
+        assert [i.prompt for i in rfi.items_for_request(app.conn, req.id)] == [
+            "how many vehicles?", "loss runs",
+        ]
+
+
+async def test_paste_is_all_or_nothing(seeded_db: Path, monkeypatch) -> None:
+    """The only bulk write in the feature runs inside db.transaction, so a
+    failure partway leaves NO partial batch committed on the autocommit
+    connection."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.forms import FormModal
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(app.conn, org.id, "Sompo questions", "2026-08-05")
+
+    real_add_item = rfi.add_item
+    calls: list[str] = []
+
+    def flaky(conn, request_id, prompt, **fields):
+        calls.append(prompt)
+        if len(calls) == 2:
+            raise RuntimeError("disk fell over")
+        return real_add_item(conn, request_id, prompt, **fields)
+
+    monkeypatch.setattr(rfi, "add_item", flaky)
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        app.screen.query_one("#rfi-items", InlineTable).focus()
+        await pilot.pause()
+        await pilot.press("P")
+        await pilot.pause()
+        form = app.screen
+        assert isinstance(form, FormModal)
+        form.query_one("#form-pasted", TextArea).text = "first\nsecond\nthird"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert app.screen is form, "a failed paste keeps the form open"
+        assert rfi.items_for_request(app.conn, req.id) == [], (
+            "the first row must roll back with the batch"
+        )
+
+
+async def test_requests_tab_items_edit_in_cell(seeded_db: Path) -> None:
+    """i on the items datasheet writes through rfi_repo — including the
+    response column, which is where the answer actually lands."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.inline_edit import CellEditor, InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(app.conn, org.id, "Sompo questions", "2026-08-05")
+    item = rfi.add_item(app.conn, req.id, "how many vehicles?")
+
+    async with app.run_test(size=(170, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        table = app.screen.query_one("#rfi-items", InlineTable)
+        table.focus()
+        table.move_cursor(row=0)
+        await pilot.pause()
+
+        await pilot.press("i")  # opens on the first editable column, the prompt
+        await pilot.pause()
+        editor = app.screen.query_one(CellEditor)
+        assert editor.value == "how many vehicles?"
+        editor.value = "how many trucks?"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert rfi.get_item(app.conn, item.id).prompt == "how many trucks?"
+
+        # hop across the editable columns to the response — prompt, group,
+        # needed by, response (status and received-on are `d`'s job, not i's)
+        table = app.screen.query_one("#rfi-items", InlineTable)
+        table.focus()
+        table.move_cursor(row=0)
+        await pilot.press("i")
+        await pilot.pause()
+        for _ in range(3):
+            await pilot.press("tab")
+            await pilot.pause()
+        editor = app.screen.query_one(CellEditor)
+        editor.value = "42, all owned"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert rfi.get_item(app.conn, item.id).response == "42, all owned"
+
+
+async def test_add_on_the_requests_tab_never_does_nothing(seeded_db: Path) -> None:
+    """`a` with the items table focused but no request picked says so, the way
+    P already does; with neither table focused it falls through to the
+    account-level default (a new task), like every other tab."""
+    from bookkit.tui.widgets.forms import FormModal
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        screen = app.screen
+
+        # no requests exist on the seeded account, so nothing to add an item to
+        app.screen.query_one("#rfi-items", InlineTable).focus()
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        assert app.screen is screen, "no form opens without a request"
+        assert any(
+            "pick a request first" in str(n.message) for n in app._notifications
+        ), "a must say why it did nothing"
+
+        # neither table focused → the account-level default
+        screen.set_focus(None)
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        assert "task" in app.screen.spec.title.lower()

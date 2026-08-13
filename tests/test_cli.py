@@ -100,3 +100,28 @@ def test_export_unknown_org_suggests(tmp_path: Path, capsys, monkeypatch) -> Non
     rc = main(["export", "open-items", "Acme Copr"])
     assert rc == 2
     assert "Acme Corp" in capsys.readouterr().out
+
+
+def test_today_lists_requests_to_chase(tmp_path, capsys) -> None:
+    from datetime import date
+
+    from bookkit import db
+    from bookkit.cli import main
+    from bookkit.repo import orgs, rfi
+
+    path = tmp_path / "t.db"
+    conn = db.connect(path)
+    org = orgs.create(conn, name="Endeavour Energy", kind="client")
+    req = rfi.create_request(
+        conn, org.id, "Sompo — property questions", "2026-08-05",
+        due_on=date.today().isoformat(),
+    )
+    rfi.add_item(conn, req.id, "how many vehicles?")
+    rfi.add_item(conn, req.id, "loss runs 2021-2025", kind="document")
+    conn.close()
+
+    assert main(["--db", str(path), "today"]) == 0
+    out = capsys.readouterr().out
+    assert "REQUESTS TO CHASE (1)" in out
+    assert "Sompo — property questions" in out
+    assert "2 of 2 open" in out

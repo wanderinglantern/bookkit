@@ -6,12 +6,15 @@ save keeps the form up for correction (the platform default since 2026-08-12).""
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 from typing import Any
 
 from ...models import (
     CONTACT_ROLES,
     NEED_STATUSES,
     PROJECT_STATUSES,
+    RFI_ITEM_KINDS,
+    RFI_ITEM_STATUSES,
     TEAM_ROLES,
     Appetite,
     Contact,
@@ -20,12 +23,15 @@ from ...models import (
     Placement,
     Project,
     ProjectNeed,
+    RfiItem,
+    RfiRequest,
     Submission,
     Task,
     TeamMember,
 )
 from ...repo import contacts, opportunities, orgs, placements, submissions, vocab
 from ...repo import projects as projects_repo
+from ...repo import rfi as rfi_repo
 from ...repo import tasks as tasks_repo
 from .forms import Field, FormSpec, dropped
 
@@ -501,3 +507,149 @@ def apply_need(
     line = core.pop("line")
     needed_by = core.pop("needed_by")
     return projects_repo.add_need(conn, project_id, line, needed_by, **core)
+
+
+def request_form(
+    existing: RfiRequest | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
+    org_id: str | None = None,
+) -> FormSpec:
+    markets: tuple[tuple[str, str], ...] = ()
+    if conn is not None:
+        markets = tuple(
+            (o.name, o.id) for o in orgs.list_orgs(conn, kind="market")
+        )
+    # the scope link lives on the REQUEST and the items inherit it, so it is
+    # set here or nowhere; org_id is what makes the client's own placements
+    # and projects offerable
+    placement_opts: tuple[tuple[str, str], ...] = ()
+    project_opts: tuple[tuple[str, str], ...] = ()
+    if conn is not None and org_id is not None:
+        placement_opts = tuple(
+            (f"{p.ref} — {p.program_name}", p.id) for p in placements.for_org(conn, org_id)
+        )
+        project_opts = tuple(
+            (p.name, p.id) for p in projects_repo.projects_for_org(conn, org_id)
+        )
+    initial = (
+        existing.model_dump()
+        if existing
+        else {"requested_on": date.today().isoformat()}
+    )
+    # a market merge soft-deletes the loser but the request keeps its FK;
+    # handing Select a value its options no longer hold raises
+    # InvalidSelectValueError and takes the app down on `e`. Same for a
+    # soft-deleted placement or project — but only where the options were
+    # actually built: without org_id those tuples are empty and the guard
+    # would blank a perfectly live scope instead of a dead one.
+    if existing:
+        guarded: list[tuple[str, tuple[tuple[str, str], ...]]] = [
+            ("market_org_id", markets)
+        ]
+        if org_id is not None:
+            guarded += [
+                ("placement_id", placement_opts),
+                ("project_id", project_opts),
+            ]
+        for key, options in guarded:
+            if initial.get(key) not in {v for _, v in options}:
+                initial = {**initial, key: None}
+    return FormSpec(
+        "edit information request" if existing else "new information request",
+        [
+            Field("title", "request", required=True,
+                  placeholder="Sompo — property questions"),
+            Field("requested_on", "asked on", "date", required=True),
+            Field("due_on", "response due", "date"),
+            Field("market_org_id", "asked by", "select", markets,
+                  optional_select=True),
+            Field("placement_id", "about placement", "select", placement_opts,
+                  optional_select=True),
+            Field("project_id", "about project", "select", project_opts,
+                  optional_select=True),
+            # withdrawal lives here, not on a key: `d` already means "done"
+            # app-wide. Blank = live; a date = withdrawn.
+            Field("cancelled_at", "cancelled on", "date"),
+            Field("notes", "notes", "textarea"),
+        ],
+        initial=initial,
+    )
+
+
+def apply_request(
+    conn: sqlite3.Connection,
+    values: dict[str, Any],
+    org_id: str,
+    existing: RfiRequest | None = None,
+) -> RfiRequest:
+    core = dropped(values)
+    # dropped() strips None so a blank optional never clobbers on edit — but
+    # blanking "cancelled on" is the ONLY way back from a mis-cancelled
+    # request, so that one blank has to be written through
+    if existing and existing.cancelled_at and not values.get("cancelled_at"):
+        core["cancelled_at"] = None
+    # same for the scope links: switching a request from a placement to a
+    # project means blanking one of them, and a blank that never lands leaves
+    # the old link in the row alongside the new one
+    if existing:
+        if existing.placement_id and not values.get("placement_id"):
+            core["placement_id"] = None
+        if existing.project_id and not values.get("project_id"):
+            core["project_id"] = None
+    # the DB CHECK enforces this too, but only as an opaque IntegrityError;
+    # FormModal turns a raise into an in-place refusal with the input intact.
+    # The row as it WILL be is what the CHECK sees, so that is what to test
+    scope = {
+        key: core[key] if key in core else (getattr(existing, key) if existing else None)
+        for key in ("placement_id", "project_id")
+    }
+    if scope["placement_id"] and scope["project_id"]:
+        raise ValueError("a request is about a placement OR a project, not both")
+    if existing:
+        return rfi_repo.update_request(conn, existing.id, **core)
+    title = core.pop("title")
+    requested_on = core.pop("requested_on")
+    return rfi_repo.create_request(conn, org_id, title, requested_on, **core)
+
+
+def rfi_item_form(
+    existing: RfiItem | None = None, *, conn: sqlite3.Connection | None = None
+) -> FormSpec:
+    category_sugg = tuple(vocab.rfi_categories(conn)) if conn else ()
+    initial = (
+        existing.model_dump()
+        if existing
+        else {"kind": "question", "status": "outstanding"}
+    )
+    return FormSpec(
+        "edit item" if existing else "new item",
+        [
+            Field("prompt", "item", required=True,
+                  placeholder="loss runs 2021-2025"),
+            Field("kind", "type", "select",
+                  tuple((k, k) for k in RFI_ITEM_KINDS)),
+            Field("category", "group", suggestions=category_sugg,
+                  placeholder="Financials"),
+            Field("due_on", "needed by", "date"),
+            Field("detail", "detail", "textarea"),
+            Field("status", "status", "select",
+                  tuple((s, s) for s in RFI_ITEM_STATUSES)),
+            Field("received_on", "received on", "date"),
+            Field("response", "response", "textarea"),
+        ],
+        initial=initial,
+    )
+
+
+def apply_rfi_item(
+    conn: sqlite3.Connection,
+    values: dict[str, Any],
+    request_id: str,
+    existing: RfiItem | None = None,
+) -> RfiItem:
+    core = dropped(values)
+    if existing:
+        return rfi_repo.update_item(conn, existing.id, **core)
+    prompt = core.pop("prompt")
+    return rfi_repo.add_item(conn, request_id, prompt, **core)

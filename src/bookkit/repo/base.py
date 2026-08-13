@@ -28,6 +28,8 @@ ENTITY_TABLES = {
     "team_assignment": "team_assignment",
     "project": "project",
     "project_need": "project_need",
+    "rfi_request": "rfi_request",
+    "rfi_item": "rfi_item",
 }
 
 
