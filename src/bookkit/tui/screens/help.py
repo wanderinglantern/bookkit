@@ -37,6 +37,7 @@ HELP = """\
   the hop loop: enter (or tab) dives from the tree into the rows,
   e edits in place, esc hops back to the tree — no detours
   t  classic Today dashboard    b/c/p/m/w  book/calendar/pipeline/markets/team
+  o  onboard (resume or start)  x  export open items workbook
   ,  setup (where program files live)
 
 [b]today screen (t)[/b]
