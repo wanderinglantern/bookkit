@@ -298,7 +298,8 @@ def test_compose_groups_by_program_project_and_general(conn):
     project = projects_repo.create_project(conn, client.id, "Warehouse Expansion")
     projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-09-01")
 
-    sections = compose(conn, client.id, date(2026, 8, 12))
+    today = date.today()
+    sections = compose(conn, client.id, today)
     labels = [s.label for s in sections]
     assert labels[0].startswith("General")
     assert any(lbl.startswith("Acme Property") for lbl in labels)
@@ -349,8 +350,9 @@ def test_write_open_items_deterministic_and_styled(conn, tmp_path):
     project = projects_repo.create_project(conn, client.id, "Warehouse Expansion")
     projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-09-01")
 
-    a = write(conn, client.id, tmp_path / "a.xlsx", date(2026, 8, 12))
-    b = write(conn, client.id, tmp_path / "b.xlsx", date(2026, 8, 12))
+    today = date.today()
+    a = write(conn, client.id, tmp_path / "a.xlsx", today)
+    b = write(conn, client.id, tmp_path / "b.xlsx", today)
     assert a.read_bytes() == b.read_bytes()
     from openpyxl import load_workbook  # test-only import; src never imports it
     ws = load_workbook(a).active
