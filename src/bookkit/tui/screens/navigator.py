@@ -8,7 +8,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ...models import Task
     from ..app import BookkitApp
 
 from datetime import date
@@ -31,7 +30,7 @@ from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.forms import Field
 from ..widgets.inline_edit import InlineTable
-from ..widgets.tables import ListTable
+from ..widgets.tables import ListTable, grouped_by_category, task_detail_cell
 from ..widgets.tower_preview import TowerPreview
 
 NodeData = tuple[str, Any]
@@ -89,22 +88,6 @@ def _attention_label(key: str, label: str, count: int) -> str:
     if key == "overdue":
         return f"[b {theme.RED}]◆ {label} · {count}[/]"
     return f"{label} [{theme.DIM}]·[/] [b]{count}[/b]"
-
-
-def _task_detail_cell(task: Task) -> Text:
-    """First line of the long notes, dimmed and clipped — full text lives in
-    the e form; this is for review at a glance."""
-    if not task.detail:
-        return dash()
-    first = task.detail.strip().splitlines()[0]
-    return Text(first[:57] + "…" if len(first) > 58 else first, style=theme.DIM)
-
-
-def _grouped_by_category(tasks: list[Task]) -> list[Task]:
-    """Display-level grouping only — repo ordering (due date, priority)
-    stays authoritative for briefs; this just clusters categories together
-    on screen. "~" sorts uncategorized/undated last."""
-    return sorted(tasks, key=lambda t: ((t.category or "~"), t.due_on or "~"))
 
 
 class NavigatorScreen(Screen):
@@ -445,7 +428,7 @@ class NavigatorScreen(Screen):
         elif which == "tasks":
             table.add_columns("due", "task", "category", "description", "detail", "account")
             table.inline_fields = TASK_INLINE
-            for task in _grouped_by_category(self._attention["tasks"]):
+            for task in grouped_by_category(self._attention["tasks"]):
                 key = f"task:{task.id}"
                 name = ""
                 if task.org_id:
@@ -462,7 +445,7 @@ class NavigatorScreen(Screen):
                     due, task.title,
                     Text(task.category, style=theme.AMBER) if task.category else dash(),
                     task.description or dash(),
-                    _task_detail_cell(task), name, key=key,
+                    task_detail_cell(task), name, key=key,
                 )
         elif which == "sla":
             table.add_columns("market", "account", "sent", right("out"))
@@ -526,7 +509,7 @@ class NavigatorScreen(Screen):
             table.add_columns("due", "task", "category", "description", "detail", "status")
             table.inline_fields = TASK_INLINE
             today = date.today()
-            for task in _grouped_by_category(tasks_repo.open_tasks(conn, org_id=org_id)):
+            for task in grouped_by_category(tasks_repo.open_tasks(conn, org_id=org_id)):
                 key = f"task:{task.id}"
                 self._row_org[key] = org_id
                 due = (
@@ -537,7 +520,7 @@ class NavigatorScreen(Screen):
                     due, task.title,
                     Text(task.category, style=theme.AMBER) if task.category else dash(),
                     task.description or dash(),
-                    _task_detail_cell(task), status_text(task.status), key=key,
+                    task_detail_cell(task), status_text(task.status), key=key,
                 )
         elif group == "projects":
             table.add_columns("ref", "project", "status", "start", "end")

@@ -60,6 +60,13 @@ def _days_since(created_at: str, today: date) -> int:
     return (today - date.fromisoformat(created_at[:10])).days
 
 
+def _status_label(status: str) -> str:
+    """Project-need statuses are raw vocab ("not_needed") — client-facing
+    cells get prose: underscores to spaces, first letter capitalized only."""
+    text = status.replace("_", " ")
+    return text[:1].upper() + text[1:] if text else text
+
+
 def _task_row(task: Task, today: date) -> ExportRow:
     details = "\n".join(
         part for part in (task.description or "", flatten_markdown(task.detail or ""))
@@ -79,12 +86,16 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
 
     org_tasks = tasks_repo.open_tasks_for_client(conn, org.id)
     by_category: dict[str, list[Task]] = {}
+    # case-insensitive bucketing, first-seen spelling wins (repo/vocab.py's
+    # _dedupe rule) — "renewal" and "Renewal" land in one section
+    category_labels: dict[str, str] = {}
     uncategorized: list[Task] = []
     for t in org_tasks:
         if t.placement_id:
             continue
         if t.category:
-            by_category.setdefault(t.category, []).append(t)
+            label = category_labels.setdefault(t.category.lower(), t.category)
+            by_category.setdefault(label, []).append(t)
         else:
             uncategorized.append(t)
     by_placement: dict[str, list[Task]] = {}
@@ -152,7 +163,7 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
                             n.notes or "",
                             f"Limit {format_cents(n.limit_cents)}" if n.limit_cents else "",
                         ) if part),
-                        kind="Need", due=n.needed_by, status=n.status,
+                        kind="Need", due=n.needed_by, status=_status_label(n.status),
                         days_open=_days_since(n.created_at, today),
                     )
                     for n in needs

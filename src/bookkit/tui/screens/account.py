@@ -35,9 +35,8 @@ from ...repo import (
 from ...repo import tasks as tasks_repo
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right
-from ..widgets.tables import ListTable
+from ..widgets.tables import ListTable, grouped_by_category, task_detail_cell
 from ..widgets.tower_preview import TowerPreview
-from .navigator import _grouped_by_category, _task_detail_cell
 
 
 def _pretty(value: str) -> str:
@@ -361,7 +360,7 @@ class AccountScreen(Screen):
                     i.subject, who, key=i.id,
                 )
 
-        open_tasks = _grouped_by_category(tasks_repo.open_tasks(conn, org_id=org.id))
+        open_tasks = grouped_by_category(tasks_repo.open_tasks(conn, org_id=org.id))
         table = self.query_one("#ov-tasks", ListTable)
         table.clear(columns=True)
         table.add_columns(
@@ -377,7 +376,7 @@ class AccountScreen(Screen):
                 due, due_in, t.title,
                 Text(t.category, style=theme.AMBER) if t.category else dash(),
                 t.description or dash(),
-                _task_detail_cell(t), key=t.id,
+                task_detail_cell(t), key=t.id,
             )
 
         opps = opportunities.for_org(conn, org.id, open_only=True)

@@ -313,6 +313,18 @@ def test_compose_groups_by_program_project_and_general(conn):
     placement_section = next(s for s in sections if s.label.startswith("Acme Property"))
     assert any(r.item == "Confirm bound terms" for r in placement_section.rows)
 
+    # need status is client-facing prose, not raw vocab ("identified", not
+    # the DB's underscored form)
+    project_section = next(s for s in sections if s.label.startswith("Project — "))
+    assert project_section.rows[0].status == "Identified"
+
+
+def test_status_label_prettifies_underscored_vocab():
+    from bookkit.services.export_open_items import _status_label
+
+    assert _status_label("identified") == "Identified"
+    assert _status_label("not_needed") == "Not needed"
+
 
 def test_compose_empty_book_returns_no_sections(conn):
     org = orgs.create(conn, kind="client", name="Empty Co", status="active", owner="grant")
@@ -327,6 +339,19 @@ def test_compose_sections_org_tasks_by_category(conn):
     tasks.create(conn, "misc", org_id=org.id)
     labels = [s.label for s in compose(conn, org.id, date(2026, 8, 12))]
     assert labels == ["Certificates — Cat Co", "Renewal — Cat Co", "General — Cat Co"]
+
+
+def test_compose_categories_bucket_case_insensitively(conn):
+    # "renewal" and "Renewal" are the same section, case-insensitively
+    # (repo/vocab.py's _dedupe rule); first-seen spelling wins the label
+    org = orgs.create(conn, name="Case Co", kind="client")
+    tasks.create(conn, "renew GL", org_id=org.id, category="renewal")
+    tasks.create(conn, "renew AL", org_id=org.id, category="Renewal")
+    sections = compose(conn, org.id, date(2026, 8, 12))
+    renewal_sections = [s for s in sections if s.label.startswith(("renewal", "Renewal"))]
+    assert len(renewal_sections) == 1
+    assert renewal_sections[0].label == "renewal — Case Co"  # first-seen spelling
+    assert len(renewal_sections[0].rows) == 2
 
 
 def test_write_open_items_deterministic_and_styled(conn, tmp_path):
