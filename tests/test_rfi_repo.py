@@ -56,3 +56,50 @@ def test_models_expose_rfi_vocabularies() -> None:
 
     assert RFI_ITEM_STATUSES == ("outstanding", "received", "waived")
     assert RFI_ITEM_KINDS == ("question", "document")
+
+
+def _org(conn) -> str:
+    from bookkit.repo import orgs
+
+    return orgs.create(conn, name="Endeavour Energy", kind="client").id
+
+
+def test_create_request_allocates_a_ref(conn) -> None:
+    from bookkit.repo import rfi
+
+    org_id = _org(conn)
+    req = rfi.create_request(conn, org_id, "Sompo — property questions", "2026-08-05")
+    assert req.ref.startswith("RFI-")
+    assert req.title == "Sompo — property questions"
+    assert req.requested_on == "2026-08-05"
+    assert rfi.get_request(conn, req.id).id == req.id
+
+
+def test_requests_for_org_excludes_deleted(conn) -> None:
+    from bookkit.repo import rfi
+
+    org_id = _org(conn)
+    keep = rfi.create_request(conn, org_id, "keep", "2026-08-05")
+    drop = rfi.create_request(conn, org_id, "drop", "2026-08-05")
+    rfi.delete_request(conn, drop.id)
+    assert [r.id for r in rfi.requests_for_org(conn, org_id)] == [keep.id]
+
+
+def test_update_request_is_event_logged(conn) -> None:
+    from bookkit.repo import rfi
+
+    org_id = _org(conn)
+    req = rfi.create_request(conn, org_id, "old", "2026-08-05")
+    rfi.update_request(conn, req.id, title="new")
+    assert rfi.get_request(conn, req.id).title == "new"
+    events = conn.execute(
+        "SELECT COUNT(*) FROM event_log WHERE entity_id = ?", (req.id,)
+    ).fetchone()[0]
+    assert events >= 2, "create and update must both land in the event log"
+
+
+def test_get_request_raises_for_unknown(conn) -> None:
+    from bookkit.repo import rfi
+
+    with pytest.raises(KeyError):
+        rfi.get_request(conn, "nope")
