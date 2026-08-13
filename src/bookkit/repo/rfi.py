@@ -91,3 +91,56 @@ def update_item(
 
 def delete_item(conn: sqlite3.Connection, item_id: str) -> None:
     base.soft_delete(conn, "rfi_item", item_id)
+
+
+# --- chase feed ------------------------------------------------------------
+
+
+def outstanding_rows(conn: sqlite3.Connection, horizon: str) -> list[sqlite3.Row]:
+    """One row per live, uncancelled request that still has outstanding items
+    whose EFFECTIVE due (item's, else the request's) falls on or before the
+    horizon — or is already past, so nothing overdue ever falls off.
+
+    NULL effective dues are excluded: an undated request is not yet a chase."""
+    return conn.execute(
+        f"""
+        SELECT r.*, o.name AS org_name, m.name AS market_name,
+               COUNT(*)                       AS open_count,
+               MIN(COALESCE(i.due_on, r.due_on)) AS earliest_due,
+               (SELECT COUNT(*) FROM rfi_item t
+                 WHERE t.request_id = r.id AND {base.alive('t')}) AS total_count
+        FROM rfi_item i
+        JOIN rfi_request r ON r.id = i.request_id
+        JOIN org o ON o.id = r.org_id
+        LEFT JOIN org m ON m.id = r.market_org_id
+        WHERE i.status = 'outstanding'
+          AND r.cancelled_at IS NULL
+          AND {base.alive('i')} AND {base.alive('r')} AND {base.alive('o')}
+        GROUP BY r.id
+        HAVING earliest_due IS NOT NULL AND earliest_due <= ?
+        ORDER BY earliest_due, r.ref
+        """,
+        (horizon,),
+    ).fetchall()
+
+
+def open_item_count(conn: sqlite3.Connection, request_id: str) -> int:
+    """How many items are still outstanding. Zero means the request is done —
+    services/rfi.is_open turns that into the derived open/closed rule."""
+    return int(
+        conn.execute(
+            f"""SELECT COUNT(*) FROM rfi_item
+                WHERE request_id = ? AND status = 'outstanding' AND {base.alive()}""",
+            (request_id,),
+        ).fetchone()[0]
+    )
+
+
+def item_count(conn: sqlite3.Connection, request_id: str) -> int:
+    return int(
+        conn.execute(
+            f"""SELECT COUNT(*) FROM rfi_item
+                WHERE request_id = ? AND {base.alive()}""",
+            (request_id,),
+        ).fetchone()[0]
+    )
