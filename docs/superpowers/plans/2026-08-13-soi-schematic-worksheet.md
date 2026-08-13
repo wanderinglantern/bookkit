@@ -1461,3 +1461,22 @@ git commit -m "cli: towerctl soi --schematic"
 - Eyeball once in a real spreadsheet app: `uv run towerctl soi programs/atomic-2026.json --theme themes/marsh.json --schematic -o /tmp/atomic-soi.xlsx && open /tmp/atomic-soi.xlsx` — the tower should read like the graphic: proportional stacking, marsh colors, retention band below, pending layer dashed. Cosmetic tuning (row height, font sizes) is fair game AFTER the golden tests are regenerated deliberately, in a follow-up commit — never silently.
 - Merging `feat/soi-schematic` to main is Grant's call (superpowers:finishing-a-development-branch). Fresh-eyes review before declaring done.
 - Prod machine needs a towerkit RELEASE to see this (wheel flow); follow the release drill in towerkit's CLAUDE.md. No new dependencies, so no bookkit wheelhouse refresh is triggered.
+
+---
+
+### Task 9: visual parity polish (Grant's Excel review, 2026-08-13)
+
+Grant rendered the sheet in Excel; four defects to fix, all visible in his screenshot: wrong theme colours, clipped line headers, one-character-per-line wrapping in narrow share-split merges, clipped text in thin primary layers.
+
+**Files:**
+- Modify: `src/towerkit/render/schematic_xlsx.py`, `src/towerkit/render/labels.py` (compact variants if not already present)
+- Test: `tests/test_schematic_xlsx.py` (append)
+
+**Requirements (each gets a test):**
+
+1. **Theme parity with the graphic.** For a fixture program rendered with `load_theme` on marsh.json: every participant block's fill in the sheet equals the colour `mpl_program`'s assignment gives that carrier under the same theme (compare via the styles.xml reading pattern against the labels/colour authority, not hardcoded hexes). If `add_schematic_sheet` currently defaults or re-derives colours anywhere instead of taking them from the shared authority, that's the bug.
+2. **Line headers never clip.** Header cells get `wrap_text=True` and a computed row height sufficient for the wrapped label at the column's width (two-line allowance); assert the header row height ≥ the two-line height whenever any header wraps.
+3. **Narrow merges stay legible.** For a merge narrower than a threshold (pick ~2.5 Excel width units per text line — derive and document), the cell uses `Alignment(shrink_to_fit=True)` (no wrap) AND the label falls back to compact forms from the shared label authority: full → "Carrier share%" → carrier only → empty (colour still speaks). Test with a program containing a 3-way 33.33% split on a narrow line column (Grant's Property tower case) — assert no label longer than the compact form is used below the threshold.
+4. **Thin layers get a row floor.** Quantization gains a minimum span of 2 rows per block that carries a label (boundary-snapping preserved; document the deviation from pure proportionality in the module docstring — this is the spec's "hybrid" fallback, activated by Grant's review). Assert a $2M primary under a $100M tower still spans ≥2 rows and its label is not wrapped beyond the merge height.
+
+**Steps:** TDD as always — the four tests first (failing), implement, gates, commit `"schematic: theme parity, header wrap, narrow-merge fitting, row floor"`. Re-run the schematic golden (`SCHEMATIC_GOLDEN_SHA` will change — this is a DELIBERATE content change; regenerate it once, note it in the commit body) and confirm `test_refactor_golden_content` (SOI sheet) is untouched.
