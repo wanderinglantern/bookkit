@@ -287,6 +287,7 @@ def test_compose_groups_by_program_project_and_general(conn):
     tasks.create(
         conn, "Chase updated loss runs", org_id=client.id,
         description="waiting on brief line from the client",
+        detail="**Please** call the broker",
     )
 
     p = placements.create(
@@ -305,8 +306,9 @@ def test_compose_groups_by_program_project_and_general(conn):
     assert any(lbl.startswith("Acme Property") for lbl in labels)
     assert any(lbl.startswith("Project — ") for lbl in labels)
     task_row = sections[0].rows[0]
-    assert task_row.kind == "Task" and task_row.days_open >= 0
-    assert "brief line" in task_row.details  # description first line of the cell
+    assert task_row.kind == "Task"
+    assert task_row.description == "waiting on brief line from the client"
+    assert task_row.detail == "Please call the broker"  # markdown flattened
 
     # a placement-only task (org_id NULL, placement_id set — legal per
     # repo/tasks.py) must still reach the workbook, in the placement's section
@@ -382,7 +384,7 @@ def test_write_open_items_deterministic_and_styled(conn, tmp_path):
     from openpyxl import load_workbook  # test-only import; src never imports it
     ws = load_workbook(a).active
     assert [c.value for c in ws[1]] == [
-        "Item", "Details", "Type", "Due / Needed by", "Status", "Days open"]
+        "Item", "Description", "Detail", "Type", "Due / Needed by", "Status"]
     # the placement-only task (org_id NULL) must actually be in the workbook,
     # not silently dropped by an org_id-only fetch
     values = [cell.value for row in ws.iter_rows() for cell in row]

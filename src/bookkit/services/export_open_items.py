@@ -24,11 +24,11 @@ from ..repo import tasks as tasks_repo
 @dataclass(frozen=True)
 class ExportRow:
     item: str
-    details: str
+    description: str
+    detail: str
     kind: str      # "Task" | "Need" | "Submission"
     due: str       # ISO or ""
     status: str
-    days_open: int
 
 
 @dataclass(frozen=True)
@@ -56,10 +56,6 @@ def flatten_markdown(text: str) -> str:
     return "\n".join(line.rstrip() for line in out.splitlines() if line.strip())
 
 
-def _days_since(created_at: str, today: date) -> int:
-    return (today - date.fromisoformat(created_at[:10])).days
-
-
 def _status_label(status: str) -> str:
     """Project-need statuses are raw vocab ("not_needed") — client-facing
     cells get prose: underscores to spaces, first letter capitalized only."""
@@ -68,15 +64,13 @@ def _status_label(status: str) -> str:
 
 
 def _task_row(task: Task, today: date) -> ExportRow:
-    details = "\n".join(
-        part for part in (task.description or "", flatten_markdown(task.detail or ""))
-        if part
-    )
     overdue = task.due_on is not None and task.due_on < today.isoformat()
     return ExportRow(
-        item=task.title, details=details, kind="Task", due=task.due_on or "",
+        item=task.title,
+        description=task.description or "",
+        detail=flatten_markdown(task.detail or ""),
+        kind="Task", due=task.due_on or "",
         status="Overdue" if overdue else "Open",
-        days_open=_days_since(task.created_at, today),
     )
 
 
@@ -123,8 +117,8 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
     general_rows = [_task_row(t, today) for t in uncategorized] + [
         ExportRow(
             item=f"Submission to {row['market_name']}",
-            details=row["about"] or "", kind="Submission", due="",
-            status="Out at market", days_open=_days_since(row["sent_on"], today),
+            description=row["about"] or "", detail="", kind="Submission", due="",
+            status="Out at market",
         )
         for row in loose_subs
     ]
@@ -138,8 +132,8 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
         rows += [
             ExportRow(
                 item=f"Submission to {row['market_name']}",
-                details=row["about"] or "", kind="Submission", due="",
-                status="Out at market", days_open=_days_since(row["sent_on"], today),
+                description=row["about"] or "", detail="", kind="Submission", due="",
+                status="Out at market",
             )
             for row in subs_by_placement.get(placement.id, [])
         ]
@@ -159,12 +153,12 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
                 tuple(
                     ExportRow(
                         item=f"{n.line} cover",
-                        details="\n".join(part for part in (
+                        description="\n".join(part for part in (
                             n.notes or "",
                             f"Limit {format_cents(n.limit_cents)}" if n.limit_cents else "",
                         ) if part),
+                        detail="",
                         kind="Need", due=n.needed_by, status=_status_label(n.status),
-                        days_open=_days_since(n.created_at, today),
                     )
                     for n in needs
                 ),
@@ -173,8 +167,8 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
 
 
 _COLUMNS: tuple[tuple[str, float], ...] = (
-    ("Item", 30.0), ("Details", 58.0), ("Type", 12.0),
-    ("Due / Needed by", 16.0), ("Status", 14.0), ("Days open", 10.0),
+    ("Item", 30.0), ("Description", 40.0), ("Detail", 44.0), ("Type", 12.0),
+    ("Due / Needed by", 16.0), ("Status", 14.0),
 )
 
 
@@ -185,13 +179,12 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
     from towerkit.theme import load_theme
 
     org = orgs.get(conn, org_id)
-    columns = [TableColumn(h, w) for h, w in _COLUMNS[:-1]]
-    columns.append(TableColumn("Days open", 10.0, align="right"))
+    columns = [TableColumn(h, w) for h, w in _COLUMNS]
 
     sections = [
         TableSection(
             s.label,
-            tuple((r.item, r.details, r.kind, r.due, r.status, r.days_open)
+            tuple((r.item, r.description, r.detail, r.kind, r.due, r.status)
                   for r in s.rows),
         )
         for s in compose(conn, org_id, today)
@@ -202,6 +195,6 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
         columns, sections,
         title=f"Open Items — {org.name}"[:31],  # Excel sheet-title cap
         theme=load_theme(None), out_path=out_path,
-        # Details is the only multi-line column; two-line floor like the SOI
-        row_height=lambda values: 18.0 * max(2, str(values[1]).count("\n") + 1),
+        # Detail is the only multi-line column; two-line floor like the SOI
+        row_height=lambda values: 18.0 * max(2, str(values[2]).count("\n") + 1),
     )
