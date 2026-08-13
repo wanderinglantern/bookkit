@@ -1068,3 +1068,29 @@ async def test_navigator_onboarding_row_enter_resumes_wizard(seeded_db: Path) ->
 
         assert isinstance(app.screen, OnboardingScreen)
         assert app.screen.org_id == org.id
+
+
+async def test_open_items_tab_datasheet(seeded_db: Path, tmp_path, monkeypatch) -> None:
+    """AccountScreen's Open items tab (8): a task datasheet keyed by client
+    (direct or via a placement), and x exports from that tab like anywhere
+    else on the screen."""
+    from bookkit.repo import placements
+    from bookkit.repo import tasks as tasks_repo
+
+    monkeypatch.chdir(tmp_path)
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    p = placements.for_org(app.conn, org.id)[0]
+    tasks_repo.create(app.conn, "placement task", placement_id=p.id, category="Renewal")
+    async with app.run_test(size=(150, 44)) as pilot:
+        app.push_screen(AccountScreen(org.id))
+        await pilot.pause()
+        await pilot.press("8")
+        await pilot.pause()
+        table = app.screen.query_one("#open-items-table")
+        assert table.has_focus                      # focus lands IN the datasheet
+        titles = [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+        assert "placement task" in titles           # placement-owned included
+        await pilot.press("x")
+        await pilot.pause()
+        assert list(tmp_path.glob("*-open-items-*.xlsx"))

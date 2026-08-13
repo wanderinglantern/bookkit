@@ -34,9 +34,11 @@ from ...repo import (
 )
 from ...repo import tasks as tasks_repo
 from .. import theme
-from ..theme import dash, date_text, days_text, money_text, right
+from ..theme import dash, date_text, days_text, money_text, right, status_text
+from ..widgets.inline_edit import InlineTable
 from ..widgets.tables import ListTable, grouped_by_category, task_detail_cell
 from ..widgets.tower_preview import TowerPreview
+from .navigator import TASK_INLINE
 
 
 def _pretty(value: str) -> str:
@@ -77,6 +79,10 @@ TAB_HINTS: dict[str, str] = {
         "[b]s[/b] submission · [b]tab[/b] opps ⇄ submissions"
     ),
     "tab-documents": "[b]a[/b] add · [b]enter[/b] opens the file · [b]e[/b] edit account",
+    "tab-open-items": (
+        "[b]i[/b] edit in cell · [b]a[/b] task · [b]e[/b] edit form · "
+        "[b]d[/b] done · [b]x[/b] export · needs/submissions edit in their tabs"
+    ),
 }
 
 # where the cursor lands when a tab opens — j/k and the row keys work at once
@@ -88,6 +94,7 @@ TAB_TABLES: dict[str, str] = {
     "tab-projects": "projects-table",
     "tab-pipeline": "pipeline-opps",
     "tab-documents": "documents-table",
+    "tab-open-items": "open-items-table",
 }
 
 
@@ -198,7 +205,10 @@ class AccountScreen(Screen):
         Binding("o", "open_towerkit", "Open in towerkit"),
         Binding("w", "assign_team", "Assign team", show=False),
         Binding("t", "scaffold_tower", "Tower file", show=False),
-        Binding("x", "merge_placement", "Merge", show=False),
+        # x is screen-wide (Grant's call 2026-08-13): the placements tab still
+        # merges under it (unchanged flow), every other tab exports open items —
+        # see action_export_open_items
+        Binding("x", "export_open_items", "Export open items"),
         Binding("i", "import_here", "Import (paste)"),
         Binding("d", "task_done", "Done (task)", show=False),
         Binding("p", "mark_primary", "Primary (contact)", show=False),
@@ -211,11 +221,13 @@ class AccountScreen(Screen):
         Binding("5", "show_tab('tab-projects')", "Projects", show=False),
         Binding("6", "show_tab('tab-pipeline')", "Pipeline", show=False),
         Binding("7", "show_tab('tab-documents')", "Documents", show=False),
+        Binding("8", "show_tab('tab-open-items')", "Open items", show=False),
     ]
 
     def __init__(self, org_id: str) -> None:
         super().__init__()
         self.current_org_id = org_id
+        self._refresh_pending = False  # a refresh deferred while a cell edit is open
 
     def compose(self) -> ComposeResult:
         yield Static(id="account-header")
@@ -255,6 +267,13 @@ class AccountScreen(Screen):
                     yield ListTable(id="pipeline-subs")
             with TabPane("7 Documents", id="tab-documents"):
                 yield ListTable(id="documents-table")
+            with TabPane("8 Open items", id="tab-open-items"):
+                with Vertical():
+                    yield InlineTable(id="open-items-table")
+                    yield Static(
+                        "other open items — edit in their tabs", classes="pane-title"
+                    )
+                    yield ListTable(id="open-items-context")
         yield Static(id="tab-hint")
         yield Footer()
 
@@ -271,8 +290,13 @@ class AccountScreen(Screen):
         # stacked tables inside scrolling panes size to their rows instead of
         # splitting the viewport into slivers
         for table_id in ("ov-team", "ov-contacts", "ov-interactions", "ov-tasks",
-                         "ov-opps", "pipeline-opps", "pipeline-subs"):
+                         "ov-opps", "pipeline-opps", "pipeline-subs", "open-items-context"):
             self.query_one(f"#{table_id}", ListTable).styles.height = "auto"
+        # inline edits (i) parse existing values off the same fields the modal
+        # form would show, keyed by the row's task id
+        self.query_one("#open-items-table", InlineTable).inline_initial = (
+            self._open_items_inline_initial
+        )
         self.refresh_data()
         self._render_tab_hint()
         self._focus_tab_table()
@@ -405,7 +429,56 @@ class AccountScreen(Screen):
                 _pretty(d.kind) if d.kind else dash(),
                 d.title, Text(d.path, style=theme.DIM), key=d.id,
             )
+
+        self._refresh_open_items(org.id)
         self._settle_tables()
+
+    def _refresh_open_items(self, org_id: str) -> None:
+        """The client's whole open-items picture: an editable task datasheet
+        (direct tasks + placement-owned ones) plus a read-only context table
+        of unmet project needs and submissions still out at market."""
+        from ...repo import projects as projects_repo
+
+        conn = self.app.conn
+        today = date.today()
+
+        table = self.query_one("#open-items-table", InlineTable)
+        table.clear(columns=True)
+        table.add_columns("due", "task", "category", "description", "detail", "status")
+        table.inline_fields = TASK_INLINE
+        for t in grouped_by_category(tasks_repo.open_tasks_for_client(conn, org_id)):
+            due = (
+                date_text(t.due_on, days_until(t.due_on, today))
+                if t.due_on else dash()
+            )
+            table.add_row(
+                due, t.title,
+                Text(t.category, style=theme.AMBER) if t.category else dash(),
+                t.description or dash(),
+                task_detail_cell(t), status_text(t.status), key=t.id,
+            )
+
+        context = self.query_one("#open-items-context", ListTable)
+        context.clear(columns=True)
+        context.add_columns("kind", "item", "due / needed", "status", right("days"))
+        for project in projects_repo.projects_for_org(conn, org_id):
+            for need in projects_repo.needs_for_project(conn, project.id):
+                if need.status not in projects_repo.ATTENTION_STATUSES:
+                    continue
+                days = days_until(need.needed_by, today)
+                context.add_row(
+                    Text("need", style=theme.DIM), f"{need.line} — {project.name}",
+                    date_text(need.needed_by, days), status_text(need.status),
+                    days_text(days), key=f"need:{need.id}",
+                )
+        for row in submissions.outstanding_for_org(conn, org_id):
+            days = days_until(row["sent_on"], today)
+            context.add_row(
+                Text("submission", style=theme.DIM),
+                f"{row['market_name']} — {row['about']}",
+                date_text(row["sent_on"], days), status_text(row["status"]),
+                days_text(days), key=f"submission:{row['id']}",
+            )
 
     def _settle_tables(self) -> None:
         """Workaround for a DataTable paint quirk: rows added before the first
@@ -656,6 +729,34 @@ class AccountScreen(Screen):
                 subprocess.Popen(["open", doc.path])
                 self.notify(f"opening {doc.path}")
 
+    # -- open-items inline edits ------------------------------------------------
+
+    def _open_items_inline_initial(self, row_key: str, field_key: str) -> str:
+        try:
+            return getattr(tasks_repo.get(self.app.conn, row_key), field_key) or ""
+        except KeyError:
+            return ""
+
+    def on_inline_table_cell_edited(self, event: InlineTable.CellEdited) -> None:
+        if event.table.id != "open-items-table":
+            return
+        tasks_repo.update(self.app.conn, event.row_key, **{event.field.key: event.value})
+        self.notify(f"{event.field.label} saved — u undoes")
+        # a refresh mid-edit (e.g. tab hopping across editable cells) would
+        # pull rows out from under the editor; flush once it closes and focus
+        # returns to the table (same guard navigator's nav-table uses)
+        if event.table.editing:
+            self._refresh_pending = True
+        else:
+            self.refresh_data()
+
+    def on_descendant_focus(self, event) -> None:
+        table = self.query_one("#open-items-table", InlineTable)
+        if not self._refresh_pending or table.editing:
+            return
+        self._refresh_pending = False
+        self.refresh_data()
+
     def action_mark_primary(self) -> None:
         table = self.query_one("#contacts-table", ListTable)
         if not table.has_focus or table.cursor_row is None or table.row_count == 0:
@@ -667,7 +768,10 @@ class AccountScreen(Screen):
             self.refresh_data()
 
     def action_task_done(self) -> None:
-        table = self.query_one("#ov-tasks", ListTable)
+        table_id = (
+            "open-items-table" if self._active_tab() == "tab-open-items" else "ov-tasks"
+        )
+        table = self.query_one(f"#{table_id}", ListTable)
         if not table.has_focus or table.cursor_row is None or table.row_count == 0:
             return
         key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
@@ -764,6 +868,11 @@ class AccountScreen(Screen):
                         f"created {ef.apply_project(conn, v, org_id).ref}"
                     ),
                 )
+        elif tab == "tab-open-items":  # same task_form flow as overview
+            self._push_form(
+                ef.task_form(conn=conn, default_org_id=org_id),
+                lambda v: ef.apply_task(conn, v, org_id=org_id),
+            )
         else:  # overview → a new task for this account
             self._push_form(
                 ef.task_form(conn=conn, default_org_id=org_id),
@@ -834,6 +943,15 @@ class AccountScreen(Screen):
         elif tab == "tab-overview":
             key = self._selected_key("ov-tasks")
             if key and self.focused is not None and self.focused.id == "ov-tasks":
+                task = tasks_repo.get(conn, key)
+                self._push_form(
+                    ef.task_form(task, conn=conn), lambda v: ef.apply_task(conn, v, existing=task)
+                )
+            else:  # otherwise e edits the account itself
+                self._edit_org()
+        elif tab == "tab-open-items":
+            key = self._selected_key("open-items-table")
+            if key and self.focused is not None and self.focused.id == "open-items-table":
                 task = tasks_repo.get(conn, key)
                 self._push_form(
                     ef.task_form(task, conn=conn), lambda v: ef.apply_task(conn, v, existing=task)
@@ -1321,6 +1439,18 @@ class AccountScreen(Screen):
         self.app.push_screen(
             FormModal(ef.member_form(conn=conn), commit=commit), done
         )
+
+    def action_export_open_items(self) -> None:
+        """x — screen-wide (Grant's call 2026-08-13): the placements tab keeps
+        its existing merge-duplicate flow under x; every other tab exports the
+        open-items workbook for this client. Export mutates nothing, so it
+        never refuses the way a form commit would."""
+        if self._active_tab() == "tab-placements":
+            self.action_merge_placement()
+            return
+        from ..widgets import entity_actions
+
+        entity_actions.export_open_items_flow(self, self.current_org_id)
 
     def action_merge_placement(self) -> None:
         """Merge the selected (duplicate) placement into another of this org's
