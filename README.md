@@ -49,3 +49,17 @@ change).
 The database lives at `$XDG_DATA_HOME/bookkit/bookkit.db` (0600 — it holds
 client contacts and premium figures; never commit it). `BOOKKIT_DB` overrides
 the path.
+
+## MCP connector (work-machine assistant)
+
+The `bookctl mcp` command exposes an MCP server for a work-machine assistant.
+Configure it with these settings:
+
+- Name: `bookkit`
+- Command: `bookctl`
+- Arguments: `mcp`
+- Environment: `BOOKKIT_DB` (only if the DB lives off the default path)
+- Mode: both
+
+Smoke check: `bookctl mcp` starts silently, waits on stdin, and can be stopped
+with Ctrl+C. Any output to stdout on startup is a bug.
