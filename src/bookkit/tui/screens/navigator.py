@@ -537,8 +537,10 @@ class NavigatorScreen(Screen):
         elif which == "rfi":
             table.add_columns(
                 "response due", right("due in"), "account", "request",
-                "asked by", "open",
+                "asked by", "scope", "open",
             )
+            from ...services import rfi as rfi_svc
+
             for chase in self._attention["rfi"]:
                 key = f"rfi:{chase.request.id}"
                 self._row_org[key] = chase.request.org_id
@@ -547,6 +549,7 @@ class NavigatorScreen(Screen):
                     days_text(chase.days_remaining), chase.org_name,
                     chase.request.title,
                     Text(chase.market_name or "—", style=theme.DIM),
+                    Text(rfi_svc.scope_label(conn, chase.request), style=theme.DIM),
                     f"{chase.open_count} of {chase.total_count}",
                     key=key,
                 )

@@ -11,6 +11,8 @@ from datetime import date, timedelta
 
 from ..dates import days_until
 from ..models import RfiItem, RfiRequest
+from ..repo import placements
+from ..repo import projects as projects_repo
 from ..repo import rfi as rfi_repo
 
 
@@ -37,6 +39,24 @@ def is_open(conn: sqlite3.Connection, request_id: str) -> bool:
     if rfi_repo.item_count(conn, request_id) == 0:
         return True
     return rfi_repo.open_item_count(conn, request_id) > 0
+
+
+def scope_label(conn: sqlite3.Connection, request: RfiRequest) -> str:
+    """What a request is about, for one column: the placement's ref, the
+    project's name, or an em dash for an account-level ask (onboarding).
+
+    One helper, two screens — the resolution rule is not duplicated."""
+    if request.placement_id:
+        try:
+            return placements.get(conn, request.placement_id).ref
+        except KeyError:
+            return "(deleted placement)"
+    if request.project_id:
+        try:
+            return projects_repo.get_project(conn, request.project_id).name
+        except KeyError:
+            return "(deleted project)"
+    return "—"
 
 
 def outstanding_requests(

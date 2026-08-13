@@ -248,7 +248,7 @@ def add_request(screen: Screen, org_id: str) -> None:
     conn = _app(screen).conn
     push_form(
         screen,
-        ef.request_form(conn=conn),
+        ef.request_form(conn=conn, org_id=org_id),
         lambda v: screen.notify(f"created {ef.apply_request(conn, v, org_id).ref}"),
     )
 
@@ -259,7 +259,7 @@ def edit_request(screen: Screen, request: RfiRequest) -> None:
     conn = _app(screen).conn
     push_form(
         screen,
-        ef.request_form(request, conn=conn),
+        ef.request_form(request, conn=conn, org_id=request.org_id),
         lambda v: ef.apply_request(conn, v, request.org_id, existing=request),
     )
 

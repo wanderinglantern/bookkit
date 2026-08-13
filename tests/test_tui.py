@@ -1178,6 +1178,46 @@ async def test_navigator_rfi_chase_bucket_and_group(seeded_db: Path) -> None:
         assert table.get_row_index(f"rfi:{req.id}") == 0
 
 
+async def test_request_scope_shows_on_both_surfaces(seeded_db: Path) -> None:
+    """The spec's scope link is only real if you can see it: the placement's
+    ref lands in the scope column on tab 9 and in the chase feed."""
+    from bookkit.repo import placements, rfi
+    from bookkit.tui.widgets.inline_edit import InlineTable
+    from bookkit.tui.widgets.tables import ListTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    placement = placements.for_org(app.conn, org.id)[0]
+    market = orgs.create(app.conn, name="Sompo", kind="market")
+    req = rfi.create_request(
+        app.conn, org.id, "Sompo — property questions", "2026-08-05",
+        due_on=date.today().isoformat(), market_org_id=market.id,
+        placement_id=placement.id,
+    )
+    rfi.add_item(app.conn, req.id, "how many vehicles?")
+
+    async with app.run_test(size=(170, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        await pilot.pause()
+        nav._current = ("att", "rfi")
+        nav._render_pane()
+        await pilot.pause()
+        row = [str(c) for c in nav.query_one("#nav-table", InlineTable).get_row(
+            f"rfi:{req.id}"
+        )]
+        assert any(placement.ref in c for c in row), "chase feed shows the scope"
+
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        table = app.screen.query_one("#rfi-requests", ListTable)
+        row = [str(c) for c in table.get_row(f"rfi:{req.id}")]
+        assert any(placement.ref in c for c in row), "tab 9 shows the scope"
+        assert any("Sompo" == c for c in row), "tab 9 shows who asked"
+
+
 async def test_request_survives_a_merged_away_market(seeded_db: Path) -> None:
     """A market merge soft-deletes the loser. A request still pointing at a
     dead market must not take the app down: the navigator's requests group

@@ -21,8 +21,8 @@ def test_request_form_offers_markets_and_defaults_today(conn) -> None:
     spec = ef.request_form(conn=conn)
     keys = [f.key for f in spec.fields]
     assert keys == [
-        "title", "requested_on", "due_on", "market_org_id", "cancelled_at",
-        "notes",
+        "title", "requested_on", "due_on", "market_org_id",
+        "placement_id", "project_id", "cancelled_at", "notes",
     ]
     market_field = next(f for f in spec.fields if f.key == "market_org_id")
     assert "Sompo" in [label for label, _ in market_field.options]
@@ -57,6 +57,95 @@ def test_apply_request_creates_then_updates(conn) -> None:
     )
     assert updated.id == created.id
     assert updated.title == "Sompo questions v2"
+
+
+def test_request_form_offers_the_client_scope(conn) -> None:
+    """The spec's binding decision — the request holds the scope link, items
+    inherit it — is only reachable if the form can set one."""
+    from bookkit.repo import placements
+    from bookkit.repo import projects as projects_repo
+
+    org = orgs.create(conn, name="Endeavour", kind="client")
+    placement = placements.create(
+        conn, org.id, "Property Program", "2026-01-01", "2027-01-01"
+    )
+    project = projects_repo.create_project(conn, org.id, "HQ Tower Build")
+    spec = ef.request_form(conn=conn, org_id=org.id)
+    keys = [f.key for f in spec.fields]
+    assert keys == [
+        "title", "requested_on", "due_on", "market_org_id",
+        "placement_id", "project_id", "cancelled_at", "notes",
+    ]
+    placement_field = next(f for f in spec.fields if f.key == "placement_id")
+    assert placement.id in [v for _, v in placement_field.options]
+    assert placement.ref in "".join(label for label, _ in placement_field.options)
+    assert placement_field.optional_select is True
+    project_field = next(f for f in spec.fields if f.key == "project_id")
+    assert (project.name, project.id) in project_field.options
+    assert project_field.optional_select is True
+
+
+def test_request_scope_round_trips_and_labels(conn) -> None:
+    from bookkit.repo import placements
+    from bookkit.services import rfi as rfi_svc
+
+    org = orgs.create(conn, name="Endeavour", kind="client")
+    placement = placements.create(
+        conn, org.id, "Property Program", "2026-01-01", "2027-01-01"
+    )
+    created = ef.apply_request(
+        conn,
+        {"title": "Sompo questions", "requested_on": "2026-08-05",
+         "placement_id": placement.id, "project_id": None},
+        org.id,
+    )
+    assert rfi.get_request(conn, created.id).placement_id == placement.id
+    assert rfi_svc.scope_label(conn, created) == placement.ref
+
+
+def test_request_scope_label_covers_projects_and_account_level(conn) -> None:
+    from bookkit.repo import projects as projects_repo
+    from bookkit.services import rfi as rfi_svc
+
+    org = orgs.create(conn, name="Endeavour", kind="client")
+    project = projects_repo.create_project(conn, org.id, "HQ Tower Build")
+    scoped = ef.apply_request(
+        conn,
+        {"title": "builder's risk questions", "requested_on": "2026-08-05",
+         "project_id": project.id},
+        org.id,
+    )
+    assert rfi_svc.scope_label(conn, scoped) == "HQ Tower Build"
+    projects_repo.delete_project(conn, project.id)
+    assert rfi_svc.scope_label(conn, scoped) == "(deleted project)"
+
+    plain = ef.apply_request(
+        conn, {"title": "onboarding docs", "requested_on": "2026-08-05"}, org.id
+    )
+    assert rfi_svc.scope_label(conn, plain) == "—"
+
+
+def test_request_refuses_both_a_placement_and_a_project(conn) -> None:
+    """The DB CHECK would raise an opaque IntegrityError; FormModal turns a
+    ValueError into an in-place refusal with the input intact."""
+    from bookkit.repo import placements
+    from bookkit.repo import projects as projects_repo
+
+    org = orgs.create(conn, name="Endeavour", kind="client")
+    placement = placements.create(
+        conn, org.id, "Property Program", "2026-01-01", "2027-01-01"
+    )
+    project = projects_repo.create_project(conn, org.id, "HQ Tower Build")
+    with pytest.raises(
+        ValueError, match="about a placement OR a project, not both"
+    ):
+        ef.apply_request(
+            conn,
+            {"title": "both", "requested_on": "2026-08-05",
+             "placement_id": placement.id, "project_id": project.id},
+            org.id,
+        )
+    assert rfi.requests_for_org(conn, org.id) == []
 
 
 def test_item_form_completes_categories_from_existing_items(conn) -> None:

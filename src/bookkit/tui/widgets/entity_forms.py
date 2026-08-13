@@ -510,12 +510,27 @@ def apply_need(
 
 
 def request_form(
-    existing: RfiRequest | None = None, *, conn: sqlite3.Connection | None = None
+    existing: RfiRequest | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
+    org_id: str | None = None,
 ) -> FormSpec:
     markets: tuple[tuple[str, str], ...] = ()
     if conn is not None:
         markets = tuple(
             (o.name, o.id) for o in orgs.list_orgs(conn, kind="market")
+        )
+    # the scope link lives on the REQUEST and the items inherit it, so it is
+    # set here or nowhere; org_id is what makes the client's own placements
+    # and projects offerable
+    placement_opts: tuple[tuple[str, str], ...] = ()
+    project_opts: tuple[tuple[str, str], ...] = ()
+    if conn is not None and org_id is not None:
+        placement_opts = tuple(
+            (f"{p.ref} — {p.program_name}", p.id) for p in placements.for_org(conn, org_id)
+        )
+        project_opts = tuple(
+            (p.name, p.id) for p in projects_repo.projects_for_org(conn, org_id)
         )
     initial = (
         existing.model_dump()
@@ -524,9 +539,16 @@ def request_form(
     )
     # a market merge soft-deletes the loser but the request keeps its FK;
     # handing Select a value its options no longer hold raises
-    # InvalidSelectValueError and takes the app down on `e`
-    if existing and existing.market_org_id not in {v for _, v in markets}:
-        initial = {**initial, "market_org_id": None}
+    # InvalidSelectValueError and takes the app down on `e`. Same for a
+    # soft-deleted placement or project, and for a form built without org_id.
+    if existing:
+        for key, options in (
+            ("market_org_id", markets),
+            ("placement_id", placement_opts),
+            ("project_id", project_opts),
+        ):
+            if initial.get(key) not in {v for _, v in options}:
+                initial = {**initial, key: None}
     return FormSpec(
         "edit information request" if existing else "new information request",
         [
@@ -535,6 +557,10 @@ def request_form(
             Field("requested_on", "asked on", "date", required=True),
             Field("due_on", "response due", "date"),
             Field("market_org_id", "asked by", "select", markets,
+                  optional_select=True),
+            Field("placement_id", "about placement", "select", placement_opts,
+                  optional_select=True),
+            Field("project_id", "about project", "select", project_opts,
                   optional_select=True),
             # withdrawal lives here, not on a key: `d` already means "done"
             # app-wide. Blank = live; a date = withdrawn.
@@ -552,6 +578,10 @@ def apply_request(
     existing: RfiRequest | None = None,
 ) -> RfiRequest:
     core = dropped(values)
+    # the DB CHECK enforces this too, but only as an opaque IntegrityError;
+    # FormModal turns a raise into an in-place refusal with the input intact
+    if core.get("placement_id") and core.get("project_id"):
+        raise ValueError("a request is about a placement OR a project, not both")
     if existing:
         return rfi_repo.update_request(conn, existing.id, **core)
     title = core.pop("title")

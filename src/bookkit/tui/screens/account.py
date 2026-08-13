@@ -518,15 +518,27 @@ class AccountScreen(Screen):
         """The client's information requests up top, the selected one's items
         below. The selection survives a refresh: rebuilding the master table
         must not silently re-point the datasheet at the first request."""
+        from ...services import rfi as rfi_svc
+
         conn = self.app.conn
         table = self.query_one("#rfi-requests", ListTable)
         table.clear(columns=True)
-        table.add_columns("ref", "request", "asked", "due", "open")
+        table.add_columns(
+            "ref", "request", "asked by", "scope", "asked", "due", "open"
+        )
         requests = rfi_repo.requests_for_org(conn, self.current_org_id)
         for request in requests:
             open_count = rfi_repo.open_item_count(conn, request.id)
+            asker: str | Text = dash()
+            if request.market_org_id:
+                try:  # a request can outlive a merged-away market
+                    asker = orgs.get(conn, request.market_org_id).name
+                except KeyError:
+                    asker = Text("(merged market)", style=theme.DIM)
             table.add_row(
-                request.ref, request.title, request.requested_on,
+                request.ref, request.title, asker,
+                Text(rfi_svc.scope_label(conn, request), style=theme.DIM),
+                request.requested_on,
                 request.due_on or dash(),
                 Text(str(open_count), style=theme.AMBER if open_count else theme.DIM),
                 key=f"rfi:{request.id}",
