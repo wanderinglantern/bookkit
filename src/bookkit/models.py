@@ -398,3 +398,19 @@ class EventLogEntry(Row):
     new_value: str | None = None
     changed_at: str
     note: str | None = None
+    batch_id: str | None = None
+
+
+class EventBatch(Row):
+    """One writer action grouped for undo — today always an MCP tool call.
+    `summary` is the line the TUI shows; `reverted_at` makes a second revert
+    inert rather than a double-apply."""
+
+    id: str
+    ref: str
+    source: str
+    tool: str
+    summary: str
+    org_id: str | None = None
+    created_at: str
+    reverted_at: str | None = None
