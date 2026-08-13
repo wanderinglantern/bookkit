@@ -73,10 +73,16 @@ def get_item(conn: sqlite3.Connection, item_id: str) -> RfiItem:
 
 def items_for_request(conn: sqlite3.Connection, request_id: str) -> list[RfiItem]:
     """Category groups first (uncategorised last), creation order within —
-    the same order the client's sheet renders, so screen and export agree."""
+    the same order the client's sheet renders, so screen and export agree.
+
+    rowid, not id, breaks the tie: created_at is second-precision and a ULID's
+    low 80 bits are random, so items added in the same second would otherwise
+    come back in arbitrary order — which pasting a list of questions does every
+    time. rowid is insertion order, and these rows are only ever soft-deleted,
+    so it is never reused."""
     rows = conn.execute(
         f"""SELECT * FROM rfi_item WHERE request_id = ? AND {base.alive()}
-            ORDER BY category IS NULL, category, created_at, id""",
+            ORDER BY category IS NULL, category, created_at, rowid""",
         (request_id,),
     ).fetchall()
     return [RfiItem.from_row(r) for r in rows]

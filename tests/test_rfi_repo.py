@@ -120,6 +120,19 @@ def test_items_order_by_category_then_creation(conn) -> None:
     ]
 
 
+def test_items_within_a_category_keep_paste_order(conn) -> None:
+    """Ten items added back-to-back share a second-precision created_at, so
+    only the tie-break orders them. This is the paste-a-litany case."""
+    from bookkit.repo import rfi
+
+    org_id = _org(conn)
+    req = rfi.create_request(conn, org_id, "onboarding docs", "2026-08-05")
+    expected = [f"question {n}" for n in range(10)]
+    for prompt in expected:
+        rfi.add_item(conn, req.id, prompt, category="Financials")
+    assert [i.prompt for i in rfi.items_for_request(conn, req.id)] == expected
+
+
 def test_item_defaults_are_question_and_outstanding(conn) -> None:
     from bookkit.repo import rfi
 
