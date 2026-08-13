@@ -85,18 +85,26 @@ TAB_HINTS: dict[str, str] = {
         "[b]i[/b] edit in cell · [b]a[/b] task · [b]e[/b] edit form · "
         "[b]d[/b] done · [b]x[/b] export · needs/submissions edit in their tabs"
     ),
+    # no "u undo" here: d is two field writes and a paste is a batch of
+    # creates, so neither is a single undoable mutation (see services/rfi)
     "tab-requests": (
         "[b]i[/b] edit in cell · [b]a[/b] add · [b]P[/b] paste list · "
-        "[b]e[/b] edit form · [b]d[/b] received · [b]u[/b] undo"
+        "[b]e[/b] edit form · [b]d[/b] received"
     ),
 }
 
 # the items datasheet's editable columns — the same Field parsers the modal
-# form uses, so an in-cell date reads "next fri" exactly as the form does
+# form uses, so an in-cell date reads "next fri" exactly as the form does.
+#
+# status and received-on are deliberately NOT here: `d` owns that transition
+# (services.rfi.mark_received sets both together), and two ways to make one
+# state change is the coupling to avoid. The response IS here — an answer you
+# cannot see on the datasheet defeats the point of the tab.
 RFI_ITEM_INLINE = {
     0: Field("prompt", "item", required=True),
     2: Field("category", "group"),
     3: Field("due_on", "needed by", "date"),
+    6: Field("response", "response"),
 }
 
 # where the cursor lands when a tab opens — j/k and the row keys work at once
@@ -554,7 +562,9 @@ class AccountScreen(Screen):
         conn = self.app.conn
         items = self.query_one("#rfi-items", InlineTable)
         items.clear(columns=True)
-        items.add_columns("item", "type", "group", "needed by", "status", "received")
+        items.add_columns(
+            "item", "type", "group", "needed by", "status", "received", "response"
+        )
         title = self.query_one("#rfi-hint", Static)
         # this runs from a RowHighlighted handler; a request that vanished
         # under the cursor must empty the datasheet, never raise out of a
@@ -576,7 +586,8 @@ class AccountScreen(Screen):
             items.add_row(
                 item.prompt, item.kind, item.category or dash(),
                 item.due_on or dash(), status_text(item.status),
-                item.received_on or dash(), key=item.id,
+                item.received_on or dash(), item.response or dash(),
+                key=item.id,
             )
 
     def _rfi_item_inline_initial(self, row_key: str, field_key: str) -> str:
@@ -918,8 +929,9 @@ class AccountScreen(Screen):
             self.refresh_data()
 
     def _mark_item_received(self) -> None:
-        """d on the items datasheet: received, dated today. One field write,
-        so u undoes it — 'done' means the same thing here as everywhere."""
+        """d on the items datasheet: received, dated today — 'done' means the
+        same thing here as everywhere. Two field writes, so no undo is
+        promised: a single u would revert only received_on."""
         from ...services import rfi as rfi_svc
 
         if self._rfi_focus() != "items":
@@ -928,7 +940,7 @@ class AccountScreen(Screen):
         if not item_id:
             return
         rfi_svc.mark_received(self.app.conn, str(item_id), date.today().isoformat())
-        self.notify("received — u undoes")
+        self.notify("received")
         self.refresh_data()
 
     def action_paste_items(self) -> None:
@@ -1041,8 +1053,20 @@ class AccountScreen(Screen):
             where = self._rfi_focus()
             if where == "requests":
                 entity_actions.add_request(self, org_id)
-            elif where == "items" and self._rfi_request_id:
+                return
+            if where == "items":
+                # mirror action_paste_items: never silently do nothing
+                if not self._rfi_request_id:
+                    self.notify("pick a request first", severity="warning")
+                    return
                 entity_actions.add_rfi_item(self, self._rfi_request_id)
+                return
+            # neither table focused → fall through to the account-level
+            # default, the way every other tab does
+            self._push_form(
+                ef.task_form(conn=conn, default_org_id=org_id),
+                lambda v: ef.apply_task(conn, v, org_id=org_id),
+            )
         else:  # overview → a new task for this account
             self._push_form(
                 ef.task_form(conn=conn, default_org_id=org_id),

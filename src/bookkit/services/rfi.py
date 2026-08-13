@@ -82,5 +82,10 @@ def outstanding_requests(
 
 
 def mark_received(conn: sqlite3.Connection, item_id: str, on: str) -> RfiItem:
-    """d on an item: received, dated. One field write, so u undoes it."""
+    """d on an item: received, dated.
+
+    This is TWO field writes (status and received_on), so base.update logs
+    two events and a single `u` reverts only the later one — leaving the item
+    received with received_on NULL. That matches tasks_repo.complete, so it is
+    parity rather than a regression, but nothing here should claim otherwise."""
     return rfi_repo.update_item(conn, item_id, status="received", received_on=on)

@@ -582,6 +582,11 @@ def apply_request(
     # FormModal turns a raise into an in-place refusal with the input intact
     if core.get("placement_id") and core.get("project_id"):
         raise ValueError("a request is about a placement OR a project, not both")
+    # dropped() strips None so a blank optional never clobbers on edit — but
+    # blanking "cancelled on" is the ONLY way back from a mis-cancelled
+    # request, so that one blank has to be written through
+    if existing and existing.cancelled_at and not values.get("cancelled_at"):
+        core["cancelled_at"] = None
     if existing:
         return rfi_repo.update_request(conn, existing.id, **core)
     title = core.pop("title")

@@ -43,6 +43,23 @@ def test_cancelling_a_request_closes_it(conn) -> None:
     assert rfi_svc.is_open(conn, req.id) is False
 
 
+def test_un_cancelling_a_request_reopens_it(conn) -> None:
+    """forms.dropped() strips None, so blanking 'cancelled on' would be a
+    no-op and a mis-cancelled request would have no UI path back."""
+    from bookkit.services import rfi as rfi_svc
+
+    org = orgs.create(conn, name="Endeavour", kind="client")
+    req = rfi.create_request(conn, org.id, "withdrawn by mistake", "2026-08-05")
+    rfi.add_item(conn, req.id, "loss runs")
+    ef.apply_request(conn, {"cancelled_at": "2026-08-12"}, org.id, existing=req)
+    cancelled = rfi.get_request(conn, req.id)
+    assert rfi_svc.is_open(conn, req.id) is False
+
+    ef.apply_request(conn, {"cancelled_at": None}, org.id, existing=cancelled)
+    assert rfi.get_request(conn, req.id).cancelled_at is None
+    assert rfi_svc.is_open(conn, req.id) is True
+
+
 def test_apply_request_creates_then_updates(conn) -> None:
     org = orgs.create(conn, name="Endeavour", kind="client")
     created = ef.apply_request(

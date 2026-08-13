@@ -96,3 +96,31 @@ def test_mark_received_stamps_status_and_date(conn) -> None:
     got = rfi_svc.mark_received(conn, item.id, TODAY.isoformat())
     assert got.status == "received"
     assert got.received_on == "2026-08-13"
+
+
+def test_mark_received_is_two_field_writes_not_one(conn) -> None:
+    """Pinning what the docstring now says out loud: two events, so a single
+    `u` reverts only the later one. Nothing here claims otherwise."""
+    req = _request(conn)
+    item = rfi.add_item(conn, req.id, "loss runs")
+    rfi_svc.mark_received(conn, item.id, TODAY.isoformat())
+    fields = {
+        r[0]
+        for r in conn.execute(
+            "SELECT field FROM event_log WHERE entity_id = ? AND field != 'created'",
+            (item.id,),
+        ).fetchall()
+    }
+    assert fields == {"status", "received_on"}
+
+
+def test_every_rfi_item_status_is_themed(conn) -> None:
+    """Color is signal, not decoration — an unthemed status renders in plain
+    FG and reads as 'no state at all'."""
+    from bookkit.models import RFI_ITEM_STATUSES
+    from bookkit.tui import theme
+
+    assert all(s in theme.STATUS_STYLES for s in RFI_ITEM_STATUSES)
+    assert theme.STATUS_STYLES["outstanding"] == theme.AMBER
+    assert theme.STATUS_STYLES["received"] == theme.GREEN
+    assert theme.STATUS_STYLES["waived"] == theme.DIM

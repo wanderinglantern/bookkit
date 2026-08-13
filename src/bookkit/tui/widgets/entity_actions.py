@@ -289,6 +289,7 @@ def edit_rfi_item(screen: Screen, item: RfiItem) -> None:
 def paste_rfi_items(screen: Screen, request_id: str) -> None:
     """One pasted block → one item per line. Refuses an empty paste in place
     (commit-in-place: the form stays up with the text intact)."""
+    from ... import db
     from ...repo import rfi as rfi_repo
     from .forms import Field, FormSpec
     from .rfi_paste import split_items
@@ -303,9 +304,15 @@ def paste_rfi_items(screen: Screen, request_id: str) -> None:
         prompts = split_items(values.get("pasted") or "")
         if not prompts:
             raise ValueError("nothing to add — paste one item per line")
-        for prompt in prompts:
-            rfi_repo.add_item(conn, request_id, prompt)
-        screen.notify(f"added {len(prompts)} items — u undoes the last")
+        # the connection is AUTOCOMMIT: without a real transaction a failure
+        # partway would leave a half-pasted batch committed
+        with db.transaction(conn):
+            for prompt in prompts:
+                rfi_repo.add_item(conn, request_id, prompt)
+        # NB: no "u undoes" here. base.insert logs creates as field='created'
+        # and events.last_mutation excludes those, so u would skip every
+        # pasted item and revert an unrelated field change elsewhere.
+        screen.notify(f"added {len(prompts)} items")
 
     push_form(
         screen,

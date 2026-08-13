@@ -1255,8 +1255,8 @@ async def test_request_survives_a_merged_away_market(seeded_db: Path) -> None:
 
 
 async def test_account_requests_tab(seeded_db: Path) -> None:
-    """Tab 9 is master/detail: picking a request fills the items datasheet;
-    d marks an item received and dates it; paste adds one item per line."""
+    """Tab 9 is master/detail: the request list fills the items datasheet
+    below it, and d on an item marks it received and dates it today."""
     from bookkit.repo import rfi
     from bookkit.tui.widgets.inline_edit import InlineTable
     from bookkit.tui.widgets.tables import ListTable
@@ -1328,3 +1328,142 @@ async def test_account_requests_tab_empty_paste_stays_open(seeded_db: Path) -> N
         with pytest.raises(ValueError):
             form._commit({"pasted": ""})
         assert rfi.items_for_request(app.conn, req.id) == []
+
+        # the happy path: a real paste creates one item per line, in order,
+        # on the request the datasheet is pointed at
+        form.query_one("#form-pasted", TextArea).text = (
+            "1. how many vehicles?\n2. loss runs"
+        )
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert app.screen is not form, "an accepted paste closes the form"
+        assert [i.prompt for i in rfi.items_for_request(app.conn, req.id)] == [
+            "how many vehicles?", "loss runs",
+        ]
+
+
+async def test_paste_is_all_or_nothing(seeded_db: Path, monkeypatch) -> None:
+    """The only bulk write in the feature runs inside db.transaction, so a
+    failure partway leaves NO partial batch committed on the autocommit
+    connection."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.forms import FormModal
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(app.conn, org.id, "Sompo questions", "2026-08-05")
+
+    real_add_item = rfi.add_item
+    calls: list[str] = []
+
+    def flaky(conn, request_id, prompt, **fields):
+        calls.append(prompt)
+        if len(calls) == 2:
+            raise RuntimeError("disk fell over")
+        return real_add_item(conn, request_id, prompt, **fields)
+
+    monkeypatch.setattr(rfi, "add_item", flaky)
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        app.screen.query_one("#rfi-items", InlineTable).focus()
+        await pilot.pause()
+        await pilot.press("P")
+        await pilot.pause()
+        form = app.screen
+        assert isinstance(form, FormModal)
+        form.query_one("#form-pasted", TextArea).text = "first\nsecond\nthird"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert app.screen is form, "a failed paste keeps the form open"
+        assert rfi.items_for_request(app.conn, req.id) == [], (
+            "the first row must roll back with the batch"
+        )
+
+
+async def test_requests_tab_items_edit_in_cell(seeded_db: Path) -> None:
+    """i on the items datasheet writes through rfi_repo — including the
+    response column, which is where the answer actually lands."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.inline_edit import CellEditor, InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(app.conn, org.id, "Sompo questions", "2026-08-05")
+    item = rfi.add_item(app.conn, req.id, "how many vehicles?")
+
+    async with app.run_test(size=(170, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        table = app.screen.query_one("#rfi-items", InlineTable)
+        table.focus()
+        table.move_cursor(row=0)
+        await pilot.pause()
+
+        await pilot.press("i")  # opens on the first editable column, the prompt
+        await pilot.pause()
+        editor = app.screen.query_one(CellEditor)
+        assert editor.value == "how many vehicles?"
+        editor.value = "how many trucks?"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert rfi.get_item(app.conn, item.id).prompt == "how many trucks?"
+
+        # hop across the editable columns to the response — prompt, group,
+        # needed by, response (status and received-on are `d`'s job, not i's)
+        table = app.screen.query_one("#rfi-items", InlineTable)
+        table.focus()
+        table.move_cursor(row=0)
+        await pilot.press("i")
+        await pilot.pause()
+        for _ in range(3):
+            await pilot.press("tab")
+            await pilot.pause()
+        editor = app.screen.query_one(CellEditor)
+        editor.value = "42, all owned"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert rfi.get_item(app.conn, item.id).response == "42, all owned"
+
+
+async def test_add_on_the_requests_tab_never_does_nothing(seeded_db: Path) -> None:
+    """`a` with the items table focused but no request picked says so, the way
+    P already does; with neither table focused it falls through to the
+    account-level default (a new task), like every other tab."""
+    from bookkit.tui.widgets.forms import FormModal
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        screen = app.screen
+
+        # no requests exist on the seeded account, so nothing to add an item to
+        app.screen.query_one("#rfi-items", InlineTable).focus()
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        assert app.screen is screen, "no form opens without a request"
+        assert any(
+            "pick a request first" in str(n.message) for n in app._notifications
+        ), "a must say why it did nothing"
+
+        # neither table focused → the account-level default
+        screen.set_focus(None)
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        assert "task" in app.screen.spec.title.lower()
