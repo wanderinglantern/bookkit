@@ -102,4 +102,81 @@ class OnboardingScreen(Screen):
         self.dismiss(None)
 
     def action_do_step(self) -> None:
-        pass  # Task 4
+        from ...repo import orgs
+        from ..widgets import entity_forms as ef
+        from ..widgets.forms import FormModal
+
+        conn = self.app.conn
+        key = self._current_status().step.key
+        org = orgs.get(conn, self.org_id)
+        draft = f"onboarding:{self.org_id}:{key}"
+
+        def done(values: dict | None) -> None:
+            if values is not None:
+                self.refresh_data(jump_to_first_incomplete=True)
+
+        if key == "org":
+            spec = ef.org_form_initial_profile(conn, org)
+            spec.title = "account basics"
+            self.app.push_screen(
+                FormModal(spec, commit=lambda v: _none(ef.apply_org(conn, v, org)),
+                          draft_key=draft),
+                done,
+            )
+        elif key == "contacts":
+            self.app.push_screen(
+                FormModal(ef.contact_form(),
+                          commit=lambda v: _none(ef.apply_contact(conn, org.id, v)),
+                          draft_key=draft),
+                done,
+            )
+        elif key == "program":
+            self.app.push_screen(
+                FormModal(ef.placement_form(conn=conn),
+                          commit=lambda v: _none(ef.apply_placement(conn, v, org.id)),
+                          draft_key=draft),
+                done,
+            )
+        elif key == "projects":
+            self._project_then_need(done, draft)
+        elif key == "followups":
+            self.app.push_screen(
+                FormModal(ef.task_form(conn=conn, default_org_id=org.id),
+                          commit=lambda v: _none(ef.apply_task(conn, v, org_id=org.id)),
+                          draft_key=draft),
+                done,
+            )
+
+    def _project_then_need(self, done, draft: str) -> None:
+        """Project first; on save, chain straight into its first need —
+        'thorough capture' means a project never lands needless silently."""
+        from ..widgets import entity_forms as ef
+        from ..widgets.forms import FormModal
+
+        conn = self.app.conn
+        created: list = []
+
+        def project_saved(values: dict | None) -> None:
+            if values is None:
+                done(None)
+                return
+            project = created[-1]
+            self.app.push_screen(
+                FormModal(ef.need_form(conn=conn),
+                          commit=lambda v: _none(ef.apply_need(conn, v, project.id)),
+                          draft_key=draft + ":need"),
+                done,
+            )
+
+        def commit_project(v: dict) -> None:
+            created.append(ef.apply_project(conn, v, org_id=self.org_id))
+
+        self.app.push_screen(
+            FormModal(ef.project_form(), commit=commit_project, draft_key=draft),
+            project_saved,
+        )
+
+
+def _none(result: object) -> None:
+    """Adapt apply_* return values to the commit contract (None = success)."""
+    return None
