@@ -27,6 +27,16 @@ from mcp.server.mcpserver import MCPServer
 from . import db
 from .services.renewals import RenewalItem
 
+# score_cutoff for the client_create duplicate guard (rapidfuzz WRatio,
+# 0-100). 'Henderson Grp' vs 'Henderson Group' scores ~95; this is
+# deliberately loose enough to catch near-misses while staying below scores
+# for genuinely distinct short names.
+_DUP_CUTOFF = 87
+
+_ENRICHABLE_ORG = {"owner", "industry", "naics", "hq_city", "hq_country",
+                    "website", "domain", "legal_name", "notes"}
+_ENRICHABLE_CONTACT = {"email", "phone", "mobile", "title", "linkedin", "notes"}
+
 
 def build_server(db_path: Path | str | None = None) -> MCPServer:
     server = MCPServer(
@@ -154,6 +164,41 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         be the exact id read from open_items or today_brief; this tool never
         fuzzy-matches a title — guessing a ref risks completing the wrong task."""
         return _task_complete(rw, task_ref)
+
+    @server.tool()
+    def client_create(
+        name: str,
+        contacts: list[dict[str, Any]] | None = None,
+        note: str | None = None,
+        tasks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new client — additive and event-logged. First checks for a
+        near-duplicate existing client name (fuzzy match); refuses and names
+        the match rather than risk a second record for the same account. On a
+        clear name, creates the org plus any bundled `contacts` (list of
+        {first_name, last_name, email, ...}), an opening `note`, and any
+        `tasks` (list of {title, due, description, detail} — `due` accepts any
+        human date) — ALL inside one transaction, so the whole bundle is
+        atomic: a bad task date rolls back the org too, nothing partial is
+        left behind. Call search first to be sure this client isn't already
+        on the book under a different spelling."""
+        return _client_create(rw, name, contacts_in=contacts, note=note, tasks_in=tasks)
+
+    @server.tool()
+    def enrich_field(
+        client: str, field: str, value: str, contact: str | None = None
+    ) -> dict[str, Any]:
+        """Fill ONE blank field on a client org (or, with `contact`, on one of
+        its contacts) — additive and event-logged. Fill-blanks-only: refuses
+        if the field is already set, naming the current value — edits to an
+        already-populated field happen in the TUI, not here. `client`
+        resolves the same way as every other client-scoped tool. `value` is
+        normalized through the same cleaner the forms use for that field
+        (email/phone/url/domain/naics) before being stored. Enrichable org
+        fields: owner, industry, naics, hq_city, hq_country, website, domain,
+        legal_name, notes. Enrichable contact fields: email, phone, mobile,
+        title, linkedin, notes."""
+        return _enrich_field(rw, client, field, value, contact=contact)
 
 
 def _today_brief(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -393,6 +438,119 @@ def _task_complete(conn: sqlite3.Connection, task_ref: str) -> dict[str, Any]:
         task = tasks_repo.complete(conn, task_ref)  # KeyError on unknown → tool error
         _provenance(conn, "task", task.id)
     return {"task_ref": task.id, "status": task.status, "completed_at": task.completed_at}
+
+
+def _client_create(
+    conn: sqlite3.Connection, name: str,
+    contacts_in: list[dict[str, Any]] | None = None, note: str | None = None,
+    tasks_in: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The whole bundle (org, contacts, opening note, tasks) is ONE
+    transaction — a bad task date (or any other failure partway through)
+    rolls the org itself back too, never leaving a half-created client."""
+    from rapidfuzz import fuzz, process
+
+    from .dates import parse_human_date
+    from .repo import contacts, interactions, orgs
+    from .repo import tasks as tasks_repo
+
+    existing = {o.name: o for o in orgs.list_orgs(conn, kind="client")}
+    match = process.extractOne(
+        name, list(existing), scorer=fuzz.WRatio, score_cutoff=_DUP_CUTOFF)
+    if match:
+        dup = existing[match[0]]
+        raise ValueError(
+            f"possible duplicate of {dup.name} ({dup.ref}) — if this is the same "
+            f"client use enrich_field/log_activity on it; if genuinely new, "
+            f"retry with a more distinct name")
+
+    with db.transaction(conn):
+        org = orgs.create(conn, name=name, kind="client")
+        _provenance(conn, "org", org.id)
+        for c in contacts_in or []:
+            contact = contacts.create(conn, org.id, **c)
+            _provenance(conn, "contact", contact.id)
+        if note:
+            interaction = interactions.log(
+                conn, org.id, type="note",
+                occurred_on=date.today().isoformat(),
+                subject=note[:80], body=note)
+            _provenance(conn, "interaction", interaction.id)
+        for t in tasks_in or []:
+            due = None
+            if t.get("due"):
+                parsed = parse_human_date(t["due"])
+                if parsed is None:
+                    raise ValueError(f"cannot read a date from {t['due']!r}")
+                due = parsed.isoformat()
+            task = tasks_repo.create(
+                conn, t["title"], org_id=org.id, due_on=due,
+                description=t.get("description"), detail=t.get("detail"))
+            _provenance(conn, "task", task.id)
+    return {"org_ref": org.ref, "name": org.name,
+            "contacts": len(contacts_in or []), "tasks": len(tasks_in or [])}
+
+
+# Route enrich_field values through the SAME cleaners the forms use
+# (tui/widgets/forms.py `_CLEANERS`) so an MCP-entered email/phone/url/domain
+# ends up identical to one typed through the TUI. `normalize` is imported
+# directly here (never the tui module — mcpserver has no TUI dependency).
+_FIELD_CLEANERS = {
+    "email": "clean_email",
+    "phone": "clean_phone",
+    "mobile": "clean_phone",
+    "website": "clean_url",
+    "domain": "clean_domain",
+    "naics": "clean_naics",
+    "linkedin": "clean_linkedin",
+    "notes": None,  # textarea: stored as-is, same as the forms' passthrough
+}
+
+
+def _clean_field_value(field: str, value: str) -> str:
+    from . import normalize
+
+    cleaner_name = _FIELD_CLEANERS.get(field, "clean_text")
+    if cleaner_name is None:
+        return value
+    cleaner = getattr(normalize, cleaner_name)
+    return cleaner(value)  # type: ignore[no-any-return]
+
+
+def _enrich_field(
+    conn: sqlite3.Connection, client: str, field: str, value: str,
+    contact: str | None = None,
+) -> dict[str, Any]:
+    """Fill-blanks-only: refuses to touch a field that already has a value
+    (edits happen in the TUI). Additive, single-field, event-logged."""
+    from .repo import contacts as contacts_repo
+    from .repo import orgs
+
+    org = _resolve_client(conn, client)
+    if contact is not None:
+        allowed, kind = _ENRICHABLE_CONTACT, "contact"
+        people = contacts_repo.for_org(conn, org.id, active_only=False)
+        target = next((c for c in people if c.name.lower() == contact.lower()), None)
+        if target is None:
+            names = [c.name for c in people]
+            raise ValueError(f"no contact {contact!r} at {org.name}; have: {names}")
+    else:
+        allowed, kind, target = _ENRICHABLE_ORG, "org", org
+    if field not in allowed:
+        raise ValueError(f"{field!r} is not enrichable on a {kind}; allowed: {sorted(allowed)}")
+    current = getattr(target, field)
+    if current:
+        raise ValueError(
+            f"{org.name}{' / ' + target.name if contact else ''} already has "
+            f"{field}={current!r} — fill-blanks-only, edits happen in the TUI")
+    cleaned = _clean_field_value(field, value)
+    with db.transaction(conn):
+        if kind == "org":
+            orgs.update(conn, target.id, note="mcp enrich", **{field: cleaned})
+        else:
+            contacts_repo.update(conn, target.id, note="mcp enrich", **{field: cleaned})
+        _provenance(conn, kind, target.id)
+    return {"set": True, "entity": kind, "field": field, "value": cleaned}
 
 
 def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict[str, Any]:

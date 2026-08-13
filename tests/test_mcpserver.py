@@ -11,7 +11,8 @@ import pytest
 
 from bookkit import db, mcpserver
 from bookkit.mcpserver import build_server
-from bookkit.repo import interactions, orgs, placements, projects, submissions, tasks
+from bookkit.repo import contacts, interactions, orgs, placements, projects, submissions, tasks
+from bookkit.repo import tasks as tasks_repo
 
 
 @pytest.fixture
@@ -277,3 +278,94 @@ def test_build_server_registers_write_tools(server_db):
     server = build_server(server_db)
     names = {t.name for t in server._tool_manager.list_tools()}
     assert {"log_activity", "task_create", "task_complete"} <= names
+
+
+def test_client_create_refuses_near_duplicate(server_db):
+    rw = db.connect(server_db)
+    orgs.create(rw, name="Henderson Group", kind="client")
+    with pytest.raises(ValueError, match="Henderson Group"):
+        mcpserver._client_create(rw, "Henderson Grp")
+
+
+def test_client_create_bundles_contacts_and_tasks(server_db):
+    rw = db.connect(server_db)
+    out = mcpserver._client_create(
+        rw, "Fresh Co",
+        contacts_in=[{"first_name": "Ann", "last_name": "Lee", "email": "a@fresh.co"}],
+        note="met at RIMS", tasks_in=[{"title": "send intro deck", "due": "9/1"}],
+    )
+    org = orgs.find(rw, out["org_ref"])
+    assert contacts.for_org(rw, org.id)[0].email == "a@fresh.co"
+    assert tasks_repo.open_tasks(rw, org_id=org.id)[0].title == "send intro deck"
+
+
+def test_client_create_bundle_is_atomic_on_bad_task_date(server_db):
+    """A bad task date must roll back the WHOLE bundle, including the org
+    itself — not leave an org created with a broken/missing task."""
+    rw = db.connect(server_db)
+    with pytest.raises(ValueError, match="cannot read a date"):
+        mcpserver._client_create(
+            rw, "Rollback Co", tasks_in=[{"title": "x", "due": "not a real date"}],
+        )
+    assert orgs.find_by_name(rw, "Rollback Co") is None
+
+
+def test_client_create_logs_provenance_on_org(server_db):
+    rw = db.connect(server_db)
+    out = mcpserver._client_create(rw, "Plain Co")
+    org = orgs.find(rw, out["org_ref"])
+    events = rw.execute(
+        "SELECT * FROM event_log WHERE entity_id = ? AND field = 'source'",
+        (org.id,)).fetchall()
+    assert events and events[0]["new_value"] == "mcp"
+
+
+def test_enrich_field_fills_blank_but_never_overwrites(server_db):
+    rw = db.connect(server_db)
+    orgs.create(rw, name="Acme", kind="client")
+    out = mcpserver._enrich_field(rw, "Acme", "industry", "construction")
+    assert out["set"] is True
+    with pytest.raises(ValueError, match="already has"):
+        mcpserver._enrich_field(rw, "Acme", "industry", "manufacturing")
+
+
+def test_enrich_field_rejects_unknown_field(server_db):
+    rw = db.connect(server_db)
+    orgs.create(rw, name="Acme", kind="client")
+    with pytest.raises(ValueError, match="not enrichable"):
+        mcpserver._enrich_field(rw, "Acme", "status", "active")
+
+
+def test_enrich_field_normalizes_email_via_shared_cleaner(server_db):
+    rw = db.connect(server_db)
+    org = orgs.create(rw, name="Acme", kind="client")
+    contacts.create(rw, org.id, first_name="Ann", last_name="Lee")
+    out = mcpserver._enrich_field(
+        rw, "Acme", "email", " Ann.Lee@EXAMPLE.com ", contact="Ann Lee")
+    assert out["value"] == "Ann.Lee@example.com"  # clean_email lowercases the domain only
+    got = contacts.for_org(rw, org.id)[0]
+    assert got.email == "Ann.Lee@example.com"
+
+
+def test_enrich_field_on_contact_unknown_name_raises_with_hint(server_db):
+    rw = db.connect(server_db)
+    org = orgs.create(rw, name="Acme", kind="client")
+    contacts.create(rw, org.id, first_name="Ann", last_name="Lee")
+    with pytest.raises(ValueError, match="no contact"):
+        mcpserver._enrich_field(rw, "Acme", "email", "x@y.com", contact="Bob Nobody")
+
+
+def test_enrich_field_logs_provenance(server_db):
+    rw = db.connect(server_db)
+    org = orgs.create(rw, name="Acme", kind="client")
+    mcpserver._enrich_field(rw, "Acme", "industry", "construction")
+    events = rw.execute(
+        "SELECT * FROM event_log WHERE entity_id = ? AND field = 'source'",
+        (org.id,)).fetchall()
+    assert events and events[0]["new_value"] == "mcp"
+
+
+def test_build_server_registers_client_create_and_enrich_field(server_db):
+    server = build_server(server_db)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    assert {"client_create", "enrich_field"} <= names
