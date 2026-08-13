@@ -206,3 +206,37 @@ def edit_layer(screen: Screen, placement: Placement, layer_id: str | None = None
         for ly in layers
     ]
     _app(screen).push_screen(Picker("edit which layer?", options), picked)
+
+
+def export_open_items_flow(screen: Screen, org_id: str) -> None:
+    """The open-items workbook for one client: resolve the org, write the
+    file to the CWD, notify. Shared by NavigatorScreen's `x` row export and
+    the client Open Items tab — export mutates nothing, so no _refresh."""
+    from datetime import date
+    from pathlib import Path
+
+    from ...repo import orgs
+    from ...services import export_open_items
+
+    conn = _app(screen).conn
+    try:
+        org = orgs.get(conn, org_id)
+    except KeyError:
+        screen.notify("account no longer exists", severity="error")
+        return
+    today = date.today()
+    out = Path(f"{org.ref}-open-items-{today.isoformat()}.xlsx")
+    try:
+        path = export_open_items.write(conn, org_id, out, today)
+    except ImportError as exc:
+        # the workbook renderer lives in towerkit; an older towerkit on
+        # this machine must not take the whole app down
+        screen.notify(
+            f"export needs a newer towerkit — update it ({exc})",
+            severity="error",
+        )
+        return
+    except OSError as exc:
+        screen.notify(f"export failed: {exc}", severity="error")
+        return
+    screen.notify(f"wrote {path}")

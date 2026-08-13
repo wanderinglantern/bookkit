@@ -759,6 +759,34 @@ async def test_export_row_reports_a_stale_towerkit(seeded_db: Path) -> None:
         assert any("towerkit" in str(n.message) for n in app._notifications)
 
 
+async def test_export_open_items_flow_writes_workbook_and_guards_stale_org(
+    seeded_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """entity_actions.export_open_items_flow is the shared home: it writes
+    the workbook for a live org, and a soft-deleted org notifies instead of
+    raising (Task 9's client tab will call this same flow)."""
+    from bookkit.tui.widgets import entity_actions
+
+    monkeypatch.chdir(tmp_path)
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        org = orgs.list_orgs(app.conn, kind="client")[0]
+
+        entity_actions.export_open_items_flow(nav, org.id)
+        await pilot.pause()
+        expected = tmp_path / f"{org.ref}-open-items-{date.today().isoformat()}.xlsx"
+        assert expected.exists()
+
+        orgs.delete(app.conn, org.id)
+        entity_actions.export_open_items_flow(nav, org.id)
+        await pilot.pause()
+        assert app.is_running
+        assert any(
+            "no longer exists" in str(n.message) for n in app._notifications
+        )
+
+
 async def test_task_tables_show_description_and_detail(seeded_db: Path) -> None:
     """description + detail surface on every task table: attention "tasks
     due", an account's task group, and the account overview tab."""

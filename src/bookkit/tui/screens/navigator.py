@@ -842,34 +842,13 @@ class NavigatorScreen(Screen):
 
     def action_export_row(self) -> None:
         """x — the open-items workbook for the client under the cursor."""
-        from ...services import export_open_items
+        from ..widgets import entity_actions
 
         org_id = self._export_target_org()
         if org_id is None:
             self.notify("select a client first", severity="warning")
             return
-        conn = self.app.conn
-        try:
-            org = orgs.get(conn, org_id)
-        except KeyError:
-            self.notify("account no longer exists", severity="error")
-            return
-        today = date.today()
-        out = Path(f"{org.ref}-open-items-{today.isoformat()}.xlsx")
-        try:
-            path = export_open_items.write(conn, org_id, out, today)
-        except ImportError as exc:
-            # the workbook renderer lives in towerkit; an older towerkit on
-            # this machine must not take the whole app down
-            self.notify(
-                f"export needs a newer towerkit — update it ({exc})",
-                severity="error",
-            )
-            return
-        except OSError as exc:
-            self.notify(f"export failed: {exc}", severity="error")
-            return
-        self.notify(f"wrote {path}")
+        entity_actions.export_open_items_flow(self, org_id)
 
     def action_onboard(self) -> None:
         """o — resume onboarding for the selected client, or start a new one."""
