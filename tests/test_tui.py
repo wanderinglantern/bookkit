@@ -1140,3 +1140,39 @@ async def test_open_items_tab_inline_cell_edit_regroups(seeded_db: Path) -> None
         table = app.screen.query_one("#open-items-table", InlineTable)
         assert table.get_row_index(task.id) < table.get_row_index(anchor.id)
         assert str(table.get_row_at(table.get_row_index(task.id))[2]) == "Apple"
+
+
+async def test_navigator_rfi_chase_bucket_and_group(seeded_db: Path) -> None:
+    """A request with an outstanding item shows in the attention feed as ONE
+    row carrying its open count, and under its account as a group."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(
+        app.conn, org.id, "Sompo — property questions", "2026-08-05",
+        due_on=date.today().isoformat(),
+    )
+    rfi.add_item(app.conn, req.id, "how many vehicles?")
+    rfi.add_item(app.conn, req.id, "loss runs", kind="document")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        await pilot.pause()
+
+        nav._current = ("att", "rfi")
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        assert table.row_count == 1, "one row per request, not per item"
+        row = [str(c) for c in table.get_row(f"rfi:{req.id}")]
+        assert any("Sompo — property questions" in c for c in row)
+        assert any("2 of 2" in c for c in row)
+
+        nav._current = ("group", ("requests", org.id))
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        assert table.get_row_index(f"rfi:{req.id}") == 0
