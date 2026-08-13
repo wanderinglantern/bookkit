@@ -6,9 +6,11 @@ one, and the source is soft-deleted (recoverable with undo). Two file-backed
 placements never merge — that would be two sources of truth, which is the
 situation §5 exists to prevent.
 
-Markets: the duplicate's contacts, appetite, submissions, interactions,
-documents, and aliases move to the survivor, and the duplicate's NAME becomes
-an alias — so tower spellings that created the duplicate keep resolving."""
+Markets: the duplicate's contacts, appetite, submissions, information
+requests, interactions, documents, and aliases move to the survivor, and the
+duplicate's NAME becomes an alias — so tower spellings that created the
+duplicate keep resolving. Everything pointing at the loser must move: the
+loser is soft-deleted, and a reader that assumes its FK is alive crashes."""
 
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ from ..repo import (
     submissions,
     tasks,
 )
+from ..repo import rfi as rfi_repo
 
 
 class MergeError(ValueError):
@@ -113,6 +116,7 @@ def merge_markets(conn: sqlite3.Connection, source_id: str, target_id: str) -> M
     moved_contacts = contacts.reassign_org(conn, source.id, target.id)
     moved_appetite = orgs.reassign_appetite(conn, source.id, target.id)
     moved_subs = submissions.reassign_market(conn, source.id, target.id)
+    moved_requests = rfi_repo.reassign_market(conn, source.id, target.id)
     interactions.reassign_org(conn, source.id, target.id)
     documents.reassign_org(conn, source.id, target.id)
     aliases.reassign_market(conn, source.id, target.id)
@@ -130,7 +134,10 @@ def merge_markets(conn: sqlite3.Connection, source_id: str, target_id: str) -> M
 
     base.log_event(
         conn, "org", target.id, "merged_from", None, source.name,
-        note=f"{moved_contacts} contacts, {moved_appetite} appetite, {moved_subs} submissions",
+        note=(
+            f"{moved_contacts} contacts, {moved_appetite} appetite, "
+            f"{moved_subs} submissions, {moved_requests} requests"
+        ),
     )
     base.soft_delete(conn, "org", source.id, note=f"merged into {target.name}")
     return MarketMergeResult(

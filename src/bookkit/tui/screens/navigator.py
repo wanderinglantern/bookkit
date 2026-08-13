@@ -629,10 +629,12 @@ class NavigatorScreen(Screen):
             for request in rfi_repo.requests_for_org(conn, org_id):
                 key = f"rfi:{request.id}"
                 self._row_org[key] = org_id
-                asker = (
-                    orgs.get(conn, request.market_org_id).name
-                    if request.market_org_id else dash()
-                )
+                asker: str | Text = dash()
+                if request.market_org_id:
+                    try:  # a request can outlive a merged-away market
+                        asker = orgs.get(conn, request.market_org_id).name
+                    except KeyError:
+                        asker = Text("(merged market)", style=theme.DIM)
                 open_count = rfi_repo.open_item_count(conn, request.id)
                 table.add_row(
                     request.ref, request.title, asker, request.requested_on,

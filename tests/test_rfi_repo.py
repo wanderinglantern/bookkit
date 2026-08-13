@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from bookkit import db
+from bookkit.repo import base
 
 
 @pytest.fixture
@@ -168,6 +169,43 @@ def test_deleted_items_disappear(conn) -> None:
     item = rfi.add_item(conn, req.id, "gone")
     rfi.delete_item(conn, item.id)
     assert rfi.items_for_request(conn, req.id) == []
+
+
+def test_merging_markets_moves_requests_to_the_survivor(conn) -> None:
+    """A market merge soft-deletes the loser; a request still pointing at it
+    would render a dead name and blow up the edit form. The merge repoints it."""
+    from bookkit.repo import orgs, rfi
+    from bookkit.services import merge
+
+    client = _org(conn)
+    dupe = orgs.create(conn, name="Axa XL", kind="market")
+    real = orgs.create(conn, name="AXA XL", kind="market")
+    req = rfi.create_request(
+        conn, client, "property questions", "2026-08-05", market_org_id=dupe.id
+    )
+    merge.merge_markets(conn, dupe.id, real.id)
+    assert rfi.get_request(conn, req.id).market_org_id == real.id
+    moved = conn.execute(
+        "SELECT COUNT(*) FROM event_log WHERE entity_id = ? AND field = 'market_org_id'",
+        (req.id,),
+    ).fetchone()[0]
+    assert moved == 1, "the move is event-logged like every other write"
+
+
+def test_outstanding_rows_drop_a_merged_away_market_name(conn) -> None:
+    from bookkit.repo import orgs, rfi
+
+    client = _org(conn)
+    dupe = orgs.create(conn, name="Axa XL", kind="market")
+    req = rfi.create_request(
+        conn, client, "property questions", "2026-08-05",
+        due_on="2026-08-19", market_org_id=dupe.id,
+    )
+    rfi.add_item(conn, req.id, "how many vehicles?")
+    base.soft_delete(conn, "org", dupe.id)
+    rows = rfi.outstanding_rows(conn, "2026-12-31")
+    assert len(rows) == 1, "the request stays in the chase queue"
+    assert rows[0]["market_name"] is None
 
 
 def test_rfi_categories_vocabulary(conn) -> None:

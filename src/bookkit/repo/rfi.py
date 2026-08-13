@@ -52,6 +52,24 @@ def delete_request(conn: sqlite3.Connection, request_id: str) -> None:
     base.soft_delete(conn, "rfi_request", request_id)
 
 
+def reassign_market(conn: sqlite3.Connection, from_org_id: str, to_org_id: str) -> int:
+    """Point every request at the surviving market when two markets merge.
+    Returns the number of requests moved.
+
+    Row by row through base.update, not one bulk UPDATE: the move is a field
+    change like any other and must land in the event log."""
+    rows = conn.execute(
+        f"""SELECT id FROM rfi_request
+            WHERE market_org_id = ? AND {base.alive()}""",
+        (from_org_id,),
+    ).fetchall()
+    for row in rows:
+        base.update(
+            conn, "rfi_request", row[0], {"market_org_id": to_org_id}, "market merged"
+        )
+    return len(rows)
+
+
 # --- items ---------------------------------------------------------------------
 
 
@@ -118,7 +136,9 @@ def outstanding_rows(conn: sqlite3.Connection, horizon: str) -> list[sqlite3.Row
         FROM rfi_item i
         JOIN rfi_request r ON r.id = i.request_id
         JOIN org o ON o.id = r.org_id
-        LEFT JOIN org m ON m.id = r.market_org_id
+        -- aliveness rides on the JOIN, not the WHERE: a merged-away market
+        -- must blank the name, never drop the whole request from the queue
+        LEFT JOIN org m ON m.id = r.market_org_id AND m.deleted_at IS NULL
         WHERE i.status = 'outstanding'
           AND r.cancelled_at IS NULL
           AND {base.alive('i')} AND {base.alive('r')} AND {base.alive('o')}

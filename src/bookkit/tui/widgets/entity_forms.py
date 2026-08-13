@@ -522,6 +522,11 @@ def request_form(
         if existing
         else {"requested_on": date.today().isoformat()}
     )
+    # a market merge soft-deletes the loser but the request keeps its FK;
+    # handing Select a value its options no longer hold raises
+    # InvalidSelectValueError and takes the app down on `e`
+    if existing and existing.market_org_id not in {v for _, v in markets}:
+        initial = {**initial, "market_org_id": None}
     return FormSpec(
         "edit information request" if existing else "new information request",
         [

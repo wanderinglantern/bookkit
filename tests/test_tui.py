@@ -1178,6 +1178,42 @@ async def test_navigator_rfi_chase_bucket_and_group(seeded_db: Path) -> None:
         assert table.get_row_index(f"rfi:{req.id}") == 0
 
 
+async def test_request_survives_a_merged_away_market(seeded_db: Path) -> None:
+    """A market merge soft-deletes the loser. A request still pointing at a
+    dead market must not take the app down: the navigator's requests group
+    renders it, and its edit form builds instead of handing Select a dead id."""
+    from bookkit.repo import base as repo_base
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets import entity_forms as ef
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    dupe = orgs.create(app.conn, name="Axa XL", kind="market")
+    req = rfi.create_request(
+        app.conn, org.id, "Sompo — property questions", "2026-08-05",
+        market_org_id=dupe.id,
+    )
+    repo_base.soft_delete(app.conn, "org", dupe.id)
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        await pilot.pause()
+
+        nav._current = ("group", ("requests", org.id))
+        nav._render_pane()  # KeyError here used to kill the app
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        row = [str(c) for c in table.get_row(f"rfi:{req.id}")]
+        assert any("merged market" in c for c in row)
+
+        spec = ef.request_form(rfi.get_request(app.conn, req.id), conn=app.conn)
+        assert spec.initial["market_org_id"] is None, (
+            "a dead market id would raise InvalidSelectValueError"
+        )
+
+
 async def test_account_requests_tab(seeded_db: Path) -> None:
     """Tab 9 is master/detail: picking a request fills the items datasheet;
     d marks an item received and dates it; paste adds one item per line."""
