@@ -10,7 +10,7 @@ import pytest
 
 from bookkit import db, mcpserver
 from bookkit.mcpserver import build_server
-from bookkit.repo import orgs, placements, submissions, tasks
+from bookkit.repo import orgs, placements, projects, submissions, tasks
 
 
 @pytest.fixture
@@ -131,6 +131,62 @@ def test_program_summary_unknown_ref_suggests(server_db):
     ro = db.connect_readonly(server_db)
     with pytest.raises(ValueError, match="no program matching"):
         mcpserver._program_summary(ro, "PLC-9999")
+
+
+def test_open_items_scoped_reuses_export_composition(server_db):
+    # seed a client + org task + need (reuse Task 2's seeding style)
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    tasks.create(conn, "Chase loss runs", org_id=org.id)
+    project = projects.create_project(conn, org.id, "New warehouse")
+    projects.add_need(conn, project.id, "Property", "2026-09-01", status="identified")
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    out = mcpserver._open_items(ro, client="Acme")
+    assert out["account"] == "Acme"
+    assert out["sections"][0]["rows"][0]["kind"] in ("Task", "Need", "Submission")
+
+
+def test_open_items_bookwide_matches_attention_windows(server_db):
+    ro = db.connect_readonly(server_db)
+    out = mcpserver._open_items(ro, client=None)
+    assert set(out) == {"tasks_due", "project_needs", "submissions_past_sla",
+                        "onboarding_incomplete"}
+
+
+def test_open_items_unknown_client_raises_with_hint(server_db):
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme Corp", kind="client")
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    with pytest.raises(ValueError, match="no client matching"):
+        mcpserver._open_items(ro, client="Acmee")
+
+
+def test_pipeline_status_formats_cents_as_dollars(server_db):
+    ro = db.connect_readonly(server_db)
+    out = mcpserver._pipeline_status(ro)
+    assert len(out["stages"]) == 7  # every STAGES entry, even at zero count
+    for stage in out["stages"]:
+        assert isinstance(stage["total"], str) and stage["total"].startswith("$")
+        assert isinstance(stage["weighted"], str) and stage["weighted"].startswith("$")
+    assert "win_rate" in out["conversion"]
+    assert out["submissions_past_sla"] == 0
+
+
+def test_build_server_registers_open_items_and_pipeline_status(server_db):
+    server = build_server(server_db)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    assert {"open_items", "pipeline_status"} <= names
+
+
+def test_resolve_client_unknown_name_suggests_nearest(server_db):
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme Corp", kind="client")
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    with pytest.raises(ValueError, match="no client matching"):
+        mcpserver._resolve_client(ro, "Acmee")
 
 
 def test_staleness_report_shape(server_db):

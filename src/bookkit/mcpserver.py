@@ -95,6 +95,25 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         or shop the account elsewhere."""
         return _staleness_report(ro)
 
+    @server.tool()
+    def open_items(client: str | None = None) -> dict[str, Any]:
+        """Open items for ONE client (`client` = name, ref, or fuzzy —
+        resolved the same way as every other client-scoped tool) — the same
+        composition used for the client export deliverable, so this matches
+        what a client would be handed. Omit `client` for the book-wide view:
+        tasks due, unmet project needs, submissions past SLA, and incomplete
+        onboarding, across the whole book (the same 120-day attention
+        windows as today_brief)."""
+        return _open_items(ro, client=client)
+
+    @server.tool()
+    def pipeline_status() -> dict[str, Any]:
+        """Opportunity pipeline health: count, total and probability-weighted
+        premium, and average days-in-stage per stage (identified through
+        won/lost); win rate and per-gate advance rates; count of submissions
+        past SLA. Money is formatted dollars."""
+        return _pipeline_status(ro)
+
 
 def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
     pass  # Task 4
@@ -243,6 +262,92 @@ def _staleness_report(conn: sqlite3.Connection) -> list[dict[str, Any]]:
          "premium": format_cents(s.premium) if s.premium else None}
         for s in staleness.stale_accounts(conn, date.today())
     ]
+
+
+def _resolve_client(conn: sqlite3.Connection, ref_or_name: str) -> Any:
+    """Shared by every client-scoped read tool and all five write tools —
+    ONE resolution path so a bad name always fails the same way, with
+    close-match hints instead of a raw KeyError."""
+    from rapidfuzz import process
+
+    from .repo import orgs
+
+    org = orgs.find(conn, ref_or_name) or orgs.find_by_name(conn, ref_or_name)
+    if org is not None:
+        return org
+    names = [o.name for o in orgs.list_orgs(conn, kind="client")]
+    close = process.extract(ref_or_name, names, limit=3, score_cutoff=60)
+    hint = ", ".join(m[0] for m in close) if close else "none close"
+    raise ValueError(f"no client matching {ref_or_name!r} — nearest: {hint}")
+
+
+def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    from .services import export_open_items, onboarding
+
+    today = date.today()
+    if client is not None:
+        org = _resolve_client(conn, client)
+        return {
+            "account": org.name,
+            "sections": [
+                {"label": s.label, "rows": [asdict(r) for r in s.rows]}
+                for s in export_open_items.compose(conn, org.id, today)
+            ],
+        }
+
+    from .dates import days_until
+    from .repo import projects as projects_repo
+    from .repo import tasks as tasks_repo
+    from .services import sla
+
+    return {
+        "tasks_due": [
+            {"ref": t.id, "title": t.title, "description": t.description,
+             "category": t.category, "due": t.due_on}
+            for t in tasks_repo.open_tasks(conn, due_by=today.isoformat())
+        ],
+        "project_needs": [
+            {"needed_by": n["needed_by"], "days": days_until(n["needed_by"], today),
+             "account": n["org_name"], "line": n["line"],
+             "project": n["project_name"], "status": n["status"]}
+            for n in projects_repo.needs_due(conn, today, days=120)
+        ],
+        "submissions_past_sla": [
+            {"market": late.market.name, "account": late.account.name,
+             "days_out": late.days_out}
+            for late in sla.past_sla(conn, today)
+        ],
+        "onboarding_incomplete": [
+            {"account": org.name, "missing": missing}
+            for org, missing in onboarding.incomplete_clients(conn, today)
+        ],
+    }
+
+
+def _pipeline_status(conn: sqlite3.Connection) -> dict[str, Any]:
+    from .money import format_cents
+    from .services import pipeline, sla
+
+    # StageMetrics carries total_cents/weighted_cents in cents (see
+    # services/pipeline.py:63) — cents never leave a tool raw, so format
+    # here and rename the keys to drop the now-misleading "_cents" suffix.
+    stages = [
+        {
+            "stage": m.stage,
+            "count": m.count,
+            "total": format_cents(m.total_cents),
+            "weighted": format_cents(m.weighted_cents),
+            "avg_days_in_stage": m.avg_days_in_stage,
+        }
+        for m in pipeline.metrics(conn)
+    ]
+    return {
+        "stages": stages,
+        "conversion": pipeline.conversion(conn),
+        "submissions_past_sla": len(sla.past_sla(conn, date.today())),
+    }
 
 
 def serve(db_path: Path | str | None = None) -> None:
