@@ -51,6 +51,50 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         project needs, stale accounts, submissions past SLA."""
         return _today_brief(ro)
 
+    @server.tool()
+    def renewals_due(days: int = 120) -> list[dict[str, Any]]:
+        """Placements needing renewal attention within `days` (default 120),
+        soonest first, plus anything already overdue and not yet renewed.
+        Each entry names its lines of cover — a program name alone is never
+        enough context to act on. Use this to answer "what's coming up" or
+        "what's overdue" instead of guessing from program names."""
+        return _renewals_due(ro, days=days)
+
+    @server.tool()
+    def search(query: str) -> list[dict[str, Any]]:
+        """Full-text search across orgs, contacts, and interactions, ranked
+        and grouped by kind ('org' | 'contact' | 'interaction'). Use this
+        FIRST to resolve a client/market/person name or a fuzzy topic into
+        real records before calling any other tool that takes an id or ref —
+        never guess one."""
+        return _search(ro, query)
+
+    @server.tool()
+    def list_programs() -> list[dict[str, Any]]:
+        """Every client program (placement) on the book: ref, account,
+        program name, period end, and status. Use this to get an overview of
+        the whole book or to find a program's ref for program_summary when
+        search doesn't already have it."""
+        return _list_programs(ro)
+
+    @server.tool()
+    def program_summary(ref: str) -> dict[str, Any]:
+        """Posture on ONE program: account, period, status, lines of cover,
+        premium, plus counts of its open tasks and outstanding submissions.
+        Deliberately slim — it does NOT dump the full program structure or
+        market shares. `ref` matches the placement ref or the exact program
+        name; an unmatched ref raises with candidate refs/names to retry
+        with."""
+        return _program_summary(ro, ref)
+
+    @server.tool()
+    def staleness_report() -> list[dict[str, Any]]:
+        """Active client accounts that have gone quiet: no logged interaction
+        in over 60 days, sorted with the most neglected (days stale × premium)
+        first. Use this to find who needs a check-in call before they lapse
+        or shop the account elsewhere."""
+        return _staleness_report(ro)
+
 
 def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
     pass  # Task 4
@@ -127,6 +171,78 @@ def _project_need(row: sqlite3.Row, today: date) -> dict[str, Any]:
         "premium_indication": format_cents_compact(row["premium_indication_cents"])
         if row["premium_indication_cents"] else None,
     }
+
+
+def _renewals_due(conn: sqlite3.Connection, days: int = 120) -> list[dict[str, Any]]:
+    from .services import renewals
+
+    return [_renewal(item) for item in renewals.upcoming(conn, date.today(), days=days)]
+
+
+def _search(conn: sqlite3.Connection, query: str) -> list[dict[str, Any]]:
+    from .repo import search as search_repo
+
+    return [
+        {"kind": hit.kind, "title": hit.title, "snippet": hit.snippet}
+        for hit in search_repo.search(conn, query)
+    ]
+
+
+def _list_programs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    from .repo import orgs, placements
+
+    out = []
+    for org in orgs.list_orgs(conn, kind="client"):
+        for p in placements.for_org(conn, org.id):
+            out.append({"ref": p.ref, "account": org.name,
+                        "program": p.program_name, "period_to": p.period_to,
+                        "status": p.status})
+    return out
+
+
+def _program_summary(conn: sqlite3.Connection, ref: str) -> dict[str, Any]:
+    """Slim by design (Grant's call): posture and open-item counts, not the
+    full structure/shares dump."""
+    from . import sync
+    from .money import format_cents
+    from .repo import orgs, placements, submissions
+    from .repo import tasks as tasks_repo
+
+    placement = next(
+        (p for org in orgs.list_orgs(conn, kind="client")
+         for p in placements.for_org(conn, org.id)
+         if p.ref == ref or p.program_name == ref),
+        None,
+    )
+    if placement is None:
+        candidates = [p["ref"] + " " + p["program"] for p in _list_programs(conn)[:5]]
+        raise ValueError(f"no program matching {ref!r}; try one of: {candidates}")
+    org = orgs.get(conn, placement.org_id)
+    return {
+        "account": org.name, "program": placement.program_name,
+        "ref": placement.ref, "period": [placement.period_from, placement.period_to],
+        "status": placement.status,
+        "lines_of_cover": sync.line_labels(placement.program_path),
+        "premium": format_cents(placement.total_premium)
+        if placement.total_premium else None,
+        "open_tasks": len([t for t in tasks_repo.open_tasks(conn, org_id=org.id)
+                           if t.placement_id == placement.id]),
+        "outstanding_submissions": len([
+            s for s in submissions.outstanding_for_org(conn, org.id)
+            if s["about_placement_id"] == placement.id]),
+    }
+
+
+def _staleness_report(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    from .money import format_cents
+    from .services import staleness
+
+    return [
+        {"account": s.org.name, "last_touch": s.last_interaction_on,
+         "days_stale": s.days_stale,
+         "premium": format_cents(s.premium) if s.premium else None}
+        for s in staleness.stale_accounts(conn, date.today())
+    ]
 
 
 def serve(db_path: Path | str | None = None) -> None:
