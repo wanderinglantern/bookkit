@@ -59,6 +59,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
 def _today_brief(conn: sqlite3.Connection) -> dict[str, Any]:
     from .dates import days_until
     from .money import format_cents_compact
+    from .repo import projects as projects_repo
     from .repo import tasks as tasks_repo
     from .services import renewals, sla, staleness
 
@@ -75,6 +76,9 @@ def _today_brief(conn: sqlite3.Connection) -> dict[str, Any]:
             for t in tasks_repo.open_tasks(conn, due_by=iso)
         ],
         "renewals_120d": [_renewal(item) for item in renewals.upcoming(conn, today, days=120)],
+        "project_needs": [
+            _project_need(need, today) for need in projects_repo.needs_due(conn, today, days=120)
+        ],
         "stale_accounts": [
             {"account": s.org.name, "last_touch": s.last_interaction_on,
              "days_stale": s.days_stale,
@@ -104,6 +108,24 @@ def _renewal(item: RenewalItem) -> dict[str, Any]:
         "premium": format_cents_compact(item.placement.total_premium)
         if item.placement.total_premium else None,
         "placement_ref": item.placement.ref,
+    }
+
+
+def _project_need(row: sqlite3.Row, today: date) -> dict[str, Any]:
+    from .dates import days_until
+    from .money import format_cents_compact
+
+    needed_by = row["needed_by"]
+    d = days_until(needed_by, today) if needed_by else 0
+    return {
+        "needed_by": needed_by,
+        "days_overdue": max(0, -d),
+        "account": row["org_name"],
+        "project": row["project_name"],
+        "line": row["line"],
+        "status": row["status"],
+        "premium_indication": format_cents_compact(row["premium_indication_cents"])
+        if row["premium_indication_cents"] else None,
     }
 
 
