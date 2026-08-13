@@ -733,3 +733,65 @@ async def test_onboarding_enter_opens_step_form_and_save_advances(empty_db: Path
         assert isinstance(screen, OnboardingScreen)
         assert orgs.get(app.conn, org.id).owner == "grant"
         assert screen.query_one("#onboard-steps", ListView).index == 1  # contacts
+
+
+async def test_onboarding_projects_step_survives_need_form_cancel(
+    empty_db: Path,
+) -> None:
+    """Fill in the project, esc out of the chained need form: the project
+    must stay saved, the wizard must reflect that (not sit stuck on
+    'untouched'), and re-entering the step must route to adding a need on
+    the project that already exists rather than spawning a duplicate."""
+    from bookkit.repo import projects as projects_repo
+    from bookkit.services import onboarding
+    from bookkit.tui.screens.onboarding import OnboardingScreen
+    from bookkit.tui.widgets.forms import FormModal
+
+    app = BookkitApp(empty_db)
+    org = orgs.create(app.conn, name="Newco", kind="client")
+    async with app.run_test(size=(130, 42)) as pilot:
+        app.push_screen(OnboardingScreen(org.id))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, OnboardingScreen)
+        steps = screen.query_one("#onboard-steps", ListView)
+        steps.index = 3  # "projects & needs"
+        await pilot.pause()
+
+        await pilot.press("enter")           # opens the project form
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        await _fill(pilot, app, "name", "HQ Tower Build")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        # save chains straight into the need form
+        assert isinstance(app.screen, FormModal)
+        assert app.screen.query_one("#form-line", Input)
+
+        # user escapes the need form without filling it in
+        await pilot.press("escape")
+        await pilot.pause()
+
+        projs = projects_repo.projects_for_org(app.conn, org.id)
+        assert len(projs) == 1  # the project itself was never lost
+
+        screen = app.screen
+        assert isinstance(screen, OnboardingScreen)
+        status = screen._statuses[3]
+        assert status.state == onboarding.PARTIAL  # refreshed, not stale
+
+        # re-entering the step routes to adding a need on the SAME
+        # project, not a brand-new blank project form
+        steps = screen.query_one("#onboard-steps", ListView)
+        steps.index = 3
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        assert app.screen.query_one("#form-line", Input)  # need form again
+        await pilot.press("escape")
+        await pilot.pause()
+
+        projs_after = projects_repo.projects_for_org(app.conn, org.id)
+        assert len(projs_after) == 1  # still exactly one project

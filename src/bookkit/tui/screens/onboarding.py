@@ -148,25 +148,54 @@ class OnboardingScreen(Screen):
             )
 
     def _project_then_need(self, done, draft: str) -> None:
-        """Project first; on save, chain straight into its first need —
-        'thorough capture' means a project never lands needless silently."""
+        """Route to whichever half of "projects & needs" is still open.
+
+        A bare project (one already created but with no needs recorded —
+        e.g. the user escaped out of the need form last time) goes straight
+        to its need form; otherwise start a brand-new project and chain
+        into its first need on save. Either way, once the project exists in
+        the DB the need form's *own* done-callback always refreshes —
+        whether the need form is saved or cancelled — so an escape there
+        never leaves the wizard showing the step as untouched, and re-
+        entering the step routes to adding a need on the project that
+        already exists instead of spawning a duplicate."""
+        from ...models import Project
+        from ...repo import projects as projects_repo
         from ..widgets import entity_forms as ef
         from ..widgets.forms import FormModal
 
         conn = self.app.conn
+
+        def open_need_form(project: Project, need_draft: str) -> None:
+            def need_done(_values: dict | None) -> None:
+                # The project is already persisted by the time we get here
+                # regardless of what happens to the need form, so always
+                # refresh — never gate this on values being non-None.
+                self.refresh_data(jump_to_first_incomplete=True)
+
+            self.app.push_screen(
+                FormModal(ef.need_form(conn=conn),
+                          commit=lambda v: _none(ef.apply_need(conn, v, project.id)),
+                          draft_key=need_draft),
+                need_done,
+            )
+
+        bare = [
+            p
+            for p in projects_repo.projects_for_org(conn, self.org_id)
+            if not projects_repo.needs_for_project(conn, p.id)
+        ]
+        if bare:
+            open_need_form(bare[0], draft + ":need")
+            return
+
         created: list = []
 
         def project_saved(values: dict | None) -> None:
             if values is None:
                 done(None)
                 return
-            project = created[-1]
-            self.app.push_screen(
-                FormModal(ef.need_form(conn=conn),
-                          commit=lambda v: _none(ef.apply_need(conn, v, project.id)),
-                          draft_key=draft + ":need"),
-                done,
-            )
+            open_need_form(created[-1], draft + ":need")
 
         def commit_project(v: dict) -> None:
             created.append(ef.apply_project(conn, v, org_id=self.org_id))
