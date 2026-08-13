@@ -88,10 +88,12 @@ class FormModal(ModalScreen):
         self,
         spec: FormSpec,
         commit: Callable[[dict[str, Any]], str | None] | None = None,
+        draft_key: str | None = None,
     ) -> None:
         super().__init__()
         self.spec = spec
         self._commit = commit
+        self._draft_key = draft_key
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-box"):
@@ -148,8 +150,37 @@ class FormModal(ModalScreen):
         return str(initial)
 
     def on_mount(self) -> None:
+        if self._draft_key:
+            self._restore_draft(self._draft_key)
         first = self.spec.fields[0]
         self.query_one(f"#form-{first.key}").focus()
+
+    def _restore_draft(self, draft_key: str) -> None:
+        import json
+
+        from ...repo import drafts
+
+        payload = drafts.load(self.app.conn, draft_key)
+        if not payload:
+            return
+        try:
+            saved: dict[str, str] = json.loads(payload)
+        except ValueError:
+            return  # unreadable scratch is not worth an error
+        for f in self.spec.fields:
+            raw = saved.get(f.key)
+            if not raw:
+                continue
+            widget = self.query_one(f"#form-{f.key}")
+            if isinstance(widget, Input) and not widget.value:
+                widget.value = raw
+            elif isinstance(widget, TextArea) and not widget.text:
+                widget.text = raw
+            elif isinstance(widget, Select) and widget.value == Select.NULL:
+                try:
+                    widget.value = raw
+                except Exception:  # option list changed since the draft — skip
+                    pass
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "form-save":
@@ -180,6 +211,10 @@ class FormModal(ModalScreen):
             if error is not None:
                 self.notify(error, severity="error")
                 return
+        if self._draft_key:
+            from ...repo import drafts
+
+            drafts.clear(self.app.conn, self._draft_key)
         self.dismiss(values)
 
     def _drain(self, f: Field) -> str | None:
@@ -216,6 +251,16 @@ class FormModal(ModalScreen):
         return cleaner(text)
 
     def action_cancel(self) -> None:
+        if self._draft_key:
+            import json
+
+            from ...repo import drafts
+
+            raw = {f.key: (self._drain(f) or "") for f in self.spec.fields}
+            if any(raw.values()):
+                drafts.save(self.app.conn, self._draft_key, json.dumps(raw))
+            else:
+                drafts.clear(self.app.conn, self._draft_key)
         self.dismiss(None)
 
 

@@ -255,3 +255,31 @@ async def test_form_fields_carry_dropdown_and_ghost_suggestions(seeded_db: Path)
         await pilot.pause()
         assert app.screen.query(AutoComplete)  # dropdown mounted
         assert app.screen.query_one("#form-program_name", Input).suggester is not None
+
+
+async def test_form_draft_survives_esc_and_clears_on_save(empty_db: Path) -> None:
+    from bookkit.repo import drafts
+    from bookkit.tui.widgets.forms import Field, FormModal, FormSpec
+
+    def spec() -> FormSpec:
+        return FormSpec(
+            "t",
+            [Field("title", "title", required=True), Field("notes", "notes", "textarea")],
+        )
+
+    app = BookkitApp(empty_db)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.push_screen(FormModal(spec(), draft_key="test:draft"))
+        await pilot.pause()
+        await _fill(pilot, app, "title", "half-typed thought")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert drafts.load(app.conn, "test:draft") is not None
+
+        # reopen: the half-typed value is back
+        app.push_screen(FormModal(spec(), draft_key="test:draft"))
+        await pilot.pause()
+        assert app.screen.query_one("#form-title", Input).value == "half-typed thought"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert drafts.load(app.conn, "test:draft") is None
