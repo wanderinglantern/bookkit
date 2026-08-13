@@ -795,3 +795,45 @@ async def test_onboarding_projects_step_survives_need_form_cancel(
 
         projs_after = projects_repo.projects_for_org(app.conn, org.id)
         assert len(projs_after) == 1  # still exactly one project
+
+
+async def test_navigator_onboarding_attention_and_resume(seeded_db: Path) -> None:
+    """A fresh client with no contacts shows up in the onboarding attention
+    leaf, and o on the account (from anywhere in the Navigator) resumes the
+    wizard for it."""
+    from bookkit.tui.screens.navigator import NavigatorScreen
+    from bookkit.tui.screens.onboarding import OnboardingScreen
+
+    def _find_leaf(node, data):
+        if node.data == data:
+            return node
+        for child in node.children:
+            found = _find_leaf(child, data)
+            if found is not None:
+                return found
+        return None
+
+    app = BookkitApp(seeded_db)
+    org = orgs.create(app.conn, name="Fresh Prospect Co", kind="client")
+    async with app.run_test(size=(160, 48)) as pilot:
+        assert isinstance(app.screen, NavigatorScreen)
+        nav = app.screen
+        nav.refresh_data()
+        await pilot.pause()
+
+        assert len(nav._attention["onboarding"]) == 1
+        assert nav._attention["onboarding"][0][0].id == org.id
+
+        tree = nav.query_one("#nav-tree")
+        leaf = _find_leaf(tree.root, ("att", "onboarding"))
+        assert leaf is not None
+        label = str(leaf.label)
+        assert "onboarding incomplete" in label
+        assert "1" in label
+
+        # o on the selected account starts/resumes onboarding
+        nav._current = ("account", org.id)
+        await pilot.press("o")
+        await pilot.pause()
+        assert isinstance(app.screen, OnboardingScreen)
+        assert app.screen.org_id == org.id

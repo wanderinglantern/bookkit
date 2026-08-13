@@ -56,6 +56,7 @@ ROW_HINTS = {
     "renewals": "[b]e[/b] edit · [b]r[/b] renew · [b]l[/b] layer · [b]enter[/b] opens account",
     "needs": "[b]enter[/b] opens account",
     "sla": "[b]enter[/b] opens account",
+    "onboarding": "[b]enter[/b] resume onboarding",
 }
 ADDABLE = ("placements", "contacts", "opportunities", "tasks", "projects")
 
@@ -105,6 +106,7 @@ class NavigatorScreen(Screen):
         Binding("d", "task_done", "Done (task)", show=False),
         Binding("r", "renew_row", "Renew", show=False),
         Binding("l", "edit_layer_row", "Layer", show=False),
+        Binding("o", "onboard", "Onboard client", show=False),
         Binding("x", "export_row", "Export open items"),
         Binding("u", "undo", "Undo"),
         Binding("R", "refresh", "Refresh", show=False),
@@ -155,9 +157,12 @@ class NavigatorScreen(Screen):
         needs = projects_repo.needs_due(conn, today, days=120)
         due_tasks = tasks_repo.open_tasks(conn, due_by=today.isoformat())
         late = sla.past_sla(conn, today)
+        from ...services import onboarding as onboarding_svc
+
+        pending_onboarding = onboarding_svc.incomplete_clients(conn, today)
         self._attention = {
             "overdue": overdue, "renewals": soon, "needs": needs,
-            "tasks": due_tasks, "sla": late,
+            "tasks": due_tasks, "sla": late, "onboarding": pending_onboarding,
         }
         att = tree.root.add(_section("ATTENTION"), expand=True, data=("att-root", None))
         for key, label, count in (
@@ -166,6 +171,7 @@ class NavigatorScreen(Screen):
             ("needs", "project needs due", len(needs)),
             ("tasks", "tasks due", len(due_tasks)),
             ("sla", "submissions past SLA", len(late)),
+            ("onboarding", "onboarding incomplete", len(pending_onboarding)),
         ):
             att.add_leaf(_attention_label(key, label, count), data=("att", key))
 
@@ -457,6 +463,15 @@ class NavigatorScreen(Screen):
                     item.submission.sent_on,
                     days_text(-item.days_out), key=key,
                 )
+        elif which == "onboarding":
+            table.add_columns("account", "missing", "since")
+            for org, missing in self._attention["onboarding"]:
+                key = f"org:{org.id}"
+                self._row_org[key] = org.id
+                table.add_row(
+                    org.name, Text(missing, style=theme.AMBER),
+                    org.created_at[:10], key=key,
+                )
 
     def _fill_group_table(self, table: InlineTable, group: str, org_id: str) -> None:
         conn = self.app.conn
@@ -616,8 +631,14 @@ class NavigatorScreen(Screen):
     def on_data_table_row_selected(self, event: ListTable.RowSelected) -> None:
         key = str(event.row_key.value or "")
         org_id = self._row_org.get(key)
-        if org_id:
-            self.app.open_account(org_id)
+        if not org_id:
+            return
+        if key.startswith("org:") and self._current == ("att", "onboarding"):
+            from .onboarding import OnboardingScreen
+
+            self.app.push_screen(OnboardingScreen(org_id))
+            return
+        self.app.open_account(org_id)
 
     def on_data_table_row_highlighted(self, event: ListTable.RowHighlighted) -> None:
         preview = self.query_one("#nav-preview", TowerPreview)
@@ -787,6 +808,40 @@ class NavigatorScreen(Screen):
             self.notify(f"export failed: {exc}", severity="error")
             return
         self.notify(f"wrote {path}")
+
+    def action_onboard(self) -> None:
+        """o — resume onboarding for the selected client, or start a new one."""
+        from ..screens.onboarding import OnboardingScreen
+        from ..widgets import entity_forms as ef
+        from ..widgets.forms import FormModal
+
+        conn = self.app.conn
+        kind, payload = self._current
+        if kind == "account":
+            self.app.push_screen(OnboardingScreen(payload))
+            return
+        created: list = []
+
+        def done(values: dict | None) -> None:
+            if values is not None and created:
+                self.app.push_screen(OnboardingScreen(created[-1].id))
+
+        def commit(values: dict) -> str | None:
+            # spec's duplicate guard: refuse a near-duplicate name in place —
+            # the form stays open so Grant can rename, or esc and resume the
+            # existing client from the onboarding attention list instead
+            from rapidfuzz import fuzz, process
+
+            existing = {o.name: o for o in orgs.list_orgs(conn, kind="client")}
+            match = process.extractOne(
+                values["name"], list(existing), scorer=fuzz.WRatio, score_cutoff=87)
+            if match:
+                dup = existing[match[0]]
+                return f"looks like {dup.name} ({dup.ref}) — rename, or esc and resume it"
+            created.append(ef.apply_org(conn, values))
+            return None
+
+        self.app.push_screen(FormModal(ef.org_form(conn=conn), commit=commit), done)
 
     # -- navigation -----------------------------------------------------------------
 
