@@ -26,7 +26,7 @@ cd "$(dirname "$0")"
 
 WHEELHOUSE_URL="https://github.com/wanderinglantern/bookkit/releases/download/v0.1.0/bookkit-wheelhouse-macos.zip"
 PY="${PYTHON:-python3}"
-WHEELHOUSE_SHA256="61ced5236da6e7d5e6ed7c0f843af390992defcbfffe3aef5684f23e73cfc9d1"
+WHEELHOUSE_SHA256="0ed4f0f466734b8dcb3d440bdb63d79392e92ec7f658ab23c822ae87c09ec184"
 TOWERKIT="../towerkit"
 
 if [ ! -f "$TOWERKIT/pyproject.toml" ]; then
