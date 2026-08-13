@@ -283,3 +283,36 @@ async def test_form_draft_survives_esc_and_clears_on_save(empty_db: Path) -> Non
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert drafts.load(app.conn, "test:draft") is None
+
+
+async def test_assign_unknown_member_creates_inline(seeded_db: Path) -> None:
+    """Choosing '+ new team member…' in the who-select chains into the member
+    form; saving it creates the member AND completes the assignment."""
+    from bookkit.repo import team as team_repo
+
+    conn = db.connect(seeded_db)
+    org = orgs.find_by_name(conn, "Atomic Industries, Inc.")
+    conn.close()
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        assert isinstance(app.screen, AccountScreen)
+        await pilot.press("w")  # action_assign_team
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        await _pick(pilot, app, "team_member_id", "__new__")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        # chained into the member form
+        assert isinstance(app.screen, FormModal)
+        await _fill(pilot, app, "name", "Priya Nair")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        members = team_repo.list_members(app.conn)
+        assert any(m.name == "Priya Nair" for m in members)
+        new_member = next(m for m in members if m.name == "Priya Nair")
+        assignments = team_repo.for_org(app.conn, org.id)
+        assert any(a["team_member_id"] == new_member.id for a in assignments)

@@ -1256,7 +1256,11 @@ class AccountScreen(Screen):
         )
         org_id = None if placement_id else self.current_org_id
 
+        from ..widgets.entity_forms import NEW_MEMBER
+
         def commit(values: dict) -> str | None:
+            if values["team_member_id"] == NEW_MEMBER:
+                return None  # nothing to write yet — done() chains to the member form
             cleaned = dropped(values)
             member_id = cleaned.pop("team_member_id")
             team_repo.assign(
@@ -1270,6 +1274,9 @@ class AccountScreen(Screen):
         def done(values: dict | None) -> None:
             if values is None:
                 return
+            if values["team_member_id"] == NEW_MEMBER:
+                self._create_member_then_assign(values, org_id, placement_id)
+                return
             scope = "placement" if placement_id else "account"
             self.notify(f"{assigned['name']} assigned to this {scope}")
             self.refresh_data()
@@ -1279,6 +1286,41 @@ class AccountScreen(Screen):
             for m in members
         )
         self.app.push_screen(FormModal(assignment_form(options, conn=conn), commit=commit), done)
+
+    def _create_member_then_assign(
+        self, assignment: dict, org_id: str | None, placement_id: str | None
+    ) -> None:
+        """The who-select's '+ new team member…' sentinel chains here: create
+        the member and complete the assignment in one transaction, so a
+        refused member save keeps that form open with input intact."""
+        from ...db import transaction
+        from ...repo import team as team_repo
+        from ..widgets import entity_forms as ef
+        from ..widgets.forms import FormModal, dropped
+
+        conn = self.app.conn
+
+        def commit(values: dict) -> str | None:
+            core = dropped(values)
+            name = core.pop("name")
+            with transaction(conn):
+                member = team_repo.create_member(conn, name, **core)
+                team_repo.assign(
+                    conn, member.id, org_id=org_id, placement_id=placement_id,
+                    role=assignment.get("role"),
+                    lines=assignment.get("lines"),
+                    notes=assignment.get("notes"),
+                )
+            return None
+
+        def done(values: dict | None) -> None:
+            if values is not None:
+                self.notify("member created and assigned")
+                self.refresh_data()
+
+        self.app.push_screen(
+            FormModal(ef.member_form(conn=conn), commit=commit), done
+        )
 
     def action_merge_placement(self) -> None:
         """Merge the selected (duplicate) placement into another of this org's

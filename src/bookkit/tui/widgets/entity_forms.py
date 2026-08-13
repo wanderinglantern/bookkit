@@ -347,6 +347,8 @@ def apply_response(
 
 # --- team ---------------------------------------------------------------------
 
+NEW_MEMBER = "__new__"
+
 
 def member_form(
     existing: TeamMember | None = None, *, conn: sqlite3.Connection | None = None
@@ -381,7 +383,11 @@ def assignment_form(
     fields = []
     if member_options:
         fields.append(
-            Field("team_member_id", "who", "select", member_options, required=True)
+            Field(
+                "team_member_id", "who", "select",
+                (*member_options, ("+ new team member…", NEW_MEMBER)),
+                required=True,
+            )
         )
     fields.extend(
         [
