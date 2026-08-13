@@ -508,3 +508,94 @@ def test_compose_projects_empty_when_no_live_projects(conn):
     assert compose_projects(conn, org.id) == []
     projects_repo.create_project(conn, org.id, "Done", status="completed")
     assert compose_projects(conn, org.id) == []
+
+
+def test_compose_soi_linked_placement_uses_towerkit_soi(conn, tmp_path):
+    from towerkit.model import Layer, Line, Participant, Period, Program, dump_program
+    from towerkit.model import Placement as TkPlacement
+
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Linked Co", kind="client", status="active")
+    p = placements.create(
+        conn, org.id, "2026 Package", "2025-10-01", "2026-10-01", status="bound"
+    )
+    program = Program(
+        insured="Linked Co", program="Package Program", placement=TkPlacement.BOUND,
+        period=Period(start=date(2025, 10, 1), end=date(2026, 10, 1)),
+        lines=[Line(id="gl", name="General Liability", abbr="GL")],
+        layers=[
+            Layer(
+                id="gl1", name="Primary GL", applies_to=["gl"],
+                attach=0, limit=1_000_000, premium=52_000,
+                participants=[Participant(carrier="Zurich", share_bps=10_000)],
+            )
+        ],
+    )
+    path = tmp_path / "package.json"
+    dump_program(program, path)
+    placements.update(conn, p.id, program_path=str(path))
+
+    sections = compose_soi(conn, org.id)
+    assert len(sections) == 1
+    section = sections[0]
+    # build_soi's unlabeled section takes the program name as its label
+    assert section.label == "2026 Package"
+    row = section.rows[0]
+    assert row.insured == "Linked Co"
+    assert row.coverage == "General Liability"
+    assert row.carrier == "Zurich"
+    assert row.effective == date(2025, 10, 1)
+    assert row.premium == 52_000  # whole dollars, straight from the file
+
+
+def test_compose_soi_unlinked_placement_gets_book_data_section(conn):
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Paper Co", kind="client")
+    placements.create(
+        conn, org.id, "Legacy Property", "2025-01-01", "2026-01-01",
+        status="bound", total_premium=12_345_00,
+    )
+    sections = compose_soi(conn, org.id)
+    assert len(sections) == 1
+    assert sections[0].label == "Legacy Property (Bound)"
+    row = sections[0].rows[0]
+    assert row.insured == "Paper Co"
+    assert row.coverage == "Legacy Property"
+    assert row.carrier == "See policy documents"
+    assert row.policy_number == ""
+    assert row.effective == date(2025, 1, 1)
+    assert row.expiration == date(2026, 1, 1)
+    assert row.limits == "" and row.retention == ""
+    assert row.premium == 12_345  # cents → whole dollars via the money boundary
+
+
+def test_compose_soi_unreadable_file_falls_back_to_book_data(conn, tmp_path):
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Moved Co", kind="client")
+    placements.create(
+        conn, org.id, "Moved Program", "2025-01-01", "2026-01-01",
+        program_path=str(tmp_path / "gone.json"),  # linked, but the file moved
+    )
+    sections = compose_soi(conn, org.id)
+    assert len(sections) == 1  # the policy list is never silently partial
+    assert sections[0].rows[0].carrier == "See policy documents"
+
+
+def test_compose_soi_empty_when_no_placements(conn):
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Bare Co", kind="client")
+    assert compose_soi(conn, org.id) == []
+
+
+def test_premium_dollars_delegates_then_floors_for_display():
+    from bookkit.services.export_open_items import _premium_dollars
+
+    assert _premium_dollars(None) is None
+    assert _premium_dollars(500_000_00) == 500_000
+    # sub-dollar cents: money.cents_to_dollars refuses; the SOI's whole-dollar
+    # display column floors instead (format_cents_compact's documented rule)
+    assert _premium_dollars(500_000_50) == 500_000

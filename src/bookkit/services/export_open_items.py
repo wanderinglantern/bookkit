@@ -14,8 +14,11 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from ..models import Project, Task
-from ..money import format_cents
+from towerkit.model import load_program
+from towerkit.soi import SoiRow, SoiSection, build_soi
+
+from ..models import Placement, Project, Task
+from ..money import MoneyParseError, cents_to_dollars, format_cents
 from ..repo import orgs, placements, submissions
 from ..repo import projects as projects_repo
 from ..repo import tasks as tasks_repo
@@ -212,6 +215,75 @@ def compose_projects(conn: sqlite3.Connection, org_id: str) -> list[SheetSection
         )
         sections.append(SheetSection(_project_label(project), rows))
     return sections
+
+
+# --- sheet 3: Schedule of Insurance — towerkit's SOI machinery, per client ------
+
+_UNLINKED_CARRIER = "See policy documents"
+
+
+def _premium_dollars(cents: int | None) -> int | None:
+    """Placement premium cents → the SOI's whole-dollar premium column.
+    Delegates to the guarded money boundary first; on its sub-dollar refusal
+    floors to dollars — display only, the same deliberate floor
+    format_cents_compact documents. Nothing is written back anywhere."""
+    if cents is None:
+        return None
+    try:
+        return cents_to_dollars(cents)
+    except MoneyParseError:
+        return cents // 100
+
+
+def _book_data_section(org_name: str, placement: Placement) -> SoiSection:
+    """Minimal SOI section for a placement with no (readable) towerkit file —
+    program name, period, status, premium from book data, so the policy list
+    is complete, never silently partial."""
+    row = SoiRow(
+        insured=org_name,
+        coverage=placement.program_name,
+        carrier=_UNLINKED_CARRIER,
+        policy_number="",
+        effective=date.fromisoformat(placement.period_from),
+        expiration=date.fromisoformat(placement.period_to),
+        limits="",
+        retention="",
+        premium=_premium_dollars(placement.total_premium),
+    )
+    return SoiSection(
+        label=f"{placement.program_name} ({_status_label(str(placement.status))})",
+        rows=(row,),
+    )
+
+
+def compose_soi(conn: sqlite3.Connection, org_id: str) -> list[SoiSection]:
+    """build_soi sections for every LINKED placement, each under a
+    program-name label (prefixing flattens the per-program nesting); minimal
+    book-data sections for UNLINKED, unreadable, or layerless ones. Non-empty
+    exactly when the org has any placement — the sheet-inclusion rule."""
+    org = orgs.get(conn, org_id)
+    out: list[SoiSection] = []
+    for placement in placements.for_org(conn, org_id):
+        sections: list[SoiSection] = []
+        if placement.program_path:
+            try:
+                program = load_program(Path(placement.program_path))
+            except Exception:  # moved/unreadable file — fall back to book data
+                program = None
+            if program is not None:
+                sections = [
+                    SoiSection(
+                        label=placement.program_name
+                        if section.label is None
+                        else f"{placement.program_name} — {section.label}",
+                        rows=section.rows,
+                    )
+                    for section in build_soi(program)
+                ]
+        if not sections:
+            sections = [_book_data_section(org.name, placement)]
+        out.extend(sections)
+    return out
 
 
 _COLUMNS: tuple[tuple[str, float], ...] = (
