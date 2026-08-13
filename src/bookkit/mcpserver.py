@@ -201,6 +201,25 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         return _log_activity(rw, client, note, follow_up=follow_up)
 
     @server.tool()
+    async def recent_activity(client: str, limit: int = 20) -> list[dict[str, Any]]:
+        """A client's logged activity, newest first, each with the
+        `interaction_ref` that `activity_delete` takes. Use this to FIND an
+        activity you need to correct — `search` returns no refs, so it cannot
+        name one for you. `client` resolves like every other client-scoped
+        tool (exact client name or ref; on a miss the error lists the nearest
+        candidates — never guess an id)."""
+        return _recent_activity(rw, client, limit=limit)
+
+    @server.tool()
+    async def activity_delete(interaction_ref: str) -> dict[str, Any]:
+        """Remove a logged activity that should not be there — typically one
+        THIS server logged in error. `interaction_ref` must be an exact ref
+        read from `recent_activity` or returned by `log_activity`; an unknown
+        or already-deleted ref is an error, never a silent no-op. The delete
+        is soft and event-logged, so `u` in the TUI restores it."""
+        return _activity_delete(rw, interaction_ref)
+
+    @server.tool()
     async def task_create(
         title: str,
         client: str | None = None,
@@ -502,6 +521,42 @@ def _log_activity(
             _provenance(conn, "task", task.id)
     return {"org_id": org.id, "interaction_ref": interaction.id,
             "follow_up_task": task.id if task else None}
+
+
+def _recent_activity(
+    conn: sqlite3.Connection, client: str, limit: int = 20
+) -> list[dict[str, Any]]:
+    """A client's logged activity, newest first, WITH refs. search() returns
+    no ids by design, so without this a model could only ever delete an
+    activity it had just created itself — a mistake found later was
+    unnameable."""
+    from .repo import interactions
+
+    org = _resolve_client(conn, client)
+    return [
+        {"interaction_ref": i.id, "occurred_on": i.occurred_on, "type": i.type,
+         "subject": i.subject, "body": i.body}
+        for i in interactions.for_org(conn, org.id, limit=limit)
+    ]
+
+
+def _activity_delete(conn: sqlite3.Connection, interaction_ref: str) -> dict[str, Any]:
+    """Remove a logged activity — the correction path when this server wrote
+    something wrong. Soft delete, so `u` in the TUI restores it and nothing
+    is destroyed.
+
+    The get() first is not redundant: base.soft_delete issues an UPDATE that
+    matches zero rows for an unknown or already-deleted id and still logs an
+    event, so it would report success for a delete that deleted nothing.
+    interactions.get filters on aliveness and raises KeyError instead."""
+    from .repo import interactions
+
+    with db.transaction(conn):
+        interaction = interactions.get(conn, interaction_ref)  # KeyError → tool error
+        interactions.delete(conn, interaction.id)
+        _provenance(conn, "interaction", interaction.id)
+    return {"interaction_ref": interaction.id, "deleted": True,
+            "subject": interaction.subject, "undo": "u in the TUI restores it"}
 
 
 def _task_create(

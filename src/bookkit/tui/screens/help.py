@@ -25,6 +25,8 @@ HELP = """\
   j / k    move                       enter   open
   g / G    top / bottom               d       mark task done
   a        add (contextual)           e       edit selected
+  D        delete the selected interaction (account tabs 1 and 3) — the way
+           to remove a wrongly logged activity; soft, so u puts it back
   i        edit in cell (contacts, tasks): enter saves · tab saves + next
            cell · esc abandons · every save is one u-undoable change
   renewal tables count down PER LINE OF COVER — a line whose policy dies

@@ -64,14 +64,16 @@ def _status(value: str) -> Text:
 TAB_HINTS: dict[str, str] = {
     "tab-overview": (
         "[b]a[/b] task · [b]e[/b] edit task/account · [b]d[/b] task done · "
-        "[b]w[/b] assign team · [b]i[/b] paste import · [b]u[/b] undo"
+        "[b]D[/b] delete interaction · [b]w[/b] assign team · "
+        "[b]i[/b] paste import · [b]u[/b] undo"
     ),
     "tab-contacts": (
         "[b]a[/b] add · [b]e[/b] edit · [b]p[/b] make primary · "
         "[b]i[/b] paste import · [b]w[/b] assign team"
     ),
     "tab-interactions": (
-        "[b]a[/b] log interaction · [b]e[/b] edit account · [b]i[/b] paste import"
+        "[b]a[/b] log interaction · [b]e[/b] edit account · [b]D[/b] delete · "
+        "[b]i[/b] paste import · [b]u[/b] undo"
     ),
     "tab-placements": (
         "[b]a[/b] add · [b]e[/b] edit · [b]s[/b] submission · [b]r[/b] renew · "
@@ -162,6 +164,37 @@ class ConfirmRenew(ModalScreen):
         self.dismiss(False)
 
 
+class ConfirmDeleteInteraction(ModalScreen):
+    """One look before removing a logged interaction. Deleting the relationship
+    log is how a wrong entry gets corrected — most often one the MCP server
+    logged against the wrong account — so it names what is going and says out
+    loud that the delete is soft."""
+
+    app: BookkitApp
+    BINDINGS = [
+        Binding("escape,n", "decline", "No"),
+        Binding("y,enter", "accept", "Yes"),
+    ]
+
+    def __init__(self, interaction) -> None:
+        super().__init__()
+        self.interaction = interaction
+
+    def compose(self) -> ComposeResult:
+        i = self.interaction
+        with VerticalScroll(classes="modal-box"):
+            yield Static("DELETE INTERACTION", classes="modal-title")
+            yield Static(f"{i.occurred_on}  {_pretty(i.type)}\n{i.subject}")
+            yield Static("y / enter delete · n / esc cancel · undoable with u",
+                         classes="hint")
+
+    def action_accept(self) -> None:
+        self.dismiss(True)
+
+    def action_decline(self) -> None:
+        self.dismiss(False)
+
+
 class MergePicker(ModalScreen):
     """Pick which placement a duplicate merges into."""
 
@@ -240,6 +273,10 @@ class AccountScreen(Screen):
         Binding("x", "export_open_items", "Export / merge"),
         Binding("i", "import_here", "Import (paste)"),
         Binding("d", "task_done", "Done (task)", show=False),
+        # D is delete, taking the shift key as L and P do — d is already
+        # "done", and the destructive sibling should never be one keystroke
+        # away from the harmless one
+        Binding("D", "delete_interaction", "Delete (interaction)", show=False),
         Binding("p", "mark_primary", "Primary (contact)", show=False),
         # p is taken; paste-a-litany takes the shift key, as L does for layers
         Binding("P", "paste_items", "Paste items", show=False),
@@ -927,6 +964,41 @@ class AccountScreen(Screen):
             tasks_repo.complete(self.app.conn, key)
             self.notify("task done — u to undo")
             self.refresh_data()
+
+    def action_delete_interaction(self) -> None:
+        """D: remove a logged interaction. The relationship log is the one
+        place a wrong entry has to be removable rather than corrected —
+        typically one this book's MCP server logged against the wrong account.
+        Soft delete, so u restores it.
+
+        Both interaction tables answer to D (the overview's recent-five and
+        the full tab), whichever has focus; focus is what disambiguates,
+        exactly as it does for the tab's two RFI tables."""
+        for table_id in ("#interactions-table", "#ov-interactions"):
+            table = self.query_one(table_id, ListTable)
+            if not table.has_focus or table.cursor_row is None or table.row_count == 0:
+                continue
+            key = table.coordinate_to_cell_key(
+                Coordinate(table.cursor_row, 0)
+            ).row_key.value
+            if not key:
+                return
+            try:
+                interaction = interactions.get(self.app.conn, key)
+            except KeyError:  # row key went stale under a concurrent rebuild
+                return
+            self.app.push_screen(
+                ConfirmDeleteInteraction(interaction),
+                lambda ok, iid=interaction.id: self._delete_interaction(iid, ok),
+            )
+            return
+
+    def _delete_interaction(self, interaction_id: str, confirmed: bool | None) -> None:
+        if not confirmed:
+            return
+        interactions.delete(self.app.conn, interaction_id)
+        self.notify("interaction deleted — u to undo")
+        self.refresh_data()
 
     def _mark_item_received(self) -> None:
         """d on the items datasheet: received, dated today — 'done' means the

@@ -723,3 +723,107 @@ def test_build_server_registers_rfi_tools(server_db):
     names = {t.name for t in server._tool_manager.list_tools()}
     assert {"requests_to_chase", "request_items", "request_item_received",
             "request_create"} <= names
+
+
+# -- undoing a bad activity -------------------------------------------------
+
+
+def test_recent_activity_returns_refs_the_delete_tool_can_use(server_db):
+    """search() deliberately returns no ids, so a model that logged a bad
+    activity in an earlier session had no way to name it. This is that way in."""
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    first = interactions.log(conn, org.id, type="note", subject="older",
+                             occurred_on="2026-08-01", body="older")
+    second = interactions.log(conn, org.id, type="note", subject="newer",
+                              occurred_on="2026-08-10", body="newer")
+    conn.close()
+
+    rw = db.connect(server_db)
+    out = mcpserver._recent_activity(rw, "Acme")
+    refs = [row["interaction_ref"] for row in out]
+    assert refs == [second.id, first.id]  # newest first, same order as the tab
+    assert out[0]["subject"] == "newer"
+
+
+def test_recent_activity_honours_limit(server_db):
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    for n in range(5):
+        interactions.log(conn, org.id, type="note", subject=f"note {n}",
+                         occurred_on=f"2026-08-0{n + 1}", body="x")
+    conn.close()
+    rw = db.connect(server_db)
+    assert len(mcpserver._recent_activity(rw, "Acme", limit=2)) == 2
+
+
+def test_activity_delete_removes_it_and_stays_undoable(server_db):
+    """The correction path for an MCP mistake: soft delete, event-logged, so
+    `u` in the TUI puts it back. Nothing is destroyed."""
+    from bookkit.services import undo
+
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+
+    rw = db.connect(server_db)
+    logged = mcpserver._log_activity(rw, "Acme", "wrong client, wrong note")
+    ref = logged["interaction_ref"]
+
+    out = mcpserver._activity_delete(rw, ref)
+    assert out["deleted"] is True
+    assert interactions.for_org(rw, org.id) == []
+
+    restored = undo.undo_last(rw)
+    assert restored is not None and restored.entity_type == "interaction"
+    assert [i.id for i in interactions.for_org(rw, org.id)] == [ref]
+
+
+def test_activity_delete_refuses_an_unknown_ref(server_db):
+    """base.soft_delete would happily UPDATE zero rows and log an event —
+    reporting success for a delete that deleted nothing. Guarded."""
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+    with pytest.raises(KeyError):
+        mcpserver._activity_delete(rw, "not-a-real-id")
+
+
+def test_activity_delete_refuses_to_delete_twice(server_db):
+    """The second call must not read as success — the row is already gone."""
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+    ref = mcpserver._log_activity(rw, "Acme", "oops")["interaction_ref"]
+    mcpserver._activity_delete(rw, ref)
+    with pytest.raises(KeyError):
+        mcpserver._activity_delete(rw, ref)
+
+
+def test_activity_delete_is_registered_as_a_write_tool(server_db):
+    server = build_server(server_db)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    assert {"recent_activity", "activity_delete"} <= names
+
+
+def test_undo_after_an_mcp_write_reverts_the_write_not_the_provenance(server_db):
+    """Regression: the MCP server stamps a 'source' provenance event after
+    every write. last_mutation counted it as undoable, so `u` in the TUI hit
+    IndexError ("No item with that key") straight after any MCP write —
+    there is no `source` column to revert. Provenance is bookkeeping."""
+    from bookkit.services import undo
+
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+
+    rw = db.connect(server_db)
+    mcpserver._enrich_field(rw, "Acme", "website", "https://acme.example")
+    assert orgs.get(rw, org.id).website == "https://acme.example"
+
+    result = undo.undo_last(rw)  # used to raise IndexError
+    assert result is not None
+    assert result.field == "website"
+    assert orgs.get(rw, org.id).website is None

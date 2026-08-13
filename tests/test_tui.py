@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from textual.coordinate import Coordinate
+from textual.screen import ModalScreen
 from textual.widgets import Input, Label, ListView, TextArea
 
 from bookkit import db, seed
@@ -1536,3 +1537,90 @@ async def test_rfi_inline_edit_of_an_inherited_due_starts_blank(seeded_db: Path)
         screen = app.screen
         assert screen._rfi_item_inline_initial(item.id, "due_on") == ""
         assert rfi.get_item(app.conn, item.id).due_on is None
+
+
+async def test_delete_interaction_confirms_then_removes_it_undoably(seeded_db: Path) -> None:
+    """D on a focused interactions table removes a logged interaction — the
+    correction path for an activity logged in error (typically by MCP). It
+    confirms first, soft-deletes, and u puts it back."""
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    bad = interactions.log(
+        app.conn, org.id, type="note", subject="wrong account",
+        occurred_on="2026-08-12", body="logged against the wrong client",
+    )
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("3")
+        await pilot.pause()
+
+        table = app.screen.query_one("#interactions-table", ListTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(bad.id))
+        await pilot.pause()
+
+        await pilot.press("D")
+        await pilot.pause()
+        # destructive, so it asks before it acts
+        assert isinstance(app.screen, ModalScreen)
+
+        await pilot.press("y")
+        await pilot.pause()
+        assert bad.id not in {i.id for i in interactions.for_org(app.conn, org.id)}
+
+        await pilot.press("u")
+        await pilot.pause()
+        assert bad.id in {i.id for i in interactions.for_org(app.conn, org.id)}
+
+
+async def test_delete_interaction_can_be_declined(seeded_db: Path) -> None:
+    """esc at the confirm leaves the interaction alone."""
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    kept = interactions.log(
+        app.conn, org.id, type="note", subject="keep me",
+        occurred_on="2026-08-12", body="a good note",
+    )
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("3")
+        await pilot.pause()
+
+        table = app.screen.query_one("#interactions-table", ListTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(kept.id))
+        await pilot.pause()
+
+        await pilot.press("D")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert kept.id in {i.id for i in interactions.for_org(app.conn, org.id)}
+
+
+async def test_delete_interaction_needs_the_table_focused(seeded_db: Path) -> None:
+    """House rule: row actions require table focus. Without it D must be
+    inert — not delete whatever happens to sit under an unfocused cursor."""
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    safe = interactions.log(
+        app.conn, org.id, type="note", subject="untouched",
+        occurred_on="2026-08-12", body="x",
+    )
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("3")
+        await pilot.pause()
+
+        app.screen.set_focus(None)
+        await pilot.pause()
+        await pilot.press("D")
+        await pilot.pause()
+        assert not isinstance(app.screen, ModalScreen)
+        assert safe.id in {i.id for i in interactions.for_org(app.conn, org.id)}

@@ -68,9 +68,14 @@ def stage_entry_count(conn: sqlite3.Connection, stage: str) -> int:
 
 def last_mutation(conn: sqlite3.Connection) -> EventLogEntry | None:
     """The most recent undoable event (field changes and deletes, not creates
-    and not undo's own bookkeeping)."""
+    and not undo's own bookkeeping).
+
+    'source' is provenance, not a mutation: the MCP server stamps it after
+    every write it makes. It has no column behind it, so treating it as
+    undoable made `u` raise IndexError immediately after ANY MCP write —
+    it must be skipped the same way 'created' is."""
     row = conn.execute(
-        "SELECT * FROM event_log WHERE field != 'created'"
+        "SELECT * FROM event_log WHERE field NOT IN ('created', 'source')"
         " AND (note IS NULL OR note NOT IN ('undo', 'undelete'))"
         " ORDER BY rowid DESC LIMIT 1"
     ).fetchone()
