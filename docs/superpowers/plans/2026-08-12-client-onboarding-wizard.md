@@ -893,3 +893,92 @@ uv run pytest -q && uv run mypy src && uv run ruff check src tests
 - [ ] **Step 3: Commit** — `git commit -m "help: document o (onboard) and x (export) navigator keys"`
 
 - [ ] **Step 4: Fresh-eyes review** — per process, run a review pass (fresh-eyes-review skill) over the whole branch before declaring done. Specific things to re-check: the 60-day `ONBOARDING_WINDOW_DAYS` fence (flagged for Grant), draft restore vs Select option drift, and that no wizard path forked form wiring instead of reusing entity_forms.
+
+---
+
+### Task 8: shared export flow in entity_actions (feature add 2026-08-13)
+
+The client open-items tab (Task 9) and the Navigator both export the same workbook; the flow moves to the shared home BEFORE the second caller exists.
+
+**Files:**
+- Modify: `src/bookkit/tui/widgets/entity_actions.py`, `src/bookkit/tui/screens/navigator.py` (action_export_row)
+- Test: `tests/test_tui.py` (append)
+
+**Interfaces:**
+- Produces: `entity_actions.export_open_items_flow(screen: Screen, org_id: str) -> None` — resolves the org (KeyError → notify error), writes `<ref>-open-items-<today>.xlsx` to CWD via `services.export_open_items.write` (OSError → notify error), notifies the path on success, calls `_refresh(screen)` is NOT needed (export mutates nothing).
+
+- [ ] **Step 1: Failing test** — a pilot test that calls the new flow directly on a mounted NavigatorScreen with a seeded client (monkeypatch.chdir(tmp_path)) and asserts the file exists + a soft-deleted org notifies instead of raising. Mirror the existing Task-9 export test in tests/test_tui.py.
+
+- [ ] **Step 2: Run to verify failure**
+
+- [ ] **Step 3: Implement** — move the body of `NavigatorScreen.action_export_row`'s guarded org-lookup + write into `entity_actions.export_open_items_flow` (module style: lazy imports inside the function, `_app(screen)` for conn, `screen.notify` for messages — read the file's existing flows and match). `action_export_row` becomes: resolve org id from the current node/row (unchanged logic), then `entity_actions.export_open_items_flow(self, org_id)`.
+
+- [ ] **Step 4: Run** — `uv run pytest tests/test_tui.py -q 2>&1 | tail -3` → PASS.
+
+- [ ] **Step 5: Commit** — `git commit -m "tui: export-open-items flow shared via entity_actions"`
+
+---
+
+### Task 9: AccountScreen "Open items" tab — the datasheet
+
+**Files:**
+- Modify: `src/bookkit/tui/screens/account.py` (TAB_HINTS :55, TAB_TABLES :83, tab bindings :207-213, TabbedContent compose :222, the per-tab add/edit/done routing around :760 and :828, refresh_data)
+- Test: `tests/test_tui.py` (append)
+
+**Interfaces:**
+- Consumes: `tasks.open_tasks_for_client` (landed on the export branch), `grouped_by_category`/`task_detail_cell` from `widgets/tables.py`, `projects_repo.projects_for_org`+`needs_for_project`, `submissions.outstanding_for_org`, `entity_actions.export_open_items_flow` (Task 8), TASK_INLINE pattern from navigator.py.
+
+- [ ] **Step 1: Failing pilot test**
+
+```python
+async def test_open_items_tab_datasheet(seeded_db: Path, tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    p = placements.for_org(app.conn, org.id)[0]
+    tasks_repo.create(app.conn, "placement task", placement_id=p.id, category="Renewal")
+    async with app.run_test(size=(150, 44)) as pilot:
+        app.push_screen(AccountScreen(org.id))
+        await pilot.pause()
+        await pilot.press("8")
+        await pilot.pause()
+        table = app.screen.query_one("#open-items-table")
+        assert table.has_focus                      # focus lands IN the datasheet
+        titles = [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+        assert "placement task" in titles           # placement-owned included
+        await pilot.press("x")
+        await pilot.pause()
+        assert list(tmp_path.glob("*-open-items-*.xlsx"))
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+- [ ] **Step 3: Implement**
+
+1. `TAB_HINTS["tab-open-items"] = ("[b]i[/b] edit in cell · [b]a[/b] task · [b]e[/b] edit form · [b]d[/b] done · [b]x[/b] export · needs/submissions edit in their tabs")`; `TAB_TABLES["tab-open-items"] = "open-items-table"`; `Binding("8", "show_tab('tab-open-items')", "Open items", show=False)`.
+2. Compose: new `TabPane("Open items", id="tab-open-items")` after Documents containing `InlineTable(id="open-items-table")` and `ListTable(id="open-items-context")` with a dim label between ("other open items — edit in their tabs").
+3. Fill (called from refresh_data like every other tab): datasheet columns `("due", "task", "category", "description", "detail", "status")`, rows from `grouped_by_category(tasks.open_tasks_for_client(conn, org.id))`, cells rendered exactly like navigator's group-tasks branch (date_text/days, title, category amber, description, task_detail_cell, status_text); `inline_fields` = the TASK_INLINE mapping shifted to this column order. Context table: needs via `projects_for_org`+`needs_for_project` filtered to `ATTENTION_STATUSES`, submissions via `outstanding_for_org`; columns `("kind", "item", "due / needed", "status", right("days"))`.
+4. Route the existing per-tab verbs: in the `action_add` tab dispatch, `tab-open-items` → same task_form flow as overview (org pre-attached); `e`/`d` operate on the datasheet's selected task via the same `_selected_key` pattern the overview uses (read :828 and mirror). Add `Binding("x", ...)` scoped in the screen's action to fire only when the active tab is open-items (mirror how other per-tab keys guard) → `entity_actions.export_open_items_flow(self, self.org_id)`.
+5. Focus: in the tab-activated handler (find where tab switches focus the mapped table — TAB_TABLES already drives this), ensure open-items focuses the datasheet.
+
+- [ ] **Step 4: Run** — `uv run pytest tests/test_tui.py tests/test_tui_forms.py -q 2>&1 | tail -3` → PASS.
+
+- [ ] **Step 5: Commit** — `git commit -m "account: open-items tab — client task datasheet + context items + export"`
+
+---
+
+### Task 10: open-items tab — inline edit coverage, help, gates
+
+**Files:**
+- Modify: `src/bookkit/tui/screens/help.py`
+- Test: `tests/test_tui.py` (append)
+
+- [ ] **Step 1: Failing pilot test** — on the open-items tab, `i` on the category cell of the first task row, type a new category, enter; assert the task's category persisted and the row regrouped. Mirror navigator's existing inline-edit test if one exists (check test_tui.py); otherwise drive via keys: focus row, `i`, type, enter.
+
+- [ ] **Step 2: Run to verify failure**
+
+- [ ] **Step 3: Implement** — whatever wiring gap the test exposes (expected: none beyond Task 9's inline_fields; this test is the guard). Add the open-items tab keys to help.py in its existing format ("8 open items · i in-cell edit · x export").
+
+- [ ] **Step 4: Full gates** — `uv run pytest -q`, `uv run mypy src`, `uv run ruff check src tests` → all green.
+
+- [ ] **Step 5: Commit** — `git commit -m "account: open-items inline-edit guard + help"`
