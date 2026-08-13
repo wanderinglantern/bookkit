@@ -1248,7 +1248,9 @@ async def test_request_survives_a_merged_away_market(seeded_db: Path) -> None:
         row = [str(c) for c in table.get_row(f"rfi:{req.id}")]
         assert any("merged market" in c for c in row)
 
-        spec = ef.request_form(rfi.get_request(app.conn, req.id), conn=app.conn)
+        spec = ef.request_form(
+            rfi.get_request(app.conn, req.id), conn=app.conn, org_id=org.id
+        )
         assert spec.initial["market_org_id"] is None, (
             "a dead market id would raise InvalidSelectValueError"
         )

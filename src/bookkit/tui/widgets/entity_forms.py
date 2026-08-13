@@ -540,13 +540,19 @@ def request_form(
     # a market merge soft-deletes the loser but the request keeps its FK;
     # handing Select a value its options no longer hold raises
     # InvalidSelectValueError and takes the app down on `e`. Same for a
-    # soft-deleted placement or project, and for a form built without org_id.
+    # soft-deleted placement or project — but only where the options were
+    # actually built: without org_id those tuples are empty and the guard
+    # would blank a perfectly live scope instead of a dead one.
     if existing:
-        for key, options in (
-            ("market_org_id", markets),
-            ("placement_id", placement_opts),
-            ("project_id", project_opts),
-        ):
+        guarded: list[tuple[str, tuple[tuple[str, str], ...]]] = [
+            ("market_org_id", markets)
+        ]
+        if org_id is not None:
+            guarded += [
+                ("placement_id", placement_opts),
+                ("project_id", project_opts),
+            ]
+        for key, options in guarded:
             if initial.get(key) not in {v for _, v in options}:
                 initial = {**initial, key: None}
     return FormSpec(
@@ -578,15 +584,28 @@ def apply_request(
     existing: RfiRequest | None = None,
 ) -> RfiRequest:
     core = dropped(values)
-    # the DB CHECK enforces this too, but only as an opaque IntegrityError;
-    # FormModal turns a raise into an in-place refusal with the input intact
-    if core.get("placement_id") and core.get("project_id"):
-        raise ValueError("a request is about a placement OR a project, not both")
     # dropped() strips None so a blank optional never clobbers on edit — but
     # blanking "cancelled on" is the ONLY way back from a mis-cancelled
     # request, so that one blank has to be written through
     if existing and existing.cancelled_at and not values.get("cancelled_at"):
         core["cancelled_at"] = None
+    # same for the scope links: switching a request from a placement to a
+    # project means blanking one of them, and a blank that never lands leaves
+    # the old link in the row alongside the new one
+    if existing:
+        if existing.placement_id and not values.get("placement_id"):
+            core["placement_id"] = None
+        if existing.project_id and not values.get("project_id"):
+            core["project_id"] = None
+    # the DB CHECK enforces this too, but only as an opaque IntegrityError;
+    # FormModal turns a raise into an in-place refusal with the input intact.
+    # The row as it WILL be is what the CHECK sees, so that is what to test
+    scope = {
+        key: core[key] if key in core else (getattr(existing, key) if existing else None)
+        for key in ("placement_id", "project_id")
+    }
+    if scope["placement_id"] and scope["project_id"]:
+        raise ValueError("a request is about a placement OR a project, not both")
     if existing:
         return rfi_repo.update_request(conn, existing.id, **core)
     title = core.pop("title")

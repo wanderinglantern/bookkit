@@ -120,6 +120,78 @@ def test_request_scope_round_trips_and_labels(conn) -> None:
     assert rfi_svc.scope_label(conn, created) == placement.ref
 
 
+def test_request_form_keeps_a_live_scope(conn) -> None:
+    """The dead-option guard exists for soft-deleted links; it must not fire on
+    options that were never built — without org_id both tuples are empty and a
+    live placement would be blanked out of the form."""
+    from bookkit.repo import placements
+
+    org = orgs.create(conn, name="Endeavour", kind="client")
+    placement = placements.create(
+        conn, org.id, "Property Program", "2026-01-01", "2027-01-01"
+    )
+    req = rfi.create_request(
+        conn, org.id, "Sompo questions", "2026-08-05", placement_id=placement.id
+    )
+    assert ef.request_form(req, conn=conn, org_id=org.id).initial[
+        "placement_id"
+    ] == placement.id
+    assert ef.request_form(req, conn=conn).initial["placement_id"] == placement.id
+
+
+def test_request_scope_can_be_switched_from_placement_to_project(conn) -> None:
+    """The natural edit — clear the placement, pick a project — must write the
+    blank through, or the row keeps both and the CHECK fires an opaque
+    IntegrityError."""
+    from bookkit.repo import placements
+    from bookkit.repo import projects as projects_repo
+
+    org = orgs.create(conn, name="Endeavour", kind="client")
+    placement = placements.create(
+        conn, org.id, "Property Program", "2026-01-01", "2027-01-01"
+    )
+    project = projects_repo.create_project(conn, org.id, "HQ Tower Build")
+    created = ef.apply_request(
+        conn,
+        {"title": "Sompo questions", "requested_on": "2026-08-05",
+         "placement_id": placement.id, "project_id": None},
+        org.id,
+    )
+    ef.apply_request(
+        conn,
+        {"placement_id": None, "project_id": project.id},
+        org.id,
+        existing=rfi.get_request(conn, created.id),
+    )
+    switched = rfi.get_request(conn, created.id)
+    assert switched.placement_id is None
+    assert switched.project_id == project.id
+
+
+def test_request_scope_can_be_cleared_entirely(conn) -> None:
+    from bookkit.repo import placements
+
+    org = orgs.create(conn, name="Endeavour", kind="client")
+    placement = placements.create(
+        conn, org.id, "Property Program", "2026-01-01", "2027-01-01"
+    )
+    created = ef.apply_request(
+        conn,
+        {"title": "Sompo questions", "requested_on": "2026-08-05",
+         "placement_id": placement.id},
+        org.id,
+    )
+    ef.apply_request(
+        conn,
+        {"placement_id": None},
+        org.id,
+        existing=rfi.get_request(conn, created.id),
+    )
+    cleared = rfi.get_request(conn, created.id)
+    assert cleared.placement_id is None
+    assert cleared.project_id is None
+
+
 def test_request_scope_label_covers_projects_and_account_level(conn) -> None:
     from bookkit.repo import projects as projects_repo
     from bookkit.services import rfi as rfi_svc
