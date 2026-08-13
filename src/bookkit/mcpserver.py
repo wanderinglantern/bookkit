@@ -1,8 +1,11 @@
 """bookctl mcp — stdio MCP server for the work-machine cowork assistant.
 
 Read tools run on a read-only connection (mode=ro — enforced by the
-database). Exactly five write tools exist, all additive, all inside
-db.transaction, all event-logged with source=mcp. stdout is protocol;
+database). Exactly seven write tools exist — log_activity, task_create,
+task_complete, client_create, enrich_field, request_item_received,
+request_create — all additive, all inside db.transaction, all event-logged
+with source=mcp. Keep this list in step with _register_write_tools; a
+contract statement that has drifted is worse than none. stdout is protocol;
 anything human goes to stderr (never print here).
 
 NOTE ON SDK NAMING: the brief this module was built from named the
@@ -144,7 +147,10 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         unmet project needs, submissions past SLA, and incomplete onboarding,
         across the whole book (project needs use the same 120-day attention
         window as today_brief). Also carries "information_requests": the
-        outstanding questions and documents the client still owes us."""
+        outstanding questions and documents clients still owe us — ALL of them,
+        regardless of due date (undated and far-future asks included), in both
+        the per-client and the book-wide view. requests_to_chase is the
+        narrower 120-day attention view of the same requests."""
         return _open_items(ro, client=client)
 
     @server.tool()
@@ -445,7 +451,8 @@ def _staleness_report(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def _resolve_client(conn: sqlite3.Connection, ref_or_name: str) -> Any:
-    """Shared by every client-scoped read tool and all five write tools —
+    """Shared by every client-scoped read tool and every client-scoped write
+    tool (all but task_complete and request_item_received, which take refs) —
     ONE resolution path so a bad name always fails the same way, with
     close-match hints instead of a raw KeyError."""
     from rapidfuzz import process
@@ -824,8 +831,8 @@ def _client_information_requests(
 ) -> list[dict[str, Any]]:
     """EVERY outstanding ask this client owes, undated ones included — this
     branch is the client-facing composition, and an undated question is still
-    something they owe. (The book-wide branch below uses the 120-day attention
-    window instead, matching its other keys.)"""
+    something they owe. The book-wide branch below answers the same question
+    the same way (unwindowed); only requests_to_chase is windowed."""
     from .repo import orgs
     from .repo import rfi as rfi_repo
 
@@ -843,18 +850,22 @@ def _client_information_requests(
     return out
 
 
-def _book_information_requests(
-    conn: sqlite3.Connection, today: date
-) -> list[dict[str, Any]]:
+def _book_information_requests(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """The per-client branch's shape, book-wide, plus the account name — and
+    like that branch it is UNWINDOWED: every outstanding ask on every live
+    uncancelled request, undated and far-future included. open_items is the
+    "everything outstanding" tool by contract; the 120-day view is
+    requests_to_chase, which keeps using services.rfi.outstanding_requests."""
     from .repo import rfi as rfi_repo
-    from .services import rfi as rfi_svc
 
     out: list[dict[str, Any]] = []
-    for chase in rfi_svc.outstanding_requests(conn, today, days=120):
+    for row in rfi_repo.outstanding_request_rows(conn):
+        request = RfiRequest.model_validate(
+            {k: row[k] for k in row.keys() if k in RfiRequest.model_fields})
         out.extend(
-            _rfi_open_item(chase.request, item, chase.market_name,
-                           account=chase.org_name)
-            for item in rfi_repo.items_for_request(conn, chase.request.id)
+            _rfi_open_item(request, item, row["market_name"],
+                           account=row["org_name"])
+            for item in rfi_repo.items_for_request(conn, request.id)
             if item.status == "outstanding"
         )
     return out
@@ -944,9 +955,10 @@ def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict[str
             {"account": org.name, "missing": missing}
             for org, missing in onboarding.incomplete_clients(conn, today)
         ],
-        # what clients owe US, not what we owe them — same 120-day attention
-        # window as project_needs above
-        "information_requests": _book_information_requests(conn, today),
+        # what clients owe US, not what we owe them — and unlike project_needs
+        # above this is NOT windowed: every outstanding ask, undated and
+        # far-future included, exactly as the per-client branch lists them
+        "information_requests": _book_information_requests(conn),
     }
 
 

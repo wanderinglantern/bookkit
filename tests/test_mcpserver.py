@@ -546,6 +546,32 @@ def test_open_items_bookwide_lists_information_requests_with_account(server_db):
     assert rows[0]["asked_by"] == "Sompo"
 
 
+def test_open_items_bookwide_is_unwindowed_like_the_per_client_branch(server_db):
+    """open_items is the "everything outstanding" tool in BOTH branches: an
+    undated ask and one due past the 120-day horizon are still owed. The
+    windowed view is requests_to_chase, and it stays windowed."""
+    conn = db.connect(server_db)
+    _, undated = _seed_request(conn, account="Acme", title="Onboarding asks")
+    no_due = rfi.add_item(conn, undated.id, "org chart")
+    _, far = _seed_request(conn, account="Beta Co", title="2028 renewal asks")
+    far_off = rfi.add_item(conn, far.id, "audited financials", due_on=_iso(900))
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    rows = mcpserver._open_items(ro, client=None)["information_requests"]
+    assert {r["item_ref"] for r in rows} == {no_due.id, far_off.id}
+    by_ref = {r["item_ref"]: r for r in rows}
+    assert by_ref[no_due.id]["account"] == "Acme"
+    assert by_ref[no_due.id]["needed_by"] is None
+    assert by_ref[far_off.id]["account"] == "Beta Co"
+    assert by_ref[far_off.id]["needed_by"] == _iso(900)
+    # and summing the per-client branch agrees with the book-wide one
+    per_client = (mcpserver._open_items(ro, client="Acme")["information_requests"]
+                  + mcpserver._open_items(ro, client="Beta Co")["information_requests"])
+    assert {r["item_ref"] for r in per_client} == {r["item_ref"] for r in rows}
+    # the chase queue keeps its 120-day window — neither of these is a chase yet
+    assert mcpserver._requests_to_chase(ro, days=120) == []
+
+
 def test_request_item_received_flips_status_and_drops_the_open_count(server_db):
     conn = db.connect(server_db)
     _, request = _seed_request(conn, due_on=_iso(5))
@@ -631,6 +657,33 @@ def test_request_create_refuses_another_clients_placement(server_db):
         mcpserver._request_create(
             rw, "Acme", "Wrong scope", ["loss runs"], placement_ref=placement.ref,
         )
+
+
+def test_request_create_scopes_to_a_project_of_that_client(server_db):
+    rw = db.connect(server_db)
+    org = orgs.create(rw, name="Acme", kind="client")
+    project = projects.create_project(rw, org.id, "New warehouse")
+    out = mcpserver._request_create(
+        rw, "Acme", "Warehouse questions", ["sprinkler report"],
+        project_ref=project.ref,
+    )
+    assert mcpserver._request_items(rw, out["request_ref"])["scope"] == project.name
+    request = rfi.find_request(rw, out["request_ref"])
+    assert request.project_id == project.id
+    assert request.placement_id is None
+
+
+def test_request_create_refuses_another_clients_project(server_db):
+    rw = db.connect(server_db)
+    acme = orgs.create(rw, name="Acme", kind="client")
+    other = orgs.create(rw, name="Beta Co", kind="client")
+    project = projects.create_project(rw, other.id, "Beta warehouse")
+    with pytest.raises(ValueError, match="no project"):
+        mcpserver._request_create(
+            rw, "Acme", "Wrong scope", ["sprinkler report"], project_ref=project.ref,
+        )
+    assert rfi.requests_for_org(rw, acme.id) == []      # nothing written
+    assert rfi.requests_for_org(rw, other.id) == []     # and not on the owner either
 
 
 def test_request_create_unknown_market_raises_with_candidates(server_db):

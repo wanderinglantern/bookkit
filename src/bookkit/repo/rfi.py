@@ -179,6 +179,34 @@ def outstanding_rows(conn: sqlite3.Connection, horizon: str) -> list[sqlite3.Row
     ).fetchall()
 
 
+def outstanding_request_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every live, uncancelled request across the book that still has at least
+    one outstanding item, with its account and market names — NO date window.
+
+    The deliberate twin of outstanding_rows above, and the difference is the
+    point: that one is the 120-day CHASE queue (undated requests are not yet a
+    chase); this one backs open_items, which answers "everything a client still
+    owes" — an undated question is still owed, and so is one due in a year.
+    Ordered soonest-deadline first with undated requests last."""
+    return conn.execute(
+        f"""
+        SELECT r.*, o.name AS org_name, m.name AS market_name
+        FROM rfi_request r
+        JOIN org o ON o.id = r.org_id
+        -- aliveness rides on the JOIN, as in outstanding_rows: a merged-away
+        -- market blanks the name, it never drops the request
+        LEFT JOIN org m ON m.id = r.market_org_id AND m.deleted_at IS NULL
+        WHERE r.cancelled_at IS NULL
+          AND {base.alive('r')} AND {base.alive('o')}
+          AND EXISTS (
+              SELECT 1 FROM rfi_item i
+               WHERE i.request_id = r.id AND i.status = 'outstanding'
+                 AND {base.alive('i')})
+        ORDER BY r.due_on IS NULL, r.due_on, r.ref
+        """
+    ).fetchall()
+
+
 def open_item_count(conn: sqlite3.Connection, request_id: str) -> int:
     """How many items are still outstanding. Zero means the request is done —
     services/rfi.is_open turns that into the derived open/closed rule."""
