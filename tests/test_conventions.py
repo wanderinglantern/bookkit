@@ -13,8 +13,11 @@ def test_no_openpyxl_outside_imports_package():
         assert "openpyxl" not in path.read_text(), f"openpyxl leaked into {rel}"
 
 
-def test_no_raw_sql_in_tui_or_imports():
-    for pkg in ("tui", "imports"):
+def test_no_raw_sql_in_tui_imports_or_services():
+    # services joined the list 2026-08-13: the batch-revert engine was the
+    # first service to grow its own .execute(), via a dead-or-alive read the
+    # repo didn't offer — repo.base.raw_row now does, so the rule holds.
+    for pkg in ("tui", "imports", "services"):
         for path in (SRC / pkg).rglob("*.py"):
             assert ".execute(" not in path.read_text(), \
                 f"raw SQL in {path.relative_to(SRC)} — queries live in repo/"

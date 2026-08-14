@@ -905,17 +905,16 @@ def _list_batches(
     """Recent batched writes, newest first — what this server changed and
     whether it has been put back."""
     from .repo import batches as batches_repo
-    from .repo import orgs as orgs_repo
+    from .services import batches as batches_svc
 
     since = (today - timedelta(days=days)).isoformat()
+    recent = batches_repo.recent(conn, since=since, limit=limit)
+    labels = batches_svc.account_names(conn, recent)  # one query, not N
     out = []
-    for batch in batches_repo.recent(conn, since=since, limit=limit):
+    for batch in recent:
         account = None
         if batch.org_id:
-            try:
-                account = orgs_repo.get(conn, batch.org_id).name
-            except KeyError:
-                account = "(deleted account)"
+            account = labels.get(batch.org_id, "(deleted account)")
         out.append({
             "ref": batch.ref, "tool": batch.tool, "summary": batch.summary,
             "account": account, "at": batch.created_at,

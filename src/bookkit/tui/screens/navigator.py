@@ -57,7 +57,7 @@ ROW_HINTS = {
         "[b]enter[/b] opens account"
     ),
     "opportunities": "[b]a[/b] add · [b]e[/b] edit · [b]enter[/b] opens account",
-    "batches": "[b]R[/b] revert this change · [b]enter[/b] opens account",
+    "batches": "[b]R[/b] revert this change · [b]enter[/b] before → after",
     "tasks": (
         "[b]i[/b] edit in cell · [b]a[/b] add · [b]e[/b] edit form · "
         "[b]d[/b] done · [b]enter[/b] opens account"
@@ -203,11 +203,19 @@ class BatchDetail(ModalScreen):
                 )
             for conflict in self._plan.conflicts:
                 c = conflict.change
-                lines.append(
-                    f"[{theme.AMBER}]{c.entity_type}.{c.field}: "
-                    f"{c.old_value!r} → {c.new_value!r} · since changed to "
-                    f"{conflict.current_value!r}[/]"
-                )
+                if self._batch.reverted_at:
+                    # after a revert, current values legitimately differ from
+                    # the batch's — that is history, not external tampering
+                    lines.append(
+                        f"{c.entity_type}.{c.field}: "
+                        f"{c.old_value!r} → {c.new_value!r}"
+                    )
+                else:
+                    lines.append(
+                        f"[{theme.AMBER}]{c.entity_type}.{c.field}: "
+                        f"{c.old_value!r} → {c.new_value!r} · since changed to "
+                        f"{conflict.current_value!r}[/]"
+                    )
             yield Static("\n".join(lines) or "no recorded changes")
             state = (
                 f"reverted {self._batch.reverted_at}"
@@ -531,18 +539,20 @@ class NavigatorScreen(Screen):
 
     def _fill_batches_table(self, table: InlineTable) -> None:
         """Recent MCP writes, newest first — the audit trail behind R."""
+        from ...services import batches as batches_svc
+
         conn = self.app.conn
         table.clear(columns=True)
         table.add_columns("ref", "when", "account", "tool", "what", "state")
+        labels = batches_svc.account_names(conn, self._batches)
         for batch in self._batches:
             account: str | Text = dash()
             if batch.org_id:
-                try:
-                    org = orgs.get(conn, batch.org_id)
-                    account = org.name
-                    self._row_org[f"batch:{batch.id}"] = org.id
-                except KeyError:
-                    account = Text("(deleted account)", style=theme.DIM)
+                label = labels.get(batch.org_id)
+                account = (
+                    label if label is not None
+                    else Text("(deleted account)", style=theme.DIM)
+                )
             state = (
                 Text("reverted", style=theme.DIM)
                 if batch.reverted_at
@@ -1185,9 +1195,20 @@ class NavigatorScreen(Screen):
 
         if choice is None:
             return
-        result = batches_svc.revert(
-            self.app.conn, ref, now=utc_now(), force=(choice == "force")
-        )
+        try:
+            result = batches_svc.revert(
+                self.app.conn, ref, now=utc_now(), force=(choice == "force")
+            )
+        except batches_svc.AlreadyReverted:
+            # the MCP server got there while the modal was open — fine, the
+            # outcome the user wanted already happened
+            self.notify("already reverted")
+            self.refresh_data()
+            return
+        except KeyError:
+            self.notify("that change no longer exists")
+            self.refresh_data()
+            return
         if result.applied:
             self.notify(f"{ref} reverted — {len(result.reverted)} change(s)")
         else:

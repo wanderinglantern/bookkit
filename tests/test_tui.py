@@ -1818,3 +1818,85 @@ async def test_help_documents_the_revert_key(seeded_db: Path) -> None:
         from textual.widgets import Static as StaticW
         rendered = " ".join(str(w.render()) for w in app.screen.query(StaticW))
         assert "R reverts the highlighted change" in rendered
+
+
+async def test_R_survives_the_batch_being_reverted_under_the_open_modal(
+    seeded_db: Path,
+) -> None:
+    """TOCTOU with the MCP server: the modal is open, the server reverts the
+    same batch on its own connection, y lands on an already-reverted batch.
+    The dismiss callback must notify, never crash the app."""
+    from bookkit import db as db_mod
+    from bookkit.repo import base
+    from bookkit.repo import batches as batches_repo
+    from bookkit.services import batches as batches_svc
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    made = batches_repo.create(
+        app.conn, batch_id=batches_repo.new_batch_id(), source="mcp",
+        tool="enrich_field", summary="set website", org_id=org.id,
+    )
+    with db_mod.transaction(app.conn, batch=db_mod.BatchState(batch_id=made.id)):
+        base.update(app.conn, "org", org.id, {"website": "https://mcp.example"})
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        nav._current = ("batches", None)
+        nav._render_pane()
+        await pilot.pause()
+        table = app.screen.query_one("#nav-table", ListTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(f"batch:{made.id}"))
+        await pilot.press("R")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)
+
+        # the MCP server gets there first
+        batches_svc.revert(app.conn, made.ref, now="2026-08-13T18:00:00Z")
+
+        await pilot.press("y")
+        await pilot.pause()
+        assert not isinstance(app.screen, ModalScreen)  # app is alive, modal gone
+        assert orgs.get(app.conn, org.id).website is None  # the first revert held
+
+
+async def test_detail_of_a_reverted_batch_shows_no_false_conflicts(
+    seeded_db: Path,
+) -> None:
+    """After a revert, current values legitimately differ from the batch's
+    new_values. enter must render the history plainly, not paint every field
+    amber as external tampering."""
+    from bookkit import db as db_mod
+    from bookkit.repo import base
+    from bookkit.repo import batches as batches_repo
+    from bookkit.services import batches as batches_svc
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    made = batches_repo.create(
+        app.conn, batch_id=batches_repo.new_batch_id(), source="mcp",
+        tool="enrich_field", summary="set website", org_id=org.id,
+    )
+    with db_mod.transaction(app.conn, batch=db_mod.BatchState(batch_id=made.id)):
+        base.update(app.conn, "org", org.id, {"website": "https://mcp.example"})
+    batches_svc.revert(app.conn, made.ref, now="2026-08-13T18:00:00Z")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        nav._current = ("batches", None)
+        nav._render_pane()
+        await pilot.pause()
+        table = app.screen.query_one("#nav-table", ListTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(f"batch:{made.id}"))
+        await pilot.press("enter")
+        await pilot.pause()
+
+        from textual.widgets import Static as StaticW
+        rendered = " ".join(str(w.render()) for w in app.screen.query(StaticW))
+        assert "website" in rendered
+        assert "since changed to" not in rendered
+        assert "reverted" in rendered

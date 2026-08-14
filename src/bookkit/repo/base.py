@@ -39,6 +39,19 @@ def alive(alias: str = "") -> str:
     return f"{prefix}deleted_at IS NULL"
 
 
+def raw_row(
+    conn: sqlite3.Connection, entity_type: str, entity_id: str
+) -> sqlite3.Row | None:
+    """The row as it IS, dead or alive — the read the batch-revert planner
+    needs, since it must compare against reality rather than the alive()
+    view. Everything else should keep using get()."""
+    table = ENTITY_TABLES[entity_type]
+    row: sqlite3.Row | None = conn.execute(
+        f"SELECT * FROM {table} WHERE id = ?", (entity_id,)
+    ).fetchone()
+    return row
+
+
 def log_event(
     conn: sqlite3.Connection,
     entity_type: str,

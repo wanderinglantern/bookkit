@@ -14,9 +14,11 @@ from dataclasses import dataclass
 from ..models import EventBatch
 from ..repo import base
 from ..repo import batches as batches_repo
+from ..repo import events as events_repo
 
-# Provenance, not a mutation — the MCP server stamps it after every write.
-SKIP_FIELDS = frozenset({"source"})
+# Provenance, not a mutation — derived from the one skip-list in repo/events
+# ('created' is not skipped here: the planner handles it as its own kind).
+SKIP_FIELDS = frozenset(events_repo.NON_MUTATION_FIELDS) - {"created"}
 
 
 @dataclass(frozen=True)
@@ -47,23 +49,27 @@ class RevertPlan:
         return not self.conflicts
 
 
-def _current_value(
-    conn: sqlite3.Connection, entity_type: str, entity_id: str, field: str
-) -> str | None:
-    """The value the row holds NOW, dead or alive — a revert must compare
-    against reality, not the alive() view."""
-    table = base.ENTITY_TABLES[entity_type]
-    row = conn.execute(
-        f"SELECT {field} FROM {table} WHERE id = ?", (entity_id,)  # noqa: S608
-    ).fetchone()
-    if row is None:
-        return None
-    return None if row[0] is None else str(row[0])
+def account_names(
+    conn: sqlite3.Connection, batches: list[EventBatch]
+) -> dict[str, str]:
+    """org_id → account name for every batch that names one, in ONE query —
+    the label rule shared by the MCP list and the TUI section (which were
+    forked on day one, and drifting). A missing key means the org was merged
+    or deleted away; the caller chooses how '(deleted account)' renders."""
+    from ..repo import orgs
+
+    return orgs.names_for(conn, {b.org_id for b in batches if b.org_id})
+
+
+def _cell(row: sqlite3.Row, field: str) -> str | None:
+    value = row[field]
+    return None if value is None else str(value)
 
 
 def plan_revert(conn: sqlite3.Connection, batch: EventBatch) -> RevertPlan:
     """Collapse the batch to its net effect, then check each net change against
-    what the record holds now."""
+    what the record holds now — read through repo.base.raw_row (dead or alive),
+    because a revert compares against reality, not the alive() view."""
     events = batches_repo.events_for(conn, batch.id)
 
     created: dict[tuple[str, str], Change] = {}
@@ -92,25 +98,58 @@ def plan_revert(conn: sqlite3.Connection, batch: EventBatch) -> RevertPlan:
         else:
             net[key] = [event.old_value, event.new_value]
 
+    # one dead-or-alive read per entity, shared by every check below
+    entities = (
+        {(t, i) for (t, i, _f) in net} | set(created) | set(deleted)
+    )
+    rows = {
+        entity: base.raw_row(conn, entity[0], entity[1]) for entity in entities
+    }
+
     updates: list[Change] = []
     conflicts: list[Conflict] = []
 
     for (entity_type, entity_id, field), (old, new) in net.items():
-        # A row this batch created is going away wholesale; conflict-checking
-        # its fields would refuse reverts that are in fact clean.
-        if (entity_type, entity_id) in created:
+        entity = (entity_type, entity_id)
+        # A row this batch created is going away wholesale; its field checks
+        # are the created-entity check below.
+        if entity in created:
             continue
         change = Change(entity_type, entity_id, field, old, new)
-        current = _current_value(conn, entity_type, entity_id, field)
+        row = rows[entity]
+        if row is None:
+            conflicts.append(Conflict(change, "(row gone)"))
+            continue
+        if row["deleted_at"] is not None and entity not in deleted:
+            # the user deleted this record AFTER the batch; restoring field
+            # values on it would resurrect nothing and base.update would
+            # refuse anyway — surface it instead
+            conflicts.append(Conflict(change, "(deleted since)"))
+            continue
+        current = _cell(row, field)
         if current != new:
             conflicts.append(Conflict(change, current))
         else:
             updates.append(change)
 
-    for (entity_type, entity_id), change in deleted.items():
-        current = _current_value(conn, entity_type, entity_id, "deleted_at")
-        if current is None:                        # someone undeleted it since
+    for entity, change in deleted.items():
+        row = rows[entity]
+        if row is None or row["deleted_at"] is None:
+            # someone undeleted it since (or it vanished outright)
             conflicts.append(Conflict(change, None))
+
+    for entity, change in created.items():
+        # The contract is 'changed since → refused', and a row this batch
+        # created is no exception: user edits after the create would vanish
+        # under the soft-delete with no conflict shown. base.insert logs no
+        # field values, so the check is the event log, not a value compare.
+        edits = batches_repo.external_change_count(
+            conn, entity[0], entity[1], batch.id
+        )
+        if edits:
+            conflicts.append(
+                Conflict(change, f"({edits} change(s) since it was created)")
+            )
 
     return RevertPlan(
         batch=batch,
@@ -155,24 +194,40 @@ def revert(
         return RevertResult(batch, reverted=[], refused=plan.conflicts,
                             applied=False)
 
+    # force applies ONLY the clean changes: anything conflicted is filtered
+    # out here and reported strictly as refused, never both
+    blocked = {
+        (c.change.entity_type, c.change.entity_id, c.change.field)
+        for c in plan.conflicts
+    }
+
+    def clean(change: Change) -> bool:
+        return (change.entity_type, change.entity_id, change.field) not in blocked
+
+    deletes = [c for c in plan.deletes if clean(c)]
+    updates = [c for c in plan.updates if clean(c)]
+    creates = [c for c in plan.creates if clean(c)]
+
     with db.transaction(conn):                     # deliberately unbatched
-        for change in plan.updates:
+        # undeletes FIRST: a batch that edited then soft-deleted one row needs
+        # the row alive again before base.update (alive-filtered) restores it
+        for change in deletes:
+            base.undelete(conn, change.entity_type, change.entity_id)
+        for change in updates:
             base.update(
                 conn, change.entity_type, change.entity_id,
                 {change.field: change.old_value}, note="revert",
             )
-        for change in plan.creates:
+        for change in creates:
             if base.get(conn, change.entity_type, change.entity_id) is not None:
                 base.soft_delete(
                     conn, change.entity_type, change.entity_id, note="revert"
                 )
-        for change in plan.deletes:
-            base.undelete(conn, change.entity_type, change.entity_id)
         batches_repo.mark_reverted(conn, batch.id, now)
 
     return RevertResult(
         batch=batch,
-        reverted=[*plan.updates, *plan.creates, *plan.deletes],
+        reverted=[*updates, *creates, *deletes],
         refused=plan.conflicts,
         applied=True,
     )

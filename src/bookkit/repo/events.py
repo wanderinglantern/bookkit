@@ -66,6 +66,13 @@ def stage_entry_count(conn: sqlite3.Connection, stage: str) -> int:
     return int(row[0])
 
 
+# event_log fields that are BOOKKEEPING, not mutations: 'created' marks a
+# row's birth (undone by deleting, not reverting), 'source' is the MCP
+# provenance stamp with no column behind it. One list, two consumers —
+# last_mutation here and SKIP_FIELDS in services/batches.py.
+NON_MUTATION_FIELDS = ("created", "source")
+
+
 def last_mutation(conn: sqlite3.Connection) -> EventLogEntry | None:
     """The most recent undoable event (field changes and deletes, not creates
     and not undo's own bookkeeping).
@@ -73,10 +80,13 @@ def last_mutation(conn: sqlite3.Connection) -> EventLogEntry | None:
     'source' is provenance, not a mutation: the MCP server stamps it after
     every write it makes. It has no column behind it, so treating it as
     undoable made `u` raise IndexError immediately after ANY MCP write —
-    it must be skipped the same way 'created' is."""
+    it must be skipped the same way 'created' is. NON_MUTATION_FIELDS is the
+    single home for that skip-list; services/batches.py derives from it."""
+    marks = ",".join("?" * len(NON_MUTATION_FIELDS))
     row = conn.execute(
-        "SELECT * FROM event_log WHERE field NOT IN ('created', 'source')"
+        f"SELECT * FROM event_log WHERE field NOT IN ({marks})"
         " AND (note IS NULL OR note NOT IN ('undo', 'undelete', 'revert'))"
-        " ORDER BY rowid DESC LIMIT 1"
+        " ORDER BY rowid DESC LIMIT 1",
+        NON_MUTATION_FIELDS,
     ).fetchone()
     return EventLogEntry.from_row(row) if row else None

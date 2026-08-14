@@ -207,3 +207,90 @@ def test_revert_is_not_itself_undoable_or_batched(conn):
 def test_revert_raises_on_an_unknown_ref(conn):
     with pytest.raises(KeyError):
         batches_svc.revert(conn, "MCP-9999", now=NOW)
+
+
+# -- review findings: the dead-or-alive seam ----------------------------------
+
+
+def test_reverting_an_update_on_a_since_deleted_entity_refuses_not_crashes(conn):
+    """The plan compared against the raw row while base.update applies through
+    the alive() filter — a batch-touched org soft-deleted since made a 'clean'
+    revert raise KeyError mid-transaction. It must refuse and say why."""
+    org = orgs.create(conn, kind="client", name="Acme", website="a")
+    made = _batch(conn, org_id=org.id)
+    with db.transaction(conn, batch=db.BatchState(batch_id=made.id)):
+        base.update(conn, "org", org.id, {"website": "b"})
+    base.soft_delete(conn, "org", org.id)          # user deletes it afterwards
+
+    result = batches_svc.revert(conn, made.ref, now=NOW)
+    assert not result.applied
+    assert result.refused, "a dead target is a conflict, not a crash"
+    assert batches_repo.get_by_ref(conn, made.ref).reverted_at is None
+
+
+def test_update_then_delete_in_one_batch_reverts_cleanly(conn):
+    """Undeletes apply before field restores, so a batch that edited and then
+    soft-deleted the same row reverts without tripping the alive() filter."""
+    org = orgs.create(conn, kind="client", name="Acme", website="a")
+    made = _batch(conn, org_id=org.id)
+    with db.transaction(conn, batch=db.BatchState(batch_id=made.id)):
+        base.update(conn, "org", org.id, {"website": "b"})
+        base.soft_delete(conn, "org", org.id)
+
+    result = batches_svc.revert(conn, made.ref, now=NOW)
+    assert result.applied
+    got = orgs.get(conn, org.id)                   # alive again
+    assert got.website == "a"
+
+
+def test_user_edits_to_a_batch_created_row_block_its_revert(conn):
+    """The contract says 'changed since → refused'. A row the batch created
+    and the user then edited must not vanish silently under a zero-conflict
+    revert; force is the explicit override."""
+    made = _batch(conn)
+    with db.transaction(conn, batch=db.BatchState(batch_id=made.id)):
+        org = orgs.create(conn, kind="client", name="Acme")
+    base.update(conn, "org", org.id, {"website": "https://grant-typed.example"})
+
+    result = batches_svc.revert(conn, made.ref, now=NOW)
+    assert not result.applied
+    assert result.refused
+    assert orgs.get(conn, org.id).website == "https://grant-typed.example"
+
+    # force's contract is "revert the clean rest, skip the conflicted" — it
+    # never destroys post-batch user work. The edited row SURVIVES force,
+    # reported as refused; removing it is what the delete flows are for.
+    forced = batches_svc.revert(conn, made.ref, now=NOW, force=True)
+    assert forced.applied
+    assert orgs.get(conn, org.id).website == "https://grant-typed.example"
+    assert {(c.change.entity_id, c.change.field) for c in forced.refused} == {
+        (org.id, "created")
+    }
+
+
+def test_force_does_not_apply_or_double_report_a_conflicted_delete(conn):
+    """A batch-deleted row the user already restored: force must leave it
+    alone (no spurious undelete event) and report it ONLY as refused."""
+    org = orgs.create(conn, kind="client", name="Acme", website="a")
+    other = orgs.create(conn, kind="client", name="Beta", website="x")
+    made = _batch(conn, org_id=org.id)
+    with db.transaction(conn, batch=db.BatchState(batch_id=made.id)):
+        base.soft_delete(conn, "org", org.id)
+        base.update(conn, "org", other.id, {"website": "y"})
+    base.undelete(conn, "org", org.id)             # user brings it back
+
+    before = conn.execute("SELECT COUNT(*) FROM event_log").fetchone()[0]
+    result = batches_svc.revert(conn, made.ref, now=NOW, force=True)
+    assert result.applied
+    reverted_ids = {(c.entity_id, c.field) for c in result.reverted}
+    refused_ids = {(c.change.entity_id, c.change.field) for c in result.refused}
+    assert (org.id, "deleted_at") in refused_ids
+    assert (org.id, "deleted_at") not in reverted_ids
+    assert reverted_ids & refused_ids == set()
+    # no spurious deleted_at None→None event for the refused delete
+    spurious = conn.execute(
+        "SELECT COUNT(*) FROM event_log WHERE entity_id = ?"
+        " AND field = 'deleted_at' AND rowid > ?", (org.id, before)
+    ).fetchone()[0]
+    assert spurious == 0
+    assert orgs.get(conn, other.id).website == "x"  # the clean change reverted

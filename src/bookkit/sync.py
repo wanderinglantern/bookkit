@@ -507,7 +507,9 @@ def opportunities_for_path(conn: sqlite3.Connection, path: Path) -> list[Opportu
         pending = [ly for ly in line_layers if not ly.participants]
         if not line_layers or not pending:
             continue
-        if _line_already_tracked(line, effective, existing):
+        if _line_already_tracked(
+            line, effective, existing, {ln.id for ln in program.lines}
+        ):
             continue
         premiums = [ly.premium for ly in pending if ly.premium is not None]
         out.append(
@@ -525,27 +527,40 @@ def opportunities_for_path(conn: sqlite3.Connection, path: Path) -> list[Opportu
     return out
 
 
-# fuzz.ratio floor for "same line, id re-slugged". Measured, not guessed:
-# one-typo fixes score >=88 ("cybr"/"cyber" 88.9, "genral-liability"/
-# "general-liability" 97) while genuinely distinct siblings top out at 83
-# ("cyber"/"cyber-2" 83.3, "property"/"property-dic" 80). Both boundaries
-# are pinned in test_linking_flow.py.
+# fuzz.ratio floor for "same line, id re-slugged". One-typo fixes score >=88
+# ("cybr"/"cyber" 88.9, "genral-liability"/"general-liability" 97). Ratio
+# ALONE is not a safe discriminator — it scales with length, so a genuinely
+# distinct sibling like "general-liability-2" scores 94 against
+# "general-liability" — which is why the bridge below also requires the
+# stored id to have VANISHED from the program and refuses unique_id's
+# numeric-suffix siblings outright. Boundaries pinned in test_linking_flow.py.
 _RENAME_CUTOFF = 85
+
+_NUMERIC_SUFFIX = re.compile(r"-\d+$")
 
 
 def _line_already_tracked(
-    line: Any, effective: str, existing: set[tuple[str | None, str | None]]
+    line: Any,
+    effective: str,
+    existing: set[tuple[str | None, str | None]],
+    current_ids: set[str],
 ) -> bool:
     """Does an opportunity already cover this line for this effective date?
 
     Exact id match first. Then the rename bridge: towerkit line ids follow
     their names now (towerkit 67ac42f), so a typo fix re-slugs the id and an
     exact-only dedupe would create a DUPLICATE opportunity on the next sync.
-    A near-identical stored key ("cybr" vs "cyber") on the same effective
-    date is the same line; a genuinely different line ("cyber" vs
-    "employers-liability") scores nowhere near the cutoff. The line's display
-    name is also accepted for TUI-authored opportunities, which store names
-    rather than slugs."""
+
+    The bridge fires only when ALL of:
+    - the stored key matches NO current line id — a rename means the old id
+      vanished; if it still names a live line, the opportunity is that
+      line's, and this one is genuinely new;
+    - neither id is the other plus a "-N" suffix — that suffix is exactly
+      what session.unique_id mints for a same-slug SIBLING, never a rename;
+    - fuzz.ratio clears the cutoff.
+
+    The line's display name is also accepted for TUI-authored opportunities,
+    which store names rather than slugs."""
     from rapidfuzz import fuzz
 
     if (line.id, effective) in existing:
@@ -555,6 +570,12 @@ def _line_already_tracked(
             continue
         if stored == line.name:
             return True
+        if stored in current_ids:
+            continue  # still a live line's key — not a rename of THIS one
+        if _NUMERIC_SUFFIX.sub("", stored) == _NUMERIC_SUFFIX.sub("", line.id) and (
+            _NUMERIC_SUFFIX.search(stored) or _NUMERIC_SUFFIX.search(line.id)
+        ):
+            continue  # unique_id's collision suffix marks a sibling, not a rename
         if fuzz.ratio(stored, line.id) >= _RENAME_CUTOFF:
             return True
     return False

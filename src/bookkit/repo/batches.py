@@ -72,6 +72,23 @@ def events_for(conn: sqlite3.Connection, batch_id: str) -> list[EventLogEntry]:
     return [EventLogEntry.from_row(r) for r in rows]
 
 
+def external_change_count(
+    conn: sqlite3.Connection, entity_type: str, entity_id: str, batch_id: str
+) -> int:
+    """Mutation events on this entity that did NOT come from this batch —
+    how the revert planner knows a batch-created row was edited since.
+    Revert/undo bookkeeping doesn't count; a user's undo of their own edit
+    still leaves the edit event, which is the conservative reading."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM event_log WHERE entity_type = ? AND entity_id = ?"
+        " AND (batch_id IS NULL OR batch_id != ?)"
+        " AND field NOT IN ('created', 'source')"
+        " AND (note IS NULL OR note NOT IN ('undo', 'undelete', 'revert'))",
+        (entity_type, entity_id, batch_id),
+    ).fetchone()
+    return int(row[0])
+
+
 def mark_reverted(conn: sqlite3.Connection, batch_id: str, at: str) -> None:
     conn.execute(
         "UPDATE event_batch SET reverted_at = ? WHERE id = ?", (at, batch_id)

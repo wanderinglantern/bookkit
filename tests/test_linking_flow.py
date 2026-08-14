@@ -418,3 +418,47 @@ def test_rename_cutoff_boundaries_hold() -> None:
     assert fuzz.ratio("cyber", "cyber-2") < _RENAME_CUTOFF
     assert fuzz.ratio("property", "property-dic") < _RENAME_CUTOFF
     assert fuzz.ratio("auto-liability", "general-liability") < _RENAME_CUTOFF
+
+
+def test_a_numbered_sibling_line_is_not_swallowed_by_the_rename_bridge(
+    conn, client, tmp_path: Path
+) -> None:
+    """fuzz.ratio scales with length: 'general-liability-2' scores 94 against
+    'general-liability', so a pure-ratio bridge would declare the NEW sibling
+    already tracked and its opportunity would silently never exist. The bridge
+    must only fire when the stored id matches no current line (i.e. the old id
+    actually vanished in a rename)."""
+    prog = make_program(
+        "Test Client, Inc.", "2027-01-01", "2028-01-01",
+        placed=False, tbd_line=False,
+    )
+    prog.lines = [Line(id="general-liability", name="General Liability")]
+    prog.layers = [Layer(
+        id="primary", name="Primary", applies_to=["general-liability"],
+        attach=0, limit=2_000_000, premium=900_000, participants=[],
+    )]
+    prog.retentions = [Retention(
+        applies_to=["general-liability"],
+        type=RetentionType.DEDUCTIBLE, amount=100_000,
+    )]
+    path = write_program(tmp_path / "p" / "proposed.json", prog)
+    assert sync.confirm_link(conn, path, client.id).ok
+    (candidate,) = sync.opportunities_for_path(conn, path)
+    sync.create_opportunity(conn, candidate)      # stores "general-liability"
+
+    # a second, genuinely distinct line whose slug collided (unique_id's -2)
+    prog.lines.append(Line(id="general-liability-2", name="General Liability 2"))
+    prog.layers.append(Layer(
+        id="xs", name="Excess", applies_to=["general-liability-2"],
+        attach=0, limit=5_000_000, premium=100_000, participants=[],
+    ))
+    prog.retentions.append(Retention(
+        applies_to=["general-liability-2"],
+        type=RetentionType.DEDUCTIBLE, amount=100_000,
+    ))
+    write_program(path, prog)
+
+    offered = [c.line_id for c in sync.opportunities_for_path(conn, path)]
+    assert offered == ["general-liability-2"], (
+        "the new sibling must be offered — its near-identical slug is not a rename"
+    )

@@ -23,6 +23,19 @@ def get(conn: sqlite3.Connection, org_id: str) -> Org:
     return Org.from_row(row)
 
 
+def names_for(conn: sqlite3.Connection, org_ids: set[str]) -> dict[str, str]:
+    """id → name for the LIVING orgs among org_ids, one query. A missing key
+    means the org was merged/deleted away — the caller picks the label."""
+    if not org_ids:
+        return {}
+    marks = ",".join("?" * len(org_ids))
+    rows = conn.execute(
+        f"SELECT id, name FROM org WHERE id IN ({marks}) AND {base.alive()}",
+        tuple(org_ids),
+    ).fetchall()
+    return {r["id"]: r["name"] for r in rows}
+
+
 def find(conn: sqlite3.Connection, ref_or_id: str) -> Org | None:
     row = conn.execute(
         f"SELECT * FROM org WHERE (id = ? OR ref = ?) AND {base.alive()}",
