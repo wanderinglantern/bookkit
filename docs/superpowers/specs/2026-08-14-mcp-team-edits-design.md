@@ -1,7 +1,8 @@
 # MCP team edits — design
 
 Date: 2026-08-14
-Status: approved (Grant, 2026-08-14 — design approved in chat, spec to follow)
+Status: implemented (2026-08-14) — plan at
+docs/superpowers/plans/2026-08-14-mcp-team-edits.md
 
 ## Goal
 
