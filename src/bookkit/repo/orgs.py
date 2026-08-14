@@ -123,6 +123,28 @@ def add_appetite(conn: sqlite3.Connection, market_org_id: str, **fields: Any) ->
     return Appetite.from_row(row)  # type: ignore[arg-type]
 
 
+def get_appetite(conn: sqlite3.Connection, appetite_id: str) -> Appetite:
+    row = base.get(conn, "appetite", appetite_id)
+    if row is None:
+        raise KeyError(f"appetite {appetite_id} not found")
+    return Appetite.from_row(row)
+
+
+def update_appetite(
+    conn: sqlite3.Connection, appetite_id: str, **fields: Any
+) -> Appetite:
+    """Correct an appetite row. `appetite` is already in ENTITY_TABLES, so this
+    is event-logged and `u`-undoable like every other field write (review
+    F18 — add_appetite existed with no way back)."""
+    base.update(conn, "appetite", appetite_id, fields)
+    return get_appetite(conn, appetite_id)
+
+
+def delete_appetite(conn: sqlite3.Connection, appetite_id: str) -> None:
+    """Soft, so `u` puts it back — the same promise every other delete makes."""
+    base.soft_delete(conn, "appetite", appetite_id)
+
+
 def appetite_for_market(conn: sqlite3.Connection, market_org_id: str) -> list[Appetite]:
     rows = conn.execute(
         f"SELECT * FROM appetite WHERE market_org_id = ? AND {base.alive()} ORDER BY line",

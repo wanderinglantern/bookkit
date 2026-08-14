@@ -437,3 +437,36 @@ def test_events_for_returns_only_that_batch_in_order(conn):
     got = batches.events_for(conn, "01BATCHTHREE")
     assert [e.id for e in got] == ["e1", "e2"]
     assert got[0].batch_id == "01BATCHTHREE"
+
+
+def test_appetite_can_be_corrected_and_removed(conn) -> None:
+    """F18: add_appetite existed with no update and no delete, so a typo'd
+    appetite row was permanent. The table is already in ENTITY_TABLES and
+    already carries deleted_at, so both are event-logged and undoable."""
+    from bookkit.repo import orgs
+
+    market = orgs.create(conn, kind="market", name="Sompo")
+    row = orgs.add_appetite(conn, market.id, line="cyber", appetite="selective")
+
+    fixed = orgs.update_appetite(conn, row.id, appetite="target", min_premium=100_00)
+    assert fixed.appetite == "target"
+    assert fixed.min_premium == 100_00
+    assert orgs.get_appetite(conn, row.id).appetite == "target"
+
+    orgs.delete_appetite(conn, row.id)
+    assert [a.id for a in orgs.appetite_for_market(conn, market.id)] == []
+
+
+def test_deleting_an_appetite_is_undoable(conn) -> None:
+    """It is a soft delete, so `u` puts it back — the same promise every other
+    delete in the app makes."""
+    from bookkit.repo import orgs
+    from bookkit.services import undo
+
+    market = orgs.create(conn, kind="market", name="Beazley")
+    row = orgs.add_appetite(conn, market.id, line="marine", appetite="target")
+    orgs.delete_appetite(conn, row.id)
+    assert orgs.appetite_for_market(conn, market.id) == []
+
+    assert undo.undo_last(conn) is not None
+    assert [a.id for a in orgs.appetite_for_market(conn, market.id)] == [row.id]

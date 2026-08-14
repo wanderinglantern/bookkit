@@ -2636,3 +2636,89 @@ def test_textual_is_pinned_to_a_major_version() -> None:
         pins = tomllib.load(handle)["project"]["dependencies"]
     textual_pin = next(p for p in pins if p.startswith("textual"))
     assert "<" in textual_pin, f"textual is unbounded above: {textual_pin!r}"
+
+
+async def test_appetite_can_be_edited_from_the_market_screen(seeded_db: Path) -> None:
+    """F18: MarketDetailScreen bound a/w/i and neither e nor d, and
+    appetite_form(existing=…) existed and was never called with one — so a
+    typo'd appetite row was permanent from the TUI."""
+    from bookkit.repo import orgs
+    from bookkit.tui.screens.markets import MarketDetailScreen
+
+    app = BookkitApp(seeded_db)
+    market = next(
+        m for m in orgs.list_orgs(app.conn, kind="market")
+        if orgs.appetite_for_market(app.conn, m.id)
+    )
+    row = orgs.appetite_for_market(app.conn, market.id)[0]
+
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.push_screen(MarketDetailScreen(market.id))
+        await pilot.pause()
+        table = app.screen.query_one("#md-appetite", ListTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(row.id))
+        await pilot.pause()
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen), "e opened nothing"
+        assert "appetite" in app.screen.spec.title
+        await _fill(pilot, app, "territories", "US and Canada")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert orgs.get_appetite(app.conn, row.id).territories == "US and Canada"
+
+
+async def test_appetite_can_be_deleted_from_the_market_screen(seeded_db: Path) -> None:
+    """F18's other half, and it must be undoable like every other delete."""
+    from bookkit.repo import orgs
+    from bookkit.tui.screens.markets import MarketDetailScreen
+
+    app = BookkitApp(seeded_db)
+    market = next(
+        m for m in orgs.list_orgs(app.conn, kind="market")
+        if orgs.appetite_for_market(app.conn, m.id)
+    )
+    row = orgs.appetite_for_market(app.conn, market.id)[0]
+
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.push_screen(MarketDetailScreen(market.id))
+        await pilot.pause()
+        table = app.screen.query_one("#md-appetite", ListTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(row.id))
+        await pilot.pause()
+        await pilot.press("D")
+        await pilot.pause()
+        assert row.id not in {a.id for a in orgs.appetite_for_market(app.conn, market.id)}
+        await pilot.press("u")
+        await pilot.pause()
+        assert row.id in {a.id for a in orgs.appetite_for_market(app.conn, market.id)}
+
+
+async def test_an_underwriter_can_be_edited_from_the_market_screen(
+    seeded_db: Path,
+) -> None:
+    """The same gap on the contacts table: `w` added underwriters and nothing
+    could correct one."""
+    from bookkit.repo import contacts, orgs
+    from bookkit.tui.screens.markets import MarketDetailScreen
+
+    app = BookkitApp(seeded_db)
+    market = next(
+        m for m in orgs.list_orgs(app.conn, kind="market")
+        if contacts.for_org(app.conn, m.id)
+    )
+    who = contacts.for_org(app.conn, market.id)[0]
+
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.push_screen(MarketDetailScreen(market.id))
+        await pilot.pause()
+        table = app.screen.query_one("#md-contacts", ListTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(who.id))
+        await pilot.pause()
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)
+        assert "contact" in app.screen.spec.title

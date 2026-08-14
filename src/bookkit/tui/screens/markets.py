@@ -315,7 +315,104 @@ class MarketDetailScreen(Screen):
         Binding("a", "add_appetite", "Add appetite"),
         Binding("w", "add_underwriter", "Add underwriter"),
         Binding("i", "import_underwriter", "Import (paste sig)"),
+        # e and D resolve by which table has focus, the same way the account
+        # screen does it. Without them, everything `a` and `w` created here
+        # was permanent (review F18).
+        Binding("e", "edit_row", "Edit"),
+        Binding("D", "delete_row", "Delete", show=False),
+        Binding("u", "undo", "Undo"),
     ]
+
+    # (table id, what a row of it is)
+    EDITABLE = (("md-appetite", "appetite"), ("md-contacts", "contact"))
+
+    def _focused_row(self) -> tuple[str, str] | None:
+        """(kind, id) for the row under the cursor in whichever of this
+        screen's tables holds focus."""
+        from textual.coordinate import Coordinate
+
+        for table_id, kind in self.EDITABLE:
+            table = self.query_one(f"#{table_id}", ListTable)
+            if not table.has_focus or table.cursor_row is None or not table.row_count:
+                continue
+            key = table.coordinate_to_cell_key(
+                Coordinate(table.cursor_row, 0)
+            ).row_key.value
+            if key:
+                return kind, str(key)
+        return None
+
+    def action_edit_row(self) -> None:
+        from ..widgets.entity_forms import (
+            appetite_form,
+            apply_contact,
+            contact_form,
+        )
+        from ..widgets.forms import FormModal, dropped
+
+        row = self._focused_row()
+        if row is None:
+            self.notify("select an appetite or underwriter row first", severity="warning")
+            return
+        kind, row_id = row
+        conn = self.app.conn
+
+        def done(values: dict | None) -> None:
+            if values is not None:
+                self._refresh()
+
+        if kind == "appetite":
+            try:
+                existing = orgs.get_appetite(conn, row_id)
+            except KeyError:
+                self.notify("that appetite row no longer exists", severity="error")
+                return
+
+            def commit_appetite(values: dict) -> str | None:
+                orgs.update_appetite(conn, row_id, **dropped(values))
+                return None
+
+            self.app.push_screen(
+                FormModal(appetite_form(existing, conn=conn), commit=commit_appetite),
+                done,
+            )
+            return
+
+        try:
+            who = contacts.get(conn, row_id)
+        except KeyError:
+            self.notify("that underwriter no longer exists", severity="error")
+            return
+
+        def commit_contact(values: dict) -> str | None:
+            apply_contact(conn, who.org_id, values, who)
+            return None
+
+        self.app.push_screen(
+            FormModal(contact_form(who), commit=commit_contact), done
+        )
+
+    def action_delete_row(self) -> None:
+        """D removes the appetite row under the cursor. Soft, so u restores
+        it — no confirmation, because the app prefers forgiveness to friction."""
+        row = self._focused_row()
+        if row is None:
+            return
+        kind, row_id = row
+        if kind != "appetite":
+            self.notify("D removes an appetite row (e edits an underwriter)")
+            return
+        try:
+            existing = orgs.get_appetite(self.app.conn, row_id)
+        except KeyError:
+            return
+        orgs.delete_appetite(self.app.conn, row_id)
+        self.notify(f"removed {_pretty(existing.line)} appetite — u to undo")
+        self._refresh()
+
+    def action_undo(self) -> None:
+        self.app.show_undo_result()
+        self._refresh()
 
     def action_import_underwriter(self) -> None:
         """Paste an underwriter's email signature — same parser as contact
@@ -390,9 +487,9 @@ class MarketDetailScreen(Screen):
         with VerticalScroll():
             yield Static(id="market-header")
             yield Static(
-                f"[{theme.DIM}][b]a[/b] add appetite · [b]w[/b] add underwriter · "
-                f"[b]i[/b] paste signature · [b]enter[/b] on a tower row opens the "
-                f"account[/]",
+                f"[{theme.DIM}][b]a[/b] appetite · [b]w[/b] underwriter · "
+                f"[b]e[/b] edit · [b]D[/b] remove · [b]i[/b] paste sig · "
+                f"[b]u[/b] undo · [b]enter[/b] on a tower row opens the account[/]",
                 id="md-hint",
             )
             yield Static("APPETITE", classes="pane-title")
@@ -445,11 +542,14 @@ class MarketDetailScreen(Screen):
         table.add_columns(
             "line", "appetite", right("min premium"), right("max limit"), "territories"
         )
+        # keyed rows: without these `e` and `D` have nothing to act on, which
+        # is why an appetite row was permanent once written (review F18)
         for a in orgs.appetite_for_market(conn, market.id):
             table.add_row(
                 _pretty(a.line), _appetite_text(a.appetite),
                 money_text(a.min_premium), money_text(a.max_limit),
                 a.territories or dash(),
+                key=a.id,
             )
 
         table = self.query_one("#md-contacts", ListTable)
@@ -458,6 +558,7 @@ class MarketDetailScreen(Screen):
             table.add_row(
                 c.name, c.title or dash(), c.email or dash(),
                 c.phone or c.mobile or dash(),
+                key=c.id,
             )
 
         table = self.query_one("#md-subs", ListTable)
