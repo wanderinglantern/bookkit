@@ -1130,11 +1130,12 @@ def test_rename_refuses_a_name_an_INACTIVE_member_holds(server_db):
                 if m.name == "Dana Cruz")
     base.update(rw, "team_member", gone.id, {"active": 0})
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as err:
         mcpserver._edit_field(
             rw, "team_member", "Sam Okafor", "name", "Dana Cruz",
             expecting="Sam Okafor",
         )
+    assert "Dana Cruz" in str(err.value)
 
 
 def test_renaming_to_the_same_name_is_not_a_self_collision(server_db):
@@ -1390,6 +1391,38 @@ def test_cascade_covers_deal_level_assignments_too(server_db):
     assert team.for_org(rw, org.id) == []
 
 
+def test_cascade_tags_provenance_on_each_unassigned_assignment(server_db):
+    """A cascaded removal must leave the same source=mcp audit trail as a
+    standalone team_unassign — see _member_deactivate's cascade loop."""
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme", lines="cyber")
+    aid = assigned["assignment_id"]
+
+    mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+    assert team.for_org(rw, org.id) == []
+
+    events = rw.execute(
+        "SELECT * FROM event_log WHERE entity_id = ? AND field = 'source'",
+        (aid,)).fetchall()
+    assert events and events[0]["new_value"] == "mcp"
+
+
+def test_cascade_batch_has_no_org_id(server_db):
+    """Spec Decision 2: a cascade spans clients, so no single org owns the
+    batch — the client names go in the summary instead."""
+    from bookkit.repo import batches as batches_repo
+
+    rw, _org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._team_assign(rw, "Dana Cruz", client="Acme", lines="cyber")
+
+    out = mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+    assert batches_repo.get_by_ref(rw, out["batch"]).org_id is None
+
+
 def test_member_deactivate_is_registered(server_db):
     server = build_server(server_db)
     names = {t.name for t in server._tool_manager.list_tools()}
@@ -1447,6 +1480,23 @@ def test_edit_field_changes_an_assignment_role(server_db):
     )
     assert out["batch"].startswith("MCP-")
     assert team.for_org(rw, org.id)[0]["role"] == "account_lead"
+
+
+def test_edit_field_changes_an_assignment_lines(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme",
+                                      lines="cyber")
+    aid = assigned["assignment_id"]
+
+    out = mcpserver._edit_field(
+        rw, "team_assignment", aid, "lines", "cyber, property",
+        expecting="cyber",
+    )
+    assert out["batch"].startswith("MCP-")
+    assert team.for_org(rw, org.id)[0]["lines"] == "cyber, property"
 
 
 def test_edit_field_refuses_a_role_outside_the_vocabulary(server_db):

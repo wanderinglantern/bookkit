@@ -190,8 +190,9 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
     @server.tool()
     async def team_roster() -> dict[str, Any]:
         """Every team member with their assignments — including the exact
-        `assignment_id` that team_unassign takes and the names edit_field
-        and team_assign resolve. Read this before any team write."""
+        `assignment_id` that team_unassign and edit_field (kind=
+        team_assignment) take and the names edit_field and team_assign
+        resolve. Read this before any team write."""
         return _team_roster(ro)
 
 
@@ -548,9 +549,11 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         field really holds, writing nothing. expecting omitted asserts the
         field is BLANK (use enrich_field for routine blank-filling). `kind`
         is org|contact|opportunity|project|project_need|task|team_member|
-        rfi_request|rfi_item; `ref` is the exact name (org/contact/
-        team_member — contact also needs `client`) or the exact ref/id a
-        read returned. Stage moves are opportunity_stage, never this."""
+        team_assignment|rfi_request|rfi_item; `ref` is the exact name
+        (org/contact/team_member — contact also needs `client`) or the
+        exact ref/id a read returned — for team_assignment, the
+        `assignment_id` that team_roster returns. Stage moves are
+        opportunity_stage, never this."""
         return _edit_field(rw, kind, ref, field, value,
                            expecting=expecting, client=client)
 
