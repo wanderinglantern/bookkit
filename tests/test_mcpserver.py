@@ -1088,6 +1088,68 @@ def test_edit_field_team_member_by_exact_name(server_db):
     assert team.get_member(rw, member.id).specialty == "cyber, tech E&O"
 
 
+def test_edit_field_renames_a_member_by_their_old_name(server_db):
+    from bookkit.repo import team
+
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruze")
+
+    out = mcpserver._edit_field(
+        rw, "team_member", "Dana Cruze", "name", "Dana Cruz",
+        expecting="Dana Cruze",
+    )
+    assert out["batch"].startswith("MCP-")
+    names = [m.name for m in team.list_members(rw, active_only=False)]
+    assert names == ["Dana Cruz"]
+
+
+def test_rename_refuses_a_name_another_member_holds(server_db):
+    """Two members sharing a name makes every lookup ambiguous — _find_member
+    and _edit_target both take the first match."""
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._member_create(rw, "Sam Okafor")
+
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_member", "Sam Okafor", "name", "dana cruz",
+            expecting="Sam Okafor",
+        )
+    assert "Dana Cruz" in str(err.value)
+
+
+def test_rename_refuses_a_name_an_INACTIVE_member_holds(server_db):
+    """Inactive members still resolve in _find_member (active_only=False), so
+    they collide just as hard as active ones."""
+    from bookkit.repo import base, team
+
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._member_create(rw, "Sam Okafor")
+    gone = next(m for m in team.list_members(rw, active_only=False)
+                if m.name == "Dana Cruz")
+    base.update(rw, "team_member", gone.id, {"active": 0})
+
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_member", "Sam Okafor", "name", "Dana Cruz",
+            expecting="Sam Okafor",
+        )
+    assert "Dana Cruz" in str(err.value)
+
+
+def test_renaming_to_the_same_name_is_not_a_self_collision(server_db):
+    """The guard must exclude the member being renamed, or a no-op rename
+    reports a collision with itself."""
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    out = mcpserver._edit_field(
+        rw, "team_member", "Dana Cruz", "name", "Dana  Cruz",
+        expecting="Dana Cruz",
+    )
+    assert out["batch"].startswith("MCP-")
+
+
 # -- creates ------------------------------------------------------------------
 
 
@@ -1234,6 +1296,314 @@ def test_unassign_takes_exact_id_and_reverts(server_db):
     assert len(team.for_org(rw, org.id)) == 1
 
 
+def test_member_deactivate_retires_someone_with_no_assignments(server_db):
+    from bookkit.repo import team
+
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+
+    out = mcpserver._member_deactivate(rw, "Dana Cruz")
+    assert out["active"] is False
+    assert out["unassigned"] == 0
+    assert out["batch"].startswith("MCP-")
+    assert [m.name for m in team.list_members(rw, active_only=True)] == []
+    assert [m.name for m in team.list_members(rw, active_only=False)] == ["Dana Cruz"]
+
+
+def test_member_deactivate_refuses_and_names_the_clients(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._team_assign(rw, "Dana Cruz", client="Acme")
+
+    with pytest.raises(ValueError) as err:
+        mcpserver._member_deactivate(rw, "Dana Cruz")
+    message = str(err.value)
+    assert "Acme" in message
+    assert "cascade" in message
+    # refused means nothing moved
+    assert len(team.for_org(rw, org.id)) == 1
+    assert team.list_members(rw, active_only=True)[0].name == "Dana Cruz"
+
+
+def test_member_deactivate_refuses_someone_already_inactive(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._member_deactivate(rw, "Dana Cruz")
+    with pytest.raises(ValueError) as err:
+        mcpserver._member_deactivate(rw, "Dana Cruz")
+    assert "already inactive" in str(err.value)
+
+
+def test_member_deactivate_cascade_removes_every_assignment(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._team_assign(rw, "Dana Cruz", client="Acme", lines="cyber")
+
+    out = mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+    assert out["active"] is False
+    assert out["unassigned"] == 1
+    assert team.for_org(rw, org.id) == []
+    assert team.list_members(rw, active_only=True) == []
+
+
+def test_cascade_is_ONE_batch_and_revert_restores_everything(server_db):
+    """The whole point of cascade over N separate unassigns: one undo unit."""
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._team_assign(rw, "Dana Cruz", client="Acme", lines="cyber")
+    mcpserver._team_assign(rw, "Dana Cruz", client="Acme", lines="property")
+
+    out = mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+    assert out["unassigned"] == 2
+    assert team.for_org(rw, org.id) == []
+
+    mcpserver._revert_batch(rw, out["batch"], now="2026-08-14T04:00:00Z")
+    assert len(team.for_org(rw, org.id)) == 2
+    assert team.list_members(rw, active_only=True)[0].name == "Dana Cruz"
+
+
+def test_cascade_on_someone_with_no_assignments_still_works(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    out = mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+    assert out["unassigned"] == 0
+    assert out["active"] is False
+
+
+def test_cascade_covers_deal_level_assignments_too(server_db):
+    from bookkit.repo import placements, team
+
+    rw, org = _rw(server_db)
+    placement = placements.create(rw, org.id, program_name="Tower GL",
+                                  period_from="2026-01-01",
+                                  period_to="2027-01-01")
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._team_assign(rw, "Dana Cruz", placement_ref=placement.ref)
+
+    out = mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+    assert out["unassigned"] == 1
+    assert team.for_org(rw, org.id) == []
+
+
+def test_cascade_tags_provenance_on_each_unassigned_assignment(server_db):
+    """A cascaded removal must leave the same source=mcp audit trail as a
+    standalone team_unassign — see _member_deactivate's cascade loop."""
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme", lines="cyber")
+    aid = assigned["assignment_id"]
+
+    mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+    assert team.for_org(rw, org.id) == []
+
+    events = rw.execute(
+        "SELECT * FROM event_log WHERE entity_id = ? AND field = 'source'",
+        (aid,)).fetchall()
+    assert events and events[0]["new_value"] == "mcp"
+
+
+def test_cascade_batch_has_no_org_id(server_db):
+    """Spec Decision 2: a cascade spans clients, so no single org owns the
+    batch — the client names go in the summary instead."""
+    from bookkit.repo import batches as batches_repo
+
+    rw, _org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._team_assign(rw, "Dana Cruz", client="Acme", lines="cyber")
+
+    out = mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+    assert batches_repo.get_by_ref(rw, out["batch"]).org_id is None
+
+
+def test_member_deactivate_is_registered(server_db):
+    server = build_server(server_db)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    assert "member_deactivate" in names
+
+
+def test_member_reactivate_brings_someone_back(server_db):
+    from bookkit.repo import team
+
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._member_deactivate(rw, "Dana Cruz")
+
+    out = mcpserver._member_reactivate(rw, "Dana Cruz")
+    assert out["active"] is True
+    assert out["batch"].startswith("MCP-")
+    assert [m.name for m in team.list_members(rw, active_only=True)] == ["Dana Cruz"]
+
+
+def test_member_reactivate_refuses_someone_already_active(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    with pytest.raises(ValueError) as err:
+        mcpserver._member_reactivate(rw, "Dana Cruz")
+    assert "already active" in str(err.value)
+
+
+def test_reactivate_does_NOT_resurrect_cascaded_assignments(server_db):
+    """Spec decision: revert_batch is the undo for a cascade. Half-restoring
+    would be worse than saying so."""
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._team_assign(rw, "Dana Cruz", client="Acme")
+    mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+
+    mcpserver._member_reactivate(rw, "Dana Cruz")
+    assert team.list_members(rw, active_only=True)[0].name == "Dana Cruz"
+    assert team.for_org(rw, org.id) == []      # assignments stay gone
+
+
+def test_edit_field_changes_an_assignment_role(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme",
+                                      role="analyst")
+    aid = assigned["assignment_id"]
+
+    out = mcpserver._edit_field(
+        rw, "team_assignment", aid, "role", "account_lead",
+        expecting="analyst",
+    )
+    assert out["batch"].startswith("MCP-")
+    assert team.for_org(rw, org.id)[0]["role"] == "account_lead"
+
+
+def test_edit_field_changes_an_assignment_lines(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme",
+                                      lines="cyber")
+    aid = assigned["assignment_id"]
+
+    out = mcpserver._edit_field(
+        rw, "team_assignment", aid, "lines", "cyber, property",
+        expecting="cyber",
+    )
+    assert out["batch"].startswith("MCP-")
+    assert team.for_org(rw, org.id)[0]["lines"] == "cyber, property"
+
+
+def test_edit_field_refuses_a_role_outside_the_vocabulary(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme",
+                                      role="analyst")
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_assignment", assigned["assignment_id"], "role",
+            "wizard", expecting="analyst",
+        )
+    assert "account_lead" in str(err.value)
+
+
+def test_edit_field_on_an_assignment_refuses_a_stale_expecting(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme",
+                                      role="analyst")
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_assignment", assigned["assignment_id"], "role",
+            "account_lead", expecting="claims_advocate",
+        )
+    assert "analyst" in str(err.value)
+    assert team.for_org(rw, org.id)[0]["role"] == "analyst"   # nothing written
+
+
+def test_edit_field_refuses_an_unknown_assignment_id(server_db):
+    rw, _ = _rw(server_db)
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_assignment", "NOPE", "lines", "cyber", expecting="x",
+        )
+    assert "team_roster" in str(err.value)
+
+
+def test_edit_field_refuses_rescoping_an_assignment(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme")
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_assignment", assigned["assignment_id"], "org_id",
+            "somewhere-else", expecting=None,
+        )
+    assert "not editable" in str(err.value)
+
+
+def test_edit_field_redirects_active_to_the_deactivate_tools(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_member", "Dana Cruz", "active", "no", expecting="yes",
+        )
+    message = str(err.value)
+    assert "member_deactivate" in message
+    assert "member_reactivate" in message
+
+
+def test_assignment_notes_round_trip_through_the_roster(server_db):
+    """notes is only editable if a read hands the model its current value —
+    compare-and-set has nothing to compare against otherwise."""
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme")
+    aid = assigned["assignment_id"]
+
+    dana = next(m for m in mcpserver._team_roster(rw)["members"]
+                if m["name"] == "Dana Cruz")
+    assert dana["assignments"][0]["notes"] is None
+
+    mcpserver._edit_field(rw, "team_assignment", aid, "notes",
+                          "covers the London tower", expecting=None)
+
+    dana = next(m for m in mcpserver._team_roster(rw)["members"]
+                if m["name"] == "Dana Cruz")
+    assert dana["assignments"][0]["notes"] == "covers the London tower"
+
+
+def test_edit_field_resolves_org_for_a_deal_level_assignment(server_db):
+    """A placement-scoped assignment has org_id NULL; the batch still has to
+    be stamped with the org, or the change is invisible to that client's
+    history."""
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import placements
+
+    rw, org = _rw(server_db)
+    placement = placements.create(rw, org.id, program_name="Tower GL",
+                                  period_from="2026-01-01",
+                                  period_to="2027-01-01")
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz",
+                                      placement_ref=placement.ref,
+                                      role="analyst")
+
+    out = mcpserver._edit_field(
+        rw, "team_assignment", assigned["assignment_id"], "role",
+        "account_lead", expecting="analyst",
+    )
+    assert batches_repo.get_by_ref(rw, out["batch"]).org_id == org.id
+
+
 # -- transitions --------------------------------------------------------------
 
 
@@ -1296,5 +1666,5 @@ def test_write_expansion_tools_are_registered(server_db):
         "edit_field", "contact_add", "opportunity_create", "project_create",
         "need_add", "member_create", "team_assign", "team_unassign",
         "team_roster", "opportunity_stage", "task_reopen",
-        "request_item_waive",
+        "request_item_waive", "member_deactivate", "member_reactivate",
     } <= names
