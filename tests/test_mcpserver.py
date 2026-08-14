@@ -1296,6 +1296,38 @@ def test_unassign_takes_exact_id_and_reverts(server_db):
     assert len(team.for_org(rw, org.id)) == 1
 
 
+def test_team_unassign_stamps_the_org_for_a_deal_level_assignment(server_db):
+    """A deal-level assignment carries only placement_id, so reading org_id
+    off the row leaves the batch unattributed — invisible in that client's
+    history. team_assign and edit_field both resolve it through the
+    placement; unassign has to agree."""
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import placements
+
+    rw, org = _rw(server_db)
+    placement = placements.create(rw, org.id, program_name="Tower GL",
+                                  period_from="2026-01-01",
+                                  period_to="2027-01-01")
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz",
+                                      placement_ref=placement.ref)
+
+    out = mcpserver._team_unassign(rw, assigned["assignment_id"])
+    assert batches_repo.get_by_ref(rw, out["batch"]).org_id == org.id
+
+
+def test_team_unassign_keeps_the_org_for_an_account_level_assignment(server_db):
+    """The account-level path must not regress while fixing the deal-level one."""
+    from bookkit.repo import batches as batches_repo
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme")
+
+    out = mcpserver._team_unassign(rw, assigned["assignment_id"])
+    assert batches_repo.get_by_ref(rw, out["batch"]).org_id == org.id
+
+
 def test_member_deactivate_retires_someone_with_no_assignments(server_db):
     from bookkit.repo import team
 
