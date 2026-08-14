@@ -1284,6 +1284,22 @@ def _find_member(conn: sqlite3.Connection, name: str) -> Any:
     return member
 
 
+def _guard_member_rename(
+    conn: sqlite3.Connection, member_id: str, new_name: str
+) -> None:
+    """Renaming onto a name someone else holds makes every member lookup
+    ambiguous — _find_member and _edit_target both take the first match — so
+    this refuses rather than letting a later write land on the wrong row."""
+    from .repo import team
+
+    for other in team.list_members(conn, active_only=False):
+        if other.id != member_id and other.name.lower() == new_name.lower():
+            raise ValueError(
+                f"team member {other.name} already holds that name — rename "
+                f"or deactivate them first"
+            )
+
+
 def _team_roster(conn: sqlite3.Connection) -> dict[str, Any]:
     from .repo import team
 
@@ -1496,8 +1512,8 @@ def _editable() -> dict[str, dict[str, Any]]:
             "category": "text", "due_on": "date",
         },
         "team_member": {
-            "title": "text", "specialty": "text", "email": "text",
-            "phone": "text", "notes": "text",
+            "name": "text", "title": "text", "specialty": "text",
+            "email": "text", "phone": "text", "notes": "text",
         },
         # role reuses team_assign's vocabulary so the two paths cannot drift.
         # org_id / placement_id are deliberately absent: re-scoping moves two
@@ -1666,6 +1682,8 @@ def _edit_field(
         )
 
     cleaned = _clean_typed(vtype, field, value)
+    if kind == "team_member" and field == "name":
+        _guard_member_rename(conn, entity_id, cleaned)
     with _open_batch(
         conn, tool="edit_field", org_id=org_id,
         summary=f"edited {kind}.{field} on {ref}",

@@ -1088,6 +1088,67 @@ def test_edit_field_team_member_by_exact_name(server_db):
     assert team.get_member(rw, member.id).specialty == "cyber, tech E&O"
 
 
+def test_edit_field_renames_a_member_by_their_old_name(server_db):
+    from bookkit.repo import team
+
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruze")
+
+    out = mcpserver._edit_field(
+        rw, "team_member", "Dana Cruze", "name", "Dana Cruz",
+        expecting="Dana Cruze",
+    )
+    assert out["batch"].startswith("MCP-")
+    names = [m.name for m in team.list_members(rw, active_only=False)]
+    assert names == ["Dana Cruz"]
+
+
+def test_rename_refuses_a_name_another_member_holds(server_db):
+    """Two members sharing a name makes every lookup ambiguous — _find_member
+    and _edit_target both take the first match."""
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._member_create(rw, "Sam Okafor")
+
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_member", "Sam Okafor", "name", "dana cruz",
+            expecting="Sam Okafor",
+        )
+    assert "Dana Cruz" in str(err.value)
+
+
+def test_rename_refuses_a_name_an_INACTIVE_member_holds(server_db):
+    """Inactive members still resolve in _find_member (active_only=False), so
+    they collide just as hard as active ones."""
+    from bookkit.repo import base, team
+
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._member_create(rw, "Sam Okafor")
+    gone = next(m for m in team.list_members(rw, active_only=False)
+                if m.name == "Dana Cruz")
+    base.update(rw, "team_member", gone.id, {"active": 0})
+
+    with pytest.raises(ValueError):
+        mcpserver._edit_field(
+            rw, "team_member", "Sam Okafor", "name", "Dana Cruz",
+            expecting="Sam Okafor",
+        )
+
+
+def test_renaming_to_the_same_name_is_not_a_self_collision(server_db):
+    """The guard must exclude the member being renamed, or a no-op rename
+    reports a collision with itself."""
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    out = mcpserver._edit_field(
+        rw, "team_member", "Dana Cruz", "name", "Dana  Cruz",
+        expecting="Dana Cruz",
+    )
+    assert out["batch"].startswith("MCP-")
+
+
 # -- creates ------------------------------------------------------------------
 
 
