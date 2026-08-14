@@ -335,3 +335,86 @@ def test_merge_refuses_two_file_backed(conn, client, tmp_path: Path) -> None:
 def test_program_link_source_migration(conn) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(program_link)").fetchall()}
     assert "source" in cols
+
+
+def test_renamed_line_does_not_duplicate_its_opportunity(conn, client, tmp_path: Path) -> None:
+    """towerkit ids follow renames now (towerkit 67ac42f): fixing a typo in a
+    line's name re-slugs its id, and every appliesTo in the file follows. The
+    opportunity created before the rename still holds the OLD id, so an exact
+    dedupe would re-offer the line and the next sync would create a duplicate.
+    A near-identical id on the same effective date is the same line."""
+    prog = make_program(
+        "Test Client, Inc.", "2027-01-01", "2028-01-01",
+        placed=False, tbd_line=True,
+    )
+    # the typo'd id, as it was when the opportunity was created
+    prog.lines[1] = Line(id="cybr", name="Cybr", abbr="CY")
+    prog.layers[1] = Layer(
+        id="primary-cy", name="Primary Cyber", applies_to=["cybr"],
+        attach=0, limit=5_000_000, premium=400_000, participants=[],
+    )
+    prog.retentions = [
+        Retention(applies_to=[ln.id], type=RetentionType.DEDUCTIBLE, amount=100_000)
+        for ln in prog.lines
+    ]
+    path = write_program(tmp_path / "p" / "proposed.json", prog)
+    assert sync.confirm_link(conn, path, client.id).ok
+    (candidate,) = sync.opportunities_for_path(conn, path)
+    sync.create_opportunity(conn, candidate)  # stores lines="cybr"
+
+    # Grant fixes the typo in towerkit: id follows, references cascade
+    prog.lines[1] = Line(id="cyber", name="Cyber", abbr="CY")
+    prog.layers[1] = Layer(
+        id="primary-cy", name="Primary Cyber", applies_to=["cyber"],
+        attach=0, limit=5_000_000, premium=400_000, participants=[],
+    )
+    prog.retentions = [
+        Retention(applies_to=[ln.id], type=RetentionType.DEDUCTIBLE, amount=100_000)
+        for ln in prog.lines
+    ]
+    write_program(path, prog)
+
+    assert sync.opportunities_for_path(conn, path) == [], (
+        "a renamed line must not re-offer the opportunity it already has"
+    )
+
+
+def test_a_genuinely_new_line_is_still_offered(conn, client, tmp_path: Path) -> None:
+    """The fuzzy bridge must not swallow real new lines."""
+    prog = make_program(
+        "Test Client, Inc.", "2027-01-01", "2028-01-01",
+        placed=False, tbd_line=True,
+    )
+    path = write_program(tmp_path / "p" / "proposed.json", prog)
+    assert sync.confirm_link(conn, path, client.id).ok
+    (candidate,) = sync.opportunities_for_path(conn, path)
+    sync.create_opportunity(conn, candidate)          # cyber is now tracked
+
+    # a genuinely different unplaced line appears
+    prog.lines.append(Line(id="el", name="Employers Liability", abbr="EL"))
+    prog.layers.append(Layer(
+        id="primary-el", name="Primary EL", applies_to=["el"],
+        attach=0, limit=1_000_000, premium=50_000, participants=[],
+    ))
+    prog.retentions = []
+    write_program(path, prog)
+
+    offered = [c.line_id for c in sync.opportunities_for_path(conn, path)]
+    assert offered == ["el"]
+
+
+def test_rename_cutoff_boundaries_hold() -> None:
+    """The bridge's floor sits between real-world clusters: one-typo id fixes
+    score above it, genuinely distinct sibling lines below. If rapidfuzz's
+    scoring shifts under an upgrade, this is the test that says so."""
+    from rapidfuzz import fuzz
+
+    from bookkit.sync import _RENAME_CUTOFF
+
+    # same line, typo fixed — must bridge
+    assert fuzz.ratio("cybr", "cyber") >= _RENAME_CUTOFF
+    assert fuzz.ratio("genral-liability", "general-liability") >= _RENAME_CUTOFF
+    # different lines — must NOT bridge
+    assert fuzz.ratio("cyber", "cyber-2") < _RENAME_CUTOFF
+    assert fuzz.ratio("property", "property-dic") < _RENAME_CUTOFF
+    assert fuzz.ratio("auto-liability", "general-liability") < _RENAME_CUTOFF

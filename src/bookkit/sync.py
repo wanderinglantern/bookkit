@@ -507,7 +507,7 @@ def opportunities_for_path(conn: sqlite3.Connection, path: Path) -> list[Opportu
         pending = [ly for ly in line_layers if not ly.participants]
         if not line_layers or not pending:
             continue
-        if (line.id, effective) in existing:
+        if _line_already_tracked(line, effective, existing):
             continue
         premiums = [ly.premium for ly in pending if ly.premium is not None]
         out.append(
@@ -523,6 +523,41 @@ def opportunities_for_path(conn: sqlite3.Connection, path: Path) -> list[Opportu
             )
         )
     return out
+
+
+# fuzz.ratio floor for "same line, id re-slugged". Measured, not guessed:
+# one-typo fixes score >=88 ("cybr"/"cyber" 88.9, "genral-liability"/
+# "general-liability" 97) while genuinely distinct siblings top out at 83
+# ("cyber"/"cyber-2" 83.3, "property"/"property-dic" 80). Both boundaries
+# are pinned in test_linking_flow.py.
+_RENAME_CUTOFF = 85
+
+
+def _line_already_tracked(
+    line: Any, effective: str, existing: set[tuple[str | None, str | None]]
+) -> bool:
+    """Does an opportunity already cover this line for this effective date?
+
+    Exact id match first. Then the rename bridge: towerkit line ids follow
+    their names now (towerkit 67ac42f), so a typo fix re-slugs the id and an
+    exact-only dedupe would create a DUPLICATE opportunity on the next sync.
+    A near-identical stored key ("cybr" vs "cyber") on the same effective
+    date is the same line; a genuinely different line ("cyber" vs
+    "employers-liability") scores nowhere near the cutoff. The line's display
+    name is also accepted for TUI-authored opportunities, which store names
+    rather than slugs."""
+    from rapidfuzz import fuzz
+
+    if (line.id, effective) in existing:
+        return True
+    for stored, when in existing:
+        if when != effective or not stored:
+            continue
+        if stored == line.name:
+            return True
+        if fuzz.ratio(stored, line.id) >= _RENAME_CUTOFF:
+            return True
+    return False
 
 
 def create_opportunity(conn: sqlite3.Connection, candidate: OpportunityCandidate) -> Opportunity:
