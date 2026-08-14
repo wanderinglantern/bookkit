@@ -66,6 +66,45 @@ def test_sync_projects_and_reports(cli_db: Path, tmp_path: Path, capsys) -> None
     assert "not linked" in out
 
 
+def _seeded_programs(cli_db: Path, tmp_path: Path) -> Path:
+    """Three linked program files plus the book that knows about them."""
+    from datetime import date
+
+    from bookkit import seed
+
+    main(["init"])
+    programs = tmp_path / "programs"
+    conn = db.connect(cli_db)
+    seed.seed(conn, today=date(2026, 8, 11), programs_dir=programs)
+    conn.close()
+    return programs
+
+
+def test_sync_one_path_projects_only_that_file(cli_db: Path, tmp_path: Path, capsys) -> None:
+    """The towerkit MCP's post-write hook calls this per file — a full roots
+    scan after every design edit would be absurd."""
+    programs = _seeded_programs(cli_db, tmp_path)
+    target = programs / "atomic-casualty.json"
+
+    assert main(["sync", "--path", str(target)]) == 0
+    out = capsys.readouterr().out
+    assert "atomic-casualty.json" in out
+    assert "✓" in out
+
+
+def test_sync_one_path_reports_an_unlinked_file_without_crashing(
+    cli_db: Path, tmp_path: Path, capsys
+) -> None:
+    import shutil
+
+    programs = _seeded_programs(cli_db, tmp_path)
+    orphan = tmp_path / "orphan.json"
+    shutil.copy(programs / "atomic-casualty.json", orphan)
+
+    assert main(["sync", "--path", str(orphan)]) == 1
+    assert "link" in capsys.readouterr().out.lower()
+
+
 def test_backup(cli_db: Path, tmp_path: Path, capsys) -> None:
     main(["init"])
     dest = tmp_path / "out" / "backup.db"
