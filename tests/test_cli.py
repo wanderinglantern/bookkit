@@ -199,3 +199,29 @@ def test_connector_info_honours_an_explicit_db_override(tmp_path, capsys) -> Non
     assert main(["--db", str(path), "mcp", "--connector-info"]) == 0
 
     assert f"--db, {path}, mcp" in capsys.readouterr().out
+
+
+def test_roots_json_is_machine_readable(cli_db: Path, tmp_path: Path, capsys) -> None:
+    """towerctl reads this to fill its own connector config, so the human
+    format ("<root>  (N program file(s))") is not good enough."""
+    import json
+
+    programs = tmp_path / "programs"
+    programs.mkdir()
+    main(["roots", str(programs)])
+    capsys.readouterr()
+
+    assert main(["roots", "--json"]) == 0
+
+    assert json.loads(capsys.readouterr().out) == {"roots": [str(programs)]}
+
+
+def test_roots_json_stays_clean_when_nothing_is_configured(cli_db: Path, capsys) -> None:
+    """Guard on the cross-program contract: the human path prints a sentence
+    here, and a stray sentence would make towerctl's parse fail rather than
+    fall back."""
+    import json
+
+    assert main(["roots", "--json"]) == 0
+
+    assert json.loads(capsys.readouterr().out) == {"roots": []}

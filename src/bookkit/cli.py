@@ -4,6 +4,7 @@ work headless so the daily brief can be piped anywhere."""
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import sys
 from datetime import date
@@ -57,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
     roots_p = sub.add_parser("roots", help="show or set the program file locations")
     roots_p.add_argument("paths", type=Path, nargs="*",
                          help="directories to save (omit to show current)")
+    roots_p.add_argument("--json", action="store_true",
+                         help="emit {\"roots\": [...]} for other tools to read")
 
     backup_p = sub.add_parser("backup", help="timestamped copy + integrity check")
     backup_p.add_argument("--dest", type=Path, default=None)
@@ -237,6 +240,11 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
                 conn, [str(p.expanduser()) for p in args.paths]
             )
         roots = sync.configured_roots(conn)
+        if args.json:
+            # towerctl mcp --connector-info parses this; keep it the only thing
+            # on stdout, including when nothing is configured.
+            print(json.dumps({"roots": [str(r) for r in roots]}))
+            return 0
         if not roots:
             print("no program roots configured")
         for root in roots:
