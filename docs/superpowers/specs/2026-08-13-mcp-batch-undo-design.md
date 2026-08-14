@@ -153,8 +153,8 @@ The tool returns an error telling the model to narrow its request.
 Enforced at the lowest level, so no future write tool can forget it. The cap
 counts **entities, not events** — a three-field edit on one placement is 1.
 
-**REVIEW POINT: the cap defaults to 25 entities.** That number is a judgement,
-not a derivation.
+**The cap defaults to 50 entities** (Grant, 2026-08-13 — reviewed up from the
+build's initial 25; a judgement, not a derivation).
 
 ## Surfaces
 

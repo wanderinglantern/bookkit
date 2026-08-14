@@ -23,9 +23,9 @@ from pathlib import Path
 
 _MIGRATION_RE = re.compile(r"^(\d{3})_.+\.sql$")
 
-BLAST_CAP = 25
+BLAST_CAP = 50
 """Most entities one batched writer action may touch before it is refused.
-A judgement, not a derivation — REVIEW POINT in the batch-undo design doc."""
+Grant's call, 2026-08-13 (was 25 pending his review)."""
 
 
 class BlastRadiusExceeded(Exception):
