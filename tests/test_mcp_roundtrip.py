@@ -83,3 +83,33 @@ async def test_rfi_write_tools_are_wired_to_a_writable_connection(tmp_path):
     assert [i.prompt for i in items] == ["loss runs", "vehicle schedule"]
     stored = rfi_repo.get_item(check, item_ref)
     assert (stored.status, stored.response) == ("received", "attached")
+
+
+async def test_batch_tools_round_trip_over_protocol(tmp_path):
+    """log_activity -> list_batches -> revert_batch over real protocol: the
+    interaction is gone afterwards. This harness is what caught the sync-tool
+    thread-dispatch bug the unit tests could not see."""
+    path = tmp_path / "rt.db"
+    conn = db.connect(path)
+    org = orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    server = build_server(path)
+
+    from mcp.client import Client
+
+    async with Client(server) as client:
+        logged = _payload(await client.call_tool(
+            "log_activity", {"client": "Acme", "note": "logged in error"}))
+        assert logged["batch"].startswith("MCP-")
+
+        listed = _payload(await client.call_tool("list_batches", {}))
+        assert listed["result"][0]["ref"] == logged["batch"]
+
+        reverted = _payload(await client.call_tool(
+            "revert_batch", {"ref": logged["batch"]}))
+        assert reverted["applied"] is True
+
+    check = db.connect(path)
+    from bookkit.repo import interactions
+    assert interactions.for_org(check, org.id) == []
+    check.close()

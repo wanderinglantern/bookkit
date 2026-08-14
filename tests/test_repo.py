@@ -376,3 +376,64 @@ def test_task_category_round_trips_and_feeds_vocab(conn):
     tasks.create(conn, "send COI", category="Certificates")
     tasks.create(conn, "misc")  # no category
     assert vocab.task_categories(conn) == ["Certificates", "Renewal"]
+
+
+# -- event batches (MCP undo units) ------------------------------------------
+
+
+def test_event_batch_round_trips_and_lists_recent(conn):
+    from bookkit.repo import batches
+
+    client = orgs.create(conn, kind="client", name="Acme")
+    made = batches.create(
+        conn, batch_id="01BATCHONE", source="mcp", tool="log_activity",
+        summary="logged a call", org_id=client.id,
+    )
+    assert made.ref.startswith("MCP-")
+    assert made.reverted_at is None
+
+    got = batches.get_by_ref(conn, made.ref)
+    assert got.id == "01BATCHONE"
+    assert got.tool == "log_activity"
+
+    listed = batches.recent(conn, since="2000-01-01T00:00:00Z")
+    assert [b.id for b in listed] == ["01BATCHONE"]
+
+
+def test_event_batch_get_by_ref_raises_on_unknown(conn):
+    from bookkit.repo import batches
+
+    with pytest.raises(KeyError):
+        batches.get_by_ref(conn, "MCP-9999")
+
+
+def test_mark_reverted_stamps_the_batch(conn):
+    from bookkit.repo import batches
+
+    made = batches.create(
+        conn, batch_id="01BATCHTWO", source="mcp", tool="task_create",
+        summary="made a task", org_id=None,
+    )
+    batches.mark_reverted(conn, made.id, "2026-08-13T18:00:00Z")
+    assert batches.get_by_ref(conn, made.ref).reverted_at == "2026-08-13T18:00:00Z"
+
+
+def test_events_for_returns_only_that_batch_in_order(conn):
+    from bookkit.repo import batches
+
+    batches.create(conn, batch_id="01BATCHTHREE", source="mcp", tool="t",
+                   summary="s", org_id=None)
+    for eid, fld, old, new, bid in (
+        ("e1", "title", "a", "b", "01BATCHTHREE"),
+        ("e2", "due_on", None, "2026-09-01", "01BATCHTHREE"),
+        ("e3", "title", "x", "y", None),
+    ):
+        conn.execute(
+            "INSERT INTO event_log (id, entity_type, entity_id, field,"
+            " old_value, new_value, changed_at, note, batch_id)"
+            " VALUES (?, 'task', 't1', ?, ?, ?, '2026-08-13T10:00:00Z', NULL, ?)",
+            (eid, fld, old, new, bid),
+        )
+    got = batches.events_for(conn, "01BATCHTHREE")
+    assert [e.id for e in got] == ["e1", "e2"]
+    assert got[0].batch_id == "01BATCHTHREE"

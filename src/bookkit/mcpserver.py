@@ -47,14 +47,16 @@ single-client stdio usage.
 from __future__ import annotations
 
 import sqlite3
-from datetime import date
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
 from . import db
-from .models import RfiItem, RfiRequest
+from .models import EventBatch, RfiItem, RfiRequest
 from .services.renewals import RenewalItem
 
 # score_cutoff for the client_create duplicate guard (rapidfuzz WRatio,
@@ -323,6 +325,24 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
             placement_ref=placement_ref, project_ref=project_ref,
         )
 
+    @server.tool()
+    async def list_batches(limit: int = 20) -> list[dict[str, Any]]:
+        """Recent changes THIS server made, newest first, each with the `ref`
+        that `revert_batch` takes. Covers the last 14 days. Use it to show the
+        user what you changed, or to find a change that needs putting back."""
+        return _list_batches(rw, date.today(), limit=limit)
+
+    @server.tool()
+    async def revert_batch(ref: str, force: bool = False) -> dict[str, Any]:
+        """Undo one batched change by its `ref` (from `list_batches` or from
+        any write tool's return). Refuses and lists the blockers if the user
+        has changed any of those fields since — pass force=true ONLY if the
+        user has said to revert the rest anyway. `applied: false` means
+        nothing was written."""
+        from .db import utc_now
+
+        return _revert_batch(rw, ref, now=utc_now(), force=force)
+
 
 def _today_brief(conn: sqlite3.Connection) -> dict[str, Any]:
     from .dates import days_until
@@ -487,6 +507,23 @@ def _resolve_client(conn: sqlite3.Connection, ref_or_name: str) -> Any:
     raise ValueError(f"no client matching {ref_or_name!r} — nearest: {hint}")
 
 
+@contextmanager
+def _open_batch(
+    conn: sqlite3.Connection, *, tool: str, summary: str, org_id: str | None = None
+) -> Iterator[EventBatch]:
+    """One MCP call, one undo unit. Opens the transaction AND the batch, so
+    every event written inside is grouped and revertible together (and counted
+    against the blast cap)."""
+    from .repo import batches as batches_repo
+
+    batch_id = batches_repo.new_batch_id()
+    with db.transaction(conn, batch=db.BatchState(batch_id=batch_id)):
+        yield batches_repo.create(
+            conn, batch_id=batch_id, source="mcp", tool=tool,
+            summary=summary, org_id=org_id,
+        )
+
+
 def _provenance(conn: sqlite3.Connection, entity: str, entity_id: str) -> None:
     from .repo import base
 
@@ -507,7 +544,11 @@ def _log_activity(
         if parsed is None:
             raise ValueError(f"cannot read a date from {follow_up!r}")
         due = parsed.isoformat()
-    with db.transaction(conn):
+    with _open_batch(
+        conn, tool="log_activity", org_id=org.id,
+        summary=f"logged a note on {org.name}"
+        + (" with a follow-up task" if due else ""),
+    ) as batch:
         interaction = interactions.log(
             conn, org.id, type="note",
             occurred_on=date.today().isoformat(),
@@ -520,7 +561,8 @@ def _log_activity(
                 conn, f"Follow up: {note[:60]}", org_id=org.id, due_on=due)
             _provenance(conn, "task", task.id)
     return {"org_id": org.id, "interaction_ref": interaction.id,
-            "follow_up_task": task.id if task else None}
+            "follow_up_task": task.id if task else None,
+            "batch": batch.ref}
 
 
 def _recent_activity(
@@ -551,12 +593,16 @@ def _activity_delete(conn: sqlite3.Connection, interaction_ref: str) -> dict[str
     interactions.get filters on aliveness and raises KeyError instead."""
     from .repo import interactions
 
-    with db.transaction(conn):
-        interaction = interactions.get(conn, interaction_ref)  # KeyError → tool error
+    interaction = interactions.get(conn, interaction_ref)  # KeyError → tool error
+    with _open_batch(
+        conn, tool="activity_delete", org_id=interaction.org_id,
+        summary=f"deleted activity: {interaction.subject}",
+    ) as batch:
         interactions.delete(conn, interaction.id)
         _provenance(conn, "interaction", interaction.id)
     return {"interaction_ref": interaction.id, "deleted": True,
-            "subject": interaction.subject, "undo": "u in the TUI restores it"}
+            "subject": interaction.subject, "undo": "u in the TUI restores it",
+            "batch": batch.ref}
 
 
 def _task_create(
@@ -583,10 +629,14 @@ def _task_create(
         if parsed is None:
             raise ValueError(f"cannot read a date from {due!r}")
         fields["due_on"] = parsed.isoformat()
-    with db.transaction(conn):
+    with _open_batch(
+        conn, tool="task_create", org_id=fields.get("org_id"),
+        summary=f"created task: {title}",
+    ) as batch:
         task = tasks_repo.create(conn, title, **fields)
         _provenance(conn, "task", task.id)
-    return {"task_ref": task.id, "title": task.title, "due": task.due_on}
+    return {"task_ref": task.id, "title": task.title, "due": task.due_on,
+            "batch": batch.ref}
 
 
 def _task_complete(conn: sqlite3.Connection, task_ref: str) -> dict[str, Any]:
@@ -594,10 +644,15 @@ def _task_complete(conn: sqlite3.Connection, task_ref: str) -> dict[str, Any]:
     open_items/today_brief — no fuzzy title matching, by design."""
     from .repo import tasks as tasks_repo
 
-    with db.transaction(conn):
-        task = tasks_repo.complete(conn, task_ref)  # KeyError on unknown → tool error
+    task = tasks_repo.get(conn, task_ref)  # KeyError on unknown → tool error
+    with _open_batch(
+        conn, tool="task_complete", org_id=task.org_id,
+        summary=f"completed task: {task.title}",
+    ) as batch:
+        task = tasks_repo.complete(conn, task_ref)
         _provenance(conn, "task", task.id)
-    return {"task_ref": task.id, "status": task.status, "completed_at": task.completed_at}
+    return {"task_ref": task.id, "status": task.status,
+            "completed_at": task.completed_at, "batch": batch.ref}
 
 
 def _client_create(
@@ -624,7 +679,11 @@ def _client_create(
             f"client use enrich_field/log_activity on it; if genuinely new, "
             f"retry with a more distinct name")
 
-    with db.transaction(conn):
+    # org_id=None: the org is created INSIDE the batch, so its id is not
+    # known when the batch row is written.
+    with _open_batch(
+        conn, tool="client_create", summary=f"created client {name}",
+    ) as batch:
         org = orgs.create(conn, name=name, kind="client")
         _provenance(conn, "org", org.id)
         for c in contacts_in or []:
@@ -648,7 +707,8 @@ def _client_create(
                 description=t.get("description"), detail=t.get("detail"))
             _provenance(conn, "task", task.id)
     return {"org_ref": org.ref, "name": org.name,
-            "contacts": len(contacts_in or []), "tasks": len(tasks_in or [])}
+            "contacts": len(contacts_in or []), "tasks": len(tasks_in or []),
+            "batch": batch.ref}
 
 
 # Route enrich_field values through the SAME cleaners the forms use
@@ -704,13 +764,18 @@ def _enrich_field(
             f"{org.name}{' / ' + target.name if contact else ''} already has "
             f"{field}={current!r} — fill-blanks-only, edits happen in the TUI")
     cleaned = _clean_field_value(field, value)
-    with db.transaction(conn):
+    with _open_batch(
+        conn, tool="enrich_field", org_id=org.id,
+        summary=f"set {field} on {org.name}"
+        + (f" / {target.name}" if contact else ""),
+    ) as batch:
         if kind == "org":
             orgs.update(conn, target.id, note="mcp enrich", **{field: cleaned})
         else:
             contacts_repo.update(conn, target.id, note="mcp enrich", **{field: cleaned})
         _provenance(conn, kind, target.id)
-    return {"set": True, "entity": kind, "field": field, "value": cleaned}
+    return {"set": True, "entity": kind, "field": field, "value": cleaned,
+            "batch": batch.ref}
 
 
 def _request_item_received(
@@ -722,9 +787,13 @@ def _request_item_received(
     from .repo import rfi as rfi_repo
     from .services import rfi as rfi_svc
 
-    with db.transaction(conn):
-        # KeyError on an unknown id (base.update) → tool error, never a
-        # silently-created row
+    # KeyError on an unknown id → tool error, never a silently-created row
+    found = rfi_repo.get_item(conn, item_ref)
+    with _open_batch(
+        conn, tool="request_item_received",
+        org_id=rfi_repo.get_request(conn, found.request_id).org_id,
+        summary=f"received an item: {found.prompt[:60]}",
+    ) as batch:
         item = rfi_svc.mark_received(conn, item_ref, date.today().isoformat())
         if response:
             item = rfi_repo.update_item(conn, item.id, response=response)
@@ -740,6 +809,7 @@ def _request_item_received(
         "request_ref": request.ref,
         "open_count": open_count,
         "total_count": total_count,
+        "batch": batch.ref,
     }
 
 
@@ -812,7 +882,10 @@ def _request_create(
         fields["project_id"] = project.id
 
     prompts = [prompt for text in items for prompt in split_items(text)]
-    with db.transaction(conn):
+    with _open_batch(
+        conn, tool="request_create", org_id=org.id,
+        summary=f"created request {title!r} for {org.name}",
+    ) as batch:
         request = rfi_repo.create_request(
             conn, org.id, title, date.today().isoformat(), **fields)
         _provenance(conn, "rfi_request", request.id)
@@ -823,7 +896,56 @@ def _request_create(
             item = rfi_repo.add_item(conn, request.id, prompt)
             _provenance(conn, "rfi_item", item.id)
     return {"request_ref": request.ref, "account": org.name,
-            "item_count": len(prompts)}
+            "item_count": len(prompts), "batch": batch.ref}
+
+
+def _list_batches(
+    conn: sqlite3.Connection, today: date, limit: int = 20, days: int = 14
+) -> list[dict[str, Any]]:
+    """Recent batched writes, newest first — what this server changed and
+    whether it has been put back."""
+    from .repo import batches as batches_repo
+    from .repo import orgs as orgs_repo
+
+    since = (today - timedelta(days=days)).isoformat()
+    out = []
+    for batch in batches_repo.recent(conn, since=since, limit=limit):
+        account = None
+        if batch.org_id:
+            try:
+                account = orgs_repo.get(conn, batch.org_id).name
+            except KeyError:
+                account = "(deleted account)"
+        out.append({
+            "ref": batch.ref, "tool": batch.tool, "summary": batch.summary,
+            "account": account, "at": batch.created_at,
+            "reverted": batch.reverted_at is not None,
+        })
+    return out
+
+
+def _revert_batch(
+    conn: sqlite3.Connection, ref: str, now: str, force: bool = False
+) -> dict[str, Any]:
+    """Undo one batched write. Refuses outright if anything in it was changed
+    since, listing what blocks it — never a partial write unless forced."""
+    from .services import batches as batches_svc
+
+    result = batches_svc.revert(conn, ref, now=now, force=force)
+    return {
+        "ref": result.batch.ref,
+        "applied": result.applied,
+        "reverted": [
+            {"entity": c.entity_type, "id": c.entity_id, "field": c.field}
+            for c in result.reverted
+        ],
+        "refused": [
+            {"entity": c.change.entity_type, "id": c.change.entity_id,
+             "field": c.change.field, "batch_set": c.change.new_value,
+             "current": c.current_value}
+            for c in result.refused
+        ],
+    }
 
 
 def _requests_to_chase(conn: sqlite3.Connection, days: int = 120) -> list[dict[str, Any]]:

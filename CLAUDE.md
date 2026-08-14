@@ -15,6 +15,12 @@
 - The connection is AUTOCOMMIT (isolation_level=None): real transactions
   need `with db.transaction(conn):` (BEGIN IMMEDIATE). conn.commit()
   outside it is a no-op — this has bitten before.
+- One MCP call is ONE undo unit: db.transaction(batch=) stamps every event
+  with a batch_id; services/batches.py reverts a batch all-or-nothing,
+  refusing when a field changed since ("surface, don't guess"). Blast cap
+  db.BLAST_CAP=25 entities per batch, enforced under log_event so no tool
+  can forget it. `u` stays single-step/field-granular for TUI writes;
+  imports/commit.py is unbatched on purpose (snapshot is its rollback).
 - Backups before bulk writes: importers snapshot the DB (db.backup) into
   backups/ before the first row changes. Migrations are additive-only so
   far; call out anything destructive before writing it.
