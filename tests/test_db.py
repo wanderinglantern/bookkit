@@ -218,19 +218,20 @@ def test_blast_cap_counts_entities_not_events(tmp_path):
     assert orgs.get(conn, org.id).domain == "a.example"
 
 
-def test_blast_cap_defaults_to_50(tmp_path):
-    """50 is Grant's call (2026-08-13) — this pins that a refactor doesn't
+def test_blast_cap_defaults_to_250(tmp_path):
+    """250 is Grant's call (2026-08-14) — this pins that a refactor doesn't
     silently change how big an MCP write can get."""
     from bookkit import db
 
-    assert db.BLAST_CAP == 50
-    assert db.BatchState(batch_id="01B").cap == 50
+    assert db.BLAST_CAP == 250
+    assert db.BatchState(batch_id="01B").cap == 250
 
 
 def test_connect_sets_a_busy_timeout(tmp_path):
-    """F2: SQLite's default busy timeout is 0, so the TUI and the MCP server —
-    which both open read-write connections to the same file — collide instantly
-    instead of waiting. Pin that the timeout is configured on both factories."""
+    """F2, as REDUCED: this value is also Python's sqlite3 default, so the
+    guarantee already held — what was missing is anything pinning it. The TUI
+    and the MCP server both hold read-write connections to the same file, so a
+    driver swap or a stray timeout= silently reintroduces 'database is locked'."""
     from bookkit import db
 
     path = tmp_path / "timeout.db"
@@ -248,9 +249,10 @@ def test_connect_sets_a_busy_timeout(tmp_path):
 
 
 def test_a_second_writer_waits_for_the_lock_instead_of_failing(tmp_path):
-    """F2, the behaviour the pragma buys: while one connection holds the write
-    lock, a second write blocks and then succeeds. Without busy_timeout this
-    raises 'database is locked' immediately."""
+    """F2, characterisation: while one connection holds the write lock, a
+    second write blocks and then succeeds rather than raising. This passed
+    before BUSY_TIMEOUT_MS existed — which is how the original P0 finding was
+    disproved — and it is here so the guarantee stops being accidental."""
     import threading
 
     from bookkit import db
