@@ -10,18 +10,27 @@ if TYPE_CHECKING:
 
 from datetime import date
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Grid, Vertical
+from textual.containers import Grid, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Static
 
 from ...dates import days_until
-from ...money import format_cents_compact
 from ...repo import tasks as tasks_repo
 from ...services import renewals, sla, staleness
+from .. import theme
+from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.tables import ListTable
+
+# Below this width the 2x2 grid gives each pane ~36 cells for up to seven
+# columns, which is where an overdue "-345" used to truncate to "-". One
+# column and a scroll beats four unreadable quadrants (review F4).
+TWO_COLUMN_MIN_WIDTH = 100
+# rows per pane when stacked: title, header, and ~9 rows of work
+PANE_HEIGHT = 12
 
 
 class TodayScreen(Screen):
@@ -44,7 +53,7 @@ class TodayScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        with Grid(id="today-grid"):
+        with VerticalScroll(id="today-scroll"), Grid(id="today-grid"):
             with Vertical(classes="pane"):
                 yield Static("TASKS DUE & OVERDUE", classes="pane-title")
                 yield ListTable(id="tasks-table")
@@ -60,6 +69,7 @@ class TodayScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._apply_layout(self.size.width)
         self.refresh_data()
         self.query_one("#tasks-table", ListTable).focus()
         from ...repo import orgs
@@ -75,10 +85,9 @@ class TodayScreen(Screen):
 
         tasks_table = self.query_one("#tasks-table", ListTable)
         tasks_table.clear(columns=True)
-        tasks_table.add_columns("due", "task", "account")
+        tasks_table.add_columns("due", right("due in"), "task", "account")
         for task in tasks_repo.open_tasks(conn, due_by=today.isoformat()):
             overdue = days_until(task.due_on, today) if task.due_on else 0
-            label = f"{-overdue}d late" if overdue < 0 else "today"
             org_name = ""
             if task.org_id:
                 from ...repo import orgs
@@ -88,67 +97,96 @@ class TodayScreen(Screen):
                 except KeyError:
                     org_name = "(deleted account)"
             row_key = f"task:{task.id}:{task.org_id or ''}"
-            tasks_table.add_row(label, task.title, org_name, key=row_key)
+            due = date_text(task.due_on, overdue) if task.due_on else dash()
+            tasks_table.add_row(
+                due, days_text(overdue), task.title, org_name, key=row_key
+            )
 
         renewals_table = self.query_one("#renewals-table", ListTable)
         renewals_table.clear(columns=True)
         renewals_table.add_columns(
-            "expiry", "d", "account", "program", "lines", "status", "premium"
+            "expiry", right("due in"), "account", "program", "lines", "status",
+            right("premium"),
         )
         for item in renewals.upcoming(conn, today, days=120):
             renewals_table.add_row(
-                item.placement.period_to,
-                str(item.days_remaining),
+                date_text(item.placement.period_to, item.days_remaining),
+                days_text(item.days_remaining),
                 item.org.name,
                 item.placement.program_name,
-                item.lines or "—",
-                item.placement.status,
-                format_cents_compact(item.placement.total_premium)
-                if item.placement.total_premium
-                else "—",
+                item.lines or dash(),
+                status_text(item.placement.status),
+                money_text(item.placement.total_premium),
                 key=f"renewal:{item.placement.id}:{item.org.id}",
             )
         from ...repo import projects as projects_repo
 
         for need in projects_repo.needs_due(conn, today, days=120):
             # a project's insurance-needed-by is the same class of attention
+            days = days_until(need["needed_by"], today)
             renewals_table.add_row(
-                need["needed_by"],
-                str(days_until(need["needed_by"], today)),
+                date_text(need["needed_by"], days),
+                days_text(days),
                 need["org_name"],
                 f"{need['project_name']} (need)",
                 need["line"],
-                need["status"],
-                format_cents_compact(need["limit_cents"]) if need["limit_cents"] else "—",
+                status_text(need["status"]),
+                money_text(need["limit_cents"]),
                 key=f"need:{need['id']}:{need['org_id']}",
             )
 
         stale_table = self.query_one("#stale-table", ListTable)
         stale_table.clear(columns=True)
-        stale_table.add_columns("account", "last touch", "stale", "premium")
+        stale_table.add_columns(
+            "account", "last touch", right("stale"), right("premium")
+        )
         for account in staleness.stale_accounts(conn, today):
             stale_table.add_row(
                 account.org.name,
-                account.last_interaction_on or "never",
-                f"{account.days_stale}d",
-                format_cents_compact(account.premium) if account.premium else "—",
+                account.last_interaction_on or Text("never", style=theme.DIM),
+                # negative days: staleness is time ALREADY elapsed, so it reads
+                # in the same red-and-glyph grammar as an overdue renewal
+                days_text(-account.days_stale),
+                money_text(account.premium),
                 key=f"stale:{account.org.id}:{account.org.id}",
             )
 
         sla_table = self.query_one("#sla-table", ListTable)
         sla_table.clear(columns=True)
-        sla_table.add_columns("market", "account", "sent", "out")
+        sla_table.add_columns("market", "account", "sent", right("out"))
         for late in sla.past_sla(conn, today):
             sla_table.add_row(
                 late.market.name,
                 late.account.name,
                 late.submission.sent_on,
-                f"{late.days_out}d",
+                days_text(-late.days_out),
                 key=f"sla:{late.submission.id}:{late.account.id}",
             )
 
     def on_screen_resume(self) -> None:
         self.refresh_data()
+
+    def on_resize(self, event) -> None:
+        self._apply_layout(event.size.width)
+
+    def _apply_layout(self, width: int) -> None:
+        """Two panes across when there is room for them, one when there is not.
+
+        Textual has no CSS media queries, so the breakpoint lives here. Narrow
+        gets `height: auto` panes inside the scroller: four stacked quadrants
+        squeezed into 21 rows would be no more readable than four squeezed
+        into 80 columns."""
+        panes = list(self.query(".pane"))
+        wide = width >= TWO_COLUMN_MIN_WIDTH
+        grid = self.query_one("#today-grid", Grid)
+        grid.styles.grid_size_columns = 2 if wide else 1
+        grid.styles.grid_size_rows = 2 if wide else len(panes)
+        # an explicit cell height, not `auto`: a grid whose rows are unsized
+        # collapses to the first row when its own height is auto, which showed
+        # one pane and a screenful of nothing
+        grid.styles.height = "1fr" if wide else PANE_HEIGHT * len(panes)
+        for pane in panes:
+            pane.styles.height = "1fr" if wide else PANE_HEIGHT
 
     def on_data_table_row_selected(self, event: ListTable.RowSelected) -> None:
         key = event.row_key.value or ""

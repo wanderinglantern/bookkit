@@ -587,49 +587,59 @@ class NavigatorScreen(Screen):
         )
         hint.update(f"[{theme.DIM}]{hop}{actions}[/]")
 
-    def _glance_card(self) -> str:
-        """The landing view: the book at a glance instead of an empty pane."""
+    def _glance_card(self) -> Text:
+        """The landing view: the book at a glance instead of an empty pane.
+
+        Returns a Text with no_wrap + ellipsis rather than a markup string.
+        Each renewal used to be one long line in a Static, so every row wrapped
+        onto a second line — on the first thing seen at every launch, at every
+        terminal width (review F6). Truncating one long account name beats
+        destroying the alignment of the whole block."""
         s = self._summary
-        overdue = self._attention["overdue"]
-        soon = self._attention["renewals"]
-        lines = [
-            f"[b {theme.GOLD}]THE BOOK AT A GLANCE[/]",
-            "",
+        card = Text(no_wrap=True, overflow="ellipsis")
+        card.append("THE BOOK AT A GLANCE\n", style=f"bold {theme.GOLD}")
+        card.append("\n")
+        card.append(
             f"  {s.accounts} accounts with bound business · "
-            f"{s.bound_placements} bound placements",
-            f"  [{theme.GREEN}]{format_cents_compact(s.total_premium)}[/] premium · "
-            f"[{theme.GREEN}]{format_cents_compact(s.total_commission)}[/] commission",
-            "",
-        ]
-        nxt = (overdue + soon)[:5]
-        if nxt:
-            lines.append(f"[b {theme.DIM}]NEXT RENEWALS[/]")
-            for item in nxt:
-                d = item.days_remaining
-                # pad the plain text FIRST so markup length can't skew alignment
-                if d < 0:
-                    when = f"[b {theme.RED}]{f'◆ {-d}d over':>12}[/]"
-                elif d <= 60:
-                    when = f"[{theme.AMBER}]{f'{d}d':>12}[/]"
-                else:
-                    when = f"[{theme.DIM}]{f'{d}d':>12}[/]"
-                money = (
-                    format_cents_compact(item.placement.total_premium)
-                    if item.placement.total_premium
-                    else "—"
-                )
-                what = item.line_ends[0][0] if item.line_ends else item.placement.program_name
-                lines.append(
-                    f"  {item.renewal_on or item.placement.period_to}  {when}  "
-                    f"{item.org.name} — [b]{what}[/b]"
-                    f"  [{theme.DIM}]{item.placement.program_name}[/]  {money}"
-                )
-            lines.append("")
-        lines.append(
-            f"[{theme.DIM}][b]j/k[/b] move · [b]space[/b] expands · "
-            f"[b]enter[/b] opens · [b]?[/b] all keys[/]"
+            f"{s.bound_placements} bound placements\n"
         )
-        return "\n".join(lines)
+        card.append("  ")
+        card.append(format_cents_compact(s.total_premium), style=theme.GREEN)
+        card.append(" premium · ")
+        card.append(format_cents_compact(s.total_commission), style=theme.GREEN)
+        card.append(" commission\n\n")
+
+        nxt = (self._attention["overdue"] + self._attention["renewals"])[:5]
+        if nxt:
+            card.append("NEXT RENEWALS\n", style=f"bold {theme.DIM}")
+            for item in nxt:
+                days = item.days_remaining
+                programme = book._program_label(item.placement.program_name)
+                # the line of cover is what renews; without projected lines the
+                # programme has to stand in for it, and then it must not ALSO
+                # be printed as its own column (most of why this row overflowed)
+                has_line = bool(item.line_ends)
+                what = item.line_ends[0][0] if has_line else programme
+                # right-align by padding the PLAIN text and carrying the style
+                # across: a Text's own justify= does nothing once it is
+                # appended into a longer line
+                when = theme.days_text(days)
+                money = theme.money_text(item.placement.total_premium)
+                card.append(f"  {item.renewal_on or item.placement.period_to}  ")
+                card.append(when.plain.rjust(12), style=when.style)
+                card.append("  ")
+                card.append(f"{item.org.name} — ")
+                card.append(what, style="bold")
+                if has_line:
+                    card.append(f"  {programme}", style=theme.DIM)
+                card.append("  ")
+                card.append(money.plain.rjust(8), style=money.style)
+                card.append("\n")
+            card.append("\n")
+        card.append(
+            "j/k move · space expands · enter opens · ? all keys", style=theme.DIM
+        )
+        return card
 
     def _fill_attention_table(self, table: InlineTable, which: str) -> None:
         conn = self.app.conn

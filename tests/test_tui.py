@@ -2074,3 +2074,200 @@ async def test_the_highlighted_pipeline_card_stays_readable(seeded_db: Path) -> 
                 f"line {line} of the highlighted card renders {culprit!r} "
                 f"at {worst:.2f}:1"
             )
+
+
+# --- Batch B regressions (F4, F5, F6, F12, F25) ------------------------------
+
+
+async def test_today_renewal_countdown_is_not_a_bare_minus(seeded_db: Path) -> None:
+    """F4: the countdown was `str(days_remaining)`, so in a 36-cell pane an
+    overdue -345 truncated to "-" — indistinguishable from an empty cell.
+    theme.days_text renders "◆ 345d over", which carries a glyph and a word."""
+    from textual.coordinate import Coordinate
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+        table = app.screen.query_one("#renewals-table", ListTable)
+        assert table.row_count
+        countdowns = [
+            str(table.get_cell_at(Coordinate(row, 1))) for row in range(table.row_count)
+        ]
+        overdue = [c for c in countdowns if "over" in c]
+        assert overdue, f"no overdue countdown rendered a word: {countdowns[:5]}"
+        assert all("◆" in c for c in overdue), overdue
+
+
+async def test_today_collapses_to_one_column_on_a_narrow_terminal(
+    seeded_db: Path,
+) -> None:
+    """F4: four panes across 80 columns leaves 36 cells for seven columns."""
+    from textual.containers import Grid
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+        grid = app.screen.query_one("#today-grid", Grid)
+        assert grid.styles.grid_size_columns == 1
+        tasks = app.screen.query_one("#tasks-table", ListTable)
+        assert tasks.size.width > 60, "a single column should give the pane real width"
+
+
+async def test_today_stays_two_columns_when_there_is_room(seeded_db: Path) -> None:
+    """F4's other half: don't punish the daily-driver terminal."""
+    from textual.containers import Grid
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+        assert app.screen.query_one("#today-grid", Grid).styles.grid_size_columns == 2
+
+
+@pytest.mark.parametrize("size", [(100, 30), (120, 40), (140, 45), (170, 50)])
+async def test_placements_table_shows_the_premium_column(seeded_db: Path, size) -> None:
+    """F5: the tower preview took enough width that `status` truncated to one
+    letter and `premium` fell off the table entirely — on the tab that exists
+    to show what a programme costs.
+
+    Parameterised because the first fix was a percentage, which fit at 140 and
+    was one cell short at 120: the property is 'the numbers are never cropped',
+    at every width, not 'it looks right on my terminal'."""
+    from textual.coordinate import Coordinate
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    async with app.run_test(size=size) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("4")
+        await pilot.pause()
+        table = app.screen.query_one("#placements-table", ListTable)
+        assert table.row_count
+        premium_column = len(table.columns) - 1
+        needed = sum(c.get_render_width(table) for c in table.columns.values())
+        assert needed <= table.size.width, (
+            f"at {size[0]} columns the table needs {needed} cells "
+            f"but has {table.size.width}"
+        )
+        assert str(table.get_cell_at(Coordinate(0, premium_column))).strip()
+
+
+async def test_the_glance_card_never_wraps_a_renewal_row(seeded_db: Path) -> None:
+    """F6: each renewal was one long markup string in a Static, so the landing
+    view — the first thing seen on every launch — wrapped every row onto a
+    second line even at 140 columns."""
+    from rich.cells import cell_len
+    from rich.markup import render as render_markup
+    from textual.widgets import Static
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        card = app.screen.query_one("#nav-card", Static)
+        rendered = card.render()
+        plain = getattr(rendered, "plain", None)
+        if plain is None:  # a markup string — measure what it actually paints
+            plain = render_markup(str(rendered)).plain
+        too_long = [
+            line for line in plain.splitlines() if cell_len(line) > card.size.width
+        ]
+        assert not too_long, (
+            f"{len(too_long)} row(s) exceed the {card.size.width}-cell pane: "
+            f"{too_long[0][:90]!r}"
+        )
+
+
+async def test_an_empty_account_tab_says_so(seeded_db: Path) -> None:
+    """F12: an empty tab rendered a header row over blank space, so 'nothing
+    here' and 'it failed to load' looked identical. The Navigator solved this
+    with its hint line; the account screen never got it."""
+    from textual.widgets import Static
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("7")  # documents — empty in the seed
+        await pilot.pause()
+        assert app.screen.query_one("#documents-table", ListTable).row_count == 0
+        hint = str(app.screen.query_one("#tab-hint", Static).render())
+        assert "empty" in hint.lower() or "nothing" in hint.lower(), hint
+
+
+async def test_a_populated_account_tab_keeps_its_key_hints(seeded_db: Path) -> None:
+    """F12's other half: the empty state must not eat the key hints."""
+    from textual.widgets import Static
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("2")  # contacts — seeded
+        await pilot.pause()
+        assert app.screen.query_one("#contacts-table", ListTable).row_count
+        hint = str(app.screen.query_one("#tab-hint", Static).render())
+        assert "add" in hint.lower()
+
+
+async def test_kanban_columns_stay_wide_enough_to_read(seeded_db: Path) -> None:
+    """F25: five fixed columns across 80 cells gave each 13 characters, so
+    every card wrapped into unreadable stubs. Columns now hold a floor and the
+    row scrolls instead."""
+    from textual.widgets import OptionList
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press("p")
+        await pilot.pause()
+        for option_list in app.screen.query(OptionList):
+            assert option_list.size.width >= 24, option_list.size.width
+
+
+async def test_help_sections_are_collapsible_and_fit_the_width(seeded_db: Path) -> None:
+    """F13: help was one hand-aligned two-column Static, 160 rows tall in a
+    19-row viewport at 80 columns, whose columns only lined up above ~70 cells.
+    Sections now collapse, and no line depends on a width it may not get."""
+    from rich.cells import cell_len
+    from textual.widgets import Collapsible, Static
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press("question_mark")
+        await pilot.pause()
+        sections = list(app.screen.query(Collapsible))
+        assert len(sections) >= 6, f"only {len(sections)} help sections"
+        assert sum(1 for s in sections if not s.collapsed) == 1, (
+            "exactly one section should start open"
+        )
+        # measure the width the open section's body ACTUALLY gets, rather than
+        # guessing at the box's padding and the Collapsible's indent
+        body_width = next(
+            s.query_one(".help-body", Static).size.width
+            for s in sections
+            if not s.collapsed
+        )
+        assert body_width >= 40, f"help body is only {body_width} cells wide"
+        from bookkit.tui.screens.help import HELP_SECTIONS
+
+        for title, body in HELP_SECTIONS:
+            for line in body.splitlines():
+                assert cell_len(line) <= body_width, (
+                    f"{title!r} line needs {cell_len(line)} of {body_width}: {line!r}"
+                )
+
+
+async def test_help_is_current_about_the_account_tabs(seeded_db: Path) -> None:
+    """F13's content errors: help said '1–8 jump straight to a tab' when there
+    are nine, and carried two separate 'markets screen' sections."""
+    from bookkit.tui.screens.help import HELP_SECTIONS
+
+    titles = [title for title, _ in HELP_SECTIONS]
+    assert len(titles) == len(set(titles)), f"duplicate help sections: {titles}"
+    joined = "\n".join(body for _, body in HELP_SECTIONS)
+    assert "1–8" not in joined and "1-8" not in joined
+    assert "1–9" in joined

@@ -203,10 +203,16 @@ ImportChooser, ImportScreen, FormModal, Picker, ConfirmRenew, MergePicker {
 #kanban {
     layout: horizontal;
     height: 1fr;
+    /* five columns across 80 cells gave each 13 characters and every card
+       wrapped into stubs. Below the floor the row scrolls instead, and
+       _focus_column brings the live column into view (review F25). NB a
+       Horizontal never adds this itself. */
+    overflow-x: auto;
 }
 
 .kanban-column {
     width: 1fr;
+    min-width: 26;
     border: round $panel-lighten-2;
     margin: 0 1 0 0;
     padding: 0 1;

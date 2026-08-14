@@ -134,9 +134,11 @@ class MarketsScreen(Screen):
         conn = self.app.conn
         rates = {r.market_org_id: r for r in hit_rate.by_market(conn)}
         table = self.query_one("#markets-table", ListTable)
+        # short headers: "bind rate" rendered as "bin" at 80 columns, and a
+        # truncated header is worse than a terse one (review F25)
         table.add_columns(
             "market", "type", "rating", "target lines",
-            right("subs out"), right("quote rate"), right("bind rate"),
+            right("out"), right("quote"), right("bind"),
         )
         def add(org, depth: int) -> None:
             profile = orgs.get_market_profile(conn, org.id)

@@ -1,4 +1,15 @@
-"""Help (?) — every key, in one place."""
+"""Help (?) — every key, in one place.
+
+One `Static` held all of this until 2026-08-14: 160 rendered rows inside a
+19-row viewport at 80 columns, laid out in two hand-aligned columns that only
+line up when the body is wider than about 70 cells, which at 80 columns it
+never is. Now it is a list of sections, each a `Collapsible`, and every line is
+short enough to survive the narrowest terminal the app supports (review F13).
+
+Keep lines at or under 46 cells. The box is widened in on_mount so there is
+more room than that, but 46 is what the body gets if the box ever narrows
+again, and short reference lines cost nothing. The test enforces it.
+"""
 
 from __future__ import annotations
 
@@ -11,118 +22,227 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Static
+from textual.widgets import Collapsible, Static
 
-HELP = """\
-[b]everywhere[/b]
-  /        search everything          n   log an interaction (quick capture)
-  ctrl+t   new task (attaches to the account you're viewing)
-  ?        this help                  u   undo last change
-  esc      back / close               ctrl+q  quit
-  forms save in place: a refused save keeps the form open to fix
+# (title, body). The first section starts open; the rest are one keypress away.
+HELP_SECTIONS: list[tuple[str, str]] = [
+    (
+        "everywhere",
+        """\
+/        search everything
+n        log an interaction (quick capture)
+ctrl+t   new task, on the account you view
+?        this help       u  undo last change
+esc      back / close    ctrl+q  quit
 
-[b]lists[/b]
-  j / k    move                       enter   open
-  g / G    top / bottom               d       mark task done
-  a        add (contextual)           e       edit selected
-  D        delete the selected interaction (account tabs 1 and 3) — the way
-           to remove a wrongly logged activity; soft, so u puts it back
-  i        edit in cell (contacts, tasks): enter saves · tab saves + next
-           cell · esc abandons · every save is one u-undoable change
-  renewal tables count down PER LINE OF COVER — a line whose policy dies
-  before the program period surfaces on its own clock (IM ◆ 70d over)
+Forms save in place: a refused save keeps the
+form open so you can fix it.""",
+    ),
+    (
+        "lists and tables",
+        """\
+j / k    move          enter  open
+g / G    top / bottom  d      mark task done
+a        add (contextual)
+e        edit the selected row
+i        edit in cell — contacts, tasks, items
+           enter saves · tab saves + next
+           esc abandons · one save, one undo
+D        delete the selected interaction
+           (account tabs 1 and 3), soft
 
-[b]navigator (home)[/b]
-  the tree drills: attention → accounts → their placements/contacts/
-  opportunities/tasks/projects; the right pane is a working table —
-  a add · e edit · d done · r renew · l layer · enter opens the account
-  the hop loop: enter (or tab) dives from the tree into the rows,
-  e edits in place, esc hops back to the tree — no detours
-  t  classic Today dashboard    b/c/p/m/w  book/calendar/pipeline/markets/team
-  o  onboard (resume or start)  x  export open items workbook
-  ,  setup (where program files live)
-  MCP CHANGES section: what the assistant changed, last 14 days — enter
-  shows before→after; R reverts the highlighted change (refuses if you
-  edited the same fields since; f then forces the rest)
+Renewal tables count down PER LINE OF COVER.
+A line whose policy dies before the programme
+period gets its own clock: "IM ◆ 70d over".""",
+    ),
+    (
+        "navigator — the home screen",
+        """\
+The tree drills: attention → accounts → their
+placements, contacts, opportunities, tasks and
+projects. The right pane is a working table.
 
-[b]today screen (t)[/b]
-  b  book        c  renewal calendar        a  new task
-  p  pipeline    m  markets                 y  sync program files
-  w  team (who to go to for what)            i  import book (xlsx/csv)
-  ,  setup (where program files live — first y opens it for you)
+a add · e edit · d done · r renew · l layer
+enter opens the account
 
-[b]book screen[/b]
-  a  new account · e  edit account · f  filter
+The hop loop: enter (or tab) dives from tree
+into rows, e edits in place, esc hops back.
 
-[b]calendar (c)[/b]
-  cells: ░░ prospective  ▒▒ submitted  ▓▓ quoted  ██ bound  ×× lapsed
-  ◆ overdue · current month in gold · enter opens the account
+t  Today dashboard     b  book
+c  renewal calendar    p  pipeline
+m  markets             w  team
+o  onboard (resume or start)
+x  export open items workbook
+,  setup (where program files live)
 
-[b]account screen[/b]
-  1–8 jump straight to a tab; the cursor lands on its rows, so
-  j/k and e work immediately — each tab's hint line names its keys
-  a adds whatever the open tab holds: task (overview), contact,
-  placement, opportunity, document; e edits the selected row
-  (or the account itself). s sends a submission for the selected
-  placement/opportunity; e on a submission records the market's
-  response (quote / decline / bind).
-  p  mark contact primary (contacts tab)
-  enter on a placement shows its tower · enter on a document opens it
-  8  open items · i in-cell edit · x export
+MCP CHANGES — what the assistant changed in
+the last 14 days. enter shows before → after.
+R reverts the highlighted change, refusing if
+you edited the same fields since; f forces.""",
+    ),
+    (
+        "account screen",
+        """\
+1–9 jump straight to a tab, and the cursor
+lands on its rows, so j/k and e work at once.
+Each tab's hint line names the keys that work
+there, and says so when the tab is empty.
 
-[b]markets screen[/b]
-  a  new market · e  edit · N  nest under a master company (creates
-     the master on the spot) · families render as an outline
-  in a market: a appetite · w underwriter · i paste their signature
+a  add whatever the open tab holds
+e  edit the selected row, or the account
+s  submission for the selected placement or
+     opportunity
+e  on a submission records the response
+     (quote / decline / bind)
+p  mark a contact primary (contacts tab)
+x  export open items (merge on placements)
+i  paste import        w  assign a colleague
 
-[b]placements tab[/b]
-  j/k switch the previewed program · header names the selection
-  r  renew into next period (file-backed placements clone next
-     year's towerkit file, linked at birth)
-  e  edit — dates/name write to the file, status/commission to bookkit
-  l  edit a layer — the one under the cursor in the carriers table,
-     straight to the form when there's only one, else a picker
-  L  add a pending layer · o  open the file in towerkit's editor
-  i  paste imports: contact/signature, program schedule, renewal terms
-  t  create the towerkit file FROM this placement (nothing typed twice)
-  w  assign a team member to this placement
-     (on the Team screen, w assigns the selected member to an account)
-  x  merge a duplicate into another placement
-  binding a submission (e on it → bound) offers to put the market
-  on a layer at its share — towerkit validation gates every write
+enter on a placement shows its tower.
+enter on a document opens the file.""",
+    ),
+    (
+        "placements tab",
+        """\
+j/k switches the previewed programme; the
+header names the selection.
 
-[b]markets screen[/b]
-  x  merge a duplicate market (its name becomes an alias)
-  A  add a tower spelling as an alias for the selected market
+r  renew into the next period — file-backed
+     placements clone next year's towerkit
+     file, linked at birth
+e  edit — dates and name write to the file,
+     status and commission to bookkit
+l  edit the layer under the carriers cursor
+L  add a pending layer
+o  open the file in towerkit's editor
+t  create the towerkit file FROM this
+     placement (nothing is typed twice)
+i  paste a schedule or renewal terms
+w  assign a colleague to this placement
+x  merge a duplicate into another placement
 
-[b]entry — type fast, it stores clean[/b]
-  pickers filter as you type — ↑↓ steers, enter selects
-  forms: ^s saves from any field · first field is focused on open
-  dates accept: today · tomorrow · fri · +2w · 15 oct · 2026-10-15
-  money accepts: 1.5m · 250k · 1,500,000
-  emails, phones, URLs, LinkedIn handles are tidied on save
-  ("312.555.0142" → "(312) 555-0142")
+Binding a submission (e on it → bound) offers
+to put the market on a layer at its share.
+towerkit validation gates every write.""",
+    ),
+    (
+        "book, calendar, pipeline",
+        """\
+book      a new account · e edit · f filter
+calendar  ░░ prospective   ▒▒ submitted
+          ▓▓ quoted        ██ bound
+          ×× lapsed        ◆  overdue
+          current month in gold
+          enter opens the account
+pipeline  h/l columns · ↑/↓ cards
+          > advance · < mark lost · e edit
+          enter opens the account · u undo""",
+    ),
+    (
+        "markets and team",
+        """\
+markets   a new market · e edit
+          x merge a duplicate
+          N nest under a master company,
+            creating the master on the spot
+          A add a tower spelling as an alias
+in a market
+          a appetite · w underwriter
+          i paste their signature
+team      a add · e edit · i paste signature
+          w assign to an account
+          f who do I go to for…?""",
+    ),
+    (
+        "today screen (t)",
+        """\
+b  book             c  renewal calendar
+p  pipeline         m  markets
+w  team             a  new task
+y  sync program files
+i  import a book (xlsx/csv)
+,  setup — where program files live; the
+     first y opens this for you
 
-[b]quick capture[/b]
-  ctrl+s save · esc keeps a draft for next time
-  "follow up Tuesday" in a note offers to create the task
+Below 100 columns the four panes stack into
+one column and the screen scrolls, rather
+than cropping every value to nothing.""",
+    ),
+    (
+        "typing — type fast, it stores clean",
+        """\
+Pickers filter as you type; ↑↓ steers,
+enter selects. Forms: ^s saves from any
+field, and the first field is focused.
 
-[b]sync review (y on today)[/b]
-  steps through unlinked files, ambiguous placements, offered
-  opportunities from proposed programs' unplaced (TBD) lines, and
-  unknown carriers (alias a towerkit spelling to a market, or
-  create the market)
-"""
+dates  today · fri · +2w · 2026-10-15
+money  1.5m · 250k · 1,500,000
+
+Emails, phones, URLs and LinkedIn handles are
+tidied on save: "312.555.0142" becomes
+"(312) 555-0142".
+
+Vocabulary fields complete from what you have
+typed before — a dropdown plus ghost text you
+accept with →.""",
+    ),
+    (
+        "quick capture and imports",
+        """\
+quick capture (n)
+  ^s save · esc keeps a draft for next time
+  "follow up Tuesday" in a note OFFERS to
+  create the task, never creates it silently
+
+sync review (y on Today)
+  steps through unlinked files, ambiguous
+  placements, opportunities offered from
+  proposed programmes' unplaced (TBD) lines,
+  and unknown carriers — alias a towerkit
+  spelling to a market, or create the market.""",
+    ),
+]
 
 
 class HelpScreen(ModalScreen):
     app: BookkitApp
+
+    # NB width/height are set inline in on_mount, NOT here: bookkit.tcss is the
+    # app-level stylesheet and outranks a screen's DEFAULT_CSS whatever the
+    # selector specificity (measured: `HelpScreen .modal-box {width:96%}` still
+    # rendered at the shared 70%). Only the rules below, which the shared file
+    # does not set, take effect from here.
+    DEFAULT_CSS = """
+    HelpScreen Collapsible {
+        border: none;
+        padding: 0;
+        width: 1fr;
+    }
+    HelpScreen .help-body {
+        width: 1fr;
+        padding: 0 0 1 0;
+    }
+    """
+
     BINDINGS = [Binding("escape,question_mark", "dismiss_modal", "Close")]
+
+    def on_mount(self) -> None:
+        # help is reference text, not a form: the shared 70% box left it 42
+        # usable cells at 80 columns, narrower than any layout it documents
+        box = self.query_one(".modal-box")
+        box.styles.width = "96%"
+        box.styles.max_width = 84
+        box.styles.max_height = "92%"
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="modal-box"):
             yield Static("KEYS", classes="modal-title")
-            yield Static(HELP)
+            for index, (title, body) in enumerate(HELP_SECTIONS):
+                with Collapsible(title=title, collapsed=index > 0):
+                    yield Static(body, classes="help-body")
+            yield Static(
+                "[b]enter[/b] opens a section · [b]esc[/b] closes", classes="hint"
+            )
 
     def action_dismiss_modal(self) -> None:
         self.dismiss(None)

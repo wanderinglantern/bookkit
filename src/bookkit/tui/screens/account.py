@@ -35,6 +35,7 @@ from ...repo import (
 )
 from ...repo import rfi as rfi_repo
 from ...repo import tasks as tasks_repo
+from ...services import book
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.forms import Field
@@ -115,6 +116,14 @@ RFI_ITEM_INLINE = {
     3: Field("due_on", "needed by", "date"),
     6: Field("response", "response"),
 }
+
+# tabs whose `a` creates a row, so an empty one can name the way out of itself
+ADDABLE_TABS = frozenset(
+    {
+        "tab-contacts", "tab-placements", "tab-projects", "tab-pipeline",
+        "tab-documents", "tab-open-items", "tab-requests", "tab-overview",
+    }
+)
 
 # where the cursor lands when a tab opens — j/k and the row keys work at once
 TAB_TABLES: dict[str, str] = {
@@ -362,7 +371,8 @@ class AccountScreen(Screen):
         bar.styles.border_bottom = ("none", "black")
         # the placements table needs room for status + premium; the shared
         # 44% width crops them, and the tower preview scrolls anyway
-        self.query_one("#placement-side").styles.width = "52%"
+        # the placements split is sized from the table's real column widths in
+        # _size_placement_split, not from a percentage — see the note there
         # stacked tables inside scrolling panes size to their rows instead of
         # splitting the viewport into slivers
         for table_id in ("ov-team", "ov-contacts", "ov-interactions", "ov-tasks",
@@ -516,6 +526,10 @@ class AccountScreen(Screen):
         self._refresh_open_items(org.id)
         self._fill_requests_tab()
         self._settle_tables()
+        # the hint follows the data: adding the first row must clear the
+        # empty state without waiting for a tab switch
+        if self.is_mounted:
+            self._render_tab_hint()
 
     def _refresh_open_items(self, org_id: str) -> None:
         """The client's whole open-items picture: an editable task datasheet
@@ -664,9 +678,12 @@ class AccountScreen(Screen):
         conn = self.app.conn
         table = self.query_one("#placements-table", ListTable)
         table.clear(columns=True)
+        # no `effective` column: the previous row's expiry implies it, and the
+        # seven columns needed 87 cells in the 72 this pane has — which pushed
+        # `premium` off the tab that exists to show what a programme costs, and
+        # cropped `status` to a single letter (review F5)
         table.add_columns(
-            "ref", "program", "effective", "expires", right("d"), "status",
-            right("premium"),
+            "ref", "program", "expires", right("d"), "status", right("premium"),
         )
         # live placements first, soonest expiry on top; already-expired ones
         # sink below (most recently expired first) instead of pinning forever
@@ -677,16 +694,45 @@ class AccountScreen(Screen):
         for p in rows:
             days = days_until(p.period_to)
             table.add_row(
-                p.ref, p.program_name, p.period_from,
+                p.ref, book._program_label(p.program_name),
                 date_text(p.period_to, days), days_text(days), _status(p.status),
                 money_text(p.total_premium),
                 key=p.id,
             )
+        self._size_placement_split(table)
         if rows:
             self.show_placement(rows[0].id)
         else:
             self.query_one("#sync-state", Static).update("no placements")
             self.query_one("#tower-preview", TowerPreview).show_placeholder()
+
+    # a tower narrower than this renders as unreadable mush; below it the
+    # preview stands down rather than crowding the numbers out
+    PREVIEW_MIN_WIDTH = 48
+
+    def _size_placement_split(self, table: ListTable) -> None:
+        """Give the table the width its columns actually need, and the preview
+        whatever is left.
+
+        A percentage split cannot work here: the same 58% that fits at 140
+        columns is one cell short at 120 and twelve short at 100, which put
+        `premium` back off the screen on the tab that exists to show it
+        (review F5). Measure, then divide."""
+        # column widths are measured on idle; ask before that and every column
+        # reports its LABEL width, which sized the pane to 45 cells flat
+        self._settle_tables()
+        needed = sum(c.get_render_width(table) for c in table.columns.values()) + 2
+        total = self.size.width
+        preview = self.query_one("#tower-preview", TowerPreview)
+        side = self.query_one("#placement-side")
+        if total - needed >= self.PREVIEW_MIN_WIDTH:
+            side.styles.width = needed
+            preview.display = True
+        else:
+            # not enough room for both: the numbers win, and `o` still opens
+            # the real tower in towerkit
+            side.styles.width = "1fr"
+            preview.display = False
 
     def _refresh_projects(self, org_id: str) -> None:
         from ...repo import projects as projects_repo
@@ -803,7 +849,23 @@ class AccountScreen(Screen):
             self.query_one(f"#{table_id}", ListTable).focus()
 
     def _render_tab_hint(self) -> None:
-        hint = TAB_HINTS.get(self._active_tab(), "")
+        """The hint line, or an empty state when the tab's table has no rows.
+
+        An empty DataTable is a header over blank space: 'nothing here' and
+        'it failed to load' look identical. The Navigator has said so since it
+        was built; this is the same two phrasings on the account screen
+        (review F12)."""
+        tab = self._active_tab()
+        hint = TAB_HINTS.get(tab, "")
+        table_id = TAB_TABLES.get(tab)
+        if table_id is not None:
+            table = self.query_one(f"#{table_id}", ListTable)
+            if table.row_count == 0:
+                hint = (
+                    "empty — [b]a[/b] adds the first row"
+                    if tab in ADDABLE_TABS
+                    else "nothing here — that's good"
+                )
         self.query_one("#tab-hint", Static).update(f"[{theme.DIM}]{hint}[/]")
 
     def on_data_table_row_highlighted(self, event: ListTable.RowHighlighted) -> None:
