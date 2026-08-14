@@ -49,7 +49,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -324,6 +324,24 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
             rw, client, title, items, market=market, due_on=due_on,
             placement_ref=placement_ref, project_ref=project_ref,
         )
+
+    @server.tool()
+    async def list_batches(limit: int = 20) -> list[dict[str, Any]]:
+        """Recent changes THIS server made, newest first, each with the `ref`
+        that `revert_batch` takes. Covers the last 14 days. Use it to show the
+        user what you changed, or to find a change that needs putting back."""
+        return _list_batches(rw, date.today(), limit=limit)
+
+    @server.tool()
+    async def revert_batch(ref: str, force: bool = False) -> dict[str, Any]:
+        """Undo one batched change by its `ref` (from `list_batches` or from
+        any write tool's return). Refuses and lists the blockers if the user
+        has changed any of those fields since — pass force=true ONLY if the
+        user has said to revert the rest anyway. `applied: false` means
+        nothing was written."""
+        from .db import utc_now
+
+        return _revert_batch(rw, ref, now=utc_now(), force=force)
 
 
 def _today_brief(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -879,6 +897,55 @@ def _request_create(
             _provenance(conn, "rfi_item", item.id)
     return {"request_ref": request.ref, "account": org.name,
             "item_count": len(prompts), "batch": batch.ref}
+
+
+def _list_batches(
+    conn: sqlite3.Connection, today: date, limit: int = 20, days: int = 14
+) -> list[dict[str, Any]]:
+    """Recent batched writes, newest first — what this server changed and
+    whether it has been put back."""
+    from .repo import batches as batches_repo
+    from .repo import orgs as orgs_repo
+
+    since = (today - timedelta(days=days)).isoformat()
+    out = []
+    for batch in batches_repo.recent(conn, since=since, limit=limit):
+        account = None
+        if batch.org_id:
+            try:
+                account = orgs_repo.get(conn, batch.org_id).name
+            except KeyError:
+                account = "(deleted account)"
+        out.append({
+            "ref": batch.ref, "tool": batch.tool, "summary": batch.summary,
+            "account": account, "at": batch.created_at,
+            "reverted": batch.reverted_at is not None,
+        })
+    return out
+
+
+def _revert_batch(
+    conn: sqlite3.Connection, ref: str, now: str, force: bool = False
+) -> dict[str, Any]:
+    """Undo one batched write. Refuses outright if anything in it was changed
+    since, listing what blocks it — never a partial write unless forced."""
+    from .services import batches as batches_svc
+
+    result = batches_svc.revert(conn, ref, now=now, force=force)
+    return {
+        "ref": result.batch.ref,
+        "applied": result.applied,
+        "reverted": [
+            {"entity": c.entity_type, "id": c.entity_id, "field": c.field}
+            for c in result.reverted
+        ],
+        "refused": [
+            {"entity": c.change.entity_type, "id": c.change.entity_id,
+             "field": c.change.field, "batch_set": c.change.new_value,
+             "current": c.current_value}
+            for c in result.refused
+        ],
+    }
 
 
 def _requests_to_chase(conn: sqlite3.Connection, days: int = 120) -> list[dict[str, Any]]:
