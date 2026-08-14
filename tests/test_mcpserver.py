@@ -1295,6 +1295,52 @@ def test_unassign_takes_exact_id_and_reverts(server_db):
     assert len(team.for_org(rw, org.id)) == 1
 
 
+def test_member_deactivate_retires_someone_with_no_assignments(server_db):
+    from bookkit.repo import team
+
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+
+    out = mcpserver._member_deactivate(rw, "Dana Cruz")
+    assert out["active"] is False
+    assert out["unassigned"] == 0
+    assert out["batch"].startswith("MCP-")
+    assert [m.name for m in team.list_members(rw, active_only=True)] == []
+    assert [m.name for m in team.list_members(rw, active_only=False)] == ["Dana Cruz"]
+
+
+def test_member_deactivate_refuses_and_names_the_clients(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._team_assign(rw, "Dana Cruz", client="Acme")
+
+    with pytest.raises(ValueError) as err:
+        mcpserver._member_deactivate(rw, "Dana Cruz")
+    message = str(err.value)
+    assert "Acme" in message
+    assert "cascade" in message
+    # refused means nothing moved
+    assert len(team.for_org(rw, org.id)) == 1
+    assert team.list_members(rw, active_only=True)[0].name == "Dana Cruz"
+
+
+def test_member_deactivate_refuses_someone_already_inactive(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._member_deactivate(rw, "Dana Cruz")
+    with pytest.raises(ValueError) as err:
+        mcpserver._member_deactivate(rw, "Dana Cruz")
+    assert "already inactive" in str(err.value)
+
+
+def test_member_deactivate_is_registered(server_db):
+    server = build_server(server_db)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    assert "member_deactivate" in names
+
+
 def test_edit_field_changes_an_assignment_role(server_db):
     from bookkit.repo import team
 

@@ -494,6 +494,13 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         return _team_unassign(rw, assignment_id)
 
     @server.tool()
+    async def member_deactivate(name: str) -> dict[str, Any]:
+        """Retire a colleague (exact name — read team_roster). Refuses while
+        they still hold assignments, naming every one. They stay in the
+        record and stop appearing in pickers; member_reactivate undoes it."""
+        return _member_deactivate(rw, name)
+
+    @server.tool()
     async def opportunity_stage(
         ref: str, to: str, note: str | None = None, loss_reason: str | None = None
     ) -> dict[str, Any]:
@@ -1416,6 +1423,43 @@ def _team_unassign(conn: sqlite3.Connection, assignment_id: str) -> dict[str, An
         team.unassign(conn, assignment_id)
         _provenance(conn, "team_assignment", assignment_id)
     return {"assignment_id": assignment_id, "removed": True, "batch": batch.ref}
+
+
+def _assignment_label(row: sqlite3.Row) -> str:
+    """How one assignment reads in a refusal: the client, plus the placement
+    ref when it is deal-level rather than account-level."""
+    keys = row.keys()
+    account = row["org_name"] if "org_name" in keys else None
+    placement = row["placement_ref"] if "placement_ref" in keys else None
+    label = account or "unscoped"
+    return f"{label} ({placement})" if placement else label
+
+
+def _member_deactivate(conn: sqlite3.Connection, name: str) -> dict[str, Any]:
+    """Retire a colleague. Refuses while they still hold assignments — a
+    roster that silently keeps pointing at someone who left is worse than a
+    refusal — and names every one so the caller can act."""
+    from .repo import base, team
+
+    member = _find_member(conn, name)
+    if not member.active:
+        raise ValueError(f"{member.name} is already inactive")
+    rows = team.for_member(conn, member.id)
+    if rows:
+        labels = ", ".join(_assignment_label(r) for r in rows)
+        raise ValueError(
+            f"{member.name} is still on {len(rows)} assignments: {labels} — "
+            f"unassign them first, or pass cascade=True to remove all "
+            f"{len(rows)} and deactivate as one revertible batch"
+        )
+    with _open_batch(
+        conn, tool="member_deactivate", summary=f"deactivated {member.name}",
+    ) as batch:
+        base.update(conn, "team_member", member.id, {"active": 0},
+                    note="mcp deactivate")
+        _provenance(conn, "team_member", member.id)
+    return {"name": member.name, "active": False, "unassigned": 0,
+            "batch": batch.ref}
 
 
 def _opportunity_stage(
