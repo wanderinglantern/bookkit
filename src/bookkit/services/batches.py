@@ -186,6 +186,13 @@ def revert(
     from .. import db
 
     batch = batches_repo.get_by_ref(conn, ref)     # KeyError on unknown
+    if batch.tool.startswith("program_"):
+        # File contents are not event_log rows — reverting the proj_* cache
+        # under an untouched file would be a lie. The file-side path exists.
+        raise ValueError(
+            f"{ref} wrote a towerkit program FILE — use program_revert_file, "
+            f"which restores the file itself and re-projects"
+        )
     if batch.reverted_at is not None:
         raise AlreadyReverted(f"{ref} was reverted at {batch.reverted_at}")
 

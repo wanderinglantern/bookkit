@@ -333,6 +333,76 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         )
 
     @server.tool()
+    async def program_layers(placement_ref: str) -> dict[str, Any]:
+        """A linked program's tower: lines (with the exact line ids the write
+        tools take), every layer with its id, attach/limit/premium in cents,
+        and participants. Read this before ANY program write."""
+        return _program_layers(rw, placement_ref)
+
+    @server.tool()
+    async def program_layer_add(
+        placement_ref: str,
+        name: str,
+        line_ids: list[str],
+        attach: str,
+        limit: str,
+        premium: str | None = None,
+    ) -> dict[str, Any]:
+        """Add a pending ('to be placed') layer to a linked program — money
+        in human dollars ("5m", "250k"). The write goes through towerkit's
+        full cycle: a validation failure or a file changed on disk refuses
+        and writes NOTHING. Every write snapshots the file first —
+        program_revert_file(batch) restores it."""
+        return _program_layer_add(rw, placement_ref, name, line_ids,
+                                  attach=attach, limit=limit, premium=premium)
+
+    @server.tool()
+    async def program_bind(
+        placement_ref: str, layer_id: str, carrier: str, share: str
+    ) -> dict[str, Any]:
+        """Bind a market onto a layer at a share ("25%"). Over-signing the
+        layer is refused by towerkit's validator — nothing written. layer_id
+        is the exact id program_layers showed."""
+        return _program_bind(rw, placement_ref, layer_id, carrier, share)
+
+    @server.tool()
+    async def program_layer_edit(
+        placement_ref: str,
+        layer_id: str,
+        name: str | None = None,
+        policy_number: str | None = None,
+        attach: str | None = None,
+        limit: str | None = None,
+        premium: str | None = None,
+    ) -> dict[str, Any]:
+        """Edit the book-facts of one layer (exact id from program_layers):
+        name, policy number, attach/limit/premium in human dollars. Tower
+        DESIGN (lines, retentions, structure) stays in towerkit's editor."""
+        return _program_layer_edit(rw, placement_ref, layer_id, name=name,
+                                   policy_number=policy_number, attach=attach,
+                                   limit=limit, premium=premium)
+
+    @server.tool()
+    async def program_edit(
+        placement_ref: str,
+        name: str | None = None,
+        period_from: str | None = None,
+        period_to: str | None = None,
+    ) -> dict[str, Any]:
+        """Edit program-level facts: name and effective dates (any human
+        date form)."""
+        return _program_edit(rw, placement_ref, name=name,
+                             period_from=period_from, period_to=period_to)
+
+    @server.tool()
+    async def program_revert_file(batch: str) -> dict[str, Any]:
+        """Restore the program file exactly as it was before one program_*
+        batch — the file-side revert (revert_batch refuses program batches).
+        Refuses if ANYTHING touched the file since that write; revert newer
+        changes first."""
+        return _program_revert_file(rw, batch)
+
+    @server.tool()
     async def contact_add(
         client: str,
         first_name: str,
@@ -999,6 +1069,209 @@ def _need_add(
         _provenance(conn, "project_need", need.id)
     return {"need_id": need.id, "line": need.line, "project_ref": project.ref,
             "batch": batch.ref}
+
+
+# --- policy records: the guarded program-file cycle ---------------------------
+
+
+def _resolve_linked_placement(conn: sqlite3.Connection, placement_ref: str) -> Any:
+    from .repo import placements as placements_repo
+
+    placement = placements_repo.find(conn, placement_ref)
+    if placement is None:
+        raise ValueError(f"no placement {placement_ref!r} — use its exact PLC ref")
+    if not placement.program_path:
+        raise ValueError(
+            f"{placement.ref} has no program file linked — nothing to edit"
+        )
+    return placement
+
+
+def _raise_on_errors(diags: Any) -> list[str]:
+    """write_through's Diagnostics → tool contract: errors refuse (nothing was
+    written), warnings ride along in the return."""
+    if not diags.ok:
+        raise ValueError(
+            "refused by towerkit's validator — nothing written: "
+            + "; ".join(d.message for d in diags.errors)
+        )
+    return [d.message for d in diags.warnings]
+
+
+def _program_write(
+    conn: sqlite3.Connection,
+    placement: Any,
+    tool: str,
+    summary: str,
+    write: Any,
+) -> tuple[Any, list[str]]:
+    """One batched program-file write: capture the pre-image, run the sync.*
+    writer, snapshot on success. sync._mutate already folds WriteConflict
+    into the diagnostics ('re-sync and retry'), so _raise_on_errors carries
+    the same re-read contract compare-and-set trained the model on."""
+    from pathlib import Path as _Path
+
+    from .services import program_files
+
+    path = _Path(placement.program_path)
+    pre_image = path.read_bytes()
+    with _open_batch(
+        conn, tool=tool, org_id=placement.org_id, summary=summary,
+    ) as batch:
+        diags = write()
+        warnings = _raise_on_errors(diags)   # raising rolls the batch back
+        program_files.capture(path, batch.ref, pre_image)
+    return batch, warnings
+
+
+def _program_layers(conn: sqlite3.Connection, placement_ref: str) -> dict[str, Any]:
+    from pathlib import Path as _Path
+
+    from towerkit.model import load_program
+
+    from . import sync as sync_mod
+
+    placement = _resolve_linked_placement(conn, placement_ref)
+    program = load_program(_Path(placement.program_path))
+    return {
+        "placement_ref": placement.ref,
+        "program": program.program,
+        "period": {"from": program.period.start.isoformat(),
+                   "to": program.period.end.isoformat()},
+        "lines": [{"id": ln.id, "name": ln.name} for ln in program.lines],
+        "layers": sync_mod.layer_details(conn, placement.id),
+    }
+
+
+def _program_layer_add(
+    conn: sqlite3.Connection, placement_ref: str, name: str,
+    line_ids: list[str], attach: str, limit: str, premium: str | None = None,
+) -> dict[str, Any]:
+    from . import sync as sync_mod
+    from .money import parse_money_cents
+
+    placement = _resolve_linked_placement(conn, placement_ref)
+    batch, warnings = _program_write(
+        conn, placement, tool="program_layer_add",
+        summary=f"added layer {name!r} to {placement.ref}",
+        write=lambda: sync_mod.add_layer(
+            conn, placement.id, name, line_ids,
+            attach_cents=parse_money_cents(attach),
+            limit_cents=parse_money_cents(limit),
+            premium_cents=parse_money_cents(premium) if premium else None,
+        ),
+    )
+    return {"added": name, "placement_ref": placement.ref,
+            "warnings": warnings, "batch": batch.ref}
+
+
+def _program_bind(
+    conn: sqlite3.Connection, placement_ref: str, layer_id: str,
+    carrier: str, share: str,
+) -> dict[str, Any]:
+    from . import sync as sync_mod
+    from .money import parse_share_bps
+
+    placement = _resolve_linked_placement(conn, placement_ref)
+    bps = parse_share_bps(share)
+    batch, warnings = _program_write(
+        conn, placement, tool="program_bind",
+        summary=f"bound {carrier} at {bps / 100:g}% on {layer_id}",
+        write=lambda: sync_mod.add_participant(
+            conn, placement.id, layer_id, carrier, bps
+        ),
+    )
+    return {"bound": carrier, "share_bps": bps, "layer_id": layer_id,
+            "warnings": warnings, "batch": batch.ref}
+
+
+def _program_layer_edit(
+    conn: sqlite3.Connection, placement_ref: str, layer_id: str,
+    name: str | None = None, policy_number: str | None = None,
+    attach: str | None = None, limit: str | None = None,
+    premium: str | None = None,
+) -> dict[str, Any]:
+    from . import sync as sync_mod
+    from .money import parse_money_cents
+
+    placement = _resolve_linked_placement(conn, placement_ref)
+    batch, warnings = _program_write(
+        conn, placement, tool="program_layer_edit",
+        summary=f"edited layer {layer_id} on {placement.ref}",
+        write=lambda: sync_mod.update_layer(
+            conn, placement.id, layer_id, name=name, policy_number=policy_number,
+            attach_cents=parse_money_cents(attach) if attach else None,
+            limit_cents=parse_money_cents(limit) if limit else None,
+            premium_cents=parse_money_cents(premium) if premium else None,
+        ),
+    )
+    return {"edited": layer_id, "warnings": warnings, "batch": batch.ref}
+
+
+def _program_edit(
+    conn: sqlite3.Connection, placement_ref: str, name: str | None = None,
+    period_from: str | None = None, period_to: str | None = None,
+) -> dict[str, Any]:
+    from . import sync as sync_mod
+
+    placement = _resolve_linked_placement(conn, placement_ref)
+    from_iso = _clean_typed("date", "period_from", period_from) if period_from else None
+    to_iso = _clean_typed("date", "period_to", period_to) if period_to else None
+    batch, warnings = _program_write(
+        conn, placement, tool="program_edit",
+        summary=f"edited program facts on {placement.ref}",
+        write=lambda: sync_mod.update_program(
+            conn, placement.id, program_name=name,
+            period_from=from_iso, period_to=to_iso,
+        ),
+    )
+    return {"edited": placement.ref, "warnings": warnings, "batch": batch.ref}
+
+
+def _program_revert_file(conn: sqlite3.Connection, batch_ref: str) -> dict[str, Any]:
+    """Restore the pre-image of one program write — the file-side revert
+    batch undo cannot provide. Refuses if anything touched the file since."""
+    from pathlib import Path as _Path
+
+    from . import sync as sync_mod
+    from .repo import batches as batches_repo
+    from .services import program_files
+
+    batch = batches_repo.get_by_ref(conn, batch_ref)   # KeyError → tool error
+    if not batch.tool.startswith("program_"):
+        raise ValueError(
+            f"{batch_ref} is not a program-file write — use revert_batch"
+        )
+    if batch.reverted_at is not None:
+        raise ValueError(f"{batch_ref} was already reverted at {batch.reverted_at}")
+    if batch.org_id is None:
+        raise ValueError(f"{batch_ref} names no account — cannot locate its file")
+    from .repo import placements as placements_repo
+
+    linked = [
+        p for p in placements_repo.for_org(conn, batch.org_id) if p.program_path
+    ]
+    target = None
+    for placement in linked:
+        try:
+            # the comprehension filtered None paths; mypy cannot see that
+            program_files.restore(_Path(str(placement.program_path)), batch_ref)
+            target = placement
+            break
+        except ValueError as exc:
+            if "was a write to" not in str(exc) and "no snapshot" not in str(exc):
+                raise                          # sha mismatch etc: surface it
+    if target is None:
+        raise ValueError(f"no snapshot for {batch_ref} on any of this account's files")
+    from .db import utc_now
+
+    with db.transaction(conn):                 # unbatched, like revert_batch
+        diags = sync_mod.project(conn, _Path(str(target.program_path)),
+                                 placement_id=target.id)
+        batches_repo.mark_reverted(conn, batch.id, utc_now())
+    return {"reverted": True, "batch": batch_ref,
+            "file": target.program_path,
+            "warnings": [d.message for d in diags.warnings]}
 
 
 def _find_member(conn: sqlite3.Connection, name: str) -> Any:
