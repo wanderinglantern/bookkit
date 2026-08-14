@@ -35,8 +35,12 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "pytest-asyncio>=1.4.0",
-    # visual regression: reads the snapshots the suite used to only write
-    "pytest-textual-snapshot>=1.0",
+    # visual regression: reads the snapshots the suite used to only write.
+    # >=1.1 is load-bearing, not hygiene: 1.0 renders SVG differently and
+    # fails all 38 baselines. Left unpinned, uv keeps 1.0 so it can take
+    # pytest 9 / syrupy 5, which is why a fresh worktree went red while the
+    # install.sh venv (built by pip, which took 1.1) stayed green.
+    "pytest-textual-snapshot>=1.1",
 ]
 
 [build-system]

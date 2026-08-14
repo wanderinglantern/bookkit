@@ -1,12 +1,25 @@
 """bookctl mcp — stdio MCP server for the work-machine cowork assistant.
 
-Read tools run on a read-only connection (mode=ro — enforced by the
-database). Exactly seven write tools exist — log_activity, task_create,
-task_complete, client_create, enrich_field, request_item_received,
-request_create — all additive, all inside db.transaction, all event-logged
-with source=mcp. Keep this list in step with _register_write_tools; a
-contract statement that has drifted is worse than none. stdout is protocol;
-anything human goes to stderr (never print here).
+Read tools run on a read-only connection (mode=ro — enforced by the database,
+not by convention). _register_read_tools and _register_write_tools are the
+only registrars, and they are the list: an earlier version of this docstring
+enumerated seven write tools by name and called them all additive, which
+stopped being true somewhere around thirty tools and several deletes ago. A
+contract statement that has drifted is worse than none, so what follows are
+the invariants every tool must satisfy rather than a roster that rots:
+
+- Writes go through db.transaction and are event-logged with source=mcp.
+- One MCP call is one undo unit: db.transaction(batch=) stamps every event
+  with a batch_id, and services/batches.py reverts a batch all-or-nothing,
+  refusing when a field changed since. db.BLAST_CAP bounds the entities one
+  batch may touch, enforced under log_event so no tool can forget it.
+- Program writes take the guarded towerkit cycle — load, mutate, validate,
+  canonical dump, re-project — sha256-guarded against a concurrent editor.
+- Placements are read-only to the assistant by design.
+
+stdout is protocol; anything human goes to stderr (never print here). That
+invariant is checked by `bookctl mcp --check`, which builds a server with
+stdout captured and fails if a single byte escapes.
 
 NOTE ON SDK NAMING: the brief this module was built from named the
 FastMCP-era API (`mcp.server.fastmcp.FastMCP`). The installed SDK (now
