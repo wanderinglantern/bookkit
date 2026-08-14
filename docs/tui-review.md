@@ -26,7 +26,10 @@
 
 Batches A–D and the snapshot suite are **merged to main**; E is on `tui-batch-e`.
 
-**No P0 remains.** Still open: F18 (market appetite still cannot be edited or deleted),
+- **F18** — market appetite rows and underwriters can now be edited, and an appetite row
+  removed (soft, so `u` restores it). The last CRUD gap.
+
+**No P0 remains, and nothing you can create in this app is permanent.** Still open:
 F29/F30/F31 (chrome contrast, recorded in the sweep's ACCEPTED list), F17 (`i` means two
 things), F21's remaining half (sort order and other screens' filters), F15's dead
 stylesheet rule, F24/F26/F27 — and one decision you owe: **F35**, on whether two-field
