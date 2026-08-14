@@ -240,6 +240,11 @@ class NavigatorScreen(Screen):
         Binding("a", "add_row", "Add", show=False),
         Binding("e", "edit_row", "Edit", show=False),
         Binding("d", "task_done", "Done (task)", show=False),
+        # D drops the task the cursor is on: `d` completes, and until this
+        # existed a task you simply did not want had to be recorded as done
+        # (review F34). Shift for the destructive sibling, as on the account
+        # screen.
+        Binding("D", "drop_row", "Drop (task)", show=False),
         Binding("r", "renew_row", "Renew", show=False),
         Binding("l", "edit_layer_row", "Layer", show=False),
         Binding("o", "onboard", "Onboard client", show=False),
@@ -1063,6 +1068,19 @@ class NavigatorScreen(Screen):
             return
         tasks_repo.complete(self.app.conn, row[1])
         self.notify("task done — u to undo")
+        self.refresh_data()
+
+    def action_drop_row(self) -> None:
+        """D — this one is not happening. One field write, so u restores it."""
+        row = self._selected_row()
+        if row is None or row[0] != "task":
+            return
+        try:
+            task = tasks_repo.get(self.app.conn, row[1])
+        except KeyError:  # stale row key after a rebuild
+            return
+        tasks_repo.drop(self.app.conn, row[1])
+        self.notify(f"dropped {task.title!r} — u to undo")
         self.refresh_data()
 
     def action_renew_row(self) -> None:

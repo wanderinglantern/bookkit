@@ -75,7 +75,14 @@ def reassign_placement(conn: sqlite3.Connection, from_id: str, to_id: str) -> in
 
 
 def complete(conn: sqlite3.Connection, task_id: str) -> Task:
-    base.update(conn, "task", task_id, {"status": "done", "completed_at": utc_now()})
+    # FIELD ORDER IS LOAD-BEARING: base.update logs one event per changed
+    # field in dict order, and `u` reverts only the most recent one, so
+    # whichever field goes LAST is the one a single undo puts back. With
+    # completed_at last, `d` then `u` cleared the timestamp and left the task
+    # done — the toast promised an undo that never happened (review F35).
+    # status goes last so `u` reopens the task, which is what the user asked
+    # for. A second `u` clears the timestamp behind it.
+    base.update(conn, "task", task_id, {"completed_at": utc_now(), "status": "done"})
     return get(conn, task_id)
 
 

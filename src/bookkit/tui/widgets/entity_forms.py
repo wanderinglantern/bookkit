@@ -18,6 +18,8 @@ from ...models import (
     TEAM_ROLES,
     Appetite,
     Contact,
+    Interaction,
+    InteractionType,
     Opportunity,
     Org,
     Placement,
@@ -29,7 +31,15 @@ from ...models import (
     Task,
     TeamMember,
 )
-from ...repo import contacts, opportunities, orgs, placements, submissions, vocab
+from ...repo import (
+    contacts,
+    interactions,
+    opportunities,
+    orgs,
+    placements,
+    submissions,
+    vocab,
+)
 from ...repo import projects as projects_repo
 from ...repo import rfi as rfi_repo
 from ...repo import tasks as tasks_repo
@@ -653,3 +663,35 @@ def apply_rfi_item(
         return rfi_repo.update_item(conn, existing.id, **core)
     prompt = core.pop("prompt")
     return rfi_repo.add_item(conn, request_id, prompt, **core)
+
+
+# --- interaction ----------------------------------------------------------------
+
+_INTERACTION_TYPES = tuple((t.value, t.value) for t in InteractionType)
+
+
+def interaction_form(existing: Interaction) -> FormSpec:
+    """Edit a logged interaction. Creation stays in quick capture (n), which
+    also does account matching and the follow-up-task offer; this is the
+    correction path — the body in particular had no way to be read or fixed
+    before (review F33)."""
+    return FormSpec(
+        "edit interaction",
+        [
+            Field("occurred_on", "when", "date", required=True),
+            Field("type", "type", "select", _INTERACTION_TYPES, required=True),
+            Field("subject", "subject", required=True),
+            Field("body", "note", "textarea"),
+        ],
+        initial=existing.model_dump(),
+    )
+
+
+def apply_interaction(
+    conn: sqlite3.Connection, values: dict[str, Any], existing: Interaction
+) -> Interaction:
+    core = dropped(values)
+    # blanking the note is a legitimate edit, and dropped() would swallow it
+    if existing.body and not values.get("body"):
+        core["body"] = None
+    return interactions.update(conn, existing.id, **core)

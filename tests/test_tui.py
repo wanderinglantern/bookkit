@@ -2271,3 +2271,195 @@ async def test_help_is_current_about_the_account_tabs(seeded_db: Path) -> None:
     joined = "\n".join(body for _, body in HELP_SECTIONS)
     assert "1–8" not in joined and "1-8" not in joined
     assert "1–9" in joined
+
+
+# --- Batch C: the CRUD gaps Grant hit in use (F33, F34) ----------------------
+
+
+async def _open_tab(pilot, app, org_id: str, tab: str, table_id: str):
+    app.open_account(org_id)
+    await pilot.pause()
+    await pilot.press(tab)
+    await pilot.pause()
+    table = app.screen.query_one(f"#{table_id}", ListTable)
+    table.focus()
+    await pilot.pause()
+    return table
+
+
+async def test_D_drops_the_selected_task(seeded_db: Path) -> None:
+    """F34: a task could only be completed. One logged against the wrong
+    account had to be marked 'done' — a lie in the event log."""
+    from bookkit.repo import tasks as tasks_repo
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    task = tasks_repo.create(app.conn, "Wrong account, delete me", org_id=org.id)
+    async with app.run_test(size=(140, 45)) as pilot:
+        table = await _open_tab(pilot, app, org.id, "8", "open-items-table")
+        table.move_cursor(row=table.get_row_index(task.id))
+        await pilot.pause()
+        await pilot.press("D")
+        await pilot.pause()
+        assert tasks_repo.get(app.conn, task.id).status == "dropped"
+        assert task.id not in {
+            t.id for t in tasks_repo.open_tasks(app.conn, org_id=org.id)
+        }
+
+
+async def test_dropping_a_task_is_undoable(seeded_db: Path) -> None:
+    """F34: drop is ONE field write, so `u` genuinely restores it — which is
+    why drop is the right verb here and hard delete is not."""
+    from bookkit.repo import tasks as tasks_repo
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    task = tasks_repo.create(app.conn, "Dropped by mistake", org_id=org.id)
+    async with app.run_test(size=(140, 45)) as pilot:
+        table = await _open_tab(pilot, app, org.id, "8", "open-items-table")
+        table.move_cursor(row=table.get_row_index(task.id))
+        await pilot.pause()
+        await pilot.press("D")
+        await pilot.pause()
+        assert tasks_repo.get(app.conn, task.id).status == "dropped"
+        await pilot.press("u")
+        await pilot.pause()
+        assert tasks_repo.get(app.conn, task.id).status == "open"
+
+
+async def test_D_still_deletes_an_interaction(seeded_db: Path) -> None:
+    """F34's regression half: generalising D must not break what it did."""
+    from bookkit.repo import interactions
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    logged = interactions.for_org(app.conn, org.id)[0]
+    async with app.run_test(size=(140, 45)) as pilot:
+        table = await _open_tab(pilot, app, org.id, "3", "interactions-table")
+        table.move_cursor(row=table.get_row_index(logged.id))
+        await pilot.pause()
+        await pilot.press("D")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)  # confirm first, as before
+        await pilot.press("y")
+        await pilot.pause()
+        assert logged.id not in {i.id for i in interactions.for_org(app.conn, org.id)}
+
+
+async def test_the_interaction_body_is_readable(seeded_db: Path) -> None:
+    """F33: interactions.log() stores a body and nothing displayed it, so
+    every note written was unreadable from the app that wrote it."""
+    from textual.widgets import Static
+
+    from bookkit.repo import interactions
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    note = interactions.log(
+        app.conn, org.id, "call", "Renewal strategy",
+        "2026-08-12", body="They want to move the AL limit to $10M [confirmed].",
+    )
+    async with app.run_test(size=(140, 45)) as pilot:
+        table = await _open_tab(pilot, app, org.id, "3", "interactions-table")
+        table.move_cursor(row=table.get_row_index(note.id))
+        await pilot.pause()
+        shown = str(app.screen.query_one("#interaction-detail", Static).render())
+        assert "move the AL limit" in shown
+        # brackets survive: pasted email bodies are not Rich markup
+        assert "[confirmed]" in shown
+
+
+async def test_editing_an_interaction_saves_the_body(seeded_db: Path) -> None:
+    """F33: interactions.update() existed in the repo and was called from
+    nowhere in tui/ — on tab 3, `e` edited the ACCOUNT."""
+    from bookkit.repo import interactions
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    note = interactions.log(
+        app.conn, org.id, "call", "Wrong subject", "2026-08-12", body="first draft"
+    )
+    async with app.run_test(size=(140, 45)) as pilot:
+        table = await _open_tab(pilot, app, org.id, "3", "interactions-table")
+        table.move_cursor(row=table.get_row_index(note.id))
+        await pilot.pause()
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen), "e did not open a form"
+        assert "interaction" in app.screen.spec.title
+        await _fill(pilot, app, "subject", "Corrected subject")
+        app.screen.query_one("#form-body", TextArea).text = "the note, rewritten"
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        saved = interactions.get(app.conn, note.id)
+        assert saved.subject == "Corrected subject"
+        assert saved.body == "the note, rewritten"
+
+
+async def test_completing_a_task_then_undoing_actually_reopens_it(
+    seeded_db: Path,
+) -> None:
+    """The toast says "task done — u to undo". complete() writes TWO fields
+    (status and completed_at) and base.update logs one event per field, while
+    undo takes only the most recent — so this pins whether the promise is
+    real."""
+    from bookkit.repo import tasks as tasks_repo
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    task = tasks_repo.create(app.conn, "Finish me", org_id=org.id)
+    async with app.run_test(size=(140, 45)) as pilot:
+        table = await _open_tab(pilot, app, org.id, "8", "open-items-table")
+        table.move_cursor(row=table.get_row_index(task.id))
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        assert tasks_repo.get(app.conn, task.id).status == "done"
+        await pilot.press("u")
+        await pilot.pause()
+        assert tasks_repo.get(app.conn, task.id).status == "open", (
+            "u after d left the task done — the toast promises an undo that "
+            "does not happen"
+        )
+
+
+def _walk_tree(node):
+    """Every node under `node`, depth-first — so a test can address a tree
+    node by what it IS rather than by how many downs it takes to reach."""
+    for child in node.children:
+        yield child
+        yield from _walk_tree(child)
+
+
+async def test_navigator_D_drops_the_task_under_the_cursor(seeded_db: Path) -> None:
+    """F34's other half: the Navigator is home, `d` completes a task there,
+    and nothing dropped one."""
+    from textual.widgets import Tree
+
+    from bookkit.repo import tasks as tasks_repo
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        # find the node rather than counting keypresses: a tree whose shape
+        # changes should not silently retarget this test at another list
+        tree = app.screen.query_one("#nav-tree", Tree)
+        target = next(
+            node
+            for node in _walk_tree(tree.root)
+            if node.data == ("att", "tasks")
+        )
+        tree.cursor_line = target.line
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        table = app.screen.query_one("#nav-table", ListTable)
+        assert table.has_focus and table.row_count
+        key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+        task_id = str(key).partition(":")[2]
+        await pilot.press("D")
+        await pilot.pause()
+        assert tasks_repo.get(app.conn, task_id).status == "dropped"
+        await pilot.press("u")
+        await pilot.pause()
+        assert tasks_repo.get(app.conn, task_id).status == "open"

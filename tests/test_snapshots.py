@@ -113,6 +113,14 @@ def test_account_placements(snap_compare, snapshot_db: Path, size) -> None:
 
 
 @pytest.mark.parametrize("size", BOTH)
+def test_account_interactions(snap_compare, snapshot_db: Path, size) -> None:
+    """The relationship log over the selected note — F33's master/detail."""
+    assert snap_compare(
+        _app(snapshot_db), terminal_size=size, press=["b", "enter", "3"]
+    )
+
+
+@pytest.mark.parametrize("size", BOTH)
 def test_account_documents_empty(snap_compare, snapshot_db: Path, size) -> None:
     """An empty tab. Pinning the empty state so F12 cannot silently regress."""
     assert snap_compare(

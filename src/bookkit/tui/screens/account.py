@@ -74,8 +74,8 @@ TAB_HINTS: dict[str, str] = {
         "[b]i[/b] paste import · [b]w[/b] assign team"
     ),
     "tab-interactions": (
-        "[b]a[/b] log interaction · [b]e[/b] edit account · [b]D[/b] delete · "
-        "[b]i[/b] paste import · [b]u[/b] undo"
+        "[b]a[/b] log · [b]e[/b] edit this interaction · [b]D[/b] delete · "
+        "[b]i[/b] paste import · [b]u[/b] undo — the note is below"
     ),
     "tab-placements": (
         "[b]a[/b] add · [b]e[/b] edit · [b]s[/b] submission · [b]r[/b] renew · "
@@ -285,8 +285,9 @@ class AccountScreen(Screen):
         Binding("d", "task_done", "Done (task)", show=False),
         # D is delete, taking the shift key as L and P do — d is already
         # "done", and the destructive sibling should never be one keystroke
-        # away from the harmless one
-        Binding("D", "delete_interaction", "Delete (interaction)", show=False),
+        # away from the harmless one. It means "remove the selected row",
+        # resolved by which table has focus (see action_delete_row).
+        Binding("D", "delete_row", "Delete / drop row", show=False),
         Binding("p", "mark_primary", "Primary (contact)", show=False),
         # p is taken; paste-a-litany takes the shift key, as L does for layers
         Binding("P", "paste_items", "Paste items", show=False),
@@ -327,7 +328,13 @@ class AccountScreen(Screen):
             with TabPane("2 Contacts", id="tab-contacts"):
                 yield ListTable(id="contacts-table")
             with TabPane("3 Interactions", id="tab-interactions"):
-                yield ListTable(id="interactions-table")
+                # master/detail, the same shape the requests tab uses: the log
+                # is the index, the note is the point. Before this the body was
+                # stored and never shown anywhere (review F33).
+                with Vertical():
+                    yield ListTable(id="interactions-table")
+                    with VerticalScroll(id="interaction-detail-pane"):
+                        yield Static(id="interaction-detail")
             with TabPane("4 Placements", id="tab-placements"):
                 with Horizontal():
                     with Vertical(id="placement-side"):
@@ -390,6 +397,8 @@ class AccountScreen(Screen):
         # bookkit.tcss gives every DataTable height 1fr, so this has to be an
         # inline style to win (same reason #account-header is set here)
         self.query_one("#rfi-requests", ListTable).styles.height = "40%"
+        # same master/detail proportion for the interaction log
+        self.query_one("#interactions-table", ListTable).styles.height = "45%"
         self.refresh_data()
         self._render_tab_hint()
         self._focus_tab_table()
@@ -469,13 +478,18 @@ class AccountScreen(Screen):
         for table_id, int_rows in (("#ov-interactions", log[:5]), ("#interactions-table", log)):
             table = self.query_one(table_id, ListTable)
             table.clear(columns=True)
-            table.add_columns("date", "type", "subject", "who")
+            table.add_columns("date", "type", "subject", "who", "note")
             for i in int_rows:
                 who = ", ".join(c.name for c in interactions.attendees(conn, i.id))
                 table.add_row(
                     i.occurred_on, Text(_pretty(i.type), style=theme.DIM),
-                    i.subject, who, key=i.id,
+                    i.subject, who,
+                    # a glyph, not the text: the note itself is in the pane
+                    # below, and a column here would only truncate it
+                    Text("✎", style=theme.GOLD) if i.body else dash(),
+                    key=i.id,
                 )
+        self._show_interaction(str(self._selected_key("interactions-table") or ""))
 
         open_tasks = grouped_by_category(tasks_repo.open_tasks(conn, org_id=org.id))
         table = self.query_one("#ov-tasks", ListTable)
@@ -641,6 +655,38 @@ class AccountScreen(Screen):
                 item.received_on or dash(), item.response or dash(),
                 key=item.id,
             )
+
+    def _show_interaction(self, interaction_id: str) -> None:
+        """Fill the detail pane under the log with the selected note.
+
+        Built as rich.Text, never markup: these bodies are pasted emails and
+        meeting notes, and Static.update() would read any [brackets] in them as
+        markup and swallow the text."""
+        detail = self.query_one("#interaction-detail", Static)
+        if not interaction_id:
+            detail.update(Text("no interaction selected", style=theme.DIM))
+            return
+        try:
+            interaction = interactions.get(self.app.conn, interaction_id)
+        except KeyError:  # fires from RowHighlighted; a vanished row must not
+            detail.update(Text("(deleted)", style=theme.DIM))  # take the app down
+            return
+        who = ", ".join(
+            c.name for c in interactions.attendees(self.app.conn, interaction.id)
+        )
+        body = Text()
+        body.append(interaction.subject, style="bold")
+        body.append(
+            f"\n{interaction.occurred_on} · {_pretty(interaction.type)}", style=theme.DIM
+        )
+        if who:
+            body.append(f" · {who}", style=theme.DIM)
+        body.append("\n\n")
+        if interaction.body:
+            body.append(interaction.body)
+        else:
+            body.append("(no note recorded — e adds one)", style=theme.DIM)
+        detail.update(body)
 
     def _rfi_item_inline_initial(self, row_key: str, field_key: str) -> str:
         try:
@@ -878,6 +924,8 @@ class AccountScreen(Screen):
             key = event.row_key.value
             if key:
                 self.show_project(key)
+        elif event.data_table.id == "interactions-table" and event.row_key is not None:
+            self._show_interaction(str(event.row_key.value or ""))
         elif event.data_table.id == "rfi-requests" and event.row_key is not None:
             # j/k down the request list re-points the items datasheet
             _, _, request_id = str(event.row_key.value or "").partition(":")
@@ -1044,17 +1092,30 @@ class AccountScreen(Screen):
             self.notify("task done — u to undo")
             self.refresh_data()
 
-    def action_delete_interaction(self) -> None:
-        """D: remove a logged interaction. The relationship log is the one
-        place a wrong entry has to be removable rather than corrected —
-        typically one this book's MCP server logged against the wrong account.
-        Soft delete, so u restores it.
+    # which tables D acts on, and what "remove" means for each of them
+    DELETABLE = {
+        "interactions-table": "interaction",
+        "ov-interactions": "interaction",
+        "ov-tasks": "task",
+        "open-items-table": "task",
+    }
 
-        Both interaction tables answer to D (the overview's recent-five and
-        the full tab), whichever has focus; focus is what disambiguates,
-        exactly as it does for the tab's two RFI tables."""
-        for table_id in ("#interactions-table", "#ov-interactions"):
-            table = self.query_one(table_id, ListTable)
+    def action_delete_row(self) -> None:
+        """D removes the row under the cursor, whichever table holds focus.
+
+        Focus is what disambiguates, exactly as it already does for a, e and d
+        on this screen. It used to be wired only to the two interaction tables,
+        which left a task with no exit but `complete()` — so a task logged
+        against the wrong account had to be recorded as done, a lie in the
+        event log (review F34).
+
+        Interactions confirm first and soft-delete: removing an entry is how a
+        wrongly logged activity gets corrected, most often one the MCP server
+        filed against the wrong account. Tasks are DROPPED rather than deleted:
+        one field write, so `u` genuinely restores it, and the row stays in
+        history instead of vanishing."""
+        for table_id, kind in self.DELETABLE.items():
+            table = self.query_one(f"#{table_id}", ListTable)
             if not table.has_focus or table.cursor_row is None or table.row_count == 0:
                 continue
             key = table.coordinate_to_cell_key(
@@ -1062,15 +1123,30 @@ class AccountScreen(Screen):
             ).row_key.value
             if not key:
                 return
-            try:
-                interaction = interactions.get(self.app.conn, key)
-            except KeyError:  # row key went stale under a concurrent rebuild
-                return
-            self.app.push_screen(
-                ConfirmDeleteInteraction(interaction),
-                lambda ok, iid=interaction.id: self._delete_interaction(iid, ok),
-            )
+            if kind == "task":
+                self._drop_task(str(key))
+            else:
+                self._confirm_delete_interaction(str(key))
             return
+
+    def _drop_task(self, task_id: str) -> None:
+        try:
+            task = tasks_repo.get(self.app.conn, task_id)
+        except KeyError:  # row key went stale under a concurrent rebuild
+            return
+        tasks_repo.drop(self.app.conn, task_id)
+        self.notify(f"dropped {task.title!r} — u to undo")
+        self.refresh_data()
+
+    def _confirm_delete_interaction(self, interaction_id: str) -> None:
+        try:
+            interaction = interactions.get(self.app.conn, interaction_id)
+        except KeyError:
+            return
+        self.app.push_screen(
+            ConfirmDeleteInteraction(interaction),
+            lambda ok, iid=interaction.id: self._delete_interaction(iid, ok),
+        )
 
     def _delete_interaction(self, interaction_id: str, confirmed: bool | None) -> None:
         if not confirmed:
@@ -1285,6 +1361,12 @@ class AccountScreen(Screen):
                         ef.project_form(project),
                         lambda v: ef.apply_project(conn, v, project.org_id, project),
                     )
+        elif tab == "tab-interactions":
+            # e edits the INTERACTION when its table has focus, and only falls
+            # through to the account otherwise. It used to always edit the
+            # account, which left interactions with no edit path at all
+            # despite interactions.update() existing (review F33).
+            self._edit_interaction_or_org("interactions-table")
         elif tab == "tab-overview":
             key = self._selected_key("ov-tasks")
             if key and self.focused is not None and self.focused.id == "ov-tasks":
@@ -1330,6 +1412,25 @@ class AccountScreen(Screen):
                 self.notify(f"that {gone} no longer exists", severity="error")
         else:
             self._edit_org()
+
+    def _edit_interaction_or_org(self, table_id: str) -> None:
+        from ..widgets import entity_forms as ef
+
+        conn = self.app.conn
+        table = self.query_one(f"#{table_id}", ListTable)
+        key = self._selected_key(table_id) if table.has_focus else None
+        if not key:
+            self._edit_org()
+            return
+        try:
+            existing = interactions.get(conn, str(key))
+        except KeyError:
+            self.notify("that interaction no longer exists", severity="error")
+            return
+        self._push_form(
+            ef.interaction_form(existing),
+            lambda v: ef.apply_interaction(conn, v, existing),
+        )
 
     def _edit_org(self) -> None:
         from ..widgets import entity_forms as ef
