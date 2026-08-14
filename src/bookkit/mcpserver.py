@@ -326,6 +326,27 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         )
 
     @server.tool()
+    async def edit_field(
+        kind: str,
+        ref: str,
+        field: str,
+        value: str,
+        expecting: str | None = None,
+        client: str | None = None,
+    ) -> dict[str, Any]:
+        """Deliberately OVERWRITE one field — compare-and-set. `expecting`
+        must be the value a read just showed you (same human form: money as
+        dollars, dates as displayed); a mismatch refuses and names what the
+        field really holds, writing nothing. expecting omitted asserts the
+        field is BLANK (use enrich_field for routine blank-filling). `kind`
+        is org|contact|opportunity|project|project_need|task|team_member|
+        rfi_request|rfi_item; `ref` is the exact name (org/contact/
+        team_member — contact also needs `client`) or the exact ref/id a
+        read returned. Stage moves are opportunity_stage, never this."""
+        return _edit_field(rw, kind, ref, field, value,
+                           expecting=expecting, client=client)
+
+    @server.tool()
     async def list_batches(limit: int = 20) -> list[dict[str, Any]]:
         """Recent changes THIS server made, newest first, each with the `ref`
         that `revert_batch` takes. Covers the last 14 days. Use it to show the
@@ -735,6 +756,201 @@ def _clean_field_value(field: str, value: str) -> str:
         return value
     cleaner = getattr(normalize, cleaner_name)
     return cleaner(value)  # type: ignore[no-any-return]
+
+
+# edit_field's allowlists: (kind → field → value type). Types: "text" routes
+# through _FIELD_CLEANERS like enrich_field; "money" parses to integer cents;
+# "date" through parse_human_date; "int" plain; a tuple is a closed
+# vocabulary and refusals list it. Deliberate absences are the contract:
+# opportunity stage/outcome/closed_at belong to opportunity_stage, and
+# project_need.status belongs to the queued needs→pipeline reconciler.
+def _editable() -> dict[str, dict[str, Any]]:
+    from .models import PROJECT_STATUSES
+
+    return {
+        "org": {f: "text" for f in _ENRICHABLE_ORG},
+        "contact": {
+            **{f: "text" for f in _ENRICHABLE_CONTACT},
+            "first_name": "text", "last_name": "text",
+        },
+        "opportunity": {
+            "title": "text", "lines": "text", "target_premium": "money",
+            "target_effective": "date", "probability_pct": "int",
+            "source": "text", "incumbent_broker": "text",
+            "competitor": "text", "notes": "text",
+        },
+        "project": {
+            "name": "text", "description": "text", "site": "text",
+            "status": PROJECT_STATUSES, "start_on": "date", "end_on": "date",
+            "notes": "text",
+        },
+        # need STATUS is deliberately absent: the queued needs→pipeline
+        # reconciler owns need-status semantics
+        "project_need": {
+            "line": "text", "needed_by": "date", "limit_cents": "money",
+            "premium_indication_cents": "money", "notes": "text",
+        },
+        "task": {
+            "title": "text", "description": "text", "detail": "text",
+            "category": "text", "due_on": "date",
+        },
+        "team_member": {
+            "title": "text", "specialty": "text", "email": "text",
+            "phone": "text", "notes": "text",
+        },
+        "rfi_request": {"title": "text", "due_on": "date", "notes": "text"},
+        "rfi_item": {
+            "prompt": "text", "category": "text", "due_on": "date",
+            "response": "text",
+        },
+    }
+
+
+_EDITABLE: dict[str, dict[str, Any]] = _editable()
+
+
+def _clean_typed(vtype: Any, field: str, value: str | None) -> Any:
+    """One cleaning rule for value AND expecting, so the model compares in
+    the same human forms a read returned."""
+    if value is None:
+        return None
+    if vtype == "money":
+        from .money import parse_money_cents
+
+        return parse_money_cents(value)
+    if vtype == "date":
+        from .dates import parse_human_date
+
+        parsed = parse_human_date(value)
+        if parsed is None:
+            raise ValueError(f"cannot read a date from {value!r}")
+        return parsed.isoformat()
+    if vtype == "int":
+        return int(value)
+    if isinstance(vtype, tuple):
+        if value not in vtype:
+            raise ValueError(f"{field!r} must be one of {list(vtype)}, not {value!r}")
+        return value
+    return _clean_field_value(field, value)
+
+
+def _edit_target(
+    conn: sqlite3.Connection, kind: str, ref: str, client: str | None
+) -> tuple[str, str | None, Any]:
+    """(entity_id, org_id-for-the-batch, current-row-model). Exact resolution
+    only — a write target is never fuzzy-matched."""
+    from .repo import contacts as contacts_repo
+
+    if kind == "org":
+        org = _resolve_client(conn, ref)
+        return org.id, org.id, org
+    if kind == "contact":
+        if not client:
+            raise ValueError("editing a contact needs `client` to scope the name")
+        org = _resolve_client(conn, client)
+        people = contacts_repo.for_org(conn, org.id, active_only=False)
+        target = next((c for c in people if c.name.lower() == ref.lower()), None)
+        if target is None:
+            raise ValueError(
+                f"no contact {ref!r} at {org.name}; have: {[c.name for c in people]}"
+            )
+        return target.id, org.id, target
+    if kind == "opportunity":
+        from .repo import opportunities
+
+        opp = opportunities.find(conn, ref)
+        if opp is None:
+            raise ValueError(f"no opportunity {ref!r} — use its exact ref (OPP-…)")
+        return opp.id, opp.org_id, opp
+    if kind == "project":
+        from .repo import projects as projects_repo
+
+        project = projects_repo.find_project(conn, ref)
+        if project is None:
+            raise ValueError(f"no project {ref!r} — use its exact ref (PRJ-…)")
+        return project.id, project.org_id, project
+    if kind == "project_need":
+        from .repo import projects as projects_repo
+
+        need = projects_repo.get_need(conn, ref)          # KeyError → tool error
+        project = projects_repo.get_project(conn, need.project_id)
+        return need.id, project.org_id, need
+    if kind == "task":
+        from .repo import tasks as tasks_repo
+
+        task = tasks_repo.get(conn, ref)                  # KeyError → tool error
+        return task.id, task.org_id, task
+    if kind == "team_member":
+        from .repo import team
+
+        members = team.list_members(conn, active_only=False)
+        member = next((m for m in members if m.name.lower() == ref.lower()), None)
+        if member is None:
+            raise ValueError(
+                f"no team member {ref!r}; have: {[m.name for m in members]}"
+            )
+        return member.id, None, member
+    if kind == "rfi_request":
+        request = _resolve_request(conn, ref)
+        return request.id, request.org_id, request
+    if kind == "rfi_item":
+        from .repo import rfi as rfi_repo
+
+        item = rfi_repo.get_item(conn, ref)               # KeyError → tool error
+        request = rfi_repo.get_request(conn, item.request_id)
+        return item.id, request.org_id, item
+    raise ValueError(f"cannot edit kind {kind!r}; editable: {sorted(_EDITABLE)}")
+
+
+def _edit_field(
+    conn: sqlite3.Connection,
+    kind: str,
+    ref: str,
+    field: str,
+    value: str,
+    expecting: str | None,
+    client: str | None = None,
+) -> dict[str, Any]:
+    """The deliberate overwrite: compare-and-set. `expecting` must match the
+    stored value (both cleaned the same way); a mismatch refuses and names
+    what the field actually holds, writing nothing. expecting=None asserts
+    the field is blank — enrich semantics made explicit."""
+    from .repo import base
+
+    allowed = _EDITABLE.get(kind)
+    if allowed is None:
+        raise ValueError(f"cannot edit kind {kind!r}; editable: {sorted(_EDITABLE)}")
+    vtype = allowed.get(field)
+    if vtype is None:
+        raise ValueError(
+            f"{field!r} is not editable on a {kind}; allowed: {sorted(allowed)}"
+        )
+
+    entity_id, org_id, row = _edit_target(conn, kind, ref, client)
+    current = getattr(row, field)
+    expected = _clean_typed(vtype, field, expecting)
+    blank = current in (None, "")
+    if expecting is None:
+        if not blank:
+            raise ValueError(
+                f"{kind}.{field} is not blank — it holds {current!r}; pass "
+                f"expecting=<that value> to overwrite deliberately"
+            )
+    elif blank or current != expected:
+        raise ValueError(
+            f"{kind}.{field} holds {current!r}, not what you expected "
+            f"({expected!r}) — re-read the record and retry"
+        )
+
+    cleaned = _clean_typed(vtype, field, value)
+    with _open_batch(
+        conn, tool="edit_field", org_id=org_id,
+        summary=f"edited {kind}.{field} on {ref}",
+    ) as batch:
+        base.update(conn, kind, entity_id, {field: cleaned}, note="mcp edit")
+        _provenance(conn, kind, entity_id)
+    return {"edited": True, "kind": kind, "field": field, "value": cleaned,
+            "was": current, "batch": batch.ref}
 
 
 def _enrich_field(

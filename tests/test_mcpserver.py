@@ -930,3 +930,159 @@ def test_batch_tools_are_registered(server_db):
     server = build_server(server_db)
     names = {t.name for t in server._tool_manager.list_tools()}
     assert {"list_batches", "revert_batch"} <= names
+
+
+# -- edit_field: compare-and-set overwrites -----------------------------------
+
+
+def _rw(server_db, *, client=True):
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client") if client else None
+    conn.close()
+    return db.connect(server_db), org
+
+
+def test_edit_field_overwrites_when_expecting_matches(server_db):
+    rw, org = _rw(server_db)
+    mcpserver._enrich_field(rw, "Acme", "website", "https://old.example")
+
+    out = mcpserver._edit_field(
+        rw, "org", "Acme", "website",
+        value="https://new.example", expecting="https://old.example",
+    )
+    assert out["batch"].startswith("MCP-")
+    assert orgs.get(rw, org.id).website == "https://new.example"
+
+    mcpserver._revert_batch(rw, out["batch"], now="2026-08-14T02:00:00Z")
+    assert orgs.get(rw, org.id).website == "https://old.example"
+
+
+def test_edit_field_refuses_on_stale_expecting_and_writes_nothing(server_db):
+    rw, org = _rw(server_db)
+    mcpserver._enrich_field(rw, "Acme", "website", "https://real.example")
+
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "org", "Acme", "website",
+            value="https://new.example", expecting="https://wrong.example",
+        )
+    assert "https://real.example" in str(err.value)   # names the actual value
+    assert orgs.get(rw, org.id).website == "https://real.example"
+
+
+def test_edit_field_expecting_none_means_blank(server_db):
+    rw, org = _rw(server_db)
+    # blank field + expecting None == enrich semantics, made explicit
+    out = mcpserver._edit_field(
+        rw, "org", "Acme", "website",
+        value="https://first.example", expecting=None,
+    )
+    assert out["batch"].startswith("MCP-")
+    # non-blank field + expecting None must refuse
+    with pytest.raises(ValueError):
+        mcpserver._edit_field(
+            rw, "org", "Acme", "website",
+            value="https://other.example", expecting=None,
+        )
+    assert orgs.get(rw, org.id).website == "https://first.example"
+
+
+def test_edit_field_rejects_fields_off_the_allowlist(server_db):
+    rw, _ = _rw(server_db)
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(rw, "org", "Acme", "ref",
+                              value="ACC-9999", expecting="ACC-0001")
+    assert "ref" in str(err.value)
+
+
+def test_edit_field_contact_requires_client_and_exact_name(server_db):
+    from bookkit.repo import contacts as contacts_repo
+
+    rw, org = _rw(server_db)
+    ann = contacts_repo.create(rw, org.id, first_name="Ann", last_name="Lee",
+                               email="ann@old.example")
+
+    out = mcpserver._edit_field(
+        rw, "contact", "Ann Lee", "email",
+        value="ann@new.example", expecting="ann@old.example", client="Acme",
+    )
+    assert out["batch"].startswith("MCP-")
+    assert contacts_repo.get(rw, ann.id).email == "ann@new.example"
+
+    with pytest.raises(ValueError):
+        mcpserver._edit_field(
+            rw, "contact", "Ann Lee", "email",
+            value="x@y.example", expecting="ann@new.example",  # no client
+        )
+
+
+def test_edit_field_moves_a_task_due_date(server_db):
+    rw, org = _rw(server_db)
+    task = tasks.create(rw, "chase quote", org_id=org.id, due_on="2026-08-20")
+
+    out = mcpserver._edit_field(
+        rw, "task", task.id, "due_on", value="2026-09-01", expecting="2026-08-20",
+    )
+    assert out["batch"].startswith("MCP-")
+    assert tasks.get(rw, task.id).due_on == "2026-09-01"
+
+
+def test_edit_field_never_touches_opportunity_stage(server_db):
+    from bookkit.repo import opportunities
+
+    rw, org = _rw(server_db)
+    opp = opportunities.create(rw, org.id, "Cyber placement")
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(rw, "opportunity", opp.ref, "stage",
+                              value="qualified", expecting="identified")
+    assert "stage" in str(err.value)
+    assert opportunities.get(rw, opp.id).stage == "identified"
+
+
+def test_edit_field_validates_vocab_and_lists_legal_values(server_db):
+    from bookkit.repo import projects
+
+    rw, org = _rw(server_db)
+    project = projects.create_project(rw, org.id, "HQ Build", status="planned")
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(rw, "project", project.ref, "status",
+                              value="underway", expecting="planned")
+    assert "active" in str(err.value)          # the legal list is in the error
+    out = mcpserver._edit_field(rw, "project", project.ref, "status",
+                                value="active", expecting="planned")
+    assert out["edited"] and projects.get_project(rw, project.id).status == "active"
+
+
+def test_edit_field_money_compares_in_human_form(server_db):
+    from bookkit.repo import opportunities
+
+    rw, org = _rw(server_db)
+    opp = opportunities.create(rw, org.id, "Cyber placement",
+                               target_premium=120_000_000)  # cents = $1.2m
+    out = mcpserver._edit_field(
+        rw, "opportunity", opp.ref, "target_premium",
+        value="1.5m", expecting="1.2m",
+    )
+    assert out["value"] == 150_000_000
+    assert opportunities.get(rw, opp.id).target_premium == 150_000_000
+
+
+def test_edit_field_edits_rfi_item_response(server_db):
+    rw, org = _rw(server_db)
+    req = rfi.create_request(rw, org.id, "Sompo questions", "2026-08-05")
+    item = rfi.add_item(rw, req.id, "how many vehicles?")
+    out = mcpserver._edit_field(rw, "rfi_item", item.id, "response",
+                                value="42 vehicles", expecting=None)
+    assert out["edited"]
+    assert rfi.get_item(rw, item.id).response == "42 vehicles"
+
+
+def test_edit_field_team_member_by_exact_name(server_db):
+    from bookkit.repo import team
+
+    rw, _ = _rw(server_db)
+    member = team.create_member(rw, "Dana Cruz", specialty="cyber")
+    out = mcpserver._edit_field(rw, "team_member", "Dana Cruz", "specialty",
+                                value="cyber, tech E&O", expecting="cyber")
+    assert out["edited"]
+    assert team.get_member(rw, member.id).specialty == "cyber, tech E&O"

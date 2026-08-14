@@ -24,6 +24,17 @@ def create_project(
     return get_project(conn, project_id)
 
 
+def find_project(conn: sqlite3.Connection, ref_or_id: str) -> Project | None:
+    """By ref (PRJ-0001, case-insensitive) or id — opportunities.find's twin,
+    so MCP can resolve the refs its reads hand out."""
+    row = conn.execute(
+        f"SELECT * FROM project WHERE (id = ? OR ref = ? COLLATE NOCASE)"
+        f" AND {base.alive()}",
+        (ref_or_id, ref_or_id),
+    ).fetchone()
+    return Project.from_row(row) if row else None
+
+
 def get_project(conn: sqlite3.Connection, project_id: str) -> Project:
     row = base.get(conn, "project", project_id)
     if row is None:
