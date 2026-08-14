@@ -113,3 +113,35 @@ async def test_batch_tools_round_trip_over_protocol(tmp_path):
     from bookkit.repo import interactions
     assert interactions.for_org(check, org.id) == []
     check.close()
+
+
+async def test_edit_field_compare_and_set_over_protocol(tmp_path):
+    """The expecting arg crosses the wire: a stale value refuses with the
+    actual named, a fresh one lands — over the real protocol, not the
+    registry."""
+    path = tmp_path / "rt.db"
+    conn = db.connect(path)
+    org = orgs.create(conn, name="Acme", kind="client",
+                      website="https://old.example")
+    conn.close()
+    server = build_server(path)
+
+    from mcp.client import Client
+
+    async with Client(server) as client:
+        stale = await client.call_tool("edit_field", {
+            "kind": "org", "ref": "Acme", "field": "website",
+            "value": "https://new.example", "expecting": "https://wrong.example",
+        })
+        assert stale.is_error
+        assert "https://old.example" in str(stale.content)
+
+        fresh = _payload(await client.call_tool("edit_field", {
+            "kind": "org", "ref": "Acme", "field": "website",
+            "value": "https://new.example", "expecting": "https://old.example",
+        }))
+        assert fresh["edited"] is True
+
+    check = db.connect(path)
+    assert orgs.get(check, org.id).website == "https://new.example"
+    check.close()
