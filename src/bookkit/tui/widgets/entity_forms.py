@@ -29,6 +29,7 @@ from ...models import (
     RfiRequest,
     Submission,
     Task,
+    TeamAssignment,
     TeamMember,
 )
 from ...repo import (
@@ -38,6 +39,7 @@ from ...repo import (
     orgs,
     placements,
     submissions,
+    team,
     vocab,
 )
 from ...repo import projects as projects_repo
@@ -392,9 +394,17 @@ def assignment_form(
     *,
     title: str = "assign team member",
     conn: sqlite3.Connection | None = None,
+    existing: TeamAssignment | None = None,
 ) -> FormSpec:
     """With member_options, the form picks WHO; without, the caller already
-    knows the member (the Team screen's assign-to-account flow)."""
+    knows the member (the Team screen's assign-to-account flow, and every
+    edit — you correct an assignment, you do not re-pick its subject).
+
+    `existing` turns this into the edit form. Note what it still does NOT
+    offer: the client and the placement. One colleague can hold several
+    assignments on one account — a row per line of cover — so an edit has to
+    stay on the row it opened, and moving someone between clients is
+    unassign + assign, kept deliberately separate."""
     line_sugg = tuple(vocab.lines(conn)) if conn else ()
     fields = []
     if member_options:
@@ -414,7 +424,18 @@ def assignment_form(
             Field("notes", "notes", "textarea"),
         ]
     )
-    return FormSpec(title, fields)
+    return FormSpec(
+        title, fields,
+        initial=existing.model_dump() if existing else {},
+    )
+
+
+def apply_assignment(
+    conn: sqlite3.Connection, values: dict[str, Any], existing: TeamAssignment
+) -> TeamAssignment:
+    """Role/lines/notes only — `dropped` cannot introduce a scope key here
+    because the form never renders one."""
+    return team.update_assignment(conn, existing.id, **dropped(values))
 
 
 # --- document -----------------------------------------------------------------
