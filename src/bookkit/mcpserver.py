@@ -1423,6 +1423,22 @@ def _team_assign(
             "batch": batch.ref}
 
 
+def _assignment_org_id(
+    conn: sqlite3.Connection, org_id: str | None, placement_id: str | None
+) -> str | None:
+    """The org a team assignment belongs to. Account-level rows carry it
+    directly; deal-level rows carry only the placement, and a batch stamped
+    with no org is invisible in that client's history. One rule, so the three
+    assignment write paths cannot drift apart again."""
+    if org_id is not None:
+        return org_id
+    if placement_id is None:
+        return None
+    from .repo import placements as placements_repo
+
+    return placements_repo.get(conn, placement_id).org_id
+
+
 def _team_unassign(conn: sqlite3.Connection, assignment_id: str) -> dict[str, Any]:
     from .repo import base, team
 
@@ -1432,7 +1448,8 @@ def _team_unassign(conn: sqlite3.Connection, assignment_id: str) -> dict[str, An
             f"no assignment {assignment_id!r} — read team_roster for exact ids"
         )
     with _open_batch(
-        conn, tool="team_unassign", org_id=row["org_id"],
+        conn, tool="team_unassign",
+        org_id=_assignment_org_id(conn, row["org_id"], row["placement_id"]),
         summary="removed a team assignment",
     ) as batch:
         team.unassign(conn, assignment_id)
@@ -1724,11 +1741,9 @@ def _edit_target(
                 f"no assignment {ref!r} — read team_roster for exact ids"
             )
         assignment = TeamAssignment.from_row(row)
-        org_id = assignment.org_id
-        if org_id is None and assignment.placement_id is not None:
-            from .repo import placements as placements_repo
-
-            org_id = placements_repo.get(conn, assignment.placement_id).org_id
+        org_id = _assignment_org_id(
+            conn, assignment.org_id, assignment.placement_id
+        )
         return assignment.id, org_id, assignment
     raise ValueError(f"cannot edit kind {kind!r}; editable: {sorted(_EDITABLE)}")
 
