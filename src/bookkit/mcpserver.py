@@ -1469,6 +1469,7 @@ def _member_deactivate(
     ) as batch:
         for row in rows:
             team.unassign(conn, row["id"])
+            _provenance(conn, "team_assignment", row["id"])
         base.update(conn, "team_member", member.id, {"active": 0},
                     note="mcp deactivate")
         _provenance(conn, "team_member", member.id)
