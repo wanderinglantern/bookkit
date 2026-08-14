@@ -1808,3 +1808,13 @@ async def test_enter_on_a_batch_shows_field_level_before_and_after(seeded_db: Pa
         rendered = " ".join(str(w.render()) for w in app.screen.query(StaticW))
         assert "website" in rendered
         assert "https://mcp.example" in rendered
+
+
+async def test_help_documents_the_revert_key(seeded_db: Path) -> None:
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(160, 48)) as pilot:
+        await pilot.press("?")
+        await pilot.pause()
+        from textual.widgets import Static as StaticW
+        rendered = " ".join(str(w.render()) for w in app.screen.query(StaticW))
+        assert "R reverts the highlighted change" in rendered

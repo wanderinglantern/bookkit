@@ -41,6 +41,9 @@ HELP = """\
   t  classic Today dashboard    b/c/p/m/w  book/calendar/pipeline/markets/team
   o  onboard (resume or start)  x  export open items workbook
   ,  setup (where program files live)
+  MCP CHANGES section: what the assistant changed, last 14 days — enter
+  shows before→after; R reverts the highlighted change (refuses if you
+  edited the same fields since; f then forces the rest)
 
 [b]today screen (t)[/b]
   b  book        c  renewal calendar        a  new task
