@@ -1086,3 +1086,204 @@ def test_edit_field_team_member_by_exact_name(server_db):
                                 value="cyber, tech E&O", expecting="cyber")
     assert out["edited"]
     assert team.get_member(rw, member.id).specialty == "cyber, tech E&O"
+
+
+# -- creates ------------------------------------------------------------------
+
+
+def test_contact_add_links_and_optionally_primaries(server_db):
+    from bookkit.repo import contacts as contacts_repo
+
+    rw, org = _rw(server_db)
+    out = mcpserver._contact_add(
+        rw, "Acme", first_name="Ann", last_name="Lee",
+        email="ann@acme.example", make_primary=True,
+    )
+    assert out["batch"].startswith("MCP-")
+    roster = contacts_repo.for_org(rw, org.id)
+    assert [c.name for c in roster] == ["Ann Lee"]
+    assert roster[0].is_primary
+    assert roster[0].email == "ann@acme.example"
+
+
+def test_contact_add_refuses_exact_duplicate_name(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._contact_add(rw, "Acme", first_name="Ann", last_name="Lee")
+    with pytest.raises(ValueError) as err:
+        mcpserver._contact_add(rw, "Acme", first_name="ann", last_name="lee")
+    assert "Ann Lee" in str(err.value)
+
+
+def test_opportunity_create_dup_guard_fuzzy_against_open_opps(server_db):
+    from bookkit.repo import opportunities
+
+    rw, org = _rw(server_db)
+    opportunities.create(rw, org.id, "Cyber placement", lines="cyber")
+    with pytest.raises(ValueError) as err:
+        mcpserver._opportunity_create(rw, "Acme", "Cyber Placement", lines="cyber")
+    assert "Cyber placement" in str(err.value)
+
+
+def test_opportunity_create_closed_opps_do_not_block(server_db):
+    from bookkit.repo import base, opportunities
+
+    rw, org = _rw(server_db)
+    old = opportunities.create(rw, org.id, "Cyber placement", lines="cyber")
+    base.update(rw, "opportunity", old.id, {"stage": "lost"})
+
+    out = mcpserver._opportunity_create(
+        rw, "Acme", "Cyber placement", lines="cyber",
+        target_premium="1.2m", target_effective="2027-01-01",
+    )
+    assert out["batch"].startswith("MCP-")
+    made = opportunities.find(rw, out["opportunity_ref"])
+    assert made.target_premium == 120_000_000
+    assert made.target_effective == "2027-01-01"
+
+
+def test_project_create_and_need_add_round_trip(server_db):
+    from bookkit.repo import projects
+
+    rw, org = _rw(server_db)
+    made = mcpserver._project_create(rw, "Acme", "HQ Tower Build",
+                                     site="Chicago, IL", start_on="2026-09-01")
+    project = projects.find_project(rw, made["project_ref"])
+    assert project.site == "Chicago, IL"
+
+    need = mcpserver._need_add(rw, made["project_ref"], "builders risk",
+                               needed_by="2026-08-25")
+    got = projects.needs_for_project(rw, project.id)
+    assert [n.line for n in got] == ["builders risk"]
+    assert need["batch"] != made["batch"]
+
+
+def test_create_batches_revert_wholesale(server_db):
+    from bookkit.repo import opportunities
+
+    rw, org = _rw(server_db)
+    out = mcpserver._opportunity_create(rw, "Acme", "Cyber placement", lines="cyber")
+    mcpserver._revert_batch(rw, out["batch"], now="2026-08-14T03:00:00Z")
+    assert opportunities.find(rw, out["opportunity_ref"]) is None
+
+
+# -- team ---------------------------------------------------------------------
+
+
+def test_team_roster_exposes_assignment_ids(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    member = team.create_member(rw, "Dana Cruz", specialty="cyber")
+    assignment = team.assign(rw, member.id, org_id=org.id, lines="cyber")
+
+    out = mcpserver._team_roster(rw)
+    names = [m["name"] for m in out["members"]]
+    assert "Dana Cruz" in names
+    dana = next(m for m in out["members"] if m["name"] == "Dana Cruz")
+    assert dana["assignments"][0]["assignment_id"] == assignment.id
+    assert dana["assignments"][0]["account"] == "Acme"
+
+
+def test_member_create_refuses_duplicate_name(server_db):
+    rw, _ = _rw(server_db)
+    out = mcpserver._member_create(rw, "Dana Cruz", specialty="cyber")
+    assert out["batch"].startswith("MCP-")
+    with pytest.raises(ValueError):
+        mcpserver._member_create(rw, "dana cruz")
+
+
+def test_team_assign_by_exact_member_name_scopes_org_and_lines(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    out = mcpserver._team_assign(rw, "Dana Cruz", client="Acme",
+                                 lines="cyber", role="placement_specialist")
+    assert out["batch"].startswith("MCP-")
+    rows = team.for_org(rw, org.id)
+    assert len(rows) == 1 and rows[0]["lines"] == "cyber"
+
+
+def test_team_assign_requires_exactly_one_scope(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    with pytest.raises(ValueError):
+        mcpserver._team_assign(rw, "Dana Cruz")   # neither client nor placement
+
+
+def test_team_assign_validates_role_vocab(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    with pytest.raises(ValueError) as err:
+        mcpserver._team_assign(rw, "Dana Cruz", client="Acme", role="wizard")
+    assert "account_lead" in str(err.value)
+
+
+def test_unassign_takes_exact_id_and_reverts(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme")
+    aid = assigned["assignment_id"]
+
+    out = mcpserver._team_unassign(rw, aid)
+    assert team.for_org(rw, org.id) == []
+
+    mcpserver._revert_batch(rw, out["batch"], now="2026-08-14T03:30:00Z")
+    assert len(team.for_org(rw, org.id)) == 1
+
+
+# -- transitions --------------------------------------------------------------
+
+
+def test_opportunity_stage_advances_one_gate(server_db):
+    from bookkit.repo import opportunities
+
+    rw, org = _rw(server_db)
+    opp = opportunities.create(rw, org.id, "Cyber placement")
+    out = mcpserver._opportunity_stage(rw, opp.ref, "qualified")
+    assert out["stage"] == "qualified"
+    assert out["batch"].startswith("MCP-")
+
+
+def test_opportunity_stage_illegal_jump_refused_with_ladder(server_db):
+    from bookkit.repo import opportunities
+
+    rw, org = _rw(server_db)
+    opp = opportunities.create(rw, org.id, "Cyber placement")
+    with pytest.raises(Exception) as err:
+        mcpserver._opportunity_stage(rw, opp.ref, "quoted")
+    assert "qualified" in str(err.value)      # the ladder is in the error
+    assert opportunities.get(rw, opp.id).stage == "identified"
+
+
+def test_opportunity_stage_won_closes_properly(server_db):
+    from bookkit.repo import base, opportunities
+
+    rw, org = _rw(server_db)
+    opp = opportunities.create(rw, org.id, "Cyber placement")
+    out = mcpserver._opportunity_stage(rw, opp.ref, "won")
+    got = opportunities.get(rw, opp.id)
+    assert got.probability_pct == 100
+    assert got.outcome == "won" and got.closed_at is not None
+    assert out["stage"] == "won"
+    assert base.alive  # keep import
+
+
+def test_task_reopen_flips_back(server_db):
+    rw, org = _rw(server_db)
+    task = tasks.create(rw, "chase quote", org_id=org.id)
+    tasks.complete(rw, task.id)
+    out = mcpserver._task_reopen(rw, task.id)
+    assert out["status"] == "open"
+    assert tasks.get(rw, task.id).completed_at is None
+
+
+def test_request_item_waive_sets_status(server_db):
+    rw, org = _rw(server_db)
+    req = rfi.create_request(rw, org.id, "Sompo questions", "2026-08-05")
+    item = rfi.add_item(rw, req.id, "how many vehicles?")
+    out = mcpserver._request_item_waive(rw, item.id)
+    assert out["status"] == "waived"
+    assert rfi.get_item(rw, item.id).status == "waived"
