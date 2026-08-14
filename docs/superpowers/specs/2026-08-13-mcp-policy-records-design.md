@@ -1,9 +1,10 @@
 # MCP policy records — design
 
 Date: 2026-08-13 (overnight)
-Status: DRAFT — implementation begun on feat/mcp-policy-records, held
-unmerged for Grant's morning review. Everything else this night merged;
-this one waits because Grant has not seen this design.
+Status: approved (Grant, 2026-08-14: "Merge it") — merged as 79564ee.
+The REVIEW POINT below resolved the same morning: design-level assist
+(lines, retentions, structure) will be a TOWERKIT EDITOR MCP, specced in
+its own session — this spec's boundary stands.
 
 ## Goal
 
