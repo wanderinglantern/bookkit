@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -85,12 +85,20 @@ def utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-def default_db_path() -> Path:
-    """$BOOKKIT_DB overrides; else $XDG_DATA_HOME/bookkit/bookkit.db."""
-    env = os.environ.get("BOOKKIT_DB")
-    if env:
-        return Path(env).expanduser()
-    xdg = os.environ.get("XDG_DATA_HOME")
+def default_db_path(env: Mapping[str, str] | None = None) -> Path:
+    """$BOOKKIT_DB overrides; else $XDG_DATA_HOME/bookkit/bookkit.db.
+
+    `env` defaults to this process's environment. Pass an explicit mapping to
+    resolve the path some *other* process would land on — connector.py passes
+    an empty one to ask "where would a GUI app that inherits no shell
+    environment look?", which is the whole question the Command/Arguments
+    fields have to answer.
+    """
+    source = os.environ if env is None else env
+    override = source.get("BOOKKIT_DB")
+    if override:
+        return Path(override).expanduser()
+    xdg = source.get("XDG_DATA_HOME")
     base = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "share"
     return base / "bookkit" / "bookkit.db"
 
