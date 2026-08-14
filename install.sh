@@ -26,7 +26,11 @@ cd "$(dirname "$0")"
 
 WHEELHOUSE_URL="https://github.com/wanderinglantern/bookkit/releases/download/v0.1.0/bookkit-wheelhouse-macos.zip"
 PY="${PYTHON:-python3}"
-WHEELHOUSE_SHA256="0ed4f0f466734b8dcb3d440bdb63d79392e92ec7f658ab23c822ae87c09ec184"
+# Bump this in the SAME commit that re-uploads the release asset, and take the
+# hash from the *uploaded* file, not the local copy. towerkit's went stale when
+# mcp>=2.0 landed and the fallback then aborted with "altered in transit" — a
+# tamper warning about a file nobody tampered with.
+WHEELHOUSE_SHA256="9c7fdbf1262c9261216295990a29242729de4b75d073fb1e48b80b4a15a8c5e0"
 TOWERKIT="../towerkit"
 
 if [ ! -f "$TOWERKIT/pyproject.toml" ]; then
@@ -42,7 +46,7 @@ rm -rf .venv
 "$PY" -m venv .venv
 
 fetch_wheelhouse() {
-    echo "→ downloading wheelhouse (~150MB) …"
+    echo "→ downloading wheelhouse (~85MB) …"
     curl -fSL --progress-bar -o wheelhouse.zip "$WHEELHOUSE_URL"
     # the corporate proxy has been caught altering pip downloads —
     # verify this artifact against the hash pinned in git

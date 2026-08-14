@@ -69,8 +69,13 @@
   now). This Mac's default DB is a stale experiment. Build/verify against
   seeded sample data locally; hand him `bookctl` commands for anything
   data-dependent.
-- install.sh is PyPI-first with wheelhouse fallback. New-dep drill lives
-  in towerkit's CLAUDE.md (wheel download, re-zip, release --clobber).
+- install.sh is PyPI-first with wheelhouse fallback. The new-dep drill and
+  its verification step are documented on the `wheelhouse` target in the
+  Makefile. Two rules learned 2026-08-14: take WHEELHOUSE_SHA256 from the
+  *uploaded* asset in the same commit as the upload (a stale hash aborts
+  with "altered in transit", a tamper warning about an untampered file),
+  and the wheelhouse is arm64-only now — cryptography, via mcp's
+  pyjwt[crypto], ships no macOS x86_64 wheels.
 - Dates: numeric entry is MDY, two-digit years are 20xx (towerkit fast
   path). Never let dateparser century-bump a past date.
 - CONCURRENT PHASES GET THEIR OWN WORKTREE. Two sessions sharing one
