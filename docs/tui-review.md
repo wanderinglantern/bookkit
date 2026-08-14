@@ -5,11 +5,18 @@
 `db.py` connection setup, and the TUI test suite.
 **Status** findings only — no application code was changed.
 
-**32 findings — 2 P0, 16 P1, 14 P2** (F2 was withdrawn from P0; see below).
+**34 findings — 2 P0, 18 P1, 14 P2** (F2 was withdrawn from P0; F33–F34 added from use).
 
-**Batch A is built** on branch `tui-batch-a`: F1, F7, F11, F22, F23, F28 fixed, F2 reduced
-and made explicit. 492 tests pass, `mypy --strict` and `ruff` clean. Each fix has a
-regression test that was watched failing first.
+**Shipped so far** on branch `tui-batch-a`, 541 tests passing with `mypy --strict` and
+`ruff` clean, every fix carrying a regression test watched failing first:
+
+- **Batch A** — F1, F7, F11, F22, F23, F28 fixed; F2 reduced and made explicit.
+- **F14** — the snapshots are now read, not just written: 18 screens × 2 terminal sizes,
+  against a frozen clock. Pulled forward from Batch E so Batch B could not regress.
+- **Batch B** — F4, F5, F6, F12, F13, F25 fixed. 17 snapshots changed, each reviewed; the
+  19 untouched screens stayed byte-identical.
+
+**Still open and ranked next:** Batch C (F33, F34 — the CRUD gaps Grant hit in use).
 
 Evidence: every screen was driven headlessly through `App.run_test()` at 140×45 and
 80×24, exported as SVG (`docs/screenshots/`) and as composited plain text
@@ -514,6 +521,75 @@ render verbatim, which is a real bug it is preventing.
 
 ---
 
+<a id="f33"></a>
+**[P1] [defect] Interaction notes are write-only — no read, no edit** —
+`account.py:319`, `interactions.py:84` · Effort **M**
+
+**Raised by Grant, 2026-08-14.** Verified.
+
+`interactions.log()` stores a `body`, and **nothing in the TUI ever displays it**. The
+Interactions tab renders four columns — date, type, subject, who — and the note you typed
+into quick capture is not among them. `interactions.update()` exists at
+`repo/interactions.py:84` and **is never called from anywhere in `tui/`**. On that tab `e`
+does not edit the interaction; it edits the *account*.
+
+So the relationship log supports Create (`a` → quick capture) and Delete (`D`, soft, `u`
+restores) and neither Read nor Update. Every note written since the app was built is
+sitting in the database, unreadable from the app that wrote it.
+
+*Against the review's own dimensions:*
+- **§7 feedback** — a field you can write and never read is a silent data sink. This is
+  the same class as F22 ("opening…" for a file that isn't there), one layer deeper.
+- **§1 widget selection** — the fix is a pattern this screen already runs: tab 9 is
+  master/detail (`#rfi-requests` 40% over `#rfi-items`, re-pointed from
+  `on_data_table_row_highlighted`). Tab 3 should be the same shape.
+- **§9 data layer** — the repo already does everything needed. This is wiring, not design.
+
+*Fix:*
+1. Split tab 3 into master/detail exactly as `_fill_request_items` does: the table on top,
+   the highlighted interaction's `body` in a scrolling pane beneath, re-pointed on
+   `RowHighlighted`.
+2. `e`, when `#interactions-table` or `#ov-interactions` has focus, opens an
+   `interaction_form` (date, type, subject, attendees, body) committing through
+   `interactions.update`. Focus disambiguates, exactly as it already does for `D`.
+3. Render the body with `Text(...)`, never markup — pasted email bodies contain brackets,
+   and `Static.update` eats them (the pitfall that produced "the preview doesn't display
+   anything").
+
+---
+
+<a id="f34"></a>
+**[P1] [defect] A task cannot be dropped or deleted — only completed** —
+`tasks.py:82,97` · Effort **S**
+
+**Raised by Grant, 2026-08-14: "unable to delete ones I don't want/need."** Verified.
+
+`repo/tasks.py` provides `drop()` (line 82), `reopen()` (87) and `delete()` (97).
+**The TUI calls none of them** — `grep` for `tasks_repo.drop|tasks_repo.delete` across
+`src/bookkit/tui/` returns nothing. The only exits from a task are `complete()` and
+`update()`.
+
+A task created by mistake — or logged by the MCP server against the wrong account, which
+is the case `D` on interactions exists for — can only be marked *done*. That is a lie
+recorded in the event log, and it pollutes every "what did I finish" view.
+
+*Against the review's own dimensions:*
+- **§4 destructive actions** — the app's stated position is undo over confirmation, and
+  it already honours it: `d` says "task done — u to undo". Drop should read identically.
+- **§6 binding consistency** — `D` currently means "delete the selected interaction",
+  hard-wired to two tables. It should mean **"delete the selected row"**, resolved by
+  which table has focus, which is how `a`, `e` and `d` already behave on this screen.
+
+*Fix:* extend `action_delete_interaction` into a general `action_delete_row`. With a task
+table focused it calls `tasks_repo.drop()` — status `dropped`, out of the open lists,
+kept in history, one field write so `u` genuinely undoes it — and notifies "task dropped —
+u to undo". With an interaction table focused, behaviour is unchanged. Add `D` to the
+Navigator's bindings too, where `d` already completes a task and there is no way to drop
+one. Reserve hard `delete()` for a later, explicit "purge" if it is ever wanted; `drop` is
+what "I don't need this" means.
+
+---
+
 ### P2
 
 | # | Finding | Where | Effort |
@@ -582,12 +658,19 @@ Everything the 80×24 pass surfaced, plus the empty states and the help screen. 
 *after* F14 so the snapshots hold the line.
 *Unlocks:* usable over SSH and in a tmux split, not just in a full window.
 
-**Batch C — "faster than navigating"** (F10, F19, F20, F21 — M)
+**Batch C — "finish the CRUD"** (F33, F34 — S/M) — *added 2026-08-14 at Grant's request*
+Two gaps where the repo layer already does the work and only the UI is missing: interaction
+notes you can write but never read or edit, and tasks you can only complete, never drop.
+Both are daily blockers rather than polish, which is why they come before the speed work.
+*Unlocks:* the relationship log becomes readable, and a wrong task stops having to be
+lied about as "done".
+
+**Batch D — "faster than navigating"** (F10, F19, F20, F21 — M)
 Command palette provider, clipboard, `bookctl open <ref>`, persisted filters. These are the
 daily-driver features rather than repairs.
 *Unlocks:* the shell-alias workflow — land in the right record from a terminal prompt.
 
-**Batch D — "keep it fixed"** (F14, F16, F3, **F32** — S/M)
+**Batch E — "keep it fixed"** (~~F14~~ shipped, F16, F3, F32 — S/M)
 Snapshot comparison, pin Textual and guard the private-API use, app-level error screen.
 Doing F14 first would have caught most of Batch B; doing it now stops Batch B regressing.
 
