@@ -145,6 +145,56 @@ class BookkitApp(App):
         else:
             self.push_screen(AccountScreen(org_id))
 
+    def crash_log_path(self) -> Path:
+        """Where a failed action's traceback goes — beside the database, so it
+        travels with the data rather than with the checkout."""
+        return self.db_file().parent / "bookkit-errors.log"
+
+    async def run_action(
+        self,
+        action,
+        default_namespace=None,
+        namespaces=None,
+    ) -> bool:
+        """Every keybinding routes through here, so this is where a failing
+        action stops being fatal.
+
+        Before this, a stale row key or a locked database on any un-guarded row
+        action — `action_renew_row`, `action_edit_row`, `action_mark_primary` —
+        dropped the whole session to a traceback, losing the screen stack, any
+        open form and the quick-capture draft in progress (review F3). The
+        per-site try/except guards remain the graceful path; this is the net
+        under the ones nobody thought of.
+
+        NB this covers actions, not message handlers: something raised from an
+        `on_data_table_row_highlighted` still reaches Textual's fatal path.
+        Those are where the existing stale-key guards live, and they stay."""
+        try:
+            return await super().run_action(action, default_namespace, namespaces)
+        except Exception as exc:  # noqa: BLE001 — the point is to catch anything
+            self._report_action_failure(action, exc)
+            return True
+
+    def _report_action_failure(self, action, exc: Exception) -> None:
+        """Say what broke, write the traceback down, and stay on the screen."""
+        import traceback
+
+        from ..db import utc_now
+
+        try:
+            path = self.crash_log_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(f"\n--- {utc_now()}  action={action!r}\n")
+                traceback.print_exception(
+                    type(exc), exc, exc.__traceback__, file=handle
+                )
+            where = f" · logged to {path.name}"
+        except OSError:  # a failure to log must not become the failure
+            where = ""
+        message = str(exc) or type(exc).__name__
+        self.notify(f"{message[:160]}{where}", severity="error", timeout=10)
+
     def run_palette_action(self, action: str) -> None:
         """Run a screen-level action chosen from the command palette.
 

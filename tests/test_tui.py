@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import date
 from pathlib import Path
 
@@ -2574,3 +2575,64 @@ def test_bookctl_open_resolves_a_ref_or_a_name(seeded_db: Path) -> None:
         assert resolve_org(conn, "no such client") is None
     finally:
         conn.close()
+
+
+# --- Batch E: keep it fixed (F3, F16, F32) -----------------------------------
+
+
+async def test_a_failing_row_action_does_not_take_the_app_down(
+    seeded_db: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """F3: there was no app-level handler, so a stale row key or a locked
+    database on any un-guarded row action dropped the session to a traceback,
+    losing the screen stack and whatever form was open."""
+    from bookkit.repo import placements
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+
+    def boom(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("4")
+        await pilot.pause()
+        app.screen.query_one("#placements-table", ListTable).focus()
+        await pilot.pause()
+        monkeypatch.setattr(placements, "get", boom)
+        await pilot.press("r")  # renew — reaches placements.get with no guard
+        await pilot.pause()
+        assert app.is_running, "the app exited on a failing action"
+        assert isinstance(app.screen, AccountScreen), "lost the screen stack"
+        messages = " ".join(n.message for n in app._notifications).lower()
+        assert "database is locked" in messages
+        assert app.crash_log_path().exists(), "no traceback was written"
+        assert "OperationalError" in app.crash_log_path().read_text()
+
+
+def test_the_private_datatable_attributes_still_exist() -> None:
+    """F16: _settle_tables() drives four private DataTable attributes. They
+    exist in textual 8.2.8 and nothing promises they will survive an upgrade,
+    so this fails loudly instead of column widths going quietly wrong."""
+    from textual.widgets import DataTable
+
+    table = DataTable()
+    for attribute in ("_require_update_dimensions", "_new_rows"):
+        assert hasattr(table, attribute), attribute
+    for method in ("_update_dimensions", "_clear_caches"):
+        assert callable(getattr(table, method, None)), method
+
+
+def test_textual_is_pinned_to_a_major_version() -> None:
+    """F16's other half: pyproject declared textual>=0.58 while running 8.2.8,
+    three majors above the floor — so `uv lock --upgrade` elsewhere could pull
+    a version where the privates above are gone."""
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    with (root / "pyproject.toml").open("rb") as handle:
+        pins = tomllib.load(handle)["project"]["dependencies"]
+    textual_pin = next(p for p in pins if p.startswith("textual"))
+    assert "<" in textual_pin, f"textual is unbounded above: {textual_pin!r}"

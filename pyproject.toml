@@ -8,7 +8,10 @@ license = { text = "MIT" }
 dependencies = [
     "towerkit",
     "pydantic>=2.7",
-    "textual>=0.58",
+    # upper bound is load-bearing: account.py::_settle_tables drives four
+    # private DataTable attributes, and tests/test_tui.py pins that they
+    # still exist. >=0.58 was three majors below what we actually run.
+    "textual>=8.2,<9",
     "rapidfuzz>=3.6",
     "babel>=2.14",
     "dateparser>=1.4.2",
