@@ -1624,3 +1624,187 @@ async def test_delete_interaction_needs_the_table_focused(seeded_db: Path) -> No
         await pilot.pause()
         assert not isinstance(app.screen, ModalScreen)
         assert safe.id in {i.id for i in interactions.for_org(app.conn, org.id)}
+
+
+async def test_navigator_lists_recent_mcp_batches(seeded_db: Path) -> None:
+    """MCP CHANGES is its own tree section, NOT an attention leaf: attention
+    means 'act on this' and carries the 120-day window; this is an audit list
+    where most rows need no action. It renders into the shared #nav-table."""
+    from bookkit.repo import batches as batches_repo
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    made = batches_repo.create(
+        app.conn, batch_id=batches_repo.new_batch_id(), source="mcp",
+        tool="enrich_field", summary="set website on Acme", org_id=org.id,
+    )
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        nav._current = ("batches", None)
+        nav._render_pane()
+        await pilot.pause()
+
+        table = app.screen.query_one("#nav-table", ListTable)
+        row = [str(c) for c in table.get_row(f"batch:{made.id}")]
+        assert made.ref in row
+        assert "enrich_field" in row
+        assert org.name in row
+
+
+async def test_reverted_batches_render_as_reverted(seeded_db: Path) -> None:
+    from bookkit.repo import batches as batches_repo
+
+    app = BookkitApp(seeded_db)
+    made = batches_repo.create(
+        app.conn, batch_id=batches_repo.new_batch_id(), source="mcp",
+        tool="task_create", summary="made a task", org_id=None,
+    )
+    batches_repo.mark_reverted(app.conn, made.id, "2026-08-13T18:00:00Z")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        nav._current = ("batches", None)
+        nav._render_pane()
+        await pilot.pause()
+
+        table = app.screen.query_one("#nav-table", ListTable)
+        row = [str(c) for c in table.get_row(f"batch:{made.id}")]
+        assert any("reverted" in cell for cell in row)
+
+
+async def test_mcp_changes_section_absent_when_no_batches(seeded_db: Path) -> None:
+    """No MCP activity, no section — the tree stays clean."""
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(160, 48)) as pilot:
+        await pilot.pause()
+        from bookkit.tui.screens.navigator import _walk
+        tree = app.screen.query_one("#nav-tree")
+        datas = {n.data for n in _walk(tree.root) if n.data}
+        assert ("batches", None) not in datas
+
+
+async def test_R_reverts_the_highlighted_batch(seeded_db: Path) -> None:
+    """R is dual-role, the house x pattern: revert on a focused MCP CHANGES
+    table, refresh everywhere else. Confirm modal first; y applies."""
+    from bookkit import db as db_mod
+    from bookkit.repo import base
+    from bookkit.repo import batches as batches_repo
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    made = batches_repo.create(
+        app.conn, batch_id=batches_repo.new_batch_id(), source="mcp",
+        tool="enrich_field", summary="set website", org_id=org.id,
+    )
+    with db_mod.transaction(app.conn, batch=db_mod.BatchState(batch_id=made.id)):
+        base.update(app.conn, "org", org.id, {"website": "https://mcp.example"})
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        nav._current = ("batches", None)
+        nav._render_pane()
+        await pilot.pause()
+
+        table = app.screen.query_one("#nav-table", ListTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(f"batch:{made.id}"))
+        await pilot.pause()
+
+        await pilot.press("R")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert orgs.get(app.conn, org.id).website is None
+        assert batches_repo.get(app.conn, made.id).reverted_at is not None
+
+
+async def test_R_on_a_conflicted_batch_shows_the_refusal(seeded_db: Path) -> None:
+    """The modal becomes the refusal list; y is inert, esc leaves everything."""
+    from bookkit import db as db_mod
+    from bookkit.repo import base
+    from bookkit.repo import batches as batches_repo
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    made = batches_repo.create(
+        app.conn, batch_id=batches_repo.new_batch_id(), source="mcp",
+        tool="enrich_field", summary="set website", org_id=org.id,
+    )
+    with db_mod.transaction(app.conn, batch=db_mod.BatchState(batch_id=made.id)):
+        base.update(app.conn, "org", org.id, {"website": "https://mcp.example"})
+    base.update(app.conn, "org", org.id, {"website": "https://grant.example"})
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        nav._current = ("batches", None)
+        nav._render_pane()
+        await pilot.pause()
+        table = app.screen.query_one("#nav-table", ListTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(f"batch:{made.id}"))
+        await pilot.press("R")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)
+        await pilot.press("y")          # inert on a conflicted batch
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert orgs.get(app.conn, org.id).website == "https://grant.example"
+        assert batches_repo.get(app.conn, made.id).reverted_at is None
+
+
+async def test_R_off_the_batches_pane_still_refreshes(seeded_db: Path) -> None:
+    from bookkit.repo import batches as batches_repo
+
+    app = BookkitApp(seeded_db)
+    made = batches_repo.create(
+        app.conn, batch_id=batches_repo.new_batch_id(), source="mcp",
+        tool="task_create", summary="s", org_id=None,
+    )
+    async with app.run_test(size=(160, 48)) as pilot:
+        await pilot.pause()
+        await pilot.press("R")          # tree focused, not the batches table
+        await pilot.pause()
+        assert not isinstance(app.screen, ModalScreen)
+        assert batches_repo.get(app.conn, made.id).reverted_at is None
+
+
+async def test_enter_on_a_batch_shows_field_level_before_and_after(seeded_db: Path) -> None:
+    from bookkit import db as db_mod
+    from bookkit.repo import base
+    from bookkit.repo import batches as batches_repo
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    made = batches_repo.create(
+        app.conn, batch_id=batches_repo.new_batch_id(), source="mcp",
+        tool="enrich_field", summary="set website", org_id=org.id,
+    )
+    with db_mod.transaction(app.conn, batch=db_mod.BatchState(batch_id=made.id)):
+        base.update(app.conn, "org", org.id, {"website": "https://mcp.example"})
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        nav._current = ("batches", None)
+        nav._render_pane()
+        await pilot.pause()
+        table = app.screen.query_one("#nav-table", ListTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(f"batch:{made.id}"))
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ModalScreen)
+        from textual.widgets import Static as StaticW
+        rendered = " ".join(str(w.render()) for w in app.screen.query(StaticW))
+        assert "website" in rendered
+        assert "https://mcp.example" in rendered

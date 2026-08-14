@@ -11,19 +11,21 @@ if TYPE_CHECKING:
     from ..app import BookkitApp
 
 from collections.abc import Iterator
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.screen import Screen
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.coordinate import Coordinate
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Static, Tree
 from textual.widgets.tree import TreeNode
 
 from ...dates import days_until
 from ...money import format_cents_compact
+from ...repo import batches as batches_repo
 from ...repo import contacts, opportunities, orgs, placements
 from ...repo import projects as projects_repo
 from ...repo import rfi as rfi_repo
@@ -55,6 +57,7 @@ ROW_HINTS = {
         "[b]enter[/b] opens account"
     ),
     "opportunities": "[b]a[/b] add · [b]e[/b] edit · [b]enter[/b] opens account",
+    "batches": "[b]R[/b] revert this change · [b]enter[/b] opens account",
     "tasks": (
         "[b]i[/b] edit in cell · [b]a[/b] add · [b]e[/b] edit form · "
         "[b]d[/b] done · [b]enter[/b] opens account"
@@ -109,6 +112,113 @@ def _attention_label(key: str, label: str, count: int) -> str:
     return f"{label} [{theme.DIM}]·[/] [b]{count}[/b]"
 
 
+class ConfirmRevertBatch(ModalScreen):
+    """One look before putting a batched MCP change back. On a conflict this
+    becomes the refusal list instead of a yes/no — force is an explicit second
+    choice, never a default."""
+
+    app: BookkitApp
+    BINDINGS = [
+        Binding("escape,n", "decline", "No"),
+        Binding("y,enter", "accept", "Yes"),
+        Binding("f", "force", "Force", show=False),
+    ]
+
+    def __init__(self, batch, plan) -> None:
+        super().__init__()
+        # NOT self.batch: Screen.batch() is a Textual method
+        self._batch = batch
+        self._plan = plan
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(classes="modal-box"):
+            yield Static("REVERT MCP CHANGE", classes="modal-title")
+            yield Static(
+                f"{self._batch.ref}  {self._batch.tool}\n{self._batch.summary}"
+            )
+            if self._plan.conflicts:
+                lines = "\n".join(
+                    f"  {c.change.field}: set {c.change.new_value!r}, "
+                    f"now {c.current_value!r}"
+                    for c in self._plan.conflicts
+                )
+                yield Static(
+                    f"[{theme.AMBER}]BLOCKED[/] — changed since:\n{lines}"
+                )
+                clean = (
+                    len(self._plan.updates)
+                    + len(self._plan.creates)
+                    + len(self._plan.deletes)
+                )
+                yield Static(
+                    f"{clean} other change(s) would revert cleanly",
+                    classes="hint",
+                )
+                yield Static("f force the rest · esc cancel", classes="hint")
+            else:
+                yield Static(
+                    "y / enter revert · esc cancel", classes="hint"
+                )
+
+    def action_accept(self) -> None:
+        if self._plan.conflicts:
+            return  # y is inert on a conflicted batch — force is explicit
+        self.dismiss("revert")
+
+    def action_force(self) -> None:
+        if self._plan.conflicts:
+            self.dismiss("force")
+
+    def action_decline(self) -> None:
+        self.dismiss(None)
+
+
+class BatchDetail(ModalScreen):
+    """Field-level before → after for one MCP batch, conflicts marked."""
+
+    app: BookkitApp
+    BINDINGS = [Binding("escape,enter,q", "close", "Close")]
+
+    def __init__(self, batch, plan) -> None:
+        super().__init__()
+        # NOT self.batch: Screen.batch() is a Textual method
+        self._batch = batch
+        self._plan = plan
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(classes="modal-box"):
+            yield Static("MCP CHANGE", classes="modal-title")
+            yield Static(
+                f"{self._batch.ref}  {self._batch.tool}  {self._batch.created_at}"
+                f"\n{self._batch.summary}"
+            )
+            lines: list[str] = []
+            for c in self._plan.creates:
+                lines.append(f"created {c.entity_type} {c.entity_id}")
+            for c in self._plan.deletes:
+                lines.append(f"deleted {c.entity_type} {c.entity_id}")
+            for c in self._plan.updates:
+                lines.append(
+                    f"{c.entity_type}.{c.field}: {c.old_value!r} → {c.new_value!r}"
+                )
+            for conflict in self._plan.conflicts:
+                c = conflict.change
+                lines.append(
+                    f"[{theme.AMBER}]{c.entity_type}.{c.field}: "
+                    f"{c.old_value!r} → {c.new_value!r} · since changed to "
+                    f"{conflict.current_value!r}[/]"
+                )
+            yield Static("\n".join(lines) or "no recorded changes")
+            state = (
+                f"reverted {self._batch.reverted_at}"
+                if self._batch.reverted_at else "live · R reverts it"
+            )
+            yield Static(f"{state} · esc closes", classes="hint")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class NavigatorScreen(Screen):
     app: BookkitApp
     BINDINGS = [
@@ -137,6 +247,7 @@ class NavigatorScreen(Screen):
         self._current: NodeData = ("none", None)
         self._row_org: dict[str, str] = {}  # table row key → org id (for enter)
         self._attention: dict[str, list[Any]] = {}
+        self._batches: list[Any] = []  # recent MCP batches, newest first
         self._fill_key: Any = None  # which rows the table holds, for cursor keeping
         self._refresh_pending = False  # a refresh deferred while a cell edit is open
 
@@ -220,6 +331,18 @@ class NavigatorScreen(Screen):
                     family.add_leaf(kid.name, data=("market", kid.id))
             else:
                 markets_root.add_leaf(master.name, data=("market", master.id))
+        self._batches = batches_repo.recent(
+            conn, since=(today - timedelta(days=14)).isoformat()
+        )
+        if self._batches:
+            # Its own section, deliberately NOT an attention leaf: attention
+            # means "act on this" and carries the 120-day bucket window plus
+            # the overdue-never-falls-off rule. This is an audit list — most
+            # rows need no action, and it hides itself when empty.
+            tree.root.add_leaf(
+                _section("MCP CHANGES", len(self._batches)),
+                data=("batches", None),
+            )
         self._restore_tree_place(tree, was_expanded, was_on)
         self._summary = book.summary(conn)
         self._n_clients = len(clients)
@@ -340,6 +463,8 @@ class NavigatorScreen(Screen):
             self._render_hint(payload, table)
         elif kind == "group":
             self._render_hint(payload[0], table)
+        elif kind == "batches":
+            self._render_hint("batches", table)
 
     def action_hop(self) -> None:
         """tab bounces between the tree and the rows it points at."""
@@ -381,6 +506,11 @@ class NavigatorScreen(Screen):
             table.display = True
             self._fill_group_table(table, *payload)
             self._render_hint(payload[0], table)
+        elif kind == "batches":
+            card.display = False
+            table.display = True
+            self._fill_batches_table(table)
+            self._render_hint("batches", table)
         elif kind == "account":
             table.display = False
             card.display = True
@@ -396,8 +526,33 @@ class NavigatorScreen(Screen):
             card.display = True
             self._render_hint(None)
             card.update(self._glance_card())
-        if kind in ("att", "group") and keep is not None and table.row_count:
+        if kind in ("att", "group", "batches") and keep is not None and table.row_count:
             table.move_cursor(row=min(keep, table.row_count - 1))
+
+    def _fill_batches_table(self, table: InlineTable) -> None:
+        """Recent MCP writes, newest first — the audit trail behind R."""
+        conn = self.app.conn
+        table.clear(columns=True)
+        table.add_columns("ref", "when", "account", "tool", "what", "state")
+        for batch in self._batches:
+            account: str | Text = dash()
+            if batch.org_id:
+                try:
+                    org = orgs.get(conn, batch.org_id)
+                    account = org.name
+                    self._row_org[f"batch:{batch.id}"] = org.id
+                except KeyError:
+                    account = Text("(deleted account)", style=theme.DIM)
+            state = (
+                Text("reverted", style=theme.DIM)
+                if batch.reverted_at
+                else Text("live", style=theme.GREEN)
+            )
+            table.add_row(
+                batch.ref, batch.created_at[11:16], account, batch.tool,
+                Text(batch.summary, style=theme.DIM), state,
+                key=f"batch:{batch.id}",
+            )
 
     def _render_hint(self, hint_key: str | None, table: ListTable | None = None) -> None:
         """The hint line under the table — the visible home for hidden keys."""
@@ -730,6 +885,18 @@ class NavigatorScreen(Screen):
 
     def on_data_table_row_selected(self, event: ListTable.RowSelected) -> None:
         key = str(event.row_key.value or "")
+        if key.startswith("batch:"):
+            # enter on an MCP change opens its before→after, not the account —
+            # the audit detail is what this table exists for
+            from ...services import batches as batches_svc
+
+            try:
+                batch = batches_repo.get(self.app.conn, key.removeprefix("batch:"))
+            except KeyError:
+                return
+            plan = batches_svc.plan_revert(self.app.conn, batch)
+            self.app.push_screen(BatchDetail(batch, plan))
+            return
         org_id = self._row_org.get(key)
         if not org_id:
             return
@@ -982,4 +1149,47 @@ class NavigatorScreen(Screen):
         self.refresh_data()
 
     def action_refresh(self) -> None:
+        """R is dual-role, the same call as x on the account screen: revert on
+        a focused MCP CHANGES table, plain refresh everywhere else."""
+        if self._current == ("batches", None):
+            table = self.query_one("#nav-table", ListTable)
+            if table.has_focus and table.cursor_row is not None and table.row_count:
+                self._revert_highlighted_batch(table)
+                return
+        self.refresh_data()
+
+    def _revert_highlighted_batch(self, table: ListTable) -> None:
+        from ...services import batches as batches_svc
+
+        key = table.coordinate_to_cell_key(
+            Coordinate(table.cursor_row, 0)
+        ).row_key.value
+        if not key:
+            return
+        try:
+            batch = batches_repo.get(self.app.conn, str(key).removeprefix("batch:"))
+        except KeyError:  # row keys can go stale mid-rebuild
+            return
+        if batch.reverted_at is not None:
+            self.notify("already reverted")
+            return
+        plan = batches_svc.plan_revert(self.app.conn, batch)
+        self.app.push_screen(
+            ConfirmRevertBatch(batch, plan),
+            lambda choice, ref=batch.ref: self._apply_batch_revert(ref, choice),
+        )
+
+    def _apply_batch_revert(self, ref: str, choice: str | None) -> None:
+        from ...db import utc_now
+        from ...services import batches as batches_svc
+
+        if choice is None:
+            return
+        result = batches_svc.revert(
+            self.app.conn, ref, now=utc_now(), force=(choice == "force")
+        )
+        if result.applied:
+            self.notify(f"{ref} reverted — {len(result.reverted)} change(s)")
+        else:
+            self.notify(f"{ref} refused — {len(result.refused)} conflict(s)")
         self.refresh_data()
