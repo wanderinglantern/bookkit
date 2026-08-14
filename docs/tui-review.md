@@ -5,7 +5,7 @@
 `db.py` connection setup, and the TUI test suite.
 **Status** findings only — no application code was changed.
 
-**34 findings — 2 P0, 18 P1, 14 P2** (F2 was withdrawn from P0; F33–F34 added from use).
+**35 findings — 2 P0, 19 P1, 14 P2** (F2 withdrawn from P0; F33–F34 from use; F35 found while building batch C).
 
 **Shipped so far** on branch `tui-batch-a`, 541 tests passing with `mypy --strict` and
 `ruff` clean, every fix carrying a regression test watched failing first:
@@ -15,8 +15,10 @@
   against a frozen clock. Pulled forward from Batch E so Batch B could not regress.
 - **Batch B** — F4, F5, F6, F12, F13, F25 fixed. 17 snapshots changed, each reviewed; the
   19 untouched screens stayed byte-identical.
+- **Batch C** — F33, F34 fixed, and F35 found and fixed along the way.
 
-**Still open and ranked next:** Batch C (F33, F34 — the CRUD gaps Grant hit in use).
+**Still open and ranked next:** Batch D (F10 command palette, F19 clipboard, F20 CLI
+deep-link, F21 persisted filters), then Batch E.
 
 Evidence: every screen was driven headlessly through `App.run_test()` at 140×45 and
 80×24, exported as SVG (`docs/screenshots/`) and as composited plain text
@@ -774,3 +776,33 @@ without it Batch B will quietly regress.
 Regenerate with the harness in `App.run_test()`; the screens are driven in the order
 Navigator → attention lists → Today → Book → Account tabs 1–9 → Calendar → Pipeline →
 Markets → Market detail → Team → Help → Search → Quick capture → New task → Settings.
+
+
+---
+
+<a id="f35"></a>
+## Addendum — F35, found while building Batch C
+
+**[P1] [defect] "task done — u to undo" was not true** — `tasks.py:77` · Effort **S** ·
+**Fixed in Batch C**
+
+`base.update` logs one event per changed field *in dict order*, and `undo.last_mutation`
+takes only the most recent. `complete()` wrote `{"status": "done", "completed_at": ...}`,
+so `u` reverted `completed_at` and left `status = "done"` — the task stayed hidden from
+every open list while the user believed it had been reopened.
+
+Fixed by making the field order load-bearing and saying so: `status` goes last, so a
+single `u` reopens the task. A test pins the promise.
+
+**Still open underneath, and worth a decision rather than another workaround:** any TUI
+action that writes two fields is only partly undoable. That follows from CLAUDE.md's rule
+that `u` stays single-step and field-granular for TUI writes, and `_mark_item_received`
+already copes by promising no undo at all. Two candidate fixes:
+
+1. `base.update` grows a `bookkeeping=` set of fields that are written but not separately
+   logged, so one user action is one undo step. Touches the core write path.
+2. Any action writing two fields stops offering undo in its toast. Honest, cheap, and a
+   real loss of affordance on the most common action in the app.
+
+I'd take (1), but it is a change to the layer everything writes through, so it is your
+call.
