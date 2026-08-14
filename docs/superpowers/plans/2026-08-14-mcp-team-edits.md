@@ -12,8 +12,15 @@
 
 ## Global Constraints
 
-- **Gates before every commit:** `uv run pytest -q`, `uv run mypy src`, `uv run ruff check src tests`. When chaining in shell, never pipe test output before the `&&` gate — pipes eat exit codes. Redirect to a file, gate on the command, tail the file after.
-- **Set `S` once at the start of your session**, to your own scratchpad directory (the path in your system prompt), and use it for every gate run below: `export S=<your scratchpad dir>`. Never redirect gate output to `/tmp` — concurrent pytest runs interleave there and you will read another session's results as your own.
+- **Gates before every commit, each as its OWN command** (do not chain them):
+  ```
+  uv run pytest -q
+  uv run mypy src
+  uv run ruff check src tests
+  ```
+  All three must be clean before you commit. Never chain a gate behind a pipe (`cmd | tail && next`) — the pipe eats the exit code and a red suite sails through. Run them separately and read each result.
+- **Do not redirect gate output outside the worktree.** This phase runs in an isolated worktree and the harness refuses writes beyond it; the scratchpad-redirect pattern from `CLAUDE.md` does not apply here. Run the gates plainly. The isolation that redirect was protecting against (concurrent pytest runs interleaving) is already handled by the worktree.
+- **The worktree venv is already set up** (`uv sync --group dev` has been run). If `uv run pytest` reports `ModuleNotFoundError: No module named 'bookkit'`, re-run `uv sync --group dev` — do not fall back to `pip` or edit `pyproject.toml`.
 - **No raw SQL outside `repo/`.** `mcpserver.py` calls `repo/` functions only. A convention test enforces this.
 - **Every write goes through `_open_batch`** — one MCP call is one undo unit, revertible by `revert_batch`, counted against `db.BLAST_CAP` (currently 250).
 - **Compare-and-set is not optional** on `edit_field`: `expecting` must match the stored value or the call refuses and writes nothing.
@@ -136,8 +143,8 @@ def test_edit_field_resolves_org_for_a_deal_level_assignment(server_db):
 
     rw, org = _rw(server_db)
     placement = placements.create(rw, org.id, program_name="Tower GL",
-                                  effective_on="2026-01-01",
-                                  expires_on="2027-01-01")
+                                  period_from="2026-01-01",
+                                  period_to="2027-01-01")
     mcpserver._member_create(rw, "Dana Cruz")
     assigned = mcpserver._team_assign(rw, "Dana Cruz",
                                       placement_ref=placement.ref,
@@ -147,7 +154,7 @@ def test_edit_field_resolves_org_for_a_deal_level_assignment(server_db):
         rw, "team_assignment", assigned["assignment_id"], "role",
         "account_lead", expecting="analyst",
     )
-    assert batches_repo.get(rw, out["batch"]).org_id == org.id
+    assert batches_repo.get_by_ref(rw, out["batch"]).org_id == org.id
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -158,7 +165,7 @@ uv run pytest -q tests/test_mcpserver.py -k "assignment" 2>&1 | tail -20
 ```
 Expected: FAIL. `test_edit_field_changes_an_assignment_role` fails with `ValueError: cannot edit kind 'team_assignment'; editable: [...]`.
 
-Note: `test_edit_field_resolves_org_for_a_deal_level_assignment` uses `placements.create` and `batches_repo.get`. If either signature differs from the call above, fix the *test* to match the real signature — do not change the source to fit the test. Confirm with `grep -n "def create" src/bookkit/repo/placements.py` and `grep -n "def get" src/bookkit/repo/batches.py`.
+Note: the helper signatures in these tests were verified against the source before dispatch — `placements.create(conn, org_id, program_name, period_from, period_to)` and `batches.get_by_ref(conn, ref)` (`out["batch"]` is a ref, not an id). Use them exactly as written.
 
 - [ ] **Step 3: Add the registry entry**
 
@@ -230,9 +237,11 @@ Expected: PASS, all of them.
 - [ ] **Step 7: Run the full gates**
 
 ```bash
-uv run pytest -q > $S/p.txt 2>&1 && uv run mypy src > $S/m.txt 2>&1 && uv run ruff check src tests > $S/r.txt 2>&1 && echo GATES-PASS; tail -3 $S/p.txt $S/m.txt $S/r.txt
+uv run pytest -q
+uv run mypy src
+uv run ruff check src tests
 ```
-Expected: `GATES-PASS`.
+Expected: all three clean — `N passed`, `Success: no issues found`, `All checks passed!`.
 
 - [ ] **Step 8: Commit**
 
@@ -377,9 +386,11 @@ Expected: PASS.
 - [ ] **Step 7: Run the full gates**
 
 ```bash
-uv run pytest -q > $S/p.txt 2>&1 && uv run mypy src > $S/m.txt 2>&1 && uv run ruff check src tests > $S/r.txt 2>&1 && echo GATES-PASS; tail -3 $S/p.txt $S/m.txt $S/r.txt
+uv run pytest -q
+uv run mypy src
+uv run ruff check src tests
 ```
-Expected: `GATES-PASS`.
+Expected: all three clean — `N passed`, `Success: no issues found`, `All checks passed!`.
 
 - [ ] **Step 8: Commit**
 
@@ -527,9 +538,11 @@ Expected: PASS.
 - [ ] **Step 6: Run the full gates**
 
 ```bash
-uv run pytest -q > $S/p.txt 2>&1 && uv run mypy src > $S/m.txt 2>&1 && uv run ruff check src tests > $S/r.txt 2>&1 && echo GATES-PASS; tail -3 $S/p.txt $S/m.txt $S/r.txt
+uv run pytest -q
+uv run mypy src
+uv run ruff check src tests
 ```
-Expected: `GATES-PASS`.
+Expected: all three clean — `N passed`, `Success: no issues found`, `All checks passed!`.
 
 - [ ] **Step 7: Commit**
 
@@ -598,8 +611,8 @@ def test_cascade_covers_deal_level_assignments_too(server_db):
 
     rw, org = _rw(server_db)
     placement = placements.create(rw, org.id, program_name="Tower GL",
-                                  effective_on="2026-01-01",
-                                  expires_on="2027-01-01")
+                                  period_from="2026-01-01",
+                                  period_to="2027-01-01")
     mcpserver._member_create(rw, "Dana Cruz")
     mcpserver._team_assign(rw, "Dana Cruz", placement_ref=placement.ref)
 
@@ -684,9 +697,11 @@ Expected: PASS, including Task 3's refusal tests (unchanged behaviour when `casc
 - [ ] **Step 6: Run the full gates**
 
 ```bash
-uv run pytest -q > $S/p.txt 2>&1 && uv run mypy src > $S/m.txt 2>&1 && uv run ruff check src tests > $S/r.txt 2>&1 && echo GATES-PASS; tail -3 $S/p.txt $S/m.txt $S/r.txt
+uv run pytest -q
+uv run mypy src
+uv run ruff check src tests
 ```
-Expected: `GATES-PASS`.
+Expected: all three clean — `N passed`, `Success: no issues found`, `All checks passed!`.
 
 - [ ] **Step 7: Commit**
 
@@ -757,11 +772,6 @@ def test_edit_field_redirects_active_to_the_deactivate_tools(server_db):
     assert "member_deactivate" in message
     assert "member_reactivate" in message
 
-
-def test_member_reactivate_is_registered(server_db):
-    server = build_server(server_db)
-    names = {t.name for t in server._tool_manager.list_tools()}
-    assert {"member_deactivate", "member_reactivate"} <= names
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -854,9 +864,11 @@ In `test_write_expansion_tools_are_registered`, add the two new names to the ass
 - [ ] **Step 8: Run the full gates**
 
 ```bash
-uv run pytest -q > $S/p.txt 2>&1 && uv run mypy src > $S/m.txt 2>&1 && uv run ruff check src tests > $S/r.txt 2>&1 && echo GATES-PASS; tail -3 $S/p.txt $S/m.txt $S/r.txt
+uv run pytest -q
+uv run mypy src
+uv run ruff check src tests
 ```
-Expected: `GATES-PASS`. Tool count is now 41.
+Expected: all three clean — `N passed`, `Success: no issues found`, `All checks passed!`. Tool count is now 41.
 
 - [ ] **Step 9: Commit**
 
@@ -899,9 +911,11 @@ docs/superpowers/plans/2026-08-14-mcp-team-edits.md
 - [ ] **Step 3: Run the full gates one final time**
 
 ```bash
-uv run pytest -q > $S/p.txt 2>&1 && uv run mypy src > $S/m.txt 2>&1 && uv run ruff check src tests > $S/r.txt 2>&1 && echo GATES-PASS; tail -3 $S/p.txt $S/m.txt $S/r.txt
+uv run pytest -q
+uv run mypy src
+uv run ruff check src tests
 ```
-Expected: `GATES-PASS`.
+Expected: all three clean — `N passed`, `Success: no issues found`, `All checks passed!`.
 
 - [ ] **Step 4: Commit**
 

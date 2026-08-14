@@ -21,6 +21,13 @@
   db.BLAST_CAP=250 entities per batch (Grant 2026-08-14), enforced under
   log_event so no tool can forget it. `u` stays single-step/field-granular for TUI writes;
   imports/commit.py is unbatched on purpose (snapshot is its rollback).
+- Team writes: assignments are corrected in place via
+  `edit_field(kind="team_assignment")` over role/lines/notes — NEVER
+  re-scoped (unassign+assign moves someone between clients). Retiring a
+  colleague is `member_deactivate`, not a field edit; it refuses while
+  assignments are live and `cascade=True` removes them all in one
+  revertible batch. Renames go through edit_field behind a duplicate
+  guard, because two members sharing a name makes every lookup ambiguous.
 - Backups before bulk writes: importers snapshot the DB (db.backup) into
   backups/ before the first row changes. Migrations are additive-only so
   far; call out anything destructive before writing it.

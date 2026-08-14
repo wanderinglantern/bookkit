@@ -190,8 +190,9 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
     @server.tool()
     async def team_roster() -> dict[str, Any]:
         """Every team member with their assignments — including the exact
-        `assignment_id` that team_unassign takes and the names edit_field
-        and team_assign resolve. Read this before any team write."""
+        `assignment_id` that team_unassign and edit_field (kind=
+        team_assignment) take and the names edit_field and team_assign
+        resolve. Read this before any team write."""
         return _team_roster(ro)
 
 
@@ -494,6 +495,25 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         return _team_unassign(rw, assignment_id)
 
     @server.tool()
+    async def member_deactivate(
+        name: str, cascade: bool = False
+    ) -> dict[str, Any]:
+        """Retire a colleague (exact name — read team_roster). Refuses while
+        they still hold assignments, naming every one; cascade=True removes
+        all of them and deactivates as ONE revertible batch. They stay in the
+        record and stop appearing in pickers; member_reactivate undoes the
+        deactivation, but NOT the cascaded assignments — revert_batch does
+        that."""
+        return _member_deactivate(rw, name, cascade=cascade)
+
+    @server.tool()
+    async def member_reactivate(name: str) -> dict[str, Any]:
+        """Bring a retired colleague back (exact name — read team_roster).
+        Assignments removed by a cascading deactivate do NOT come back; use
+        revert_batch for those."""
+        return _member_reactivate(rw, name)
+
+    @server.tool()
     async def opportunity_stage(
         ref: str, to: str, note: str | None = None, loss_reason: str | None = None
     ) -> dict[str, Any]:
@@ -529,9 +549,11 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         field really holds, writing nothing. expecting omitted asserts the
         field is BLANK (use enrich_field for routine blank-filling). `kind`
         is org|contact|opportunity|project|project_need|task|team_member|
-        rfi_request|rfi_item; `ref` is the exact name (org/contact/
-        team_member — contact also needs `client`) or the exact ref/id a
-        read returned. Stage moves are opportunity_stage, never this."""
+        team_assignment|rfi_request|rfi_item; `ref` is the exact name
+        (org/contact/team_member — contact also needs `client`) or the
+        exact ref/id a read returned — for team_assignment, the
+        `assignment_id` that team_roster returns. Stage moves are
+        opportunity_stage, never this."""
         return _edit_field(rw, kind, ref, field, value,
                            expecting=expecting, client=client)
 
@@ -1284,6 +1306,22 @@ def _find_member(conn: sqlite3.Connection, name: str) -> Any:
     return member
 
 
+def _guard_member_rename(
+    conn: sqlite3.Connection, member_id: str, new_name: str
+) -> None:
+    """Renaming onto a name someone else holds makes every member lookup
+    ambiguous — _find_member and _edit_target both take the first match — so
+    this refuses rather than letting a later write land on the wrong row."""
+    from .repo import team
+
+    for other in team.list_members(conn, active_only=False):
+        if other.id != member_id and other.name.lower() == new_name.lower():
+            raise ValueError(
+                f"team member {other.name} already holds that name — rename "
+                f"or deactivate them first"
+            )
+
+
 def _team_roster(conn: sqlite3.Connection) -> dict[str, Any]:
     from .repo import team
 
@@ -1296,6 +1334,7 @@ def _team_roster(conn: sqlite3.Connection) -> dict[str, Any]:
                 "account": row["org_name"] if "org_name" in row.keys() else None,
                 "placement": row["placement_ref"] if "placement_ref" in row.keys() else None,
                 "role": row["role"], "lines": row["lines"],
+                "notes": row["notes"],
             })
         out.append({
             "name": member.name, "title": member.title,
@@ -1401,6 +1440,70 @@ def _team_unassign(conn: sqlite3.Connection, assignment_id: str) -> dict[str, An
     return {"assignment_id": assignment_id, "removed": True, "batch": batch.ref}
 
 
+def _assignment_label(row: sqlite3.Row) -> str:
+    """How one assignment reads in a refusal: the client, plus the placement
+    ref when it is deal-level rather than account-level."""
+    keys = row.keys()
+    account = row["org_name"] if "org_name" in keys else None
+    placement = row["placement_ref"] if "placement_ref" in keys else None
+    label = account or "unscoped"
+    return f"{label} ({placement})" if placement else label
+
+
+def _member_deactivate(
+    conn: sqlite3.Connection, name: str, cascade: bool = False
+) -> dict[str, Any]:
+    """Retire a colleague. Refuses while they still hold assignments — a
+    roster that silently keeps pointing at someone who left is worse than a
+    refusal — and names every one so the caller can act. cascade=True removes
+    them and deactivates in ONE batch, so revert_batch puts it all back."""
+    from .repo import base, team
+
+    member = _find_member(conn, name)
+    if not member.active:
+        raise ValueError(f"{member.name} is already inactive")
+    rows = team.for_member(conn, member.id)
+    if rows and not cascade:
+        labels = ", ".join(_assignment_label(r) for r in rows)
+        raise ValueError(
+            f"{member.name} is still on {len(rows)} assignments: {labels} — "
+            f"unassign them first, or pass cascade=True to remove all "
+            f"{len(rows)} and deactivate as one revertible batch"
+        )
+    summary = f"deactivated {member.name}"
+    if rows:
+        summary += f" and removed {len(rows)} assignments"
+    # org_id stays None: a cascade spans clients, so no single org owns it.
+    with _open_batch(
+        conn, tool="member_deactivate", summary=summary,
+    ) as batch:
+        for row in rows:
+            team.unassign(conn, row["id"])
+            _provenance(conn, "team_assignment", row["id"])
+        base.update(conn, "team_member", member.id, {"active": 0},
+                    note="mcp deactivate")
+        _provenance(conn, "team_member", member.id)
+    return {"name": member.name, "active": False, "unassigned": len(rows),
+            "batch": batch.ref}
+
+
+def _member_reactivate(conn: sqlite3.Connection, name: str) -> dict[str, Any]:
+    """Bring a retired colleague back. Assignments a cascade removed do NOT
+    come back — revert_batch is the undo for those."""
+    from .repo import base
+
+    member = _find_member(conn, name)
+    if member.active:
+        raise ValueError(f"{member.name} is already active")
+    with _open_batch(
+        conn, tool="member_reactivate", summary=f"reactivated {member.name}",
+    ) as batch:
+        base.update(conn, "team_member", member.id, {"active": 1},
+                    note="mcp reactivate")
+        _provenance(conn, "team_member", member.id)
+    return {"name": member.name, "active": True, "batch": batch.ref}
+
+
 def _opportunity_stage(
     conn: sqlite3.Connection, ref: str, to: str,
     note: str | None = None, loss_reason: str | None = None,
@@ -1465,7 +1568,7 @@ def _request_item_waive(conn: sqlite3.Connection, item_ref: str) -> dict[str, An
 # opportunity stage/outcome/closed_at belong to opportunity_stage, and
 # project_need.status belongs to the queued needs→pipeline reconciler.
 def _editable() -> dict[str, dict[str, Any]]:
-    from .models import PROJECT_STATUSES
+    from .models import PROJECT_STATUSES, TEAM_ROLES
 
     return {
         "org": {f: "text" for f in _ENRICHABLE_ORG},
@@ -1495,8 +1598,14 @@ def _editable() -> dict[str, dict[str, Any]]:
             "category": "text", "due_on": "date",
         },
         "team_member": {
-            "title": "text", "specialty": "text", "email": "text",
-            "phone": "text", "notes": "text",
+            "name": "text", "title": "text", "specialty": "text",
+            "email": "text", "phone": "text", "notes": "text",
+        },
+        # role reuses team_assign's vocabulary so the two paths cannot drift.
+        # org_id / placement_id are deliberately absent: re-scoping moves two
+        # columns at once and single-field compare-and-set cannot do it.
+        "team_assignment": {
+            "role": TEAM_ROLES, "lines": "text", "notes": "text",
         },
         "rfi_request": {"title": "text", "due_on": "date", "notes": "text"},
         "rfi_item": {
@@ -1507,6 +1616,12 @@ def _editable() -> dict[str, dict[str, Any]]:
 
 
 _EDITABLE: dict[str, dict[str, Any]] = _editable()
+
+# Fields that exist but are owned by a transition tool. The generic refusal
+# only lists what IS editable; these say where the caller should go instead.
+_EDIT_REDIRECTS: dict[tuple[str, str], str] = {
+    ("team_member", "active"): "member_deactivate / member_reactivate",
+}
 
 
 def _clean_typed(vtype: Any, field: str, value: str | None) -> Any:
@@ -1599,6 +1714,22 @@ def _edit_target(
         item = rfi_repo.get_item(conn, ref)               # KeyError → tool error
         request = rfi_repo.get_request(conn, item.request_id)
         return item.id, request.org_id, item
+    if kind == "team_assignment":
+        from .models import TeamAssignment
+        from .repo import base as base_repo
+
+        row = base_repo.get(conn, "team_assignment", ref)
+        if row is None:
+            raise ValueError(
+                f"no assignment {ref!r} — read team_roster for exact ids"
+            )
+        assignment = TeamAssignment.from_row(row)
+        org_id = assignment.org_id
+        if org_id is None and assignment.placement_id is not None:
+            from .repo import placements as placements_repo
+
+            org_id = placements_repo.get(conn, assignment.placement_id).org_id
+        return assignment.id, org_id, assignment
     raise ValueError(f"cannot edit kind {kind!r}; editable: {sorted(_EDITABLE)}")
 
 
@@ -1622,6 +1753,11 @@ def _edit_field(
         raise ValueError(f"cannot edit kind {kind!r}; editable: {sorted(_EDITABLE)}")
     vtype = allowed.get(field)
     if vtype is None:
+        redirect = _EDIT_REDIRECTS.get((kind, field))
+        if redirect is not None:
+            raise ValueError(
+                f"{field!r} on a {kind} is not a field edit — use {redirect}"
+            )
         raise ValueError(
             f"{field!r} is not editable on a {kind}; allowed: {sorted(allowed)}"
         )
@@ -1643,6 +1779,8 @@ def _edit_field(
         )
 
     cleaned = _clean_typed(vtype, field, value)
+    if kind == "team_member" and field == "name":
+        _guard_member_rename(conn, entity_id, cleaned)
     with _open_batch(
         conn, tool="edit_field", org_id=org_id,
         summary=f"edited {kind}.{field} on {ref}",
