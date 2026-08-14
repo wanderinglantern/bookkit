@@ -93,8 +93,9 @@ One new `_edit_target` branch:
 - Batch `org_id` is `row["org_id"]` for an account-level assignment, or
   the placement's `org_id` for a deal-level one.
 - The write path needs no change: `_edit_field` already calls
-  `base.update(conn, kind, entity_id, …)` with `kind` as the table name,
-  and `team_assignment` *is* the table.
+  `base.update(conn, kind, entity_id, …)`, where `kind` is an
+  `ENTITY_TABLES` entity-type key, and `"team_assignment"` is already
+  registered there (`repo/base.py:28`).
 
 ### `team_roster` — emit `notes`
 
