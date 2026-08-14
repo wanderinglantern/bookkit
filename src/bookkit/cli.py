@@ -47,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     sync_p = sub.add_parser("sync", help="project towerkit program files")
     sync_p.add_argument("--roots", type=Path, nargs="+", default=None,
                         help="override the configured program roots")
+    sync_p.add_argument("--path", type=Path, default=None,
+                        help="project exactly one file instead of scanning the roots")
 
     roots_p = sub.add_parser("roots", help="show or set the program file locations")
     roots_p.add_argument("paths", type=Path, nargs="*",
@@ -184,6 +186,17 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
 
     if args.command == "sync":
         from . import sync
+
+        if args.path is not None:
+            try:
+                diags = sync.project(conn, Path(args.path))
+            except sync.AmbiguousPlacement as exc:
+                print(f"✗ {args.path}: {exc} — confirm it in the review queue")
+                return 1
+            for diag in diags.items:
+                print(f"  {diag}")
+            print(("✓ " if diags.ok else "✗ ") + str(args.path))
+            return 0 if diags.ok else 1
 
         roots = (
             [Path(r) for r in args.roots] if args.roots else sync.configured_roots(conn)
