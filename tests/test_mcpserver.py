@@ -1335,6 +1335,61 @@ def test_member_deactivate_refuses_someone_already_inactive(server_db):
     assert "already inactive" in str(err.value)
 
 
+def test_member_deactivate_cascade_removes_every_assignment(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._team_assign(rw, "Dana Cruz", client="Acme", lines="cyber")
+
+    out = mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+    assert out["active"] is False
+    assert out["unassigned"] == 1
+    assert team.for_org(rw, org.id) == []
+    assert team.list_members(rw, active_only=True) == []
+
+
+def test_cascade_is_ONE_batch_and_revert_restores_everything(server_db):
+    """The whole point of cascade over N separate unassigns: one undo unit."""
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._team_assign(rw, "Dana Cruz", client="Acme", lines="cyber")
+    mcpserver._team_assign(rw, "Dana Cruz", client="Acme", lines="property")
+
+    out = mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+    assert out["unassigned"] == 2
+    assert team.for_org(rw, org.id) == []
+
+    mcpserver._revert_batch(rw, out["batch"], now="2026-08-14T04:00:00Z")
+    assert len(team.for_org(rw, org.id)) == 2
+    assert team.list_members(rw, active_only=True)[0].name == "Dana Cruz"
+
+
+def test_cascade_on_someone_with_no_assignments_still_works(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    out = mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+    assert out["unassigned"] == 0
+    assert out["active"] is False
+
+
+def test_cascade_covers_deal_level_assignments_too(server_db):
+    from bookkit.repo import placements, team
+
+    rw, org = _rw(server_db)
+    placement = placements.create(rw, org.id, program_name="Tower GL",
+                                  period_from="2026-01-01",
+                                  period_to="2027-01-01")
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._team_assign(rw, "Dana Cruz", placement_ref=placement.ref)
+
+    out = mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+    assert out["unassigned"] == 1
+    assert team.for_org(rw, org.id) == []
+
+
 def test_member_deactivate_is_registered(server_db):
     server = build_server(server_db)
     names = {t.name for t in server._tool_manager.list_tools()}

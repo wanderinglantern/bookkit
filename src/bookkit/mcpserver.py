@@ -494,11 +494,16 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         return _team_unassign(rw, assignment_id)
 
     @server.tool()
-    async def member_deactivate(name: str) -> dict[str, Any]:
+    async def member_deactivate(
+        name: str, cascade: bool = False
+    ) -> dict[str, Any]:
         """Retire a colleague (exact name — read team_roster). Refuses while
-        they still hold assignments, naming every one. They stay in the
-        record and stop appearing in pickers; member_reactivate undoes it."""
-        return _member_deactivate(rw, name)
+        they still hold assignments, naming every one; cascade=True removes
+        all of them and deactivates as ONE revertible batch. They stay in the
+        record and stop appearing in pickers; member_reactivate undoes the
+        deactivation, but NOT the cascaded assignments — revert_batch does
+        that."""
+        return _member_deactivate(rw, name, cascade=cascade)
 
     @server.tool()
     async def opportunity_stage(
@@ -1435,30 +1440,39 @@ def _assignment_label(row: sqlite3.Row) -> str:
     return f"{label} ({placement})" if placement else label
 
 
-def _member_deactivate(conn: sqlite3.Connection, name: str) -> dict[str, Any]:
+def _member_deactivate(
+    conn: sqlite3.Connection, name: str, cascade: bool = False
+) -> dict[str, Any]:
     """Retire a colleague. Refuses while they still hold assignments — a
     roster that silently keeps pointing at someone who left is worse than a
-    refusal — and names every one so the caller can act."""
+    refusal — and names every one so the caller can act. cascade=True removes
+    them and deactivates in ONE batch, so revert_batch puts it all back."""
     from .repo import base, team
 
     member = _find_member(conn, name)
     if not member.active:
         raise ValueError(f"{member.name} is already inactive")
     rows = team.for_member(conn, member.id)
-    if rows:
+    if rows and not cascade:
         labels = ", ".join(_assignment_label(r) for r in rows)
         raise ValueError(
             f"{member.name} is still on {len(rows)} assignments: {labels} — "
             f"unassign them first, or pass cascade=True to remove all "
             f"{len(rows)} and deactivate as one revertible batch"
         )
+    summary = f"deactivated {member.name}"
+    if rows:
+        summary += f" and removed {len(rows)} assignments"
+    # org_id stays None: a cascade spans clients, so no single org owns it.
     with _open_batch(
-        conn, tool="member_deactivate", summary=f"deactivated {member.name}",
+        conn, tool="member_deactivate", summary=summary,
     ) as batch:
+        for row in rows:
+            team.unassign(conn, row["id"])
         base.update(conn, "team_member", member.id, {"active": 0},
                     note="mcp deactivate")
         _provenance(conn, "team_member", member.id)
-    return {"name": member.name, "active": False, "unassigned": 0,
+    return {"name": member.name, "active": False, "unassigned": len(rows),
             "batch": batch.ref}
 
 
