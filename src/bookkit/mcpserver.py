@@ -506,6 +506,13 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         return _member_deactivate(rw, name, cascade=cascade)
 
     @server.tool()
+    async def member_reactivate(name: str) -> dict[str, Any]:
+        """Bring a retired colleague back (exact name — read team_roster).
+        Assignments removed by a cascading deactivate do NOT come back; use
+        revert_batch for those."""
+        return _member_reactivate(rw, name)
+
+    @server.tool()
     async def opportunity_stage(
         ref: str, to: str, note: str | None = None, loss_reason: str | None = None
     ) -> dict[str, Any]:
@@ -1477,6 +1484,23 @@ def _member_deactivate(
             "batch": batch.ref}
 
 
+def _member_reactivate(conn: sqlite3.Connection, name: str) -> dict[str, Any]:
+    """Bring a retired colleague back. Assignments a cascade removed do NOT
+    come back — revert_batch is the undo for those."""
+    from .repo import base
+
+    member = _find_member(conn, name)
+    if member.active:
+        raise ValueError(f"{member.name} is already active")
+    with _open_batch(
+        conn, tool="member_reactivate", summary=f"reactivated {member.name}",
+    ) as batch:
+        base.update(conn, "team_member", member.id, {"active": 1},
+                    note="mcp reactivate")
+        _provenance(conn, "team_member", member.id)
+    return {"name": member.name, "active": True, "batch": batch.ref}
+
+
 def _opportunity_stage(
     conn: sqlite3.Connection, ref: str, to: str,
     note: str | None = None, loss_reason: str | None = None,
@@ -1589,6 +1613,12 @@ def _editable() -> dict[str, dict[str, Any]]:
 
 
 _EDITABLE: dict[str, dict[str, Any]] = _editable()
+
+# Fields that exist but are owned by a transition tool. The generic refusal
+# only lists what IS editable; these say where the caller should go instead.
+_EDIT_REDIRECTS: dict[tuple[str, str], str] = {
+    ("team_member", "active"): "member_deactivate / member_reactivate",
+}
 
 
 def _clean_typed(vtype: Any, field: str, value: str | None) -> Any:
@@ -1720,6 +1750,11 @@ def _edit_field(
         raise ValueError(f"cannot edit kind {kind!r}; editable: {sorted(_EDITABLE)}")
     vtype = allowed.get(field)
     if vtype is None:
+        redirect = _EDIT_REDIRECTS.get((kind, field))
+        if redirect is not None:
+            raise ValueError(
+                f"{field!r} on a {kind} is not a field edit — use {redirect}"
+            )
         raise ValueError(
             f"{field!r} is not editable on a {kind}; allowed: {sorted(allowed)}"
         )

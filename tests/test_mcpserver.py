@@ -1396,6 +1396,42 @@ def test_member_deactivate_is_registered(server_db):
     assert "member_deactivate" in names
 
 
+def test_member_reactivate_brings_someone_back(server_db):
+    from bookkit.repo import team
+
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._member_deactivate(rw, "Dana Cruz")
+
+    out = mcpserver._member_reactivate(rw, "Dana Cruz")
+    assert out["active"] is True
+    assert out["batch"].startswith("MCP-")
+    assert [m.name for m in team.list_members(rw, active_only=True)] == ["Dana Cruz"]
+
+
+def test_member_reactivate_refuses_someone_already_active(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    with pytest.raises(ValueError) as err:
+        mcpserver._member_reactivate(rw, "Dana Cruz")
+    assert "already active" in str(err.value)
+
+
+def test_reactivate_does_NOT_resurrect_cascaded_assignments(server_db):
+    """Spec decision: revert_batch is the undo for a cascade. Half-restoring
+    would be worse than saying so."""
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    mcpserver._team_assign(rw, "Dana Cruz", client="Acme")
+    mcpserver._member_deactivate(rw, "Dana Cruz", cascade=True)
+
+    mcpserver._member_reactivate(rw, "Dana Cruz")
+    assert team.list_members(rw, active_only=True)[0].name == "Dana Cruz"
+    assert team.for_org(rw, org.id) == []      # assignments stay gone
+
+
 def test_edit_field_changes_an_assignment_role(server_db):
     from bookkit.repo import team
 
@@ -1461,6 +1497,18 @@ def test_edit_field_refuses_rescoping_an_assignment(server_db):
             "somewhere-else", expecting=None,
         )
     assert "not editable" in str(err.value)
+
+
+def test_edit_field_redirects_active_to_the_deactivate_tools(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_member", "Dana Cruz", "active", "no", expecting="yes",
+        )
+    message = str(err.value)
+    assert "member_deactivate" in message
+    assert "member_reactivate" in message
 
 
 def test_assignment_notes_round_trip_through_the_roster(server_db):
@@ -1568,5 +1616,5 @@ def test_write_expansion_tools_are_registered(server_db):
         "edit_field", "contact_add", "opportunity_create", "project_create",
         "need_add", "member_create", "team_assign", "team_unassign",
         "team_roster", "opportunity_stage", "task_reopen",
-        "request_item_waive",
+        "request_item_waive", "member_deactivate", "member_reactivate",
     } <= names
