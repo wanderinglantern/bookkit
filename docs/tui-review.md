@@ -16,9 +16,15 @@
 - **Batch B** — F4, F5, F6, F12, F13, F25 fixed. 17 snapshots changed, each reviewed; the
   19 untouched screens stayed byte-identical.
 - **Batch C** — F33, F34 fixed, and F35 found and fixed along the way.
+- **Batch D** — F10 command palette (record search + screen actions), F19 clipboard
+  (`Y` yanks a row), F20 `bookctl open <ref-or-name>`, F21 the book filter persists and
+  says when it is on.
 
-**Still open and ranked next:** Batch D (F10 command palette, F19 clipboard, F20 CLI
-deep-link, F21 persisted filters), then Batch E.
+Batches A–D and the snapshot suite are **merged to main**.
+
+**Still open and ranked next:** Batch E (F14 done; F16 pin Textual and guard the private
+DataTable API, F3 an app-level error screen, F32 the contrast sweep as a test), plus the
+two remaining P0/P1 items — F3 and F18 — and the F35 decision on two-field undo.
 
 Evidence: every screen was driven headlessly through `App.run_test()` at 140×45 and
 80×24, exported as SVG (`docs/screenshots/`) and as composited plain text
