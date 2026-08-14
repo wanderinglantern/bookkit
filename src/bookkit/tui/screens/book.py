@@ -46,19 +46,42 @@ class BookScreen(Screen):
         with Vertical():
             yield Input(placeholder="filter by name / owner / status …", id="book-filter")
             yield ListTable(id="book-table")
-            yield Static(
-                f"[{theme.DIM}][b]a[/b] add · [b]e[/b] edit · [b]f[/b] filter · "
-                f"[b]enter[/b] opens[/]",
-                id="book-hint",
-            )
+            yield Static(id="book-hint")
         yield Footer()
 
+    # the filter is remembered per screen under this key (review F21)
+    FILTER_SETTING = "book.filter"
+
     def on_mount(self) -> None:
-        self.refresh_data()
+        from ...repo import settings
+
+        # a filter you retype every morning is a filter the app should have
+        # kept: settings is already a KV store, so this costs one read
+        saved = str(settings.get(self.app.conn, self.FILTER_SETTING) or "")
+        if saved:
+            self.query_one("#book-filter", Input).value = saved
+        self.refresh_data(saved)
         table = self.query_one("#book-table", ListTable)
         table.focus()
-        if table.row_count == 0:
+        self._render_hint(saved)
+        if table.row_count == 0 and not saved:
             self.notify("empty book — press a to create your first account")
+
+    def _render_hint(self, filter_text: str) -> None:
+        """Say when a filter is on: silently hiding most of the book is the
+        kind of state that has to be visible."""
+        keys = (
+            "[b]a[/b] add · [b]e[/b] edit · [b]f[/b] filter · "
+            "[b]Y[/b] copy · [b]enter[/b] opens"
+        )
+        if filter_text.strip():
+            from rich.markup import escape
+
+            keys = (
+                f"[{theme.AMBER}]filtered by '{escape(filter_text.strip())}'[/] — "
+                f"[b]f[/b] to change, empty it to clear · {keys}"
+            )
+        self.query_one("#book-hint", Static).update(f"[{theme.DIM}]{keys}[/]")
 
     def refresh_data(self, filter_text: str = "") -> None:
         conn = self.app.conn
@@ -97,7 +120,11 @@ class BookScreen(Screen):
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "book-filter":
+            from ...repo import settings
+
             self.refresh_data(event.value)
+            self._render_hint(event.value)
+            settings.set_value(self.app.conn, self.FILTER_SETTING, event.value)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "book-filter":

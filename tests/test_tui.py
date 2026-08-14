@@ -2463,3 +2463,114 @@ async def test_navigator_D_drops_the_task_under_the_cursor(seeded_db: Path) -> N
         await pilot.press("u")
         await pilot.pause()
         assert tasks_repo.get(app.conn, task_id).status == "open"
+
+
+# --- Batch D: faster than navigating (F10, F19, F20, F21) --------------------
+
+
+async def test_the_palette_finds_a_record_by_name(seeded_db: Path) -> None:
+    """F10: the palette was already bound and advertised in the Footer, and
+    offered only theme-change and quit. For a database utility, jumping to any
+    record from anywhere is the highest-leverage thing it can do."""
+    from bookkit.tui.commands import RecordCommands
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        provider = RecordCommands(app.screen)
+        await provider.startup()
+        hits = [hit async for hit in provider.search("atom")]
+        assert hits, "no hits for 'atom'"
+        assert any("Atomic" in (hit.text or "") for hit in hits)
+
+
+async def test_the_palette_offers_the_screens(seeded_db: Path) -> None:
+    """F10's other half: the palette should also answer 'what can I do'."""
+    from bookkit.tui.commands import ScreenCommands
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        provider = ScreenCommands(app.screen)
+        await provider.startup()
+        offered = {hit.text async for hit in provider.discover()}
+        assert any("Today" in t for t in offered if t)
+        assert any("Calendar" in t for t in offered if t)
+
+
+async def test_the_palette_jumps_to_the_account(seeded_db: Path) -> None:
+    """A hit that does not open the record is a search box, not a jump."""
+    from bookkit.tui.commands import RecordCommands
+    from bookkit.tui.screens.account import AccountScreen
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        provider = RecordCommands(app.screen)
+        await provider.startup()
+        hit = next(
+            h for h in [x async for x in provider.search("atom")]
+            if "Atomic" in (h.text or "")
+        )
+        hit.command()
+        await pilot.pause()
+        assert isinstance(app.screen, AccountScreen)
+
+
+async def test_Y_copies_the_selected_row(seeded_db: Path) -> None:
+    """F19: nothing in the app ever called copy_to_clipboard, so an email or a
+    ref could not be lifted out of a row without retyping it."""
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    copied: list[str] = []
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.copy_to_clipboard = copied.append  # type: ignore[method-assign]
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("2")
+        await pilot.pause()
+        table = app.screen.query_one("#contacts-table", ListTable)
+        table.focus()
+        await pilot.pause()
+        await pilot.press("Y")
+        await pilot.pause()
+        assert copied, "Y copied nothing"
+        # a contact row is worth copying for its email above all
+        assert "@" in copied[0]
+
+
+async def test_the_book_filter_survives_a_restart(seeded_db: Path) -> None:
+    """F21: filters reset on every entry, so the same one was retyped daily."""
+    from textual.widgets import Input
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.press("b")
+        await pilot.pause()
+        app.screen.query_one("#book-filter", Input).value = "borealis"
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+    again = BookkitApp(seeded_db)
+    async with again.run_test(size=(140, 45)) as pilot:
+        await pilot.press("b")
+        await pilot.pause()
+        assert again.screen.query_one("#book-filter", Input).value == "borealis"
+        assert again.screen.query_one("#book-table", ListTable).row_count == 1
+
+
+def test_bookctl_open_resolves_a_ref_or_a_name(seeded_db: Path) -> None:
+    """F20: bookctl always landed on the Navigator, so a shell alias could not
+    put you in front of a client."""
+    from bookkit import db as db_mod
+    from bookkit.cli import resolve_org
+
+    conn = db_mod.connect(seeded_db)
+    try:
+        by_ref = resolve_org(conn, "ACC-0001")
+        by_name = resolve_org(conn, "atomic industries")
+        assert by_ref is not None and by_ref.id == by_name.id
+        assert resolve_org(conn, "no such client") is None
+    finally:
+        conn.close()

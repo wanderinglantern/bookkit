@@ -25,12 +25,36 @@ class ListTable(DataTable):
         Binding("k", "cursor_up", "Up", show=False),
         Binding("g", "scroll_top", "Top", show=False),
         Binding("G", "scroll_bottom", "Bottom", show=False),
+        # Y yanks the row to the system clipboard. On every table, because the
+        # thing you want out of a terminal — an email, a ref, a premium — was
+        # otherwise retyped by hand (review F19).
+        Binding("Y", "copy_row", "Copy row", show=False),
     ]
 
     def __init__(self, **kwargs) -> None:
         kwargs.setdefault("cursor_type", "row")
         kwargs.setdefault("zebra_stripes", True)
         super().__init__(**kwargs)
+
+    def action_copy_row(self) -> None:
+        """Copy the row under the cursor.
+
+        An email is what you almost always want off a contact row, so a cell
+        that looks like one wins outright; otherwise the whole row goes, tab
+        separated, which pastes into a spreadsheet as cells."""
+        if self.cursor_row is None or not self.row_count:
+            return
+        cells = [
+            str(cell).strip()
+            for cell in self.get_row_at(self.cursor_row)
+            if str(cell).strip() not in ("", "—")
+        ]
+        if not cells:
+            return
+        email = next((c for c in cells if "@" in c and " " not in c), None)
+        payload = email or "\t".join(cells)
+        self.app.copy_to_clipboard(payload)
+        self.notify(f"copied {payload if len(payload) < 40 else cells[0]}")
 
 
 def rfi_asker_cell(conn: sqlite3.Connection, request: RfiRequest) -> str | Text:

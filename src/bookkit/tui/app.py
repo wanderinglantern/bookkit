@@ -10,12 +10,16 @@ from textual.binding import Binding
 from textual.screen import Screen
 
 from .. import db
+from .commands import RecordCommands, ScreenCommands
 from .theme import BOOKKIT_THEME
 
 
 class BookkitApp(App):
     TITLE = "bookkit"
     CSS_PATH = "bookkit.tcss"
+    # the palette is already bound and already in the Footer; these are what
+    # make it worth pressing (review F10)
+    COMMANDS = App.COMMANDS | {RecordCommands, ScreenCommands}
     BINDINGS = [
         Binding("slash", "global_search", "Search", key_display="/"),
         Binding("n", "quick_capture", "Log interaction"),
@@ -24,9 +28,17 @@ class BookkitApp(App):
         Binding("ctrl+q", "quit", "Quit", priority=True),
     ]
 
-    def __init__(self, db_path: Path | str | None = None, **kwargs) -> None:
+    def __init__(
+        self,
+        db_path: Path | str | None = None,
+        open_org_id: str | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self._db_path = db_path
+        # `bookctl open <ref-or-name>` lands here: the Navigator is still
+        # pushed underneath, so esc means what it always means (review F20)
+        self._open_org_id = open_org_id
         self.conn = db.connect(db_path)
 
     def db_file(self) -> Path:
@@ -39,6 +51,8 @@ class BookkitApp(App):
         self.register_theme(BOOKKIT_THEME)
         self.theme = "bookkit"
         self.push_screen(NavigatorScreen())
+        if self._open_org_id:
+            self.open_account(self._open_org_id)
 
     def on_unmount(self) -> None:
         self.conn.close()
@@ -130,6 +144,49 @@ class BookkitApp(App):
             self.switch_screen(AccountScreen(org_id))
         else:
             self.push_screen(AccountScreen(org_id))
+
+    def run_palette_action(self, action: str) -> None:
+        """Run a screen-level action chosen from the command palette.
+
+        The palette can fire from any screen, including one that has no such
+        binding, so these route through the app rather than through whatever
+        happens to be on top. `go_home` pops back to the Navigator instead of
+        pushing a second one."""
+        from .screens.navigator import NavigatorScreen
+
+        if action == "go_home":
+            while len(self.screen_stack) > 2 and not isinstance(
+                self.screen, NavigatorScreen
+            ):
+                self.pop_screen()
+            return
+        if action == "help":
+            self.action_help()
+            return
+        if action == "undo_last":
+            self.show_undo_result()
+            refresh = getattr(self.screen, "refresh_data", None)
+            if refresh is not None:
+                refresh()
+            return
+        if action == "setup":
+            from .widgets.settings import SettingsModal
+
+            self.push_screen(SettingsModal())
+            return
+        screens = {
+            "open_today": ("today", "TodayScreen"),
+            "open_book": ("book", "BookScreen"),
+            "open_calendar": ("calendar", "CalendarScreen"),
+            "open_pipeline": ("pipeline", "PipelineScreen"),
+            "open_markets": ("markets", "MarketsScreen"),
+            "open_team": ("team", "TeamScreen"),
+        }
+        module_name, class_name = screens[action]
+        module = __import__(
+            f"bookkit.tui.screens.{module_name}", fromlist=[class_name]
+        )
+        self.push_screen(getattr(module, class_name)())
 
     def show_undo_result(self) -> None:
         from ..services import undo

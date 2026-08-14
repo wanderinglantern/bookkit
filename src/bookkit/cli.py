@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import db
 from .dates import days_until
+from .models import Org
 from .money import format_cents, format_cents_compact
 from .repo import search as search_repo
 from .repo import tasks as tasks_repo
@@ -31,6 +32,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="also write three linked towerkit program files here")
 
     sub.add_parser("today", help="today's brief as plain text")
+
+    open_p = sub.add_parser("open", help="launch the TUI on one client")
+    open_p.add_argument("who", help="ref (ACC-0001) or part of the account name")
 
     sub.add_parser("mcp", help="stdio MCP server (work-machine cowork connector)")
 
@@ -75,11 +79,50 @@ def main(argv: list[str] | None = None) -> int:
         BookkitApp(db_path=args.db).run()
         return 0
 
+    if args.command == "open":
+        # a shell alias should be able to put you in front of a client, rather
+        # than in front of the navigator with the name still to type (F20)
+        from .tui.app import BookkitApp
+
+        conn = db.connect(args.db)
+        try:
+            org = resolve_org(conn, args.who)
+        finally:
+            conn.close()
+        if org is None:
+            print(f"no account matches {args.who!r}", file=sys.stderr)
+            return 1
+        BookkitApp(db_path=args.db, open_org_id=org.id).run()
+        return 0
+
     conn = db.connect(args.db)
     try:
         return _dispatch(args, conn)
     finally:
         conn.close()
+
+
+def resolve_org(conn: sqlite3.Connection, who: str) -> Org | None:
+    """Find one account by ref or by name. An exact ref wins outright; a name
+    goes through the same fuzzy matcher the book filter uses, so
+    `bookctl open atomic` finds "Atomic Industries, Inc."."""
+    from rapidfuzz import fuzz, process
+
+    from .repo import orgs
+
+    needle = who.strip()
+    if not needle:
+        return None
+    everyone = orgs.list_orgs(conn)
+    by_ref = {o.ref.casefold(): o for o in everyone}
+    exact = by_ref.get(needle.casefold())
+    if exact is not None:
+        return exact
+    by_name = {o.name: o for o in everyone}
+    match = process.extractOne(
+        needle, list(by_name), scorer=fuzz.WRatio, score_cutoff=75
+    )
+    return by_name[match[0]] if match else None
 
 
 def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
