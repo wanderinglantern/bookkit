@@ -814,6 +814,86 @@ async def test_task_tables_show_description_and_detail(seeded_db: Path) -> None:
         assert "brief line" in [str(c) for c in row]
 
 
+async def test_overview_tasks_wrap_long_detail(seeded_db: Path) -> None:
+    """The overview task table wraps the long notes down the row instead of
+    clipping them: the detail column is fixed-width, the row auto-heights, and
+    the whole note is in the cell. The one-line task tables keep clipping."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.screens.navigator import NavigatorScreen
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    long_detail = (
+        "Carrier wants the signed TRIA rejection plus 2021-2025 loss runs "
+        "with open reserves before they will release terms."
+    )
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    task = tasks_repo.create(
+        app.conn, "chase terms", detail=long_detail,
+        due_on=date.today().isoformat(), org_id=org.id,
+    )
+    async with app.run_test(size=(160, 48)) as pilot:
+        assert isinstance(app.screen, NavigatorScreen)
+        app.open_account(org.id)
+        await pilot.pause()
+        overview = app.screen.query_one("#ov-tasks", ListTable)
+
+        # the whole note reaches the cell — nothing clipped with an ellipsis
+        detail = str(overview.get_row(task.id)[5])
+        assert detail == long_detail
+
+        # and the row grew to fit it rather than cutting it off at one line
+        row_key = next(
+            key for key in overview.rows if key.value == task.id
+        )
+        assert overview.rows[row_key].height > 1
+
+        # Y still yanks one flat line — a wrapped cell must not paste as
+        # several spreadsheet rows
+        overview.focus()
+        overview.move_cursor(row=overview.get_row_index(task.id))
+        await pilot.pause()
+        await pilot.press("Y")
+        assert "\n" not in app._clipboard
+        assert "open reserves before they will release terms." in app._clipboard
+
+        # the editable task tables are unchanged: still one line, still clipped
+        app.pop_screen()
+        await pilot.pause()
+        nav = app.screen
+        assert isinstance(nav, NavigatorScreen)
+        nav._current = ("group", ("tasks", org.id))
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        assert all(row.height == 1 for row in table.rows.values())
+        assert str(table.get_row(f"task:{task.id}")[4]).endswith("…")
+
+
+async def test_overview_tasks_stand_down_when_narrow(seeded_db: Path) -> None:
+    """At 80 columns there is no room to wrap into: a detail column a few
+    characters wide would burn three rows per task to say nothing, so the
+    table falls back to one clipped line — the call the placements tab makes
+    at PREVIEW_MIN_WIDTH."""
+    from bookkit.repo import tasks as tasks_repo
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    task = tasks_repo.create(
+        app.conn, "chase terms",
+        detail="Carrier wants the signed TRIA rejection plus 2021-2025 loss "
+               "runs with open reserves before they will release terms.",
+        due_on=date.today().isoformat(), org_id=org.id,
+    )
+    async with app.run_test(size=(80, 24)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        overview = app.screen.query_one("#ov-tasks", ListTable)
+        row_key = next(key for key in overview.rows if key.value == task.id)
+        assert overview.rows[row_key].height == 1
+        assert str(overview.get_row(task.id)[5]).endswith("…")
+
+
 async def test_task_tables_group_by_category(seeded_db: Path) -> None:
     """category surfaces on every task table and rows arrive grouped by it
     (display-level: repo ordering stays authoritative for briefs)."""

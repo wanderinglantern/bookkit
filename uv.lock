@@ -145,7 +145,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "rapidfuzz", specifier = ">=3.6" },
-    { name = "textual", specifier = ">=0.58" },
+    { name = "textual", specifier = ">=8.2,<9" },
     { name = "textual-autocomplete", specifier = ">=4.0" },
     { name = "towerkit", editable = "../towerkit" },
 ]

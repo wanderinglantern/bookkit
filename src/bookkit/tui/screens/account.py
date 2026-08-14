@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from ...models import Task
     from ..app import BookkitApp
 
 import subprocess
@@ -46,6 +49,7 @@ from ..widgets.tables import (
     rfi_asker_cell,
     rfi_due_cell,
     task_detail_cell,
+    task_detail_wrapped,
 )
 from ..widgets.tower_preview import TowerPreview
 from .navigator import TASK_INLINE
@@ -116,6 +120,46 @@ RFI_ITEM_INLINE = {
     3: Field("due_on", "needed by", "date"),
     6: Field("response", "response"),
 }
+
+# narrower than this and a wrapped detail column is not worth the rows it
+# costs: the note comes out three characters wide, three lines tall, saying
+# nothing. Same call the placements tab makes at PREVIEW_MIN_WIDTH — stand
+# down rather than render mush.
+OV_DETAIL_MIN = 40
+OV_DETAIL_MAX = 60
+
+
+def _ov_detail_width(tasks: list[Task], total: int) -> int | None:
+    """Width for the overview task table's detail column, or None to leave it
+    as one clipped line.
+
+    The other five columns are auto-width, so they get measured off the data
+    and taken off the screen width first; the detail column wraps into what is
+    left, and only if that is worth wrapping into. Measure, then divide — a
+    percentage cannot know that one account's task titles are twice as long as
+    another's. A long description therefore wins the space, which is the right
+    order: it is the field that was filled in.
+
+    Note it costs nothing when nobody wrote a note — the column stays auto-width
+    and the table renders exactly as it did before."""
+    if not any(t.detail for t in tasks):
+        return None
+
+    def widest(pick: Callable[[Task], str]) -> int:
+        return max((len(pick(t)) for t in tasks), default=1)
+
+    lead = (
+        10  # due, a date
+        + 6  # due in
+        + widest(lambda t: t.title)
+        + widest(lambda t: t.category or "—")
+        + widest(lambda t: t.description or "—")
+        + 6 * 2  # cell padding, all six columns
+        + 2  # the pane's own margin
+    )
+    spare = total - lead
+    return min(spare, OV_DETAIL_MAX) if spare >= OV_DETAIL_MIN else None
+
 
 # tabs whose `a` creates a row, so an empty one can name the way out of itself
 ADDABLE_TABS = frozenset(
@@ -494,9 +538,15 @@ class AccountScreen(Screen):
         open_tasks = grouped_by_category(tasks_repo.open_tasks(conn, org_id=org.id))
         table = self.query_one("#ov-tasks", ListTable)
         table.clear(columns=True)
-        table.add_columns(
-            "due", right("due in"), "task", "category", "description", "detail"
-        )
+        # the long notes wrap down the row here instead of being clipped to
+        # their first 58 characters. That needs BOTH a fixed-width column and
+        # an auto-height row: an auto-width column just grows to fit the
+        # longest line and nothing ever wraps. Only this table — the editable
+        # task tables stay one line per row, see task_detail_wrapped on why
+        detail_width = _ov_detail_width(open_tasks, self.size.width)
+        for label in ("due", right("due in"), "task", "category", "description"):
+            table.add_column(label)
+        table.add_column("detail", width=detail_width)
         for t in open_tasks:
             if t.due_on:
                 days = days_until(t.due_on, today)
@@ -507,7 +557,8 @@ class AccountScreen(Screen):
                 due, due_in, t.title,
                 Text(t.category, style=theme.AMBER) if t.category else dash(),
                 t.description or dash(),
-                task_detail_cell(t), key=t.id,
+                task_detail_wrapped(t) if detail_width else task_detail_cell(t),
+                key=t.id, height=None if detail_width else 1,
             )
 
         opps = opportunities.for_org(conn, org.id, open_only=True)

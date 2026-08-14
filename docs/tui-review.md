@@ -5,7 +5,7 @@
 `db.py` connection setup, and the TUI test suite.
 **Status** findings only — no application code was changed.
 
-**35 findings — 2 P0, 19 P1, 14 P2** (F2 withdrawn from P0; F33–F34 from use; F35 found while building batch C).
+**36 findings — 2 P0, 20 P1, 14 P2** (F2 withdrawn from P0; F33–F34 from use; F35 found while building batch C; F36 requested 2026-08-14, reversing an earlier call).
 
 **Shipped so far** on branch `tui-batch-a`, 541 tests passing with `mypy --strict` and
 `ruff` clean, every fix carrying a regression test watched failing first:
@@ -821,3 +821,50 @@ already copes by promising no undo at all. Two candidate fixes:
 
 I'd take (1), but it is a change to the layer everything writes through, so it is your
 call.
+
+---
+
+## Addendum — F36, requested 2026-08-14 (reversal of an earlier call)
+
+**[P1] [feature] Information requests carry no line of cover** — `models.py:247`,
+`export_rfi.py:76` · Effort **M** · **Requested by Grant, 2026-08-14**
+
+The earlier decision was that a request scopes to a placement and the *program* is
+specific enough — a line-of-cover column would be noise. Grant has reversed that: on a
+tower with GL, AL and EL under one program, "which line is this ask about" is a real
+question a client asks, and the answer is currently nowhere. Two things follow from the
+reversal, and one thing does not:
+
+1. **Populate the line from towerkit, do not type it.** towerkit files are the sole
+   authority for program structure (`CLAUDE.md`), and the lines are already projected —
+   `proj_layer.applies_to` holds them per placement (`projection.py:28`). So the field is
+   a picker over the linked placement's projected lines, not free text, and it can only
+   be offered once `RfiRequest.placement_id` is set. An account-level or project-scoped
+   request has no tower to read from and leaves it empty.
+
+2. **Drill to the layer too.** Grant's suggestion, and `proj_layer` already carries
+   `layer_id`, `name`, `attach` and `lim`, so a second, optional narrowing is nearly
+   free once the first exists. A request about the $10M xs $10M layer is a different
+   conversation from one about primary GL.
+
+3. **Export it.** `compose_information_requests` renders Item | Detail | Type | Needed by
+   (`export_rfi.py:80`); the line belongs in that sheet, since the export is what leaves
+   the building.
+
+**The decision you owe before this is built:** where the line lives. Two shapes, and they
+are not equivalent:
+
+- **On the request** — one line per request, matching how `scope_label` already resolves
+  one placement per request. Cheap, and consistent with the existing scope column.
+- **On the item** — a single request can ask for GL loss runs *and* AL schedules, which is
+  how brokers actually send them. Truer to the work, but it means `RfiItem` grows the
+  field, the items datasheet grows a column it does not have room for at 80 cells (F25's
+  problem again), and `scope_label`'s one-request-one-scope rule stops holding.
+
+I'd take **on the request**, with the layer as a second optional column, and let a
+genuinely two-line ask be two requests — that keeps the chase queue's "one row, one thing
+to chase" shape. But the argument for item-level is real, and it is your call.
+
+**Not in scope for this**: back-filling the line onto historical requests. There is no
+source to derive it from — the placement link does not say which of its lines an old ask
+was about — so any back-fill would be a guess written into the record.
