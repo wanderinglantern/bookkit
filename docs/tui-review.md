@@ -20,11 +20,17 @@
   (`Y` yanks a row), F20 `bookctl open <ref-or-name>`, F21 the book filter persists and
   says when it is on.
 
-Batches A–D and the snapshot suite are **merged to main**.
+- **Batch E** — F3 (the last P0: a failing action no longer takes the session down),
+  F16 (Textual pinned with an upper bound, private DataTable attributes guarded by test),
+  F32 (the contrast sweep is a test over 20 journeys at two sizes).
 
-**Still open and ranked next:** Batch E (F14 done; F16 pin Textual and guard the private
-DataTable API, F3 an app-level error screen, F32 the contrast sweep as a test), plus the
-two remaining P0/P1 items — F3 and F18 — and the F35 decision on two-field undo.
+Batches A–D and the snapshot suite are **merged to main**; E is on `tui-batch-e`.
+
+**No P0 remains.** Still open: F18 (market appetite still cannot be edited or deleted),
+F29/F30/F31 (chrome contrast, recorded in the sweep's ACCEPTED list), F17 (`i` means two
+things), F21's remaining half (sort order and other screens' filters), F15's dead
+stylesheet rule, F24/F26/F27 — and one decision you owe: **F35**, on whether two-field
+TUI actions should be undoable at all.
 
 Evidence: every screen was driven headlessly through `App.run_test()` at 140×45 and
 80×24, exported as SVG (`docs/screenshots/`) and as composited plain text
