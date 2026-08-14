@@ -9,7 +9,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from . import db
+from . import connector, db
 from .dates import days_until
 from .models import Org
 from .money import format_cents, format_cents_compact
@@ -36,7 +36,11 @@ def main(argv: list[str] | None = None) -> int:
     open_p = sub.add_parser("open", help="launch the TUI on one client")
     open_p.add_argument("who", help="ref (ACC-0001) or part of the account name")
 
-    sub.add_parser("mcp", help="stdio MCP server (work-machine cowork connector)")
+    mcp_p = sub.add_parser("mcp", help="stdio MCP server (work-machine cowork connector)")
+    mcp_p.add_argument("--connector-info", action="store_true",
+                       help="print the Add MCP Connector field values instead of serving")
+    mcp_p.add_argument("--check", action="store_true",
+                       help="verify the connector starts and finds the book; exit 1 if not")
 
     renew_p = sub.add_parser("renewals", help="upcoming renewals")
     renew_p.add_argument("--days", type=int, default=90)
@@ -96,6 +100,18 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         BookkitApp(db_path=args.db, open_org_id=org.id).run()
         return 0
+
+    if args.command == "mcp" and (args.connector_info or args.check):
+        # Deliberately ahead of db.connect: it creates and migrates the file,
+        # so running these through _dispatch would conjure the very database
+        # --check exists to tell you is missing.
+        if args.connector_info:
+            _print_connector_fields(connector.fields(args.db))
+            return 0
+        report = connector.check(args.db)
+        for result in report.checks:
+            print(f"{'✓' if result.ok else '✗'} {result.label:<8}  {result.detail}")
+        return 0 if report.ok else 1
 
     conn = db.connect(args.db)
     try:
@@ -299,6 +315,17 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
         return 0
 
     return 2
+
+
+def _print_connector_fields(fields: connector.ConnectorFields) -> None:
+    """One line per input in the Add MCP Connector dialog, in panel order."""
+    env = ", ".join(f"{k}={v}" for k, v in fields.env.items()) or "(none)"
+    print("Add MCP Connector — paste one line per field:\n")
+    print(f"  Name         {fields.name}")
+    print(f"  Command      {fields.command}")
+    print(f"  Arguments    {', '.join(fields.arguments)}")
+    print(f"  Env Secrets  {env}")
+    print(f"  Mode         {fields.mode}")
 
 
 def _print_today(conn: sqlite3.Connection) -> None:

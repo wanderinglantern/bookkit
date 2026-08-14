@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -164,3 +165,37 @@ def test_today_lists_requests_to_chase(tmp_path, capsys) -> None:
     assert "REQUESTS TO CHASE (1)" in out
     assert "Sompo — property questions" in out
     assert "2 of 2 open" in out
+
+
+def test_connector_info_prints_pasteable_panel_fields(cli_db: Path, capsys) -> None:
+    """`bookctl mcp --connector-info` must print, not serve — the Cowork panel
+    is hand-entry, so the command's whole job is producing the five values.
+    """
+    assert main(["mcp", "--connector-info"]) == 0
+
+    out = capsys.readouterr().out
+    assert "bookkit" in out
+    assert str(Path(sys.executable).parent / "bookctl") in out
+    # cli_db points BOOKKIT_DB off-default, so the path must be pinned
+    assert f"--db, {cli_db}, mcp" in out
+    assert "both" in out
+
+
+def test_check_exit_code_reflects_the_verdict(cli_db: Path, capsys) -> None:
+    assert main(["mcp", "--check"]) == 1
+    assert "no such file" in capsys.readouterr().out
+
+    main(["init"])
+    capsys.readouterr()
+    assert main(["mcp", "--check"]) == 0
+
+
+def test_connector_info_honours_an_explicit_db_override(tmp_path, capsys) -> None:
+    """`bookctl --db X mcp --connector-info` has to describe the connector for
+    X, not for wherever this shell happens to point.
+    """
+    path = tmp_path / "explicit.db"
+
+    assert main(["--db", str(path), "mcp", "--connector-info"]) == 0
+
+    assert f"--db, {path}, mcp" in capsys.readouterr().out

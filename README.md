@@ -53,16 +53,43 @@ the path.
 ## MCP connector (work-machine assistant)
 
 The `bookctl mcp` command exposes an MCP server for a work-machine assistant.
-Configure it with these settings:
+The connector panel is hand-entry, so ask for the values rather than typing
+them from memory — run this **on the machine the connector will run on**:
 
-- Name: `bookkit`
-- Command: `bookctl`
-- Arguments: `mcp`
-- Environment: `BOOKKIT_DB` (only if the DB lives off the default path)
-- Mode: both
+```
+bookctl mcp --connector-info
+```
 
-Smoke check: `bookctl mcp` starts silently, waits on stdin, and can be stopped
-with Ctrl+C. Any output to stdout on startup is a bug.
+It prints one line per field, ready to paste:
+
+```
+Add MCP Connector — paste one line per field:
+
+  Name         bookkit
+  Command      /Users/you/Developer/bookkit/.venv/bin/bookctl
+  Arguments    mcp
+  Env Secrets  (none)
+  Mode         both
+```
+
+Command is an absolute path on purpose. `bookctl` is not on `PATH` — the
+repo-root `bookctl` is an `sh` wrapper around `./.venv/bin/bookctl`, and a GUI
+app inherits neither your `PATH` nor a shell alias, so a bare `bookctl` fails
+to launch. Arguments gains `--db, <path>, mcp` when the database lives
+anywhere the connector could not find on its own; a database path is not a
+secret, so it goes in Arguments rather than the encrypted Env Secrets store.
+
+Then verify before you trust it:
+
+```
+bookctl mcp --check
+```
+
+It exits 0 only when the console script is executable, the database exists
+(reporting its size and age, so a stale copy is obvious), the schema is
+migrated, and startup writes nothing to stdout — stdout is the MCP wire, and
+one stray `print` corrupts the protocol. Neither flag starts the server, and
+neither creates the database.
 
 The assistant can manage the whole book side: read everything, create
 clients/contacts/opportunities/projects/needs/tasks/RFIs/team members,
