@@ -79,8 +79,12 @@ def build_server(db_path: Path | str | None = None) -> MCPServer:
             "completing or enriching anything — never guess an id."
         ),
     )
-    ro = db.connect_readonly(db_path)
+    # Order matters: connect() creates the file and migrates it, and a
+    # mode=ro connection cannot create anything. Opening read-only first
+    # kills the server at startup on a first run, and a server that never
+    # starts looks exactly like a server with no tools.
     rw = db.connect(db_path)
+    ro = db.connect_readonly(db_path)
     _register_read_tools(server, ro)
     _register_write_tools(server, rw)
     return server

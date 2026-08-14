@@ -42,6 +42,21 @@ def test_build_server_registers_tools(server_db):
     } <= names
 
 
+def test_build_server_creates_the_database_when_it_is_missing(tmp_path: Path):
+    """A first run points at a path nothing has created yet. The read-only
+    connection cannot create a file, so the read-write connect (which does,
+    and migrates) has to come first — otherwise the server dies at startup
+    and the client sees NO tools, which reads as 'the tool doesn't exist'."""
+    path = tmp_path / "not-yet.db"
+    assert not path.exists()
+
+    server = build_server(path)
+
+    assert path.exists()
+    names = {t.name for t in server._tool_manager.list_tools()}
+    assert {"today_brief", "team_assign", "request_create"} <= names
+
+
 def test_renewals_due_names_lines_of_cover(server_db):
     conn = db.connect(server_db)
     org = orgs.create(conn, name="Acme", kind="client")
