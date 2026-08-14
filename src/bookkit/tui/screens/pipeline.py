@@ -82,16 +82,20 @@ class PipelineScreen(Screen):
                 org = orgs.get(conn, o.org_id)
                 target = format_cents_compact(o.target_premium) if o.target_premium else "—"
                 # Text.assemble, not markup: account/title text must render
-                # verbatim even if it contains [brackets]
+                # verbatim even if it contains [brackets].
+                #
+                # And NO baked colours (review F28, reported from use):
+                # OptionList paints its highlight BEHIND the prompt and does
+                # not override an explicit foreground the way DataTable does,
+                # so theme.DIM here rendered at 1.83:1 on the gold cursor —
+                # the ref, the probability and the whole lines/effective row
+                # vanished from whichever card was selected. Hierarchy comes
+                # from weight and indentation, which the cursor cannot erase.
                 label = Text.assemble(
-                    (o.ref, theme.DIM), " ", (org.name, "bold"), "\n",
-                    "  ", o.title,
-                    (" · ", theme.DIM), target,
-                    (f" · {o.probability_pct}%", theme.DIM), "\n",
-                    (
-                        f"  {o.lines or 'lines —'} · eff {o.target_effective or '—'}",
-                        theme.DIM,
-                    ),
+                    o.ref, "  ", (org.name, "bold"), "\n",
+                    "  ", o.title, " · ", target,
+                    f" · {o.probability_pct}%", "\n",
+                    f"  {o.lines or 'lines —'} · eff {o.target_effective or '—'}",
                 )
                 option_list.add_option(Option(label, id=o.id))
 

@@ -1900,3 +1900,195 @@ async def test_detail_of_a_reverted_batch_shows_no_false_conflicts(
         assert "website" in rendered
         assert "since changed to" not in rendered
         assert "reverted" in rendered
+
+
+# --- Batch A regressions (review findings F1, F7, F11, F22, F23, F28) --------
+
+
+def _contrast(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> float:
+    """WCAG relative-contrast between two rendered colours.
+
+    Colour is signal in this app (CLAUDE.md), so a signal the cursor paints
+    over is a bug, not a cosmetic issue. F32 generalises this into a sweep.
+    """
+
+    def channel(value: int) -> float:
+        v = value / 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+    def luminance(c: tuple[int, int, int]) -> float:
+        return 0.2126 * channel(c[0]) + 0.7152 * channel(c[1]) + 0.0722 * channel(c[2])
+
+    a, b = luminance(fg), luminance(bg)
+    high, low = max(a, b), min(a, b)
+    return (high + 0.05) / (low + 0.05)
+
+
+def _worst_contrast(widget, line: int) -> tuple[float, str]:
+    """Lowest contrast of any non-blank text segment on one rendered line."""
+    worst, culprit = 21.0, ""
+    for segment in widget.render_line(line):
+        style = segment.style
+        if not style or not style.color or not style.bgcolor or not segment.text.strip():
+            continue
+        fg = style.color.get_truecolor()
+        bg = style.bgcolor.get_truecolor()
+        ratio = _contrast((fg.red, fg.green, fg.blue), (bg.red, bg.green, bg.blue))
+        if ratio < worst:
+            worst, culprit = ratio, segment.text.strip()
+    return worst, culprit
+
+
+async def test_today_edit_ignores_a_table_that_does_not_have_focus(seeded_db: Path) -> None:
+    """F1: `e` must act on the tasks table only when the tasks table is
+    focused. It used to open the edit form for whatever row the invisible
+    tasks cursor sat on — editing a record the user never looked at."""
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+        assert isinstance(app.screen, TodayScreen)
+        app.screen.query_one("#renewals-table", ListTable).focus()
+        await pilot.pause()
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, TodayScreen), (
+            "e opened a form while the renewals table had focus"
+        )
+
+
+async def test_today_edit_still_works_when_the_tasks_table_has_focus(seeded_db: Path) -> None:
+    """F1's other half: the gate must not disable the feature it guards."""
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+        app.screen.query_one("#tasks-table", ListTable).focus()
+        await pilot.pause()
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)
+        assert app.screen.spec.title == "edit task"
+
+
+async def test_search_jump_replaces_the_account_screen_instead_of_stacking(
+    seeded_db: Path,
+) -> None:
+    """F7: jumping between clients with / used to push a fresh AccountScreen
+    each time, so esc walked back through every account visited."""
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("b")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        baseline = len(app.screen_stack)
+        assert isinstance(app.screen, AccountScreen)
+        for _ in range(3):
+            await pilot.press("slash")
+            await pilot.pause()
+            for character in "atom":
+                await pilot.press(character)
+            await pilot.pause()
+            await pilot.press("down")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, AccountScreen)
+        assert len(app.screen_stack) == baseline, (
+            f"stack grew to {[type(s).__name__ for s in app.screen_stack]}"
+        )
+
+
+async def test_the_theme_command_is_not_offered(seeded_db: Path) -> None:
+    """F11: bookkit is deliberately one warm dark palette, and its colours are
+    baked into Rich markup — switching theme from the palette repaints the
+    chrome and leaves every status word, glyph and separator behind."""
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        titles = [c.title for c in app.get_system_commands(app.screen)]
+        assert "Theme" not in titles
+        assert "Quit" in titles, "the other system commands must survive"
+
+
+async def test_opening_a_missing_document_says_so_instead_of_pretending(
+    seeded_db: Path, monkeypatch
+) -> None:
+    """F22: enter on a document row notified 'opening …' and fired `open` at a
+    path it never checked, so a moved or deleted file failed in silence."""
+    from bookkit.repo import documents
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    documents.add(app.conn, org.id, "Gone Policy", "/nope/not/here.pdf", kind="policy")
+
+    launched: list[list[str]] = []
+    monkeypatch.setattr(
+        "subprocess.Popen", lambda args, *a, **k: launched.append(list(args))
+    )
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("7")
+        await pilot.pause()
+        table = app.screen.query_one("#documents-table", ListTable)
+        table.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert launched == [], "launched a viewer on a path that does not exist"
+        messages = " ".join(n.message for n in app._notifications)
+        assert "not found" in messages.lower()
+
+
+async def test_a_stale_request_edit_names_what_is_missing(seeded_db: Path) -> None:
+    """F23: the refusal read 'no longer exists' with no subject."""
+    from bookkit.repo import rfi as rfi_repo
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    request = rfi_repo.create_request(app.conn, org.id, "Sompo questions", "2026-08-01")
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        table = app.screen.query_one("#rfi-requests", ListTable)
+        table.focus()
+        await pilot.pause()
+        rfi_repo.delete_request(app.conn, request.id)  # vanishes under the cursor
+        await pilot.press("e")
+        await pilot.pause()
+        messages = " ".join(n.message for n in app._notifications)
+        assert "request" in messages.lower(), f"unsubjected refusal: {messages!r}"
+
+
+async def test_the_highlighted_pipeline_card_stays_readable(seeded_db: Path) -> None:
+    """F28, reported from use: OptionList paints its highlight BEHIND the
+    prompt and does not override an explicit foreground the way DataTable
+    does, so every span styled theme.DIM rendered at 1.83:1 on the gold
+    cursor — the ref, the probability and the whole lines/effective row
+    simply vanished from the selected card."""
+    from textual.widgets import OptionList
+
+    from bookkit.services import pipeline as pipeline_svc
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.press("p")
+        await pilot.pause()
+        first_stage = pipeline_svc.OPEN_STAGES[0]
+        option_list = app.screen.query_one(f"#list-{first_stage}", OptionList)
+        option_list.focus()
+        option_list.highlighted = 0
+        await pilot.pause()
+        assert option_list.option_count, "no cards to highlight"
+        for line in range(4):
+            worst, culprit = _worst_contrast(option_list, line)
+            assert worst >= 3.0, (
+                f"line {line} of the highlighted card renders {culprit!r} "
+                f"at {worst:.2f}:1"
+            )

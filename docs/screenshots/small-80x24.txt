@@ -1,0 +1,701 @@
+
+
+=========
+navigator
+=========
+  bookkit  ·  20 accounts  ·  $77.07M bound (21 placements)  ·  ◆ 7 overdue  ·  
+ ▼ ATTENTION                               │                                    
+ ├── ◆ overdue renewals · 7                │   THE BOOK AT A GLANCE             
+ ├── renewals ≤ 120d · 6                   │                                    
+ ├── project needs due · 0                 │     17 accounts with bound         
+ ├── tasks due · 7                         │   business · 21 bound placements   
+ ├── submissions past SLA · 6              │     $77.07M premium · $9.91M       
+ ├── onboarding incomplete · 0             │   commission                       
+ └── requests to chase · 0                 │                                    
+ ▼ ACCOUNTS · 20                           │   NEXT RENEWALS                    
+ ├── ▶ ◆ Atomic Industries, Inc.           │     2025-09-03   ◆ 345d over       
+ ├── ▶ Borealis Foods Group                │   Atomic Industries, Inc. — 2024   
+ ├── ▶ ◆ Cascade Health Partners           │   Casualty Program  2024           
+ ├── ▶ Delta Marine Logistics              │   Casualty Program  $7.6M          
+ ├── ▶ ◆ Everline Software                 │     2025-11-16   ◆ 271d over       
+ ├── ▶ Foundry Metals Corp                 │   Cascade Health Partners — 2024   
+ ├── ▶ ◆ Granite Peak Hotels               │   Casualty Program  2024           
+ ├── ▶ Harborview Utilities              ▆ │   Casualty Program  $1.42M         
+ ├── ▶ ◆ Ironwood Timber                   │     2026-01-29   ◆ 197d over       
+ ├── ▶ Junction Rail Services              │   Everline Software — 2025         
+ ├── ▶ Kestrel Aviation Group              │   Casualty Program  2025           
+ ├── ▶ Lumen Data Centers                  │   Casualty Program  $3.04M         
+ ├── ▶ Meridian Pharma                     │     2026-04-13   ◆ 123d over       
+                                     ▉                                          
+
+=====================
+nav-attention-overdue
+=====================
+  bookkit  ·  20 accounts  ·  $77.07M bound (21 placements)  ·  ◆ 7 overdue  ·  
+ ▼ ATTENTION                               │  renews           due in  account  
+ ├── ◆ overdue renewals · 7                │  2025-09-03  ◆ 345d over  Atomic I 
+ ├── renewals ≤ 120d · 6                   │  2025-11-16  ◆ 271d over  Cascade  
+ ├── project needs due · 0                 │  2026-01-29  ◆ 197d over  Everline 
+ ├── tasks due · 7                         │  2026-04-13  ◆ 123d over  Granite  
+ ├── submissions past SLA · 6              │  2026-06-05   ◆ 70d over  Atomic I 
+ ├── onboarding incomplete · 0             │  2026-06-26   ◆ 49d over  Ironwood 
+ └── requests to chase · 0                 │  2026-07-06   ◆ 39d over  Summit E 
+ ▼ ACCOUNTS · 20                           │                                    
+ ├── ▶ ◆ Atomic Industries, Inc.           │                                    
+ ├── ▶ Borealis Foods Group                │                                    
+ ├── ▶ ◆ Cascade Health Partners           │                                    
+ ├── ▶ Delta Marine Logistics              │                                    
+ ├── ▶ ◆ Everline Software                 │                                    
+ ├── ▶ Foundry Metals Corp                 │                                    
+ ├── ▶ ◆ Granite Peak Hotels               │                                    
+ ├── ▶ Harborview Utilities              ▆ │                                    
+ ├── ▶ ◆ Ironwood Timber                   │                                    
+ ├── ▶ Junction Rail Services              │                                    
+ ├── ▶ Kestrel Aviation Group              │                                    
+ ├── ▶ Lumen Data Centers                  │          ▉                         
+ ├── ▶ Meridian Pharma                     │  esc back to tree — e edit · r     
+                                     ▉                                          
+
+===================
+nav-attention-tasks
+===================
+  bookkit  ·  20 accounts  ·  $77.07M bound (21 placements)  ·  ◆ 7 overdue  ·  
+ ▼ ATTENTION                               │  market     account                
+ ├── ◆ overdue renewals · 7                │  Travelers  Quartz Financial       
+ ├── renewals ≤ 120d · 6                   │  Travelers  Junction Rail Services 
+ ├── project needs due · 0                 │  AIG        Pinnacle Construction  
+ ├── tasks due · 7                         │  Chubb      Delta Marine Logistics 
+ ├── submissions past SLA · 6              │  Swiss Re   Foundry Metals Corp    
+ ├── onboarding incomplete · 0             │  AXA XL     Orchard Valley Agricul 
+ └── requests to chase · 0                 │                                    
+ ▼ ACCOUNTS · 20                           │                                    
+ ├── ▶ ◆ Atomic Industries, Inc.           │                                    
+ ├── ▶ Borealis Foods Group                │                                    
+ ├── ▶ ◆ Cascade Health Partners           │                                    
+ ├── ▶ Delta Marine Logistics              │                                    
+ ├── ▶ ◆ Everline Software                 │                                    
+ ├── ▶ Foundry Metals Corp                 │                                    
+ ├── ▶ ◆ Granite Peak Hotels               │                                    
+ ├── ▶ Harborview Utilities              ▆ │                                    
+ ├── ▶ ◆ Ironwood Timber                   │                                    
+ ├── ▶ Junction Rail Services              │                                    
+ ├── ▶ Kestrel Aviation Group              │                                    
+ ├── ▶ Lumen Data Centers                  │                   ▍                
+ ├── ▶ Meridian Pharma                     │  esc back to tree — enter opens    
+                                     ▉                                          
+
+=====
+today
+=====
+ ⭘                                 bookkit                                      
+╭─────────────────────────────────────╮ ╭──────────────────────────────────────╮
+│ TASKS DUE & OVERDUE                 │ │ RENEWALS — NEXT 120 DAYS             │
+│  due  task  account                 │ │  expiry  d  account  program  lines  │
+│  8d   Send  Boreali                 │ │  2025-0  -  Atomic   2024 Ca  —      │
+│  7d   Foll  Meridia                 │ │  2025-1  -  Cascade  2024 Ca  —      │
+│  7d   Book  Boreali                 │ │  2026-0  -  Everlin  2025 Ca  —    ▄ │
+│  3d   Book  Orchard                 │ │  2026-0  -  Granite  2025 Ca  —      │
+│  1d   Chas  Harborv                 │ │  2026-0  -  Atomic   Casualt  GL, A  │
+│  tod  Book  Harborv               ▇ │ │  2026-0  -  Ironwoo  2025 Ca  —      │
+│                  ▉                  │ │             ▌                        │
+╰─────────────────────────────────────╯ ╰──────────────────────────────────────╯
+╭─────────────────────────────────────╮ ╭──────────────────────────────────────╮
+│ STALE ACCOUNTS                      │ │ SUBMISSIONS PAST SLA                 │
+│  account  last touch  stale  premiu │ │  market  account  sent  out          │
+│  Granite  2026-03-22  145d   $3.2M  │ │  Travel  Quartz   2026  27d          │
+│  Cascade  2026-05-13  93d    $1.42M │ │  Travel  Junctio  2026  25d          │
+│                                     │ │  AIG     Pinnacl  2026  23d          │
+│                                     │ │  Chubb   Delta M  2026  20d          │
+│                                     │ │  Swiss   Foundry  2026  17d          │
+│                                     │ │  AXA XL  Orchard  2026  13d          │
+│                        ▏            │ │                        ▎             │
+╰─────────────────────────────────────╯ ╰──────────────────────────────────────╯
+                                ▍                                               
+
+====
+book
+====
+ ⭘                                 bookkit                                      
+▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎
+▊  filter by name / owner / status …                                           ▎
+▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎
+ ref       account                     owner  status    next renewal         da 
+ ACC-0001  Atomic Industries, Inc.     grant  active    2025-09-03    ◆ 345d ov 
+ ACC-0002  Borealis Foods Group        grant  active    2026-10-10            5 
+ ACC-0003  Cascade Health Partners     grant  active    2025-11-16    ◆ 271d ov 
+ ACC-0004  Delta Marine Logistics      grant  active    2026-12-23            4 
+ ACC-0005  Everline Software           grant  active    2026-01-29    ◆ 197d ov 
+ ACC-0006  Foundry Metals Corp         grant  active    2027-03-07           20 
+ ACC-0007  Granite Peak Hotels         grant  active    2026-04-13    ◆ 123d ov 
+ ACC-0008  Harborview Utilities        grant  active    2027-05-20           27 
+ ACC-0009  Ironwood Timber             grant  dormant   2026-06-26     ◆ 49d ov 
+ ACC-0010  Junction Rail Services      grant  active    2027-08-02           35 
+ ACC-0011  Kestrel Aviation Group      grant  active    2026-09-13            3 
+ ACC-0012  Lumen Data Centers          grant  active    2026-10-20            6 
+ ACC-0013  Meridian Pharma             grant  active    2026-11-26           10▁
+ ACC-0014  Northgate Retail Holdings   grant  prospect  2027-01-02           14 
+ ACC-0015  Orchard Valley Agriculture  grant  prospect  2027-02-08           17 
+ ACC-0016  Pinnacle Construction       grant  active    2027-03-17           21 
+                                                            ▋                   
+ a add · e edit · f filter · enter opens                                        
+                                                                                
+
+==================
+account-1-overview
+==================
+  Atomic Industries, Inc.  ACC-0001  ·  active  ·  owner grant  ·  renewal ◆    
+ 1 Overview  2 Contacts  3 Interactions  4 Placements  5 Projects  6 Pipeline  7
+╸━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KEY CONTACTS                                                                    
+    name        role          title  email                 phone                
+ ★  Xia Chen    risk manager  CFO    contact0@example.com  —                    
+    Elena Chen  procurement   CFO    contact1@example.com  —                   ▁
+                                                                                
+RECENT INTERACTIONS                                                             
+ date        type     subject                   who                             
+ 2026-08-09  meeting  Renewal presentation      Elena Chen                      
+ 2026-08-07  email    Quarterly review meeting  Xia Chen, Elena Chen            
+ 2026-08-03  meeting  Introduction meeting      Xia Chen, Elena Chen            
+ 2026-08-03  email    Binder confirmation       Xia Chen, Elena Chen            
+ 2026-07-19  note     Exposure data follow-up   Xia Chen, Elena Chen            
+                                                                                
+OPEN TASKS                                                                      
+ due  due in  task  category  description  detail                               
+                                                                                
+OPEN OPPORTUNITIES                                                              
+ ref       title         stage      target  close                               
+ OPP-0007  New d&o line  submitted   $1.2M  2027-01-03                          
+  a task · e edit task/account · d task done · D delete interaction · w assign  
+                               ▍                                                
+
+=========
+account-2
+=========
+  Atomic Industries, Inc.  ACC-0001  ·  active  ·  owner grant  ·  renewal ◆    
+ 1 Overview  2 Contacts  3 Interactions  4 Placements  5 Projects  6 Pipeline  7
+━━━━━━━━━━━━╸━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    name        role          title  email                 phone                
+ ★  Xia Chen    risk manager  CFO    contact0@example.com  —                    
+    Elena Chen  procurement   CFO    contact1@example.com  —                    
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+  a add · e edit · p make primary · i paste import · w assign team              
+                               ▍                                                
+
+=========
+account-3
+=========
+  Atomic Industries, Inc.  ACC-0001  ·  active  ·  owner grant  ·  renewal ◆    
+ 1 Overview  2 Contacts  3 Interactions  4 Placements  5 Projects  6 Pipeline  7
+━━━━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ date        type        subject                        who                     
+ 2026-08-09  meeting     Renewal presentation           Elena Chen              
+ 2026-08-07  email       Quarterly review meeting       Xia Chen, Elena Chen    
+ 2026-08-03  meeting     Introduction meeting           Xia Chen, Elena Chen    
+ 2026-08-03  email       Binder confirmation            Xia Chen, Elena Chen    
+ 2026-07-19  note        Exposure data follow-up        Xia Chen, Elena Chen    
+ 2026-07-14  event       Loss run request               Xia Chen                
+ 2026-07-14  email       Quarterly review meeting       Xia Chen, Elena Chen    
+ 2026-07-12  site visit  Renewal presentation           Elena Chen              
+ 2026-07-06  site visit  Premium indication discussion  Xia Chen                
+ 2026-07-03  meeting     Loss run request               Xia Chen, Elena Chen    
+ 2026-06-30  site visit  Quarterly review meeting       Xia Chen, Elena Chen    
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+  a log interaction · e edit account · D delete · i paste import · u undo       
+                               ▍                                                
+
+=========
+account-4
+=========
+  Atomic Industries, Inc.  ACC-0001  ·  active  ·  owner grant  ·  renewal ◆    
+view  2 Contacts  3 Interactions  4 Placements  5 Projects  6 Pipeline  7 Docume
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ref       program                effective ╭──────────────────────────────────╮
+ PLC-0001  Casualty Program       2025-09-03│ █████████████████████ ·········  │
+ PLC-0002  2024 Casualty Program  2024-09-03│ top $27M                         │
+                                            │ █████████████████████ ·········  │
+                                            │ █████████████████████ ·········  │
+                                            │ █████████████████████ ·········  │
+                                            │ ██████S██████████C███ ·········  │
+                      ▍                     │ Umbrella                         │
+ carrier    layer                  share  pr│ █████████████████████ ·········  │
+ Travelers  Primary Auto            100%    │ ███████████████████████████████  │
+ Zurich     Primary GL              100%    │ ███████████████████████████████  │
+ CNA        Primary Inland Marine   100%    │ ██████████████████████████C████  │
+ Swiss Re   Umbrella                 60%   $│ Primary Inla                     │
+ Chubb      Umbrella                 40%    │ ███████████████████████████████  │
+                                            │ █████Z█████████T███████████████  │
+                                            │ Primary Auto                     │
+                                      ▊     │ ═══════════════════════════════  │
+ ▸ PLC-0001  Casualty Program  quoted       │ $0                               │
+ ✓ in sync (atomic-casualty.json)           ╰──────────────────────────────────╯
+  a add · e edit · s submission · r renew · l/L layer · o towerkit · t tower    
+                               ▍                                                
+
+=========
+account-5
+=========
+  Atomic Industries, Inc.  ACC-0001  ·  active  ·  owner grant  ·  renewal ◆    
+cts  3 Interactions  4 Placements  5 Projects  6 Pipeline  7 Documents  8 Open i
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ref  project  status  start  end  open needs                                   
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ line  needed by  d  status  limit  linked                                      
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+  a add project/need · e edit · o need → opportunity · tab projects ⇄ needs     
+                               ▍                                                
+
+=========
+account-6
+=========
+  Atomic Industries, Inc.  ACC-0001  ·  active  ·  owner grant  ·  renewal ◆    
+actions  4 Placements  5 Projects  6 Pipeline  7 Documents  8 Open items  9 Requ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                                                                                
+OPPORTUNITIES                                                                   
+ ref       title         stage      target  prob                                
+ OPP-0007  New d&o line  submitted   $1.2M   75%                                
+                                                                                
+SUBMISSIONS                                                                     
+ market  sent        status  quoted  response                                   
+ Chubb   2026-07-26  quoted   $300K  2026-07-31                                 
+ AIG     2026-08-06  quoted   $1.4M  2026-08-13                                 
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+  a opportunity · e edit opp / record response · s submission · tab opps ⇄      
+                               ▍                                                
+
+=========
+account-7
+=========
+  Atomic Industries, Inc.  ACC-0001  ·  active  ·  owner grant  ·  renewal ◆    
+ns  4 Placements  5 Projects  6 Pipeline  7 Documents  8 Open items  9 Requests 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━
+ added  kind  title  path                                                       
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+  a add · enter opens the file · e edit account                                 
+                               ▍                                                
+
+=========
+account-8
+=========
+  Atomic Industries, Inc.  ACC-0001  ·  active  ·  owner grant  ·  renewal ◆    
+ns  4 Placements  5 Projects  6 Pipeline  7 Documents  8 Open items  9 Requests 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━╺━━━━━━━━━━━━
+ due  task  category  description  detail  status                               
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+other open items — edit in their tabs                                           
+ kind  item  due / needed  status  days                                         
+  i edit in cell · a task · e edit form · d done · x export ·                   
+                                   ▍                                            
+
+=========
+account-9
+=========
+  Atomic Industries, Inc.  ACC-0001  ·  active  ·  owner grant  ·  renewal ◆    
+ns  4 Placements  5 Projects  6 Pipeline  7 Documents  8 Open items  9 Requests 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━╺
+ ref  request  asked by  scope  asked  due  open                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+no request selected                                                             
+ item  type  group  needed by  status  received  response                       
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+  i edit in cell · a add · P paste list · e edit form · d received              
+                                ▎                                               
+
+========
+calendar
+========
+ ⭘                                 bookkit                                      
+ account                     Aug 26  Sep 26  Oct 26  Nov 26  Dec 26  Jan 27  Fe 
+ Atomic Industries, Inc.             ▓▓ 3                                       
+ Borealis Foods Group                        ██ 10                              
+ Cascade Health Partners                             ▒▒ 16                      
+ Delta Marine Logistics                                      ██ 23              
+ Everline Software                                                   ▒▒ 29      
+ Foundry Metals Corp                                                            
+ Granite Peak Hotels                                                            
+ Harborview Utilities                                                           
+ Ironwood Timber                                                                
+ Junction Rail Services                                                         
+ Kestrel Aviation Group              ██ 13                                      
+ Lumen Data Centers                          ██ 20                              
+ Meridian Pharma                                     ██ 26                      
+ Northgate Retail Holdings                                           ▒▒ 2       
+ Orchard Valley Agriculture                                                  ██ 
+ Pinnacle Construction                                                          
+ Quartz Financial                                                               
+ Riverbend Chemicals                                                            
+ Summit Energy Partners                                                        ▇
+                                                  ▍                             
+ ░░ prospective ▒▒ submitted ▓▓ quoted ██ bound ×× lapsed ◆ overdue  — j/k move 
+ esc Back  ^q Quit  / Search  n Log interaction  ^t Task  ? Help    ▏^p palette 
+
+========
+pipeline
+========
+ ⭘                                 bookkit                                      
+╭─────────────╮ ╭─────────────╮ ╭─────────────╮ ╭─────────────╮ ╭─────────────╮ 
+│ IDENTIFIED  │ │ QUALIFIED · │ │ SUBMITTED · │ │ QUOTED · 2  │ │ PRESENTED · │ 
+│ · 2 · $1.1M │ │ 3 · $1.17M  │ │ 2 · $1.05M  │ │ · $907.5K   │ │ 1 · $100K   │ 
+│  OPP-0002   │ │  OPP-0001   │ │  OPP-0004   │ │  OPP-0003   │ │  OPP-0005   │ 
+│  Borealis   │ │  Pinnacle   │ │  Lumen      │ │  Meridian   │ │  Ironwood   │ 
+│  Foods      │ │  Construc   │ │  Data       │ │  Pharma     │ │  Timber     │ 
+│  Group      │ │  tion       │ │  Centers    │ │    New      │ │    New d&o  │ 
+│    New      │ │    New      │ │    New      │ │  energy     │ │  line ·     │ 
+│  cyber      │ │  energy     │ │  property   │ │  line ·     │ │  $500K ·    │ 
+│  line ·     │ │  line ·     │ │  line ·     │ │  $250K ·    │ │  20%        │ 
+│  $500K ·    │ │  $1.2M · ▃  │ │  $250K ·    │ │  75%        │ │    marine   │ 
+│  75%        │ │  60%        │ │  60%        │ │    proper   │ │  · eff      │ 
+│    marine   │ │    energy   │ │    casual   │ │  ty · eff   │ │  2026-11-1  │ 
+│  · eff   ▂  │ │  · eff      │ │  ty · eff   │ │  2026-09-   │ │  6          │ 
+│  2026-10-   │ │  2026-10-   │ │  2026-09-▃  │ │  29      ▃  │ │             │ 
+│  27         │ │  09         │ │  23         │ │  OPP-0009   │ │             │ 
+│  OPP-0010   │ │  OPP-0006   │ │  OPP-0007   │ │  Summit     │ │             │ 
+│  Riverben   │ │  Quartz     │ │  Atomic     │ │  Energy     │ │             │ 
+│  d          │ │  Financia   │ │  Industri   │ │  Partners   │ │             │ 
+│  Chemical   │ │  l          │ │  es, Inc.   │ │    New      │ │             │ 
+╰─────────────╯ ╰─────────────╯ ╰─────────────╯ ╰─────────────╯ ╰─────────────╯ 
+ h/l columns · ↑/↓ cards · > advance · < mark lost · e edit · enter opens       
+                                          ▊                                     
+
+=======
+markets
+=======
+ ⭘                                 bookkit                                      
+ market              type        rating  target lines  subs out  quote rate  bin
+ AIG                 carrier     A       cyber                1         67%     
+ AXA XL              carrier     A+      energy               1         50%     
+ Amwins              wholesaler  —       cyber                1         50%     
+ Beazley             lloyds      A       —                    1         75%     
+ Berkley             carrier     A+      —                    0           —     
+ Berkshire Hathaway  carrier     A++     —                    1         50%     
+ Chubb               carrier     A++     casualty             1         67%     
+ Coalition           mga         A-      casualty             0          0%     
+ FM Global           carrier     A+      —                    1          0%     
+ Liberty             carrier     A       —                    0         50%     
+ Munich Re           reinsurer   A+      d&o                  0        100%     
+ Sompo               carrier     A+      marine               0         75%     
+ Swiss Re            reinsurer   A+      —                    1         50%     
+ Travelers           carrier     A++     d&o                  2         60%     
+ Zurich              carrier     A+      energy               0           —     
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                         ▋      
+ enter opens market · a add · e edit · N nest under master · x merge duplicate  
+                                                                                
+
+=============
+market-detail
+=============
+ ⭘                                 bookkit                                      
+ AIG  (carrier)   AM Best A   quote 67% · bind 0% (3 sent)                      
+ a add appetite · w add underwriter · i paste signature · enter on a tower row  
+                                                                                
+ APPETITE                                                                       
+ line   appetite   min premium  max limit  territories                          
+ cyber  target           $100K       $50M  US                                   
+ d&o    selective        $250K       $50M  US                                   
+                                                                                
+ UNDERWRITERS                                                                   
+ name        title               email             phone                        
+ Liam Novak  Senior Underwriter  uw50@example.com  —                            
+                                                                                
+ CURRENT SUBMISSIONS                                                            
+ sent        status  quoted  response                                           
+ 2026-08-06  quoted   $1.4M  2026-08-13                                         
+ 2026-07-22  out          —  —                                                  
+ 2026-07-17  quoted   $1.4M  2026-07-20                                         
+                                                                                
+ ON THE TOWER — RENEWING NEXT 90 DAYS                                           
+ account  expiry  due in  program  layer  as written  share  premium            
+                                                                                
+                                                                                
+                                              ▋                                 
+
+====
+team
+====
+ ⭘                                 bookkit                                      
+▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎
+▊  who do I go to for… (cyber, marine, D&O)                                    ▎
+▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎
+ name         title                specialty                 assignments        
+ Dana Okafor  SVP, Cyber Practice  cyber, tech E&O           Junction Rail Servi
+ Leo Novak    Claims Advocate      claims                    Atomic Industries, 
+ Mia Torres   Casualty Lead        casualty, umbrella, auto  —                  
+ Raj Patel    Property Broker      property, builders risk   Foundry Metals Corp
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                        ▋                                       
+ 4 members — enter assignments · a add · e edit · w assign to account · i paste 
+                                        ▍                                       
+
+====
+help
+====
+█▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀█                        
+█                                                      █                        
+█  KEYS                                                █                        
+█  everywhere                                       ▄  █                        
+█    /        search everything          n   log an    █                        
+█  interaction (quick capture)                         █                        
+█    ctrl+t   new task (attaches to the account        █                        
+█  you're viewing)                                     █                        
+█    ?        this help                  u   undo      █                        
+█  last change                                         █                        
+█    esc      back / close               ctrl+q        █                        
+█  quit                                                █                        
+█    forms save in place: a refused save keeps the     █                        
+█  form open to fix                                    █                        
+█                                                      █                        
+█  lists                                               █                        
+█    j / k    move                       enter         █                        
+█                                                      █                        
+█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█                        
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+
+======
+search
+======
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+            █▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀█            
+            █                                                      █            
+            █  SEARCH EVERYTHING                                   █            
+            █  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  █            
+            █  ▊  accounts, contacts, notes…                    ▎  █            
+            █  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  █            
+            █  ╭────────────────────────────────────────────────╮  █            
+            █  ╰────────────────────────────────────────────────╯  █            
+            █                                                      █            
+            █  enter opens the account · esc closes                █            
+            █                                                      █            
+            █▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█            
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+
+============
+search-typed
+============
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+            █▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀█            
+            █                                                      █            
+            █  SEARCH EVERYTHING                                   █            
+            █  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  █            
+            █  ▊  acme                                          ▎  █            
+            █  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  █            
+            █  ╭────────────────────────────────────────────────╮  █            
+            █  ╰────────────────────────────────────────────────╯  █            
+            █                                                      █            
+            █  enter opens the account · esc closes                █            
+            █                                                      █            
+            █▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█            
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+
+=============
+quick-capture
+=============
+                                                                                
+                                                                                
+            █▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀█            
+            █                                                      █            
+            █  LOG INTERACTION                                     █            
+            █                                                      █            
+            █  account                                             █            
+            █  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎   █            
+            █  ▊  type to fuzzy-match…                         ▎   █            
+            █  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎   █            
+            █  ╭───────────────────────────────────────────────╮   █            
+            █  │ AIG                                           │   █            
+            █  │ AXA XL                                      ▃ │   █            
+            █  │ Amwins                                        │   █            
+            █  │ Atomic Industries, Inc.                       │   █            
+            █  ╰───────────────────────────────────────────────╯   █            
+            █                                                      █            
+            █  type                                                █            
+            █                                                      █            
+            █                                                      █            
+            █▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█            
+                                                                                
+                                                                                
+                                                                                
+
+=============
+form-new-task
+=============
+                                                                                
+                                                                                
+            █▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀█            
+            █                                                      █            
+            █  NEW TASK                                            █            
+            █                                                      █            
+            █  title *                                             █            
+            █  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎   █            
+            █  ▊                                               ▎   █            
+            █  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎▄  █            
+            █                                                      █            
+            █  description                                         █            
+            █  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎   █            
+            █  ▊  one-line summary                             ▎   █            
+            █  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎   █            
+            █                                                      █            
+            █  category                                            █            
+            █  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎   █            
+            █                                                      █            
+            █                                                      █            
+            █▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█            
+                                                                                
+                                                                                
+                                                                                
+
+========
+settings
+========
+                                                                                
+                                                                                
+            █▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀█            
+            █                                                      █            
+            █  SETUP — PROGRAM FILE LOCATIONS                      █            
+            █  Directories holding towerkit program JSON (one      █            
+            █  per line).                                          █            
+            █  Sync scans them recursively; linking runs from      █            
+            █  there.                                              █            
+            █  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎   █            
+            █  ▊                                               ▎   █            
+            █  ▊                                               ▎   █            
+            █  ▊                                               ▎   █            
+            █  ▊                                               ▎   █            
+            █  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎   █            
+            █                                                      █            
+            █  e.g.  ~/Developer/programs                       ▄  █            
+            █                                                      █            
+            █  ^s save · esc cancel                                █            
+            █                                                      █            
+            █▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█            
+                                                                                
+                                                                                
+                                                                                

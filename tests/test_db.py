@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import stat
+import time
 from pathlib import Path
 
 import pytest
@@ -224,3 +225,63 @@ def test_blast_cap_defaults_to_50(tmp_path):
 
     assert db.BLAST_CAP == 50
     assert db.BatchState(batch_id="01B").cap == 50
+
+
+def test_connect_sets_a_busy_timeout(tmp_path):
+    """F2: SQLite's default busy timeout is 0, so the TUI and the MCP server —
+    which both open read-write connections to the same file — collide instantly
+    instead of waiting. Pin that the timeout is configured on both factories."""
+    from bookkit import db
+
+    path = tmp_path / "timeout.db"
+    conn = db.connect(path)
+    try:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == db.BUSY_TIMEOUT_MS
+        assert db.BUSY_TIMEOUT_MS >= 5000
+    finally:
+        conn.close()
+    ro = db.connect_readonly(path)
+    try:
+        assert ro.execute("PRAGMA busy_timeout").fetchone()[0] == db.BUSY_TIMEOUT_MS
+    finally:
+        ro.close()
+
+
+def test_a_second_writer_waits_for_the_lock_instead_of_failing(tmp_path):
+    """F2, the behaviour the pragma buys: while one connection holds the write
+    lock, a second write blocks and then succeeds. Without busy_timeout this
+    raises 'database is locked' immediately."""
+    import threading
+
+    from bookkit import db
+    from bookkit.repo import orgs
+
+    path = tmp_path / "contended.db"
+    db.connect(path).close()  # migrate once, up front
+    writer = db.connect(path)
+    holding = threading.Event()
+
+    def hold_the_write_lock() -> None:
+        # the connection must be CREATED in this thread: sqlite3 objects are
+        # thread-bound, and a holder that dies on import leaves no lock at all
+        # (which would make this test pass for the wrong reason)
+        holder = db.connect(path, migrate=False)
+        try:
+            with db.transaction(holder):
+                holding.set()
+                time.sleep(0.4)
+        finally:
+            holder.close()
+
+    thread = threading.Thread(target=hold_the_write_lock)
+    thread.start()
+    try:
+        assert holding.wait(timeout=2), "holder never took the write lock"
+        started = time.monotonic()
+        org = orgs.create(writer, kind="client", name="Waited For Lock")
+        waited = time.monotonic() - started
+        assert orgs.get(writer, org.id).name == "Waited For Lock"
+        assert waited > 0.1, f"write did not actually contend (took {waited:.3f}s)"
+    finally:
+        thread.join()
+        writer.close()

@@ -169,7 +169,10 @@ class TodayScreen(Screen):
 
     def _selected_task_id(self) -> str | None:
         table = self.query_one("#tasks-table", ListTable)
-        if table.cursor_row is None or table.row_count == 0:
+        # same gate as action_task_done: with four panes on this screen, `e`
+        # fired while the renewals/stale/SLA table had focus would edit the row
+        # under the tasks table's INVISIBLE cursor (review F1)
+        if not table.has_focus or table.cursor_row is None or table.row_count == 0:
             return None
         key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value or ""
         kind, task_id, _ = key.split(":", 2)

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
-from textual.app import App
+from textual.app import App, SystemCommand
 from textual.binding import Binding
+from textual.screen import Screen
 
 from .. import db
 from .theme import BOOKKIT_THEME
@@ -53,7 +55,15 @@ class BookkitApp(App):
 
         if self._modal_open():
             return
-        self.push_screen(SearchModal())
+
+        def opened(org_id: str | None) -> None:
+            # the modal dismisses with the account to open and the CALLER opens
+            # it, so the modal is off the stack before open_account decides
+            # whether to switch or push (review F7)
+            if org_id:
+                self.open_account(org_id)
+
+        self.push_screen(SearchModal(), opened)
 
     def action_quick_capture(self) -> None:
         from .widgets.quick_capture import QuickCapture
@@ -97,10 +107,29 @@ class BookkitApp(App):
 
         self.push_screen(HelpScreen())
 
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        """Everything the palette offers EXCEPT "Theme".
+
+        bookkit is deliberately one warm dark palette (see tui/theme.py), and
+        that palette is baked into Rich markup in the table cells — switching
+        theme repaints the chrome and leaves every status word, glyph and
+        separator on the old colours, with FG-styled cells landing invisible on
+        a light ground. Offering the command was the bug (review F11)."""
+        for command in super().get_system_commands(screen):
+            if command.title != "Theme":
+                yield command
+
     def open_account(self, org_id: str) -> None:
+        """Open a client. Jumping from one account straight to another REPLACES
+        it rather than burying it: `/` is the fast path between clients, and
+        pushing each one left esc walking back through every account visited
+        that session, re-running a full refresh on each (review F7)."""
         from .screens.account import AccountScreen
 
-        self.push_screen(AccountScreen(org_id))
+        if isinstance(self.screen, AccountScreen):
+            self.switch_screen(AccountScreen(org_id))
+        else:
+            self.push_screen(AccountScreen(org_id))
 
     def show_undo_result(self) -> None:
         from ..services import undo

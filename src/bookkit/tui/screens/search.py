@@ -73,10 +73,12 @@ class SearchModal(ModalScreen):
             results.highlighted = next(enabled, None)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        # dismiss WITH the account and let the caller open it: opening from in
+        # here ran while this modal was still on the stack, so open_account
+        # could not tell it was already on an account screen (review F7)
         if event.option.id:
             _, org_id = event.option.id.split(":", 1)
-            self.dismiss(None)
-            self.app.open_account(org_id)
+            self.dismiss(org_id)
 
     def action_dismiss_modal(self) -> None:
         self.dismiss(None)

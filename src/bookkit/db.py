@@ -27,6 +27,15 @@ BLAST_CAP = 50
 """Most entities one batched writer action may touch before it is refused.
 Grant's call, 2026-08-13 (was 25 pending his review)."""
 
+BUSY_TIMEOUT_MS = 5000
+"""How long a writer waits for the write lock before giving up.
+
+This is ALSO Python's sqlite3 default (`connect(timeout=5.0)`), so the value
+is not a change — stating it is. The TUI and the MCP server both hold
+read-write connections to the same file and `transaction()` takes the lock up
+front with BEGIN IMMEDIATE, so the day someone passes `timeout=` or swaps the
+driver, losing this silently turns every overlap into 'database is locked'."""
+
 
 class BlastRadiusExceeded(Exception):
     """A batched write tried to touch more entities than its cap allows."""
@@ -134,6 +143,7 @@ def connect(path: Path | str | None = None, migrate: bool = True) -> sqlite3.Con
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     if migrate:
         apply_migrations(conn)
     return conn
@@ -145,6 +155,7 @@ def connect_readonly(path: Path | str | None = None) -> sqlite3.Connection:
     target = Path(path) if path else default_db_path()
     conn = sqlite3.connect(f"file:{target}?mode=ro", uri=True, isolation_level=None)
     conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     return conn
 
 

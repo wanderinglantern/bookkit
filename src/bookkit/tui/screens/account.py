@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from ..app import BookkitApp
 
 import subprocess
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -894,8 +895,24 @@ class AccountScreen(Screen):
                 None,
             )
             if doc:
-                subprocess.Popen(["open", doc.path])
-                self.notify(f"opening {doc.path}")
+                self._open_document(Path(doc.path).expanduser())
+
+    def _open_document(self, path: Path) -> None:
+        """Hand a document to the desktop. A moved or deleted file used to be
+        launched anyway and reported as 'opening …', so the failure landed in
+        the suspended terminal's stderr where nobody saw it (review F22)."""
+        if not path.exists():
+            self.notify(f"file not found: {path}", severity="error")
+            return
+        # no Windows entry on purpose: `start` is a cmd builtin, not an
+        # executable, so shipping it would only ever raise into the guard below
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        try:
+            subprocess.Popen([opener, str(path)])
+        except OSError as exc:
+            self.notify(f"could not open {path.name}: {exc}", severity="error")
+            return
+        self.notify(f"opening {path.name}")
 
     # -- open-items inline edits ------------------------------------------------
 
@@ -1245,7 +1262,10 @@ class AccountScreen(Screen):
                 else:  # neither table focused → e edits the account itself
                     self._edit_org()
             except KeyError:
-                self.notify("no longer exists", severity="error")
+                # name the subject: "no longer exists" left the user guessing
+                # which of the tab's two tables had gone stale (review F23)
+                gone = {"items": "item", "requests": "request"}.get(where or "", "account")
+                self.notify(f"that {gone} no longer exists", severity="error")
         else:
             self._edit_org()
 
