@@ -217,10 +217,10 @@ def test_blast_cap_counts_entities_not_events(tmp_path):
     assert orgs.get(conn, org.id).domain == "a.example"
 
 
-def test_blast_cap_defaults_to_50(tmp_path):
-    """50 is Grant's call (2026-08-13) — this pins that a refactor doesn't
+def test_blast_cap_defaults_to_250(tmp_path):
+    """250 is Grant's call (2026-08-14) — this pins that a refactor doesn't
     silently change how big an MCP write can get."""
     from bookkit import db
 
-    assert db.BLAST_CAP == 50
-    assert db.BatchState(batch_id="01B").cap == 50
+    assert db.BLAST_CAP == 250
+    assert db.BatchState(batch_id="01B").cap == 250
