@@ -1234,6 +1234,116 @@ def test_unassign_takes_exact_id_and_reverts(server_db):
     assert len(team.for_org(rw, org.id)) == 1
 
 
+def test_edit_field_changes_an_assignment_role(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme",
+                                      role="analyst")
+    aid = assigned["assignment_id"]
+
+    out = mcpserver._edit_field(
+        rw, "team_assignment", aid, "role", "account_lead",
+        expecting="analyst",
+    )
+    assert out["batch"].startswith("MCP-")
+    assert team.for_org(rw, org.id)[0]["role"] == "account_lead"
+
+
+def test_edit_field_refuses_a_role_outside_the_vocabulary(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme",
+                                      role="analyst")
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_assignment", assigned["assignment_id"], "role",
+            "wizard", expecting="analyst",
+        )
+    assert "account_lead" in str(err.value)
+
+
+def test_edit_field_on_an_assignment_refuses_a_stale_expecting(server_db):
+    from bookkit.repo import team
+
+    rw, org = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme",
+                                      role="analyst")
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_assignment", assigned["assignment_id"], "role",
+            "account_lead", expecting="claims_advocate",
+        )
+    assert "analyst" in str(err.value)
+    assert team.for_org(rw, org.id)[0]["role"] == "analyst"   # nothing written
+
+
+def test_edit_field_refuses_an_unknown_assignment_id(server_db):
+    rw, _ = _rw(server_db)
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_assignment", "NOPE", "lines", "cyber", expecting="x",
+        )
+    assert "team_roster" in str(err.value)
+
+
+def test_edit_field_refuses_rescoping_an_assignment(server_db):
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme")
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "team_assignment", assigned["assignment_id"], "org_id",
+            "somewhere-else", expecting=None,
+        )
+    assert "not editable" in str(err.value)
+
+
+def test_assignment_notes_round_trip_through_the_roster(server_db):
+    """notes is only editable if a read hands the model its current value —
+    compare-and-set has nothing to compare against otherwise."""
+    rw, _ = _rw(server_db)
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz", client="Acme")
+    aid = assigned["assignment_id"]
+
+    dana = next(m for m in mcpserver._team_roster(rw)["members"]
+                if m["name"] == "Dana Cruz")
+    assert dana["assignments"][0]["notes"] is None
+
+    mcpserver._edit_field(rw, "team_assignment", aid, "notes",
+                          "covers the London tower", expecting=None)
+
+    dana = next(m for m in mcpserver._team_roster(rw)["members"]
+                if m["name"] == "Dana Cruz")
+    assert dana["assignments"][0]["notes"] == "covers the London tower"
+
+
+def test_edit_field_resolves_org_for_a_deal_level_assignment(server_db):
+    """A placement-scoped assignment has org_id NULL; the batch still has to
+    be stamped with the org, or the change is invisible to that client's
+    history."""
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import placements
+
+    rw, org = _rw(server_db)
+    placement = placements.create(rw, org.id, program_name="Tower GL",
+                                  period_from="2026-01-01",
+                                  period_to="2027-01-01")
+    mcpserver._member_create(rw, "Dana Cruz")
+    assigned = mcpserver._team_assign(rw, "Dana Cruz",
+                                      placement_ref=placement.ref,
+                                      role="analyst")
+
+    out = mcpserver._edit_field(
+        rw, "team_assignment", assigned["assignment_id"], "role",
+        "account_lead", expecting="analyst",
+    )
+    assert batches_repo.get_by_ref(rw, out["batch"]).org_id == org.id
+
+
 # -- transitions --------------------------------------------------------------
 
 

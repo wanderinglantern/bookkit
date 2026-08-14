@@ -1296,6 +1296,7 @@ def _team_roster(conn: sqlite3.Connection) -> dict[str, Any]:
                 "account": row["org_name"] if "org_name" in row.keys() else None,
                 "placement": row["placement_ref"] if "placement_ref" in row.keys() else None,
                 "role": row["role"], "lines": row["lines"],
+                "notes": row["notes"],
             })
         out.append({
             "name": member.name, "title": member.title,
@@ -1465,7 +1466,7 @@ def _request_item_waive(conn: sqlite3.Connection, item_ref: str) -> dict[str, An
 # opportunity stage/outcome/closed_at belong to opportunity_stage, and
 # project_need.status belongs to the queued needs→pipeline reconciler.
 def _editable() -> dict[str, dict[str, Any]]:
-    from .models import PROJECT_STATUSES
+    from .models import PROJECT_STATUSES, TEAM_ROLES
 
     return {
         "org": {f: "text" for f in _ENRICHABLE_ORG},
@@ -1497,6 +1498,12 @@ def _editable() -> dict[str, dict[str, Any]]:
         "team_member": {
             "title": "text", "specialty": "text", "email": "text",
             "phone": "text", "notes": "text",
+        },
+        # role reuses team_assign's vocabulary so the two paths cannot drift.
+        # org_id / placement_id are deliberately absent: re-scoping moves two
+        # columns at once and single-field compare-and-set cannot do it.
+        "team_assignment": {
+            "role": TEAM_ROLES, "lines": "text", "notes": "text",
         },
         "rfi_request": {"title": "text", "due_on": "date", "notes": "text"},
         "rfi_item": {
@@ -1599,6 +1606,22 @@ def _edit_target(
         item = rfi_repo.get_item(conn, ref)               # KeyError → tool error
         request = rfi_repo.get_request(conn, item.request_id)
         return item.id, request.org_id, item
+    if kind == "team_assignment":
+        from .models import TeamAssignment
+        from .repo import base as base_repo
+
+        row = base_repo.get(conn, "team_assignment", ref)
+        if row is None:
+            raise ValueError(
+                f"no assignment {ref!r} — read team_roster for exact ids"
+            )
+        assignment = TeamAssignment.from_row(row)
+        org_id = assignment.org_id
+        if org_id is None and assignment.placement_id is not None:
+            from .repo import placements as placements_repo
+
+            org_id = placements_repo.get(conn, assignment.placement_id).org_id
+        return assignment.id, org_id, assignment
     raise ValueError(f"cannot edit kind {kind!r}; editable: {sorted(_EDITABLE)}")
 
 
