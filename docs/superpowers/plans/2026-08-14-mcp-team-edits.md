@@ -143,8 +143,8 @@ def test_edit_field_resolves_org_for_a_deal_level_assignment(server_db):
 
     rw, org = _rw(server_db)
     placement = placements.create(rw, org.id, program_name="Tower GL",
-                                  effective_on="2026-01-01",
-                                  expires_on="2027-01-01")
+                                  period_from="2026-01-01",
+                                  period_to="2027-01-01")
     mcpserver._member_create(rw, "Dana Cruz")
     assigned = mcpserver._team_assign(rw, "Dana Cruz",
                                       placement_ref=placement.ref,
@@ -154,7 +154,7 @@ def test_edit_field_resolves_org_for_a_deal_level_assignment(server_db):
         rw, "team_assignment", assigned["assignment_id"], "role",
         "account_lead", expecting="analyst",
     )
-    assert batches_repo.get(rw, out["batch"]).org_id == org.id
+    assert batches_repo.get_by_ref(rw, out["batch"]).org_id == org.id
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -165,7 +165,7 @@ uv run pytest -q tests/test_mcpserver.py -k "assignment" 2>&1 | tail -20
 ```
 Expected: FAIL. `test_edit_field_changes_an_assignment_role` fails with `ValueError: cannot edit kind 'team_assignment'; editable: [...]`.
 
-Note: `test_edit_field_resolves_org_for_a_deal_level_assignment` uses `placements.create` and `batches_repo.get`. If either signature differs from the call above, fix the *test* to match the real signature — do not change the source to fit the test. Confirm with `grep -n "def create" src/bookkit/repo/placements.py` and `grep -n "def get" src/bookkit/repo/batches.py`.
+Note: the helper signatures in these tests were verified against the source before dispatch — `placements.create(conn, org_id, program_name, period_from, period_to)` and `batches.get_by_ref(conn, ref)` (`out["batch"]` is a ref, not an id). Use them exactly as written.
 
 - [ ] **Step 3: Add the registry entry**
 
@@ -611,8 +611,8 @@ def test_cascade_covers_deal_level_assignments_too(server_db):
 
     rw, org = _rw(server_db)
     placement = placements.create(rw, org.id, program_name="Tower GL",
-                                  effective_on="2026-01-01",
-                                  expires_on="2027-01-01")
+                                  period_from="2026-01-01",
+                                  period_to="2027-01-01")
     mcpserver._member_create(rw, "Dana Cruz")
     mcpserver._team_assign(rw, "Dana Cruz", placement_ref=placement.ref)
 
@@ -772,11 +772,6 @@ def test_edit_field_redirects_active_to_the_deactivate_tools(server_db):
     assert "member_deactivate" in message
     assert "member_reactivate" in message
 
-
-def test_member_reactivate_is_registered(server_db):
-    server = build_server(server_db)
-    names = {t.name for t in server._tool_manager.list_tools()}
-    assert {"member_deactivate", "member_reactivate"} <= names
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
