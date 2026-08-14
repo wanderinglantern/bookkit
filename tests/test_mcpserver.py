@@ -1287,3 +1287,14 @@ def test_request_item_waive_sets_status(server_db):
     out = mcpserver._request_item_waive(rw, item.id)
     assert out["status"] == "waived"
     assert rfi.get_item(rw, item.id).status == "waived"
+
+
+def test_write_expansion_tools_are_registered(server_db):
+    server = build_server(server_db)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    assert {
+        "edit_field", "contact_add", "opportunity_create", "project_create",
+        "need_add", "member_create", "team_assign", "team_unassign",
+        "team_roster", "opportunity_stage", "task_reopen",
+        "request_item_waive",
+    } <= names

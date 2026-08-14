@@ -63,3 +63,12 @@ Configure it with these settings:
 
 Smoke check: `bookctl mcp` starts silently, waits on stdin, and can be stopped
 with Ctrl+C. Any output to stdout on startup is a bug.
+
+The assistant can manage the whole book side: read everything, create
+clients/contacts/opportunities/projects/needs/tasks/RFIs/team members,
+assign the team, move pipeline stages one gate at a time, and deliberately
+edit fields (compare-and-set: it must prove it read the current value, or
+the edit refuses). Every write is one revertible batch — the MCP CHANGES
+section in the Navigator lists them, `enter` shows before→after, and `R`
+puts one back. Placements and towerkit program files are read-only to the
+assistant by design.
