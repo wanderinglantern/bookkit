@@ -10,7 +10,7 @@ __pycache__/
 .ruff_cache/
 dist/
 *.egg-info/
-tests/snapshots/
+tests/snapshots/          # dead: the write-only artifacts F14 replaced
 wheelhouse/
 bookkit-wheelhouse-macos.zip
 .install-pypi.log

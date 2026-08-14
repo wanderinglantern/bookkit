@@ -32,6 +32,8 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "pytest-asyncio>=1.4.0",
+    # visual regression: reads the snapshots the suite used to only write
+    "pytest-textual-snapshot>=1.0",
 ]
 
 [build-system]

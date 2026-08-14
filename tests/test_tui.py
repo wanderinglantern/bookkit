@@ -19,8 +19,6 @@ from bookkit.tui.screens.pipeline import PipelineScreen
 from bookkit.tui.screens.today import TodayScreen
 from bookkit.tui.widgets.tables import ListTable
 
-SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
-
 
 async def _fill(pilot, app, key: str, text: str) -> None:
     widget = app.screen.query_one(f"#form-{key}", Input)
@@ -49,11 +47,6 @@ def seeded_db(tmp_path: Path) -> Path:
     return path
 
 
-def snapshot(app: BookkitApp, name: str) -> None:
-    SNAPSHOT_DIR.mkdir(exist_ok=True)
-    (SNAPSHOT_DIR / f"{name}.svg").write_text(app.export_screenshot())
-
-
 async def test_today_screen_populates(seeded_db: Path) -> None:
     app = BookkitApp(seeded_db)
     async with app.run_test(size=(120, 40)) as pilot:
@@ -64,7 +57,6 @@ async def test_today_screen_populates(seeded_db: Path) -> None:
         assert app.screen.query_one("#tasks-table", ListTable).row_count > 0
         assert app.screen.query_one("#stale-table", ListTable).row_count > 0
         assert app.screen.query_one("#sla-table", ListTable).row_count > 0
-        snapshot(app, "today")
         await pilot.press("escape")
 
 
@@ -75,12 +67,10 @@ async def test_book_and_account(seeded_db: Path) -> None:
         assert isinstance(app.screen, BookScreen)
         table = app.screen.query_one("#book-table", ListTable)
         assert table.row_count == 20
-        snapshot(app, "book")
         await pilot.press("enter")
         assert isinstance(app.screen, AccountScreen)
         header = str(app.screen.query_one("#account-header").render())
         assert "ACC-" in header
-        snapshot(app, "account")
         await pilot.press("escape")
         assert isinstance(app.screen, BookScreen)
 
@@ -99,7 +89,6 @@ async def test_account_placements_tower(seeded_db: Path) -> None:
         assert "in sync" in state
         carriers = screen.query_one("#carriers-table", ListTable)
         assert carriers.row_count > 0
-        snapshot(app, "account_placements")
 
 
 async def test_quick_capture_end_to_end(seeded_db: Path) -> None:
@@ -119,7 +108,6 @@ async def test_quick_capture_end_to_end(seeded_db: Path) -> None:
         await pilot.click("#qc-subject")
         for ch in "Quick call":
             await pilot.press(ch if ch != " " else "space")
-        snapshot(app, "quick_capture")
         await pilot.press("ctrl+s")
         await pilot.pause()
         after = interactions.for_org(conn, org.id)
@@ -159,7 +147,6 @@ async def test_search_modal(seeded_db: Path) -> None:
 
         results = app.screen.query_one("#search-results", OptionList)
         assert results.option_count > 0
-        snapshot(app, "search")
 
 
 async def test_calendar_pipeline_markets(seeded_db: Path) -> None:
@@ -168,23 +155,19 @@ async def test_calendar_pipeline_markets(seeded_db: Path) -> None:
         await pilot.press("c")
         assert isinstance(app.screen, CalendarScreen)
         assert app.screen.query_one("#calendar-table", ListTable).row_count > 0
-        snapshot(app, "calendar")
         await pilot.press("escape")
 
         await pilot.press("p")
         assert isinstance(app.screen, PipelineScreen)
-        snapshot(app, "pipeline")
         await pilot.press("escape")
 
         await pilot.press("m")
         assert isinstance(app.screen, MarketsScreen)
         table = app.screen.query_one("#markets-table", ListTable)
         assert table.row_count == 15
-        snapshot(app, "markets")
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, MarketDetailScreen)
-        snapshot(app, "market_detail")
 
 
 async def test_help_screen(seeded_db: Path) -> None:
@@ -401,7 +384,6 @@ async def test_navigator_home_attention_and_group_tables(seeded_db: Path) -> Non
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, AccountScreen)
-        snapshot(app, "navigator")
 
 
 async def test_navigator_row_keys_require_table_focus(seeded_db: Path) -> None:
