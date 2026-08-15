@@ -50,7 +50,7 @@ Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a7094
 
 ## Just finished
 
-**Phases 1-6 are complete.** There are no unbatched TUI write paths left, the
+**Phases 1-7 are complete.** There are no unbatched TUI write paths left, the
 three keystrokes that used to kill the session no longer can, and every screen
 counts down to the date it prints.
 Every write — forms, keystroke actions, merges and pipeline stage moves — is
@@ -59,7 +59,7 @@ through the same code path `R` uses, scoped to `source='tui'` (Grant's call,
 2026-08-15), so it can no longer revert a sync projection or an assistant
 write. The recurring `NON_MUTATION_FIELDS` bug class is closed structurally.
 
-Eleven audit criticals are genuinely fixed and asserted: **C4** (merges ran 4-10
+Fourteen audit criticals are genuinely fixed and asserted: **C4** (merges ran 4-10
 writes with no transaction), **C5** (the MergePicker's "undoable with u" was
 false), **C10** (the lost-deal bug), **C2** (three DuplicateID app-kills),
 **C16** (`r` renewing from the tab bar), **C18** (a program-batch revert
@@ -67,8 +67,10 @@ killing the app), **C11** (four screens printing `period_to` beside a
 `renewal_on` countdown), **C12** (the calendar hiding every overdue renewal),
 **C13** (the 80x24 countdown truncating `57d` into a plausible `5` — fixed
 incidentally by shortening the book's headers; verified by rendering, not
-assumed), **C1** (`seed --demo` doubling a book in use), and **C19** (two
-missing `.resolve()` calls breaking the towerctl and Cowork contracts).
+assumed), **C1** (`seed --demo` doubling a book in use), **C19** (two missing `.resolve()` calls breaking the towerctl and Cowork
+contracts), **C15** (money fields pre-filling a value their own parser
+rejected), **C20** (a bare `5` saving a date nine months out), and **C17**
+(the TUI rename bypassing the duplicate guard).
 
 **The 10 tests in `tests/test_batch_spine.py` are mutation-verified**, not just
 green. Each mutation was applied to the specific line the test defends, the
@@ -96,32 +98,31 @@ end-to-end version caught a real gap the mechanism test could not.
 
 ## Next step
 
-**Phase 7, the forms.** All three are in the entry path a broker uses daily:
+**Phase 8, layout.** The two structural ones are worth doing together, since
+both are single CSS rules with outsized effects:
 
-1. **C15 — money fields pre-fill a value their own parser rejects.** A
-   placement whose `total_premium` carries odd cents renders as `1,234.56`
-   in the form, and `parse_money_cents` refuses both that and `1234.56`
-   ("fractional dollars are not allowed"). The record then cannot be saved at
-   all — not the status, not the dates — until the money field is manually
-   rounded. Decide whether cents are enterable: teach the parser the
-   `1,234.56` form, or render whole dollars in `forms.py::_initial_text` and
-   say so in the field error.
-2. **C20 — a bare number in a date field saves a date nine months out.**
-   `due = "5"` saves `2027-05-01`; dateparser reads a lone integer as a month
-   and future-biases it. `5` meaning "the 5th" is the most natural short
-   entry there is, and the task then drops off every 120-day attention
-   window. Reject bare 1-2 digit integers in `dates.parse_human_date`, and
-   echo the parsed date before the form closes.
-3. **C17 — the TUI rename bypasses the duplicate guard.** `_guard_member_rename`
-   exists only at `mcpserver.py:1326`; `team.py:222` writes straight through
-   `repo/team.py:34`. Two colleagues sharing a name makes every later MCP
-   lookup ambiguous. Move the guard into `repo.team.create_member` /
-   `update_member` so both surfaces inherit it, and surface the refusal in the
-   FormModal, which already keeps the form open on a refused commit.
+1. **C3 — the Footer renders as a BLANK LINE** whenever its bindings overflow
+   the terminal width: blank on 6 of 9 screens at 140x45 and 8 of 9 at 80x24,
+   including the home screen at the project's own reference size. `Footer` is
+   `height: 1` with `overflow-x: auto`, so the scrollbar takes its only row;
+   the global `* { scrollbar-size-horizontal: 1 }` in `bookkit.tcss:9-12`
+   outranks Textual's own `Footer { scrollbar-size: 0 0 }` because app CSS
+   beats DEFAULT_CSS. Fix is one rule, then cap what is `show=True` (Account
+   needs 199 columns of footer keys) and add a test asserting
+   `Footer.virtual_size.width <= container_size.width` at both sizes —
+   without it the next `show=True` binding silently blanks it again.
+2. **C14 — the modal Save button and `^s save` hint fall outside the box**
+   below 34 terminal rows: `.modal-box { max-height: 80% }` and
+   `.modal-fields { max-height: 55vh }` add up past the box. Tab still
+   reaches the invisible button. Make the fields scroller `height: 1fr`
+   inside the capped box so it absorbs the shortfall.
+3. **C6 — the import preview cannot show its own verdict.** `#import-preview`
+   is a non-focusable `Static` with `max-height: 16`; content past ~14 rows is
+   unreachable, not scrollable, and `report()` puts `ERRORS — cannot commit`
+   last. Make it focusable and hoist the verdict into a fixed header line.
 
-Also queued from the audit's IMPORTANT list: cross-field date validation (a
-placement whose period runs backwards 21 months currently saves, and renders
-as a permanently overdue renewal that never clears).
+Both remaining snapshot re-baselines land here. Six were updated in phase 5;
+expect most of the rest to move once the footer renders.
 
 ## Decisions made this session
 
