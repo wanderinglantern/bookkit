@@ -31,16 +31,28 @@ Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a7094
   - `src/bookkit/tui/widgets/forms.py`
   - `src/bookkit/tui/widgets/entity_actions.py`
   - `tests/test_batch_spine.py` (new)
-- Gates green on the branch: `mypy` 0, `ruff` 0, `pytest` **619 passed**
-  (baseline at branch point was 612; +7 new tests), 38 snapshots passed.
+- Gates green on the branch: `mypy` 0, `ruff` 0, `pytest` **641 passed**
+  (baseline at branch point was 612; +29 new tests), 38 snapshots passed.
+- Also modified since first writing: `services/undo.py` (rewritten),
+  `services/merge.py`, `services/batches.py`, `repo/batches.py`,
+  `tui/screens/{account,navigator,markets,pipeline}.py`, and 8 reassign
+  helpers in `repo/{tasks,submissions,documents,contacts,orgs,interactions}.py`.
+  New test files: `tests/test_undo_batch.py`,
+  `tests/test_merge_and_stage_batches.py`.
 
 ## Just finished
 
-Phase 1, the batch spine, is complete and verified: every TUI form save is now
-one atomic, `R`-revertible batch, and a refused save rolls back instead of
-leaving half its rows behind. Also closed the recurring `NON_MUTATION_FIELDS`
-bug class structurally — `log_event` now refuses at write time for any field
-that is neither a real column nor declared bookkeeping.
+**Phases 1-3 are complete. There are no unbatched TUI write paths left.**
+Every write — forms, keystroke actions, merges and pipeline stage moves — is
+one atomic, `R`-revertible batch. `u` now undoes the last *writer action*
+through the same code path `R` uses, scoped to `source='tui'` (Grant's call,
+2026-08-15), so it can no longer revert a sync projection or an assistant
+write. The recurring `NON_MUTATION_FIELDS` bug class is closed structurally.
+
+Three audit criticals are genuinely fixed and asserted: **C4** (merges ran
+4-10 writes with no transaction), **C5** (the MergePicker's "undoable with u"
+was false), and **C10** (the lost-deal bug — `<` wrote four fields that undo
+could only put one of back).
 
 **The 10 tests in `tests/test_batch_spine.py` are mutation-verified**, not just
 green. Each mutation was applied to the specific line the test defends, the
@@ -53,41 +65,45 @@ failure observed, and the file restored:
 | Drop the `_assert_known_field` call from `log_event` | `an_undeclared_event_field_is_refused_at_write_time` |
 | Restore the old 2-name `NON_MUTATION_FIELDS` | `declared_bookkeeping_fields_are_allowed`, `undo_steps_past_provenance…` |
 
-**Correction worth carrying forward:** I initially described
-`test_multi_field_write_reverts_as_one_unit` as "the lost-deal fix". It is
-not. It calls `open_batch` directly, so it proves the *mechanism* collapses a
-multi-field write into one revertible unit — which the MCP path already had.
-The actual lost-deal bug (`<` on the pipeline writing four fields that `u`
-cannot put back) is **not fixed**; it needs `tui/screens/pipeline.py:142-153`
-converted to a batch, which is Phase 3 below.
+**Correction, now resolved.** I first described
+`test_multi_field_write_reverts_as_one_unit` as "the lost-deal fix". It was
+not — it calls `open_batch` directly, so it proved only the mechanism. The
+real fix landed afterwards in `tui/screens/pipeline.py`
+(`action_close_lost`, `action_advance_card`), and is asserted end-to-end by
+`test_closing_a_deal_from_the_board_is_undoable_end_to_end`, which drives the
+real board (`p`, `<`, `u`) rather than opening the batch itself. Unwrapping
+the keystroke fails that test.
+
+**The general lesson, applied twice now:** a test that sets up the new seam
+itself proves the mechanism, not that production code uses it. Both times the
+end-to-end version caught a real gap the mechanism test could not.
 
 ## Next step
 
-**Flip `u` to batch-granular in `src/bookkit/services/undo.py`.** It currently
-reads `events.last_mutation(conn)` and reverts one field. Replace with: find
-the most recent un-reverted `event_batch` with `source = 'tui'`, and revert it
-through `services.batches.revert(conn, ref, now=...)` — so `u` and `R` share
-one code path.
+**Phase 4, the crash class.** Three `DuplicateID` app-kills share one root
+cause: `OptionList` options keyed on a non-unique `org_id`.
 
-Concretely:
-1. Add `repo/batches.py::last_undoable(conn, source)` — newest
-   `event_batch` where `source = ?` and `reverted_at IS NULL`.
-2. Rewrite `services/undo.py::undo_last` to use it. `UndoResult` needs new
-   fields: it must carry the batch `ref`, the `summary`, `applied: bool`, and
-   the `refused: list[Conflict]` so a "changed since" refusal can be shown
-   instead of reported as success.
-3. Update `src/bookkit/tui/app.py` — `action_undo_last` is around line 216,
-   `show_undo_result` around line 241-248. The toast currently renders
-   `f"{entity_type}.{field}: {new!r} → {old!r}"`, which is a schema path and a
-   Python repr; it should name the client and ref.
-4. Update the 5 existing call sites in tests: `tests/test_services.py:112,121`,
-   `tests/test_repo.py:471`, `tests/test_mcpserver.py:792,841`.
-   Note `test_mcpserver.py:841` is commented "used to raise IndexError" — it is
-   the regression test for the old `source` bug and must keep passing.
-5. Fix `services/batches.py::revert` while you are in there: `mark_reverted` is
-   called unconditionally inside the transaction, so `force=True` on a fully
-   conflicted batch returns `applied=True` with `reverted=[]` and burns the
-   batch permanently. Only mark it reverted if something actually applied.
+1. `tui/screens/search.py:59` — option id is `f"{hit.kind}:{hit.org_id}"`, so
+   two interactions at one account collide. Repro: `/` then type `ca` on
+   seeded data; six of seven two-letter prefixes kill the session.
+2. `tui/screens/team.py:186` — `enter` on a colleague holding both an
+   account-level and a placement-level assignment. Repro from cold start:
+   `w, w, "Junction", enter, ctrl+s, enter`.
+3. `tui/screens/markets.py:587` — exposure rows keyed on `row.org_id`;
+   latent on seed data, routine on a real tower where one carrier takes a
+   share of both the primary and the umbrella.
+
+Fix each by keying on the entity's own id and resolving the owner at
+selection time. Then extend the crash net: `App.run_action`
+(`tui/app.py:153-176`) wraps *actions*, and its own docstring says it does
+not cover message handlers — which is why all three are fatal rather than
+annoying.
+
+Also in Phase 4: `account.py:1235` `_selected_key` has no `has_focus` gate
+(C16), so `b, enter, 4, tab, tab, r` fires `ConfirmRenew` from the tab bar —
+and `r` clones a placement and its towerkit file. And `navigator.py:1223`
+lets a `ValueError` from a `program_*` batch revert escape a dismiss
+callback and kill the app (C18).
 
 ## Decisions made this session
 
@@ -185,14 +201,21 @@ Concretely:
 
 ## Open questions for Grant
 
-- **Scope `u` to `source='tui'`?** Proposed rule: `u` = undo my last action in
-  this app; `R` on the MCP CHANGES table = revert an assistant batch; imports =
-  snapshot rollback. This is what stops `u` reverting sync-projection writes.
-  Confirm before I build step 2 above.
-- **After an import, `u` will say "nothing to undo"** rather than raising.
-  That is correct — an import's rollback is its snapshot — but it is a visible
-  change, and it makes the missing `bookctl restore` (audit G1) more pressing.
-  Do you want `bookctl restore` in this branch or its own?
-- **CLAUDE.md line updated in this session**: "`u` stays single-step/
-  field-granular for TUI writes" was superseded by your instruction. I have
-  amended it; check the wording matches what you meant.
+- **Resolved 2026-08-15:** `u` is scoped to `source='tui'`. CLAUDE.md on the
+  branch has been updated to match.
+- **`bookctl restore` (audit G1) — this branch or its own?** Still open, and
+  now sharper: `u` after an import correctly says "nothing to undo", and the
+  only rollback is a `.bak` file the app never tells you how to use.
+- **One contract change needs your eye.** `revert(force=True)` on a fully
+  conflicted batch used to return `applied=True` with an empty `reverted`
+  list and mark the batch reverted, burning it. `applied` now means "the book
+  moved". That required editing
+  `test_user_edits_to_a_batch_created_row_block_its_revert`, which asserted
+  the old behaviour deliberately. I think the change is right —
+  `revert_batch`'s own docstring says "applied: false means nothing was
+  written" — but it is yours to overrule.
+- **Blast cap now applies to merges.** Bulk moves are event-logged row by row
+  so a merge can actually be reverted, which means a merge touching more than
+  `BLAST_CAP` (250) entities will now be refused. Nothing in the seeded book
+  comes close, but a large carrier merge on your real data might. If that
+  bites, `BatchState(cap=)` already exists to raise it per batch.
