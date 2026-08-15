@@ -50,7 +50,8 @@ Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a7094
 
 ## Just finished
 
-**Phases 1-8 are complete.** There are no unbatched TUI write paths left, the
+**Every audit CRITICAL is closed**, plus the silent-no-op and dead-key
+clusters from the IMPORTANT list. There are no unbatched TUI write paths left, the
 three keystrokes that used to kill the session no longer can, and every screen
 counts down to the date it prints.
 Every write — forms, keystroke actions, merges and pipeline stage moves — is
@@ -102,27 +103,25 @@ end-to-end version caught a real gap the mechanism test could not.
 
 ## Next step
 
-Every CRITICAL from the audit is now closed. What remains is the IMPORTANT
-list, and it is mostly small, independent work rather than another
-architecture phase. The clusters worth taking in order:
+The remaining audit IMPORTANT items, in rough value order:
 
-1. **Silent no-ops** (audit's highest-value UX group). Six of seven Navigator
-   row actions do nothing at all with the tree focused; `D` is a silent no-op
-   on five account tabs; `a` is advertised on attention tables that cannot
-   add. The gates are correct — the silence is the bug. One shared
-   "nothing to act on — tab into the rows first" notify covers most of it.
-2. **Advertised-but-dead keys.** `j/k` on the Navigator card (the Tree binds
-   neither), `i paste import` on three account hint lines (moved to `I` on
-   2026-08-14), `u` documented as working "everywhere" but dead on Calendar,
-   Markets, Team and Onboarding, and `esc` likewise dead on Today. Pure text
-   and binding edits; a test asserting every letter named in a hint line
-   resolves to a live binding would stop it recurring.
-3. **Wrong numbers, second tier**: the markets exposure counting *quoted*
-   placements as bound (`projection.py:92-120` has no status filter while
-   `market_premiums` does), and hit rates as unlabelled lifetime ratios with
-   pending submissions in the denominator.
-4. **`bookctl restore`** (audit G1) — still open, and still the thing that
-   makes the backup story real rather than nominal.
+1. **Wrong numbers, second tier.** `repo/projection.py:92-120`
+   (`carrier_exposure`) has no status filter while `market_premiums` does, so
+   the markets exposure counts QUOTED placements as bound — Travelers reads
+   $650K on one screen and $1.3M on another, from the same data. And hit
+   rates (`services/hit_rate.py:22-28`) are unlabelled lifetime ratios with
+   pending submissions in the denominator, shown without an `n`.
+2. **`bookctl restore` (audit G1).** The backup half is solid — VACUUM INTO,
+   integrity-checked, 0600, taken before the first row changes, and now
+   before a forced seed too. There is still no restore, in the CLI or the
+   docs, so the rollback story is nominal rather than real.
+3. **No audit trail.** `repo/events.history` and `field_history` have zero
+   consumers anywhere; the only change surface is the MCP CHANGES table
+   (assistant batches, 14 days). Now that every TUI write is a batch with a
+   summary, a "what did I change?" view is mostly a query away.
+4. Smaller copy work: the `SUBMISSIONS PAST SLA` heading never defines the
+   threshold, empty states are missing on Markets/Pipeline/Calendar/search,
+   and the `opp`/`plc` two-letter codes have no legend.
 
 ## Decisions made this session
 
