@@ -18,7 +18,9 @@ Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a7094
 - Last commit: `0607582` — chore: wheelhouse that can actually satisfy mcp,
   and the hash the release actually has
 - Branch: `fix/tui-batches-undo-sweep`, in worktree
-  `.claude/worktrees/batch-undo`, branched off `0607582` (= `main` = `origin/main`)
+  `.claude/worktrees/batch-undo`, branched off `0607582`. Note `main` has since
+  moved to `72383af` (docs only: this handoff, `changelog.md`, CLAUDE.md), so
+  the branch is one docs commit behind and does not need rebasing to continue.
 - Uncommitted changes: **everything below is uncommitted on that branch.**
   Nothing has been committed. Deliberate — the branch is Grant's to review.
   - `src/bookkit/db.py`
