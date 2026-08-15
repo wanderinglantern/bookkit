@@ -85,3 +85,24 @@
   RFI phase-4 report). One session per worktree, `.claude/worktrees/<name>`,
   removed when the branch merges. Also: redirect gate output to the
   scratchpad, not /tmp — concurrent pytest runs interleave there.
+- A FRESH WORKTREE NEEDS `uv sync --group dev`, and gates must run as
+  `uv run --no-sync python -m pytest`. A bare `uv sync` installs runtime
+  deps only, and `uv run pytest` then silently falls through to Anaconda's
+  pytest — which cannot import bookkit and reports `ModuleNotFoundError:
+  No module named 'bookkit'` from conftest, looking exactly like a broken
+  editable install (2026-08-15). Related: `.claude/worktrees/towerkit` is a
+  symlink to ../../towerkit and is what makes the `path = "../towerkit"`
+  dependency resolve from inside a worktree — don't delete it.
+- A GREEN SUITE PROVES NOTHING BROKE, NOT THAT THE NEW PATH IS TAKEN. When
+  a change is meant to route behaviour through a new seam, assert the seam
+  is actually used, end to end, before believing it. Batching the shared
+  `entity_actions.push_form` looked right and went green — while 33 call
+  sites built `FormModal` directly and bypassed it entirely (2026-08-15).
+- Handoffs go in `./handoffs/YYYYMMDD-Feature.md`, written so a fresh
+  Claude can resume cold: goal, state, next step with file:line, decisions
+  and what was rejected, what was tried that failed, gotchas, open
+  questions. `changelog.md` is maintained per the prompt at its own bottom;
+  commit and push it when asked.
+- Grant reviews long-form work as published artifacts, not terminal
+  scrollback — an audit or a multi-phase build gets a report artifact and,
+  for ongoing work, a build log kept updated at the same URL.
