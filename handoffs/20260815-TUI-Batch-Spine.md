@@ -50,7 +50,7 @@ Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a7094
 
 ## Just finished
 
-**Phases 1-7 are complete.** There are no unbatched TUI write paths left, the
+**Phases 1-8 are complete.** There are no unbatched TUI write paths left, the
 three keystrokes that used to kill the session no longer can, and every screen
 counts down to the date it prints.
 Every write — forms, keystroke actions, merges and pipeline stage moves — is
@@ -59,7 +59,7 @@ through the same code path `R` uses, scoped to `source='tui'` (Grant's call,
 2026-08-15), so it can no longer revert a sync projection or an assistant
 write. The recurring `NON_MUTATION_FIELDS` bug class is closed structurally.
 
-Fourteen audit criticals are genuinely fixed and asserted: **C4** (merges ran 4-10
+Seventeen audit criticals are genuinely fixed and asserted: **C4** (merges ran 4-10
 writes with no transaction), **C5** (the MergePicker's "undoable with u" was
 false), **C10** (the lost-deal bug), **C2** (three DuplicateID app-kills),
 **C16** (`r` renewing from the tab bar), **C18** (a program-batch revert
@@ -69,8 +69,12 @@ killing the app), **C11** (four screens printing `period_to` beside a
 incidentally by shortening the book's headers; verified by rendering, not
 assumed), **C1** (`seed --demo` doubling a book in use), **C19** (two missing `.resolve()` calls breaking the towerctl and Cowork
 contracts), **C15** (money fields pre-filling a value their own parser
-rejected), **C20** (a bare `5` saving a date nine months out), and **C17**
-(the TUI rename bypassing the duplicate guard).
+rejected), **C20** (a bare `5` saving a date nine months out), **C17** (the TUI rename bypassing the duplicate guard), **C3** (the Footer
+painting blank on 6 of 9 screens), **C14** (the modal Save button outside its
+own box), and **C6** (the import preview unable to show its own verdict).
+
+**All 36 snapshot baselines that moved were read before being accepted** —
+six in phase 5, thirty in phase 8. They no longer encode any known bug.
 
 **The 10 tests in `tests/test_batch_spine.py` are mutation-verified**, not just
 green. Each mutation was applied to the specific line the test defends, the
@@ -98,31 +102,27 @@ end-to-end version caught a real gap the mechanism test could not.
 
 ## Next step
 
-**Phase 8, layout.** The two structural ones are worth doing together, since
-both are single CSS rules with outsized effects:
+Every CRITICAL from the audit is now closed. What remains is the IMPORTANT
+list, and it is mostly small, independent work rather than another
+architecture phase. The clusters worth taking in order:
 
-1. **C3 — the Footer renders as a BLANK LINE** whenever its bindings overflow
-   the terminal width: blank on 6 of 9 screens at 140x45 and 8 of 9 at 80x24,
-   including the home screen at the project's own reference size. `Footer` is
-   `height: 1` with `overflow-x: auto`, so the scrollbar takes its only row;
-   the global `* { scrollbar-size-horizontal: 1 }` in `bookkit.tcss:9-12`
-   outranks Textual's own `Footer { scrollbar-size: 0 0 }` because app CSS
-   beats DEFAULT_CSS. Fix is one rule, then cap what is `show=True` (Account
-   needs 199 columns of footer keys) and add a test asserting
-   `Footer.virtual_size.width <= container_size.width` at both sizes —
-   without it the next `show=True` binding silently blanks it again.
-2. **C14 — the modal Save button and `^s save` hint fall outside the box**
-   below 34 terminal rows: `.modal-box { max-height: 80% }` and
-   `.modal-fields { max-height: 55vh }` add up past the box. Tab still
-   reaches the invisible button. Make the fields scroller `height: 1fr`
-   inside the capped box so it absorbs the shortfall.
-3. **C6 — the import preview cannot show its own verdict.** `#import-preview`
-   is a non-focusable `Static` with `max-height: 16`; content past ~14 rows is
-   unreachable, not scrollable, and `report()` puts `ERRORS — cannot commit`
-   last. Make it focusable and hoist the verdict into a fixed header line.
-
-Both remaining snapshot re-baselines land here. Six were updated in phase 5;
-expect most of the rest to move once the footer renders.
+1. **Silent no-ops** (audit's highest-value UX group). Six of seven Navigator
+   row actions do nothing at all with the tree focused; `D` is a silent no-op
+   on five account tabs; `a` is advertised on attention tables that cannot
+   add. The gates are correct — the silence is the bug. One shared
+   "nothing to act on — tab into the rows first" notify covers most of it.
+2. **Advertised-but-dead keys.** `j/k` on the Navigator card (the Tree binds
+   neither), `i paste import` on three account hint lines (moved to `I` on
+   2026-08-14), `u` documented as working "everywhere" but dead on Calendar,
+   Markets, Team and Onboarding, and `esc` likewise dead on Today. Pure text
+   and binding edits; a test asserting every letter named in a hint line
+   resolves to a live binding would stop it recurring.
+3. **Wrong numbers, second tier**: the markets exposure counting *quoted*
+   placements as bound (`projection.py:92-120` has no status filter while
+   `market_premiums` does), and hit rates as unlabelled lifetime ratios with
+   pending submissions in the denominator.
+4. **`bookctl restore`** (audit G1) — still open, and still the thing that
+   makes the backup story real rather than nominal.
 
 ## Decisions made this session
 
