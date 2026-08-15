@@ -31,8 +31,11 @@ Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a7094
   - `src/bookkit/tui/widgets/forms.py`
   - `src/bookkit/tui/widgets/entity_actions.py`
   - `tests/test_batch_spine.py` (new)
-- Gates green on the branch: `mypy` 0, `ruff` 0, `pytest` **649 passed**
-  (baseline at branch point was 612; +37 new tests), 38 snapshots passed.
+- Gates green on the branch: `mypy` 0, `ruff` 0, `pytest` **654 passed**
+  (baseline at branch point was 612; +42 new tests), 38 snapshots passed.
+- **Six snapshot baselines were deliberately updated** in phase 5 (book,
+  calendar, today at both sizes); the other 32 are untouched. Each new render
+  was read before being accepted.
 - Also modified since first writing: `services/undo.py` (rewritten),
   `services/merge.py`, `services/batches.py`, `repo/batches.py`,
   `tui/screens/{account,navigator,markets,pipeline}.py`, and 8 reassign
@@ -42,19 +45,24 @@ Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a7094
 
 ## Just finished
 
-**Phases 1-4 are complete.** There are no unbatched TUI write paths left, and
-the three keystrokes that used to kill the session no longer can.
+**Phases 1-5 are complete.** There are no unbatched TUI write paths left, the
+three keystrokes that used to kill the session no longer can, and every screen
+counts down to the date it prints.
 Every write — forms, keystroke actions, merges and pipeline stage moves — is
 one atomic, `R`-revertible batch. `u` now undoes the last *writer action*
 through the same code path `R` uses, scoped to `source='tui'` (Grant's call,
 2026-08-15), so it can no longer revert a sync projection or an assistant
 write. The recurring `NON_MUTATION_FIELDS` bug class is closed structurally.
 
-Six audit criticals are genuinely fixed and asserted: **C4** (merges ran 4-10
+Nine audit criticals are genuinely fixed and asserted: **C4** (merges ran 4-10
 writes with no transaction), **C5** (the MergePicker's "undoable with u" was
 false), **C10** (the lost-deal bug), **C2** (three DuplicateID app-kills),
-**C16** (`r` renewing from the tab bar), and **C18** (a program-batch revert
-killing the app).
+**C16** (`r` renewing from the tab bar), **C18** (a program-batch revert
+killing the app), **C11** (four screens printing `period_to` beside a
+`renewal_on` countdown), **C12** (the calendar hiding every overdue renewal),
+and **C13** (the 80x24 countdown truncating `57d` into a plausible `5` —
+fixed incidentally by shortening the book's headers; verified by rendering,
+not assumed).
 
 **The 10 tests in `tests/test_batch_spine.py` are mutation-verified**, not just
 green. Each mutation was applied to the specific line the test defends, the
@@ -82,26 +90,25 @@ end-to-end version caught a real gap the mechanism test could not.
 
 ## Next step
 
-**Phase 5, the wrong numbers.** These are display bugs, but they are the ones
-a broker would act on:
+**Phase 6, the CLI and MCP surface.** These are the findings that can damage
+real data or silently misconfigure the connector:
 
-1. **C11 — `period_to` printed beside a `renewal_on` countdown.** Four
-   reviewers found this independently. `today.py:113`, `book.py:106`,
-   `account.py:434-441`, `calendar.py:89` print `placement.period_to` while
-   the countdown next to it measures to `renewal_on` (the earliest line end,
-   `services/renewals.py:76-81`). On seeded data Today shows
-   `expiry 2026-09-03 ◆ 70d over` — a date twenty days in the FUTURE, in red,
-   labelled seventy days overdue. The Navigator (`navigator.py:662`) and the
-   MCP server already do it right; these four are the outliers. Print
-   `item.renewal_on or period_to` and rename the column `renews`.
-2. **C12 — the calendar drops every overdue renewal.** `calendar.py:78,90-92`
-   starts the grid at `today.replace(day=1)` and `if 0 <= idx < 12` silently
-   discards anything earlier, so all 7 seeded overdue renewals are invisible
-   on the one screen meant to make the year legible. The legend even
-   advertises a `◆ overdue` marker that can essentially never render.
-3. **Book premium column** (`book.py:108`) shows one placement's premium as
-   the account's, mixing bound with unbound — three of twenty seeded rows
-   show revenue that does not exist.
+1. **C1 — `bookctl seed --demo` has no empty-book guard.** Run twice against
+   one database it went 35 -> 70 orgs. `$BOOKKIT_DB` defaults to the real
+   book, `--demo` is `required=True` so it is not a guard, and the seeded rows
+   carry no `source`/`note` provenance and are not a batch, so they cannot be
+   cleanly removed. It is in the README quick start. Fix: refuse when the book
+   has any org unless `--force`, call `db.backup` first either way, and state
+   the destination path and row counts before writing.
+2. **C19 — two missing `.resolve()` calls.** `cli.py:240` stores program roots
+   unresolved, so a relative root validates at set-time and resolves to
+   nothing from any other cwd — and towerctl parses that output to build its
+   own config. `connector.py:113-115` emits an absolute `Command` but a
+   relative `--db` in `Arguments`; because `build_server` creates the DB on
+   connect, the connector starts clean and just reports an empty book.
+3. Top-level exception handler in `cli.py` (six raw tracebacks on plausible
+   input, including a typo'd `--db`), and read commands should open read-only
+   so a wrong path fails instead of creating a cheerful empty book.
 
 ## Decisions made this session
 
