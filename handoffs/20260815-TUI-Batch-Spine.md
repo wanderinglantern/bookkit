@@ -31,8 +31,8 @@ Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a7094
   - `src/bookkit/tui/widgets/forms.py`
   - `src/bookkit/tui/widgets/entity_actions.py`
   - `tests/test_batch_spine.py` (new)
-- Gates green on the branch: `mypy` 0, `ruff` 0, `pytest` **641 passed**
-  (baseline at branch point was 612; +29 new tests), 38 snapshots passed.
+- Gates green on the branch: `mypy` 0, `ruff` 0, `pytest` **649 passed**
+  (baseline at branch point was 612; +37 new tests), 38 snapshots passed.
 - Also modified since first writing: `services/undo.py` (rewritten),
   `services/merge.py`, `services/batches.py`, `repo/batches.py`,
   `tui/screens/{account,navigator,markets,pipeline}.py`, and 8 reassign
@@ -42,17 +42,19 @@ Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a7094
 
 ## Just finished
 
-**Phases 1-3 are complete. There are no unbatched TUI write paths left.**
+**Phases 1-4 are complete.** There are no unbatched TUI write paths left, and
+the three keystrokes that used to kill the session no longer can.
 Every write — forms, keystroke actions, merges and pipeline stage moves — is
 one atomic, `R`-revertible batch. `u` now undoes the last *writer action*
 through the same code path `R` uses, scoped to `source='tui'` (Grant's call,
 2026-08-15), so it can no longer revert a sync projection or an assistant
 write. The recurring `NON_MUTATION_FIELDS` bug class is closed structurally.
 
-Three audit criticals are genuinely fixed and asserted: **C4** (merges ran
-4-10 writes with no transaction), **C5** (the MergePicker's "undoable with u"
-was false), and **C10** (the lost-deal bug — `<` wrote four fields that undo
-could only put one of back).
+Six audit criticals are genuinely fixed and asserted: **C4** (merges ran 4-10
+writes with no transaction), **C5** (the MergePicker's "undoable with u" was
+false), **C10** (the lost-deal bug), **C2** (three DuplicateID app-kills),
+**C16** (`r` renewing from the tab bar), and **C18** (a program-batch revert
+killing the app).
 
 **The 10 tests in `tests/test_batch_spine.py` are mutation-verified**, not just
 green. Each mutation was applied to the specific line the test defends, the
@@ -80,30 +82,26 @@ end-to-end version caught a real gap the mechanism test could not.
 
 ## Next step
 
-**Phase 4, the crash class.** Three `DuplicateID` app-kills share one root
-cause: `OptionList` options keyed on a non-unique `org_id`.
+**Phase 5, the wrong numbers.** These are display bugs, but they are the ones
+a broker would act on:
 
-1. `tui/screens/search.py:59` — option id is `f"{hit.kind}:{hit.org_id}"`, so
-   two interactions at one account collide. Repro: `/` then type `ca` on
-   seeded data; six of seven two-letter prefixes kill the session.
-2. `tui/screens/team.py:186` — `enter` on a colleague holding both an
-   account-level and a placement-level assignment. Repro from cold start:
-   `w, w, "Junction", enter, ctrl+s, enter`.
-3. `tui/screens/markets.py:587` — exposure rows keyed on `row.org_id`;
-   latent on seed data, routine on a real tower where one carrier takes a
-   share of both the primary and the umbrella.
-
-Fix each by keying on the entity's own id and resolving the owner at
-selection time. Then extend the crash net: `App.run_action`
-(`tui/app.py:153-176`) wraps *actions*, and its own docstring says it does
-not cover message handlers — which is why all three are fatal rather than
-annoying.
-
-Also in Phase 4: `account.py:1235` `_selected_key` has no `has_focus` gate
-(C16), so `b, enter, 4, tab, tab, r` fires `ConfirmRenew` from the tab bar —
-and `r` clones a placement and its towerkit file. And `navigator.py:1223`
-lets a `ValueError` from a `program_*` batch revert escape a dismiss
-callback and kill the app (C18).
+1. **C11 — `period_to` printed beside a `renewal_on` countdown.** Four
+   reviewers found this independently. `today.py:113`, `book.py:106`,
+   `account.py:434-441`, `calendar.py:89` print `placement.period_to` while
+   the countdown next to it measures to `renewal_on` (the earliest line end,
+   `services/renewals.py:76-81`). On seeded data Today shows
+   `expiry 2026-09-03 ◆ 70d over` — a date twenty days in the FUTURE, in red,
+   labelled seventy days overdue. The Navigator (`navigator.py:662`) and the
+   MCP server already do it right; these four are the outliers. Print
+   `item.renewal_on or period_to` and rename the column `renews`.
+2. **C12 — the calendar drops every overdue renewal.** `calendar.py:78,90-92`
+   starts the grid at `today.replace(day=1)` and `if 0 <= idx < 12` silently
+   discards anything earlier, so all 7 seeded overdue renewals are invisible
+   on the one screen meant to make the year legible. The legend even
+   advertises a `◆ overdue` marker that can essentially never render.
+3. **Book premium column** (`book.py:108`) shows one placement's premium as
+   the account's, mixing bound with unbound — three of twenty seeded rows
+   show revenue that does not exist.
 
 ## Decisions made this session
 
