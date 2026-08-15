@@ -103,25 +103,25 @@ end-to-end version caught a real gap the mechanism test could not.
 
 ## Next step
 
-The remaining audit IMPORTANT items, in rough value order:
+Two items from the audit remain, both about the same gap — the app can take a
+backup and can no longer be told what it changed:
 
-1. **Wrong numbers, second tier.** `repo/projection.py:92-120`
-   (`carrier_exposure`) has no status filter while `market_premiums` does, so
-   the markets exposure counts QUOTED placements as bound — Travelers reads
-   $650K on one screen and $1.3M on another, from the same data. And hit
-   rates (`services/hit_rate.py:22-28`) are unlabelled lifetime ratios with
-   pending submissions in the denominator, shown without an `n`.
-2. **`bookctl restore` (audit G1).** The backup half is solid — VACUUM INTO,
-   integrity-checked, 0600, taken before the first row changes, and now
-   before a forced seed too. There is still no restore, in the CLI or the
-   docs, so the rollback story is nominal rather than real.
-3. **No audit trail.** `repo/events.history` and `field_history` have zero
-   consumers anywhere; the only change surface is the MCP CHANGES table
-   (assistant batches, 14 days). Now that every TUI write is a batch with a
-   summary, a "what did I change?" view is mostly a query away.
-4. Smaller copy work: the `SUBMISSIONS PAST SLA` heading never defines the
-   threshold, empty states are missing on Markets/Pipeline/Calendar/search,
-   and the `opp`/`plc` two-letter codes have no legend.
+1. **`bookctl restore` (audit G1).** The backup half is solid: VACUUM INTO,
+   integrity-checked, 0600, taken before the first row changes by every
+   importer and now by `seed --force` too, through the one `db.snapshot`.
+   There is still no restore — not in the CLI, not in the docs — so recovery
+   means quitting and `cp`-ing a `.bak` over the live DB with its `-wal` and
+   `-shm` sidecars. Nothing prunes `backups/` either.
+2. **No audit trail (audit G2).** `repo/events.history` and `field_history`
+   have zero consumers anywhere in the TUI, CLI or MCP. The only change
+   surface is the navigator's MCP CHANGES section: assistant batches, 14
+   days. Now that EVERY TUI write is a batch carrying a summary and an
+   org_id, "what did I change today?" is close to a query plus a table — and
+   it is the natural companion to `u` being batch-granular.
+
+Then the smaller copy work: `SUBMISSIONS PAST SLA` never defines the
+threshold, Markets/Pipeline/Calendar/search have no empty states, and the
+`opp`/`plc` codes in the needs table have no legend.
 
 ## Decisions made this session
 
