@@ -31,8 +31,13 @@ Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a7094
   - `src/bookkit/tui/widgets/forms.py`
   - `src/bookkit/tui/widgets/entity_actions.py`
   - `tests/test_batch_spine.py` (new)
-- Gates green on the branch: `mypy` 0, `ruff` 0, `pytest` **654 passed**
-  (baseline at branch point was 612; +42 new tests), 38 snapshots passed.
+- Gates green on the branch: `mypy` 0, `ruff` 0, `pytest` **664 passed**
+  (baseline at branch point was 612; +52 new tests), 38 snapshots passed.
+  Confirmed twice, in both ordered and randomised order, against 664
+  collected. (One run mid-phase reported 621 passed with exit 0 and no skip
+  or error line — 43 tests short. It did not reproduce; most likely pytest
+  collected while a test file was being rewritten. Worth knowing that a
+  green exit code here does not by itself prove the whole suite ran.)
 - **Six snapshot baselines were deliberately updated** in phase 5 (book,
   calendar, today at both sizes); the other 32 are untouched. Each new render
   was read before being accepted.
@@ -45,7 +50,7 @@ Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a7094
 
 ## Just finished
 
-**Phases 1-5 are complete.** There are no unbatched TUI write paths left, the
+**Phases 1-6 are complete.** There are no unbatched TUI write paths left, the
 three keystrokes that used to kill the session no longer can, and every screen
 counts down to the date it prints.
 Every write — forms, keystroke actions, merges and pipeline stage moves — is
@@ -54,15 +59,16 @@ through the same code path `R` uses, scoped to `source='tui'` (Grant's call,
 2026-08-15), so it can no longer revert a sync projection or an assistant
 write. The recurring `NON_MUTATION_FIELDS` bug class is closed structurally.
 
-Nine audit criticals are genuinely fixed and asserted: **C4** (merges ran 4-10
+Eleven audit criticals are genuinely fixed and asserted: **C4** (merges ran 4-10
 writes with no transaction), **C5** (the MergePicker's "undoable with u" was
 false), **C10** (the lost-deal bug), **C2** (three DuplicateID app-kills),
 **C16** (`r` renewing from the tab bar), **C18** (a program-batch revert
 killing the app), **C11** (four screens printing `period_to` beside a
 `renewal_on` countdown), **C12** (the calendar hiding every overdue renewal),
-and **C13** (the 80x24 countdown truncating `57d` into a plausible `5` —
-fixed incidentally by shortening the book's headers; verified by rendering,
-not assumed).
+**C13** (the 80x24 countdown truncating `57d` into a plausible `5` — fixed
+incidentally by shortening the book's headers; verified by rendering, not
+assumed), **C1** (`seed --demo` doubling a book in use), and **C19** (two
+missing `.resolve()` calls breaking the towerctl and Cowork contracts).
 
 **The 10 tests in `tests/test_batch_spine.py` are mutation-verified**, not just
 green. Each mutation was applied to the specific line the test defends, the
@@ -90,25 +96,32 @@ end-to-end version caught a real gap the mechanism test could not.
 
 ## Next step
 
-**Phase 6, the CLI and MCP surface.** These are the findings that can damage
-real data or silently misconfigure the connector:
+**Phase 7, the forms.** All three are in the entry path a broker uses daily:
 
-1. **C1 — `bookctl seed --demo` has no empty-book guard.** Run twice against
-   one database it went 35 -> 70 orgs. `$BOOKKIT_DB` defaults to the real
-   book, `--demo` is `required=True` so it is not a guard, and the seeded rows
-   carry no `source`/`note` provenance and are not a batch, so they cannot be
-   cleanly removed. It is in the README quick start. Fix: refuse when the book
-   has any org unless `--force`, call `db.backup` first either way, and state
-   the destination path and row counts before writing.
-2. **C19 — two missing `.resolve()` calls.** `cli.py:240` stores program roots
-   unresolved, so a relative root validates at set-time and resolves to
-   nothing from any other cwd — and towerctl parses that output to build its
-   own config. `connector.py:113-115` emits an absolute `Command` but a
-   relative `--db` in `Arguments`; because `build_server` creates the DB on
-   connect, the connector starts clean and just reports an empty book.
-3. Top-level exception handler in `cli.py` (six raw tracebacks on plausible
-   input, including a typo'd `--db`), and read commands should open read-only
-   so a wrong path fails instead of creating a cheerful empty book.
+1. **C15 — money fields pre-fill a value their own parser rejects.** A
+   placement whose `total_premium` carries odd cents renders as `1,234.56`
+   in the form, and `parse_money_cents` refuses both that and `1234.56`
+   ("fractional dollars are not allowed"). The record then cannot be saved at
+   all — not the status, not the dates — until the money field is manually
+   rounded. Decide whether cents are enterable: teach the parser the
+   `1,234.56` form, or render whole dollars in `forms.py::_initial_text` and
+   say so in the field error.
+2. **C20 — a bare number in a date field saves a date nine months out.**
+   `due = "5"` saves `2027-05-01`; dateparser reads a lone integer as a month
+   and future-biases it. `5` meaning "the 5th" is the most natural short
+   entry there is, and the task then drops off every 120-day attention
+   window. Reject bare 1-2 digit integers in `dates.parse_human_date`, and
+   echo the parsed date before the form closes.
+3. **C17 — the TUI rename bypasses the duplicate guard.** `_guard_member_rename`
+   exists only at `mcpserver.py:1326`; `team.py:222` writes straight through
+   `repo/team.py:34`. Two colleagues sharing a name makes every later MCP
+   lookup ambiguous. Move the guard into `repo.team.create_member` /
+   `update_member` so both surfaces inherit it, and surface the refusal in the
+   FormModal, which already keeps the form open on a refused commit.
+
+Also queued from the audit's IMPORTANT list: cross-field date validation (a
+placement whose period runs backwards 21 months currently saves, and renders
+as a permanently overdue renewal that never clears).
 
 ## Decisions made this session
 
