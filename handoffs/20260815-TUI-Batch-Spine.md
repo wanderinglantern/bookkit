@@ -1,239 +1,228 @@
-# Handoff — 2026-08-15 — TUI batch spine + undo sweep
+# Handoff — 2026-08-15 — TUI batch spine, undo sweep, and the audit fixes
 
 ## Goal
 
-Route every TUI write through the batch machinery (`db.transaction(batch=)` /
-`services/batches.py`), then rewrite `u` on top of it. Grant approved this
-after an 11-agent usability audit found that TUI writes were unbatched and
-untransacted, which was the single root cause behind a cluster of criticals:
-half-applied merges, "undoable with u" promises that were false, a lost deal
-that could not be reopened, and `u` reverting sync-projection writes the user
-never made.
+An 11-agent usability audit drove the live app and found 20 CRITICAL and 64
+IMPORTANT issues. Grant approved fixing them, starting with the one
+architectural cause behind a whole cluster: **TUI writes never went through
+`db.transaction(batch=)`**, so `R` could not reach them and `u` was carrying
+weight it was never designed for.
 
-Audit report: https://claude.ai/code/artifact/8ad54adc-9a2c-43b6-b363-583d1dc798d0
-Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a70942a
+- Audit report: https://claude.ai/code/artifact/8ad54adc-9a2c-43b6-b363-583d1dc798d0
+- Build log:    https://claude.ai/code/artifact/b358c736-94f8-444b-857a-26440a70942a
+
+**Every CRITICAL is now closed**, plus the silent-no-op, dead-key and
+market-numbers clusters from IMPORTANT.
 
 ## State
 
-- Last commit: `0607582` — chore: wheelhouse that can actually satisfy mcp,
-  and the hash the release actually has
-- Branch: `fix/tui-batches-undo-sweep`, in worktree
-  `.claude/worktrees/batch-undo`, branched off `0607582`. Note `main` has since
-  moved to `72383af` (docs only: this handoff, `changelog.md`, CLAUDE.md), so
-  the branch is one docs commit behind and does not need rebasing to continue.
-- Uncommitted changes: **everything below is uncommitted on that branch.**
-  Nothing has been committed. Deliberate — the branch is Grant's to review.
-  - `src/bookkit/db.py`
-  - `src/bookkit/services/batches.py`
-  - `src/bookkit/mcpserver.py`
-  - `src/bookkit/repo/base.py`
-  - `src/bookkit/repo/events.py`
-  - `src/bookkit/tui/widgets/forms.py`
-  - `src/bookkit/tui/widgets/entity_actions.py`
-  - `tests/test_batch_spine.py` (new)
-- Gates green on the branch: `mypy` 0, `ruff` 0, `pytest` **664 passed**
-  (baseline at branch point was 612; +52 new tests), 38 snapshots passed.
-  Confirmed twice, in both ordered and randomised order, against 664
-  collected. (One run mid-phase reported 621 passed with exit 0 and no skip
-  or error line — 43 tests short. It did not reproduce; most likely pytest
-  collected while a test file was being rewritten. Worth knowing that a
-  green exit code here does not by itself prove the whole suite ran.)
-- **Six snapshot baselines were deliberately updated** in phase 5 (book,
-  calendar, today at both sizes); the other 32 are untouched. Each new render
-  was read before being accepted.
-- Also modified since first writing: `services/undo.py` (rewritten),
-  `services/merge.py`, `services/batches.py`, `repo/batches.py`,
-  `tui/screens/{account,navigator,markets,pipeline}.py`, and 8 reassign
-  helpers in `repo/{tasks,submissions,documents,contacts,orgs,interactions}.py`.
-  New test files: `tests/test_undo_batch.py`,
-  `tests/test_merge_and_stage_batches.py`.
+- Branch `fix/tui-batches-undo-sweep`, in worktree
+  `.claude/worktrees/batch-undo`, branched off `0607582`.
+- **Nothing is committed on the branch.** All 89 changed/added files are
+  uncommitted, deliberately — it is Grant's to review. `main` has since moved
+  on with docs-only commits (this handoff, `changelog.md`, CLAUDE.md); the
+  branch does not need rebasing.
+- `main` also carries ~9 files of **someone else's uncommitted RFI-state
+  work** (`rfi_state_cell` in `tui/widgets/tables.py` and friends). Untouched
+  throughout. Do not disturb it.
+- Gates on the branch: `mypy` 0, `ruff` 0, **`pytest` 741 passed against 741
+  collected** (612 at branch point, +129 new), 38 snapshots.
 
-## Just finished
+### Running the gates
 
-**Every audit CRITICAL is closed**, plus the silent-no-op and dead-key
-clusters from the IMPORTANT list. There are no unbatched TUI write paths left, the
-three keystrokes that used to kill the session no longer can, and every screen
-counts down to the date it prints.
-Every write — forms, keystroke actions, merges and pipeline stage moves — is
-one atomic, `R`-revertible batch. `u` now undoes the last *writer action*
-through the same code path `R` uses, scoped to `source='tui'` (Grant's call,
-2026-08-15), so it can no longer revert a sync projection or an assistant
-write. The recurring `NON_MUTATION_FIELDS` bug class is closed structurally.
+```
+cd .claude/worktrees/batch-undo
+uv sync --group dev                       # ONCE per fresh worktree — see gotchas
+uv run --no-sync python -m pytest -q      # NOT `uv run pytest`
+uv run --no-sync mypy src
+uv run --no-sync ruff check src tests
+```
 
-Seventeen audit criticals are genuinely fixed and asserted: **C4** (merges ran 4-10
-writes with no transaction), **C5** (the MergePicker's "undoable with u" was
-false), **C10** (the lost-deal bug), **C2** (three DuplicateID app-kills),
-**C16** (`r` renewing from the tab bar), **C18** (a program-batch revert
-killing the app), **C11** (four screens printing `period_to` beside a
-`renewal_on` countdown), **C12** (the calendar hiding every overdue renewal),
-**C13** (the 80x24 countdown truncating `57d` into a plausible `5` — fixed
-incidentally by shortening the book's headers; verified by rendering, not
-assumed), **C1** (`seed --demo` doubling a book in use), **C19** (two missing `.resolve()` calls breaking the towerctl and Cowork
-contracts), **C15** (money fields pre-filling a value their own parser
-rejected), **C20** (a bare `5` saving a date nine months out), **C17** (the TUI rename bypassing the duplicate guard), **C3** (the Footer
-painting blank on 6 of 9 screens), **C14** (the modal Save button outside its
-own box), and **C6** (the import preview unable to show its own verdict).
+Redirect output to the scratchpad and gate on the command, never pipe before
+the `&&`. A full run is ~3 minutes; run it with `run_in_background` and wait
+rather than fighting a foreground timeout.
 
-**All 36 snapshot baselines that moved were read before being accepted** —
-six in phase 5, thirty in phase 8. They no longer encode any known bug.
+## What landed, and where
 
-**The 10 tests in `tests/test_batch_spine.py` are mutation-verified**, not just
-green. Each mutation was applied to the specific line the test defends, the
-failure observed, and the file restored:
+### The batch spine (everything else sits on this)
 
-| Mutation | Tests that failed |
+| Where | What |
 |---|---|
-| Defeat `_tx_depth` reentrancy in `db.transaction` | the 3 nesting tests |
-| Revert `FormModal` batching to opt-in | `a_form_save_lands_as_one_revertible_batch` |
-| Drop the `_assert_known_field` call from `log_event` | `an_undeclared_event_field_is_refused_at_write_time` |
-| Restore the old 2-name `NON_MUTATION_FIELDS` | `declared_bookkeeping_fields_are_allowed`, `undo_steps_past_provenance…` |
+| `db.py:72` `_tx_depth`, `db.py:123` `transaction()` | Nesting JOINS rather than raising — SQLite has no nested BEGIN. An inner `batch=` is deliberately ignored; the outermost writer action owns the undo unit. |
+| `services/batches.py:27` `open_batch()` | One implementation, two surfaces, taking `source='mcp'` or `'tui'`. `mcpserver._open_batch` delegates to it. |
+| `tui/widgets/forms.py:63` `BatchSpec`, `:274` `_run_commit` | **Batching is ON BY DEFAULT** in `FormModal`; `batch=False` opts out. A commit returning an error string raises `_Refused` inside the transaction, so a refused save rolls back — the form still stays open with input intact. |
+| `tui/widgets/entity_actions.py:30` `batched_write()` | The keystroke equivalent, for direct writes: d done, D drop, delete interaction, inline edits, appetite delete, merges, stage moves. |
+| `repo/base.py:69` `_assert_known_field` | An `event_log` field must be a real column or declared in `events.NON_MUTATION_FIELDS`. Refuses at write time rather than exploding inside `u` days later. |
 
-**Correction, now resolved.** I first described
-`test_multi_field_write_reverts_as_one_unit` as "the lost-deal fix". It was
-not — it calls `open_batch` directly, so it proved only the mechanism. The
-real fix landed afterwards in `tui/screens/pipeline.py`
-(`action_close_lost`, `action_advance_card`), and is asserted end-to-end by
-`test_closing_a_deal_from_the_board_is_undoable_end_to_end`, which drives the
-real board (`p`, `<`, `u`) rather than opening the batch itself. Unwrapping
-the keystroke fails that test.
+### Undo
 
-**The general lesson, applied twice now:** a test that sets up the new seam
-itself proves the mechanism, not that production code uses it. Both times the
-end-to-end version caught a real gap the mechanism test could not.
+`services/undo.py:44` `undo_last` finds the newest un-reverted `event_batch`
+with `source='tui'` (`repo/batches.py:92` `last_undoable`) and reverts it
+through `services.batches.revert`. `u` and `R` are now one code path.
+`services/undo.py:32` `SOURCE = "tui"` is the scoping Grant approved.
+
+### The rest, by cluster
+
+- **Crash class** — `search.py`, `team.py` and `markets.py` keyed OptionList
+  options / DataTable rows on a non-unique `org_id`; all three now key on the
+  entity's own id. `tui/app.py:274` `_guard_message_dispatch()` patches
+  `MessagePump._dispatch_message` so a raising message handler is no longer
+  fatal. `account.py:1237` `_acting_key` gates row actions on focus.
+- **Wrong dates** — Today, Book, the account header and the calendar print
+  `RenewalItem.renewal_on`, not `placement.period_to`. The calendar gained an
+  `overdue` column and drives `◆` off `days_remaining < 0`, not grid position.
+- **CLI safety** — the `cli.py` seed branch guards a non-empty book (`--force`
+  takes a `db.snapshot` first); `cli.py:143` `_refuse_a_missing_book` stops
+  read commands creating a database at a typo; `cli.py:156` `main()` wraps
+  everything below argparse. `.resolve()` added in `cli.py` roots and
+  `connector.py fields()`.
+- **Form entry** — `money.py parse_money_cents` accepts `1,234.56`;
+  `dates.py parse_human_date` refuses bare 1–2 digit input; the team name
+  guard moved to `repo/team.py::_guard_name`.
+- **Layout** — `bookkit.tcss` exempts `Footer` from the global scrollbar rule;
+  `forms.py DEFAULT_CSS` gives `.modal-fields` `height: 1fr`; both import
+  previews are `VerticalScroll` with the verdict pinned outside
+  (`imports/staging.py::verdict`).
+- **Market numbers** — `projection.carrier_exposure` carries `status`;
+  `submissions.market_counts` adds `decided`; `hit_rate` divides by decided
+  and returns `None` (not 0.0) when nothing has come back.
+
+### New tests (all mutation-verified)
+
+`tests/test_batch_spine.py`, `test_undo_batch.py`,
+`test_merge_and_stage_batches.py`, `test_crash_class.py`,
+`test_renewal_dates.py`, `test_cli_safety.py`, `test_form_entry.py`,
+`test_layout.py`, `test_dead_keys.py`, `test_market_numbers.py`.
+
+Two are **guards against recurrence** and will fail future work on purpose:
+
+- `test_layout.py` — every screen's `Footer.virtual_size.width <=
+  container_size.width` at 140x45. When a new `show=True` binding fails it,
+  demote one; do not raise the ceiling.
+- `test_dead_keys.py` — every key named in a hint line resolves to a live
+  binding, per screen and per account tab.
 
 ## Next step
 
-Two items from the audit remain, both about the same gap — the app can take a
-backup and can no longer be told what it changed:
+Two remaining audit items, both circling the same gap: the app takes backups,
+and it cannot tell you what it changed.
 
-1. **`bookctl restore` (audit G1).** The backup half is solid: VACUUM INTO,
-   integrity-checked, 0600, taken before the first row changes by every
-   importer and now by `seed --force` too, through the one `db.snapshot`.
-   There is still no restore — not in the CLI, not in the docs — so recovery
-   means quitting and `cp`-ing a `.bak` over the live DB with its `-wal` and
-   `-shm` sidecars. Nothing prunes `backups/` either.
-2. **No audit trail (audit G2).** `repo/events.history` and `field_history`
-   have zero consumers anywhere in the TUI, CLI or MCP. The only change
+1. **`bookctl restore` (audit G1).** The backup half is solid — VACUUM INTO,
+   integrity-checked, 0600, taken before the first row changes, now through
+   the single `db.snapshot` used by both importers and `seed --force`. There
+   is no restore in the CLI or the docs, so recovery means quitting and
+   `cp`-ing a `.bak` over the live DB with its `-wal`/`-shm` sidecars.
+   Nothing prunes `backups/` either — every pasted email signature writes a
+   full copy, forever.
+2. **The audit trail (audit G2).** `repo/events.history` and `field_history`
+   have **zero consumers** anywhere in TUI, CLI or MCP. The only change
    surface is the navigator's MCP CHANGES section: assistant batches, 14
-   days. Now that EVERY TUI write is a batch carrying a summary and an
-   org_id, "what did I change today?" is close to a query plus a table — and
-   it is the natural companion to `u` being batch-granular.
+   days. Every TUI write is now a batch carrying `tool`, `summary` and
+   `org_id`, so "what did I change today?" is close to a query plus a table —
+   and it is the natural companion to `u` being batch-granular.
 
-Then the smaller copy work: `SUBMISSIONS PAST SLA` never defines the
-threshold, Markets/Pipeline/Calendar/search have no empty states, and the
-`opp`/`plc` codes in the needs table have no legend.
+Then smaller copy work from the audit: `SUBMISSIONS PAST SLA` never states
+the threshold; Markets, Pipeline, Calendar and search results have no empty
+states; the `opp`/`plc` codes in the needs table have no legend.
 
 ## Decisions made this session
 
-- **Work in a worktree, not on `main`.** `main` has ~9 files of uncommitted
-  in-flight RFI-state work (`rfi_state_cell` in `tui/widgets/tables.py` and
-  friends, with tests and updated snapshots). CLAUDE.md documents a
-  2026-08-13 incident where a peer session's `git checkout` on a shared
-  working dir landed a commit on the wrong branch. Rejected: branching in
-  place (changes HEAD for any peer session in the same dir), and working
-  in the dirty tree (my changes and theirs become inseparable).
+- **Work in a worktree.** `main` had uncommitted peer work, and CLAUDE.md
+  documents a 2026-08-13 incident where a `git checkout` on a shared working
+  dir put a commit on the wrong branch. Rejected: branching in place, and
+  working in the dirty tree.
+- **`db.transaction` nests by joining.** Rejected auditing and unwrapping
+  every inner transaction first — far larger blast radius for the same
+  result. Consequence: an inner `batch=` is silently ignored, documented on
+  the function and covered by a test.
+- **Batching defaults ON.** Opt-in would leave whichever call site was missed
+  silently unbatched — precisely the failure being fixed.
+- **A refused save rolls back.** Real behaviour change: previously a commit
+  that wrote two rows and then returned an error left those rows behind.
+- **`u` scoped to `source='tui'`** (Grant, 2026-08-15), superseding CLAUDE.md's
+  earlier "single-step / field-granular" line, which has been amended.
+- **Exposure carries status rather than filtering to bound.** A quoted tower
+  is real exposure worth seeing; filtering would also have emptied the screen
+  on seeded data, hiding the problem rather than fixing it.
+- **Hit rates return `None`, not 0.0, when nothing is decided.** "Nobody has
+  answered" and "everybody declined" are different facts.
+- **`revert(force=True)` that applies nothing is now `applied=False`** and no
+  longer marks the batch reverted. This changed a deliberately-tested
+  contract — see open questions.
 
-- **`db.transaction` nests by JOINING rather than raising.** SQLite has no
-  nested `BEGIN`. Once a batch wraps a whole writer action, inner helpers that
-  already open their own transaction (`entity_actions.py:309` RFI paste,
-  `services/merge.py`) would hit "cannot start a transaction within a
-  transaction". Implemented with a `_tx_depth` ContextVar in `db.py`: only the
-  outermost issues BEGIN/COMMIT. Rejected: auditing and unwrapping every inner
-  transaction first — far larger blast radius for the same result.
-  **Consequence:** an inner `batch=` is silently ignored. Documented on the
-  function, and covered by
-  `test_inner_batch_is_ignored_so_the_outer_action_owns_the_undo_unit`.
+## Things that did not work
 
-- **Batching defaults ON in `FormModal`, with `batch=False` to opt out.**
-  Opt-in would leave whichever call site I missed silently unbatched — exactly
-  the failure being fixed. Opt-out is the safer polarity.
+- **Batching `entity_actions.push_form` alone.** CLAUDE.md points new screens
+  at that wrapper, so it looked like the single chokepoint, and the suite went
+  green. The end-to-end test then failed: **33 call sites construct
+  `FormModal` directly**, including `ctrl+t`. The default moved into
+  `FormModal.__init__`.
+- **Hooking `App._handle_exception` for the message-handler net.** By the time
+  Textual calls it, the pump that raised has already stopped, so the app
+  "survives" with a widget that silently never processes another message —
+  worse than crashing, because it looks fine. It presented as a test hang, not
+  a pass. The catch must sit inside `_dispatch_message`.
+- **A focus gate requiring THIS table to have focus.** It broke `l`, which
+  deliberately edits the shown placement's layer while the carriers table has
+  focus. The gate is "focus is on a table", which refuses chrome without
+  breaking sibling-table flows.
+- **Trusting the audit on `i paste import`.** Two independent reviewers
+  reported it dead on three account tabs, citing a comment about the binding
+  moving to `I`. **Both were wrong** — that comment is about `D` and `P`
+  (paste RFI items); `i` is `import_here` on every tab. I edited the hints
+  before the new guard test showed they had been right all along. Reverted.
+  Two agents agreeing is not verification.
+- **`Footer.render_lines(footer.region)`** returns empty regardless of state,
+  so a test built on it passes and fails for the wrong reasons. Measure the
+  composited row instead.
+- **`show_horizontal_scrollbar` as a "footer fits" assertion.** Once the
+  overflow is hidden it is always False, so the test would have passed
+  forever. Compare content width against container width.
 
-- **A refused save now rolls back.** A `commit` callback returning an error
-  string raises `_Refused` inside the transaction, which is unwrapped back to
-  that string afterwards. The commit-in-place contract still holds (form stays
-  open, input intact) because rollback happens before the error surfaces.
-  This IS a behaviour change: previously a commit that wrote two rows then
-  returned an error left those rows behind.
+## Gotchas
 
-- **Bookkeeping fields must be declared or the write fails.** Rejected: adding
-  the three missing names and moving on, which is what the previous three
-  rounds of this bug did. `base._assert_known_field` makes the next one fail
-  loudly at the write that causes it.
-
-- **One `open_batch`, two surfaces.** Moved out of `mcpserver.py` into
-  `services/batches.py` with a `source` stamp; the MCP server delegates.
-  Rejected: a second TUI-side copy, which is how the two drifted before.
-
-## Anything tried that didn't work
-
-- **Batching `entity_actions.push_form` alone was insufficient.** CLAUDE.md
-  points new screens at that shared wrapper, so it looked like the right single
-  chokepoint, and the full suite went green after the change. The end-to-end
-  test then failed: **33 call sites construct `FormModal(...)` directly and
-  bypass `push_form` entirely** — including `ctrl+t` (`tui/app.py:112`), the
-  plainest write in the app. Fix was to move the default into
-  `FormModal.__init__`. Lesson: a green suite proved only that nothing broke,
-  not that the new behaviour engaged.
-
-- **`uv run pytest` in a fresh worktree silently runs Anaconda's pytest.**
-  The dev dependency group is not installed by a bare `uv sync`, so `uv run
-  pytest` fell through to `/opt/anaconda3/bin/python3`'s pytest, which cannot
-  import `bookkit` from the worktree venv. It presents as
-  `ModuleNotFoundError: No module named 'bookkit'` in `conftest.py`, which
-  reads like a broken editable install and is not. Fix:
-  `uv sync --group dev`, then run `uv run --no-sync python -m pytest`.
-  (`pyproject.toml:38-42` already carries a comment about a fresh worktree
-  going red for a related reason — this is a second, different trap.)
-
-- Two of my own test fixtures were wrong on first run, worth knowing:
-  `status="lapsed"` violates the org CHECK constraint (valid: prospect,
-  active, dormant, lost, declined), and `batches_repo.recent(conn)` requires a
-  `since` argument.
-
-## Gotchas / in-flight
-
-- **`main` has uncommitted RFI-state work. Do not disturb it.** It looks
-  complete (tests + updated snapshots) but is not mine to commit.
-- **Three worktrees are live**: `batch-undo` (this one), `sync-one-path`,
-  `team-crud`. Peer sessions may be active. Redirect all gate output to the
-  scratchpad, never `/tmp`.
-- **`.claude/worktrees/towerkit` is a symlink** to
-  `/Users/grantgreeson/Developer/towerkit`. That is what makes the
-  `path = "../towerkit"` dependency resolve from inside a worktree. Don't
-  delete it.
-- **`BLAST_CAP` (250) now applies to TUI writes too**, because they are
-  batched. Any TUI flow that touches more than 250 entities in one save will
-  now be refused. Nothing known does, but a cascade-style flow could.
-- **Snapshot baselines are NOT re-baselined.** Deferred deliberately until the
-  layout fixes (C3 footer, C13 book column order, C14 modal clipping) land, so
-  the diff can be read once and in context. Note the baselines currently
-  encode four known bugs — the blank footer, the truncated countdown, and the
-  missing Save button at 80x24.
-- **`forms.py` `DEFAULT_CSS` still has the C14 conflict**: `.modal-fields`
-  `max-height: 55vh` fights `.modal-box` `max-height: 80%` from
-  `bookkit.tcss:159-166`. Untouched so far.
-- The audit found **three `DuplicateID` app-kills** (search, team, markets)
-  from `OptionList` options keyed on a non-unique `org_id`, all firing from
-  message handlers that `App.run_action`'s crash net does not cover. Not yet
-  fixed; `/` then typing `ca` still kills the session on seeded data.
+- **A fresh worktree needs `uv sync --group dev`.** Without it `uv run pytest`
+  silently falls through to Anaconda's pytest, which cannot import bookkit and
+  reports `ModuleNotFoundError` from `conftest.py` — which looks exactly like
+  a broken editable install and is not. Use
+  `uv run --no-sync python -m pytest`.
+- **`.claude/worktrees/towerkit` is a symlink** to `../../towerkit`, and it is
+  what makes the `path = "../towerkit"` dependency resolve from inside a
+  worktree. Don't delete it.
+- **A green exit code does not prove the whole suite ran.** One run reported
+  621 passed with exit 0 and no skip or error line — 43 short. It never
+  reproduced across four later runs; cause unconfirmed. Compare the number
+  against `--collect-only`.
+- **`run_test()` disables notifications** unless `notifications=True`, so
+  toast assertions otherwise see an empty list and a reviewer concludes the
+  app shows no error messages at all.
+- **`BLAST_CAP` (250) now applies to TUI writes**, including merges — whose
+  bulk moves are event-logged row by row so a merge can actually be reverted.
+  A merge touching more than 250 entities will be refused. Nothing in the seed
+  comes close; a large carrier merge on real data might. `BatchState(cap=)`
+  already exists to raise it per batch.
+- **Imports stay unbatched on purpose** (their snapshot is the rollback), so
+  `u` after an import correctly reports "nothing to undo".
+- **38 snapshot baselines were re-baselined across three phases**, each render
+  read before being accepted. They no longer encode any known bug — which was
+  not true at the start of this branch.
+- Re-baselining surfaced a genuine flake: `interactions.attendees` ordered by
+  `last_name` alone, which ties for two contacts sharing a surname and then
+  falls back to random-tailed ids. Stable within a process, unstable across
+  them. Fixed with a `last_name, first_name, rowid` tiebreaker.
 
 ## Open questions for Grant
 
-- **Resolved 2026-08-15:** `u` is scoped to `source='tui'`. CLAUDE.md on the
-  branch has been updated to match.
-- **`bookctl restore` (audit G1) — this branch or its own?** Still open, and
-  now sharper: `u` after an import correctly says "nothing to undo", and the
-  only rollback is a `.bak` file the app never tells you how to use.
-- **One contract change needs your eye.** `revert(force=True)` on a fully
-  conflicted batch used to return `applied=True` with an empty `reverted`
-  list and mark the batch reverted, burning it. `applied` now means "the book
-  moved". That required editing
-  `test_user_edits_to_a_batch_created_row_block_its_revert`, which asserted
-  the old behaviour deliberately. I think the change is right —
-  `revert_batch`'s own docstring says "applied: false means nothing was
-  written" — but it is yours to overrule.
-- **Blast cap now applies to merges.** Bulk moves are event-logged row by row
-  so a merge can actually be reverted, which means a merge touching more than
-  `BLAST_CAP` (250) entities will now be refused. Nothing in the seeded book
-  comes close, but a large carrier merge on your real data might. If that
-  bites, `BatchState(cap=)` already exists to raise it per batch.
+- **The `revert(force=True)` contract change.** It used to return
+  `applied=True` with an empty `reverted` list and mark the batch reverted —
+  burning it, so the user could never put it back even after undoing their own
+  edit. `applied` now means "the book moved". That required editing
+  `test_batches_service.py::test_user_edits_to_a_batch_created_row_block_its_revert`,
+  which asserted the old behaviour on purpose. I believe the change is right
+  (`revert_batch`'s own docstring says "applied: false means nothing was
+  written"), but it is yours to overrule.
+- **Does `bookctl restore` belong on this branch or its own?** Open since the
+  start of the session.
+- **How should this branch land?** 89 uncommitted files. The phases are
+  cleanly separable and each was gated independently, so one commit per phase
+  is available if you'd rather not take it as a single lump.
