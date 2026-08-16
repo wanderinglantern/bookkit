@@ -71,8 +71,8 @@ def _status(value: str) -> Text:
 # that actually work on that tab (help lists them too)
 TAB_HINTS: dict[str, str] = {
     "tab-overview": (
-        "[b]a[/b] task · [b]e[/b] edit task/account · [b]d[/b] task done · "
-        "[b]D[/b] delete interaction · [b]w[/b] assign team · "
+        "[b]a[/b] task · [b]e[/b] edit task/team/account · [b]d[/b] task done · "
+        "[b]D[/b] delete interaction / team row · [b]w[/b] assign team · "
         "[b]i[/b] paste import · [b]u[/b] undo"
     ),
     "tab-contacts": (
@@ -247,6 +247,55 @@ class ConfirmDeleteInteraction(ModalScreen):
             yield Static("DELETE INTERACTION", classes="modal-title")
             yield Static(f"{i.occurred_on}  {_pretty(i.type)}\n{i.subject}")
             yield Static("y / enter delete · n / esc cancel · undoable with u",
+                         classes="hint")
+
+    def action_accept(self) -> None:
+        self.dismiss(True)
+
+    def action_decline(self) -> None:
+        self.dismiss(False)
+
+
+class ConfirmRemoveAssignment(ModalScreen):
+    """One look before taking a colleague off this account.
+
+    The prompt names the LINE and the SCOPE, not just the person, because one
+    colleague routinely holds several assignments here — a row per line of
+    cover, or one per placement. "Remove Rosa Delgado?" is unanswerable when
+    two of her rows are on screen; "Rosa Delgado · casualty · account" is the
+    only version you can say yes to safely."""
+
+    app: BookkitApp
+    BINDINGS = [
+        Binding("escape,n", "decline", "No"),
+        Binding("y,enter", "accept", "Yes"),
+    ]
+
+    def __init__(self, row) -> None:
+        super().__init__()
+        self.row = row
+
+    def compose(self) -> ComposeResult:
+        row = self.row
+        scope = (
+            f"{row['placement_ref']} {row['program_name']}"
+            if row["placement_ref"] else "this account"
+        )
+        detail = " · ".join(
+            part for part in (
+                _pretty(row["role"]) if row["role"] else "",
+                row["lines"] or "no lines recorded",
+                scope,
+            ) if part
+        )
+        with VerticalScroll(classes="modal-box"):
+            yield Static("REMOVE FROM TEAM", classes="modal-title")
+            yield Static(f"[b]{row['member_name']}[/b]\n{detail}")
+            yield Static(
+                "this removes the one assignment, not the colleague",
+                classes="hint",
+            )
+            yield Static("y / enter remove · n / esc cancel · undoable with u",
                          classes="hint")
 
     def action_accept(self) -> None:
@@ -1168,6 +1217,7 @@ class AccountScreen(Screen):
         "ov-interactions": "interaction",
         "ov-tasks": "task",
         "open-items-table": "task",
+        "ov-team": "team_assignment",
     }
 
     def action_delete_row(self) -> None:
@@ -1195,6 +1245,8 @@ class AccountScreen(Screen):
                 return
             if kind == "task":
                 self._drop_task(str(key))
+            elif kind == "team_assignment":
+                self._confirm_remove_assignment(str(key))
             else:
                 self._confirm_delete_interaction(str(key))
             return
@@ -1224,6 +1276,59 @@ class AccountScreen(Screen):
         interactions.delete(self.app.conn, interaction_id)
         self.notify("interaction deleted — u to undo")
         self.refresh_data()
+
+    def _assignment_row(self, assignment_id: str):
+        """The joined row behind a team table key — member name and placement
+        come from the join, so re-reading the assignment alone is not enough
+        to describe it."""
+        from ...repo import team as team_repo
+
+        return next(
+            (
+                row for row in team_repo.for_org(self.app.conn, self.current_org_id)
+                if row["id"] == assignment_id
+            ),
+            None,
+        )
+
+    def _confirm_remove_assignment(self, assignment_id: str) -> None:
+        row = self._assignment_row(assignment_id)
+        if row is None:  # key went stale under a concurrent rebuild
+            return
+        self.app.push_screen(
+            ConfirmRemoveAssignment(row),
+            lambda ok, aid=assignment_id: self._remove_assignment(aid, ok),
+        )
+
+    def _remove_assignment(self, assignment_id: str, confirmed: bool | None) -> None:
+        from ...repo import team as team_repo
+
+        if not confirmed:
+            return
+        row = self._assignment_row(assignment_id)
+        if row is None:
+            return
+        who = row["member_name"]
+        team_repo.unassign(self.app.conn, assignment_id)
+        # name the line: with several rows for one person, "removed Rosa
+        # Delgado" reads as though she came off the account entirely
+        lines = row["lines"] or "no lines"
+        self.notify(f"removed {who} ({lines}) from this team — u to undo")
+        self.refresh_data()
+
+    def _edit_assignment(self, assignment_id: str) -> None:
+        from ...repo import team as team_repo
+        from ..widgets import entity_forms as ef
+
+        conn = self.app.conn
+        try:
+            existing = team_repo.get_assignment(conn, assignment_id)
+        except KeyError:
+            return
+        self._push_form(
+            ef.assignment_form(title="edit assignment", conn=conn, existing=existing),
+            lambda v: ef.apply_assignment(conn, v, existing),
+        )
 
     def _mark_item_received(self) -> None:
         """d on the items datasheet: received, dated today — 'done' means the
@@ -1458,12 +1563,18 @@ class AccountScreen(Screen):
             # despite interactions.update() existing (review F33).
             self._edit_interaction_or_org("interactions-table")
         elif tab == "tab-overview":
+            focused_id = self.focused.id if self.focused is not None else None
             key = self._selected_key("ov-tasks")
-            if key and self.focused is not None and self.focused.id == "ov-tasks":
+            team_key = self._selected_key("ov-team")
+            if key and focused_id == "ov-tasks":
                 task = tasks_repo.get(conn, key)
                 self._push_form(
                     ef.task_form(task, conn=conn), lambda v: ef.apply_task(conn, v, existing=task)
                 )
+            elif team_key and focused_id == "ov-team":
+                # without this the team table fell through to _edit_org, so e
+                # on a colleague silently opened the ACCOUNT form (review F35)
+                self._edit_assignment(str(team_key))
             else:  # otherwise e edits the account itself
                 self._edit_org()
         elif tab == "tab-open-items":

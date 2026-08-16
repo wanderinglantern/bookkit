@@ -68,6 +68,24 @@ def assign(
     return TeamAssignment.from_row(row)  # type: ignore[arg-type]
 
 
+def get_assignment(conn: sqlite3.Connection, assignment_id: str) -> TeamAssignment:
+    row = base.get(conn, "team_assignment", assignment_id)
+    if row is None:
+        raise KeyError(f"team assignment {assignment_id} not found")
+    return TeamAssignment.from_row(row)
+
+
+def update_assignment(
+    conn: sqlite3.Connection, assignment_id: str, note: str | None = None,
+    **changes: Any,
+) -> TeamAssignment:
+    """Correct an assignment in place — role, lines, notes. Deliberately not
+    org_id/placement_id: re-scoping moves a colleague between clients, which
+    is unassign + assign, not an edit (same rule the MCP edit_field follows)."""
+    base.update(conn, "team_assignment", assignment_id, changes, note)
+    return get_assignment(conn, assignment_id)
+
+
 def unassign(conn: sqlite3.Connection, assignment_id: str) -> None:
     base.soft_delete(conn, "team_assignment", assignment_id)
 

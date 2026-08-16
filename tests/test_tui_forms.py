@@ -8,7 +8,8 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-from textual.widgets import Input, Select, TabbedContent
+from textual.coordinate import Coordinate
+from textual.widgets import Input, Select, Static, TabbedContent
 
 from bookkit import db, seed
 from bookkit.repo import contacts, orgs, placements, submissions
@@ -316,3 +317,161 @@ async def test_assign_unknown_member_creates_inline(seeded_db: Path) -> None:
         new_member = next(m for m in members if m.name == "Priya Nair")
         assignments = team_repo.for_org(app.conn, org.id)
         assert any(a["team_member_id"] == new_member.id for a in assignments)
+
+
+# --- team assignments on the account overview ---------------------------------
+#
+# One colleague can hold several assignments on the same account — one row per
+# line of cover or per placement (the MCP side asserts the same in
+# test_mcpserver.py). So every one of these flows has to act on the ASSIGNMENT
+# under the cursor, never on "the member", or Grant's two-row case (a blank
+# `lines` row plus a "casualty" row) becomes unfixable from the TUI.
+
+
+async def _team_rows(app) -> dict[str, int]:
+    """assignment_id → row index, so a test never depends on sort order between
+    two assignments that share a member and a scope."""
+    table = app.screen.query_one("#ov-team", ListTable)
+    return {
+        table.coordinate_to_cell_key(Coordinate(row, 0)).row_key.value: row
+        for row in range(table.row_count)
+    }
+
+
+async def _focus_team_row(pilot, app, assignment_id: str) -> None:
+    table = app.screen.query_one("#ov-team", ListTable)
+    table.focus()
+    await pilot.pause()
+    table.cursor_coordinate = Coordinate((await _team_rows(app))[assignment_id], 0)
+    await pilot.pause()
+
+
+@pytest.fixture
+def two_assignments(seeded_db: Path):
+    """One member, two account-level assignments: a blank-lines row and a
+    casualty row — the shape Grant hit."""
+    from bookkit.repo import team as team_repo
+
+    conn = db.connect(seeded_db)
+    org = orgs.find_by_name(conn, "Atomic Industries, Inc.")
+    member = team_repo.create_member(conn, "Rosa Delgado")
+    blank = team_repo.assign(conn, member.id, org_id=org.id)
+    casualty = team_repo.assign(conn, member.id, org_id=org.id, lines="casualty")
+    conn.close()
+    return seeded_db, org, member, blank, casualty
+
+
+async def test_removing_one_assignment_leaves_the_member_s_others(two_assignments) -> None:
+    """D on the team table removes the row under the cursor and nothing else:
+    the member keeps their other assignment and stays on the roster."""
+    from bookkit.repo import team as team_repo
+
+    path, org, member, blank, casualty = two_assignments
+    app = BookkitApp(path)
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await _focus_team_row(pilot, app, casualty.id)
+
+        await pilot.press("D")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+
+        surviving = {r["id"] for r in team_repo.for_org(app.conn, org.id)}
+        assert casualty.id not in surviving
+        assert blank.id in surviving
+        # removing an assignment is not retiring a colleague
+        assert any(m.id == member.id for m in team_repo.list_members(app.conn))
+
+
+async def test_remove_confirm_names_the_line_so_two_rows_are_telling_apart(
+    two_assignments,
+) -> None:
+    """With two rows for one person, 'remove Rosa Delgado?' is unanswerable —
+    the prompt has to carry the line and the scope."""
+    path, org, _member, _blank, casualty = two_assignments
+    app = BookkitApp(path)
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await _focus_team_row(pilot, app, casualty.id)
+        await pilot.press("D")
+        await pilot.pause()
+
+        prompt = " ".join(
+            str(s.render()) for s in app.screen.query(Static)
+        )
+        assert "Rosa Delgado" in prompt
+        assert "casualty" in prompt
+
+
+async def test_edit_assignment_fills_in_the_blank_lines_row(two_assignments) -> None:
+    """e on a team row edits THAT assignment's role/lines/notes — the direct
+    fix for a row assigned with no lines."""
+    from bookkit.repo import team as team_repo
+
+    path, org, _member, blank, casualty = two_assignments
+    app = BookkitApp(path)
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await _focus_team_row(pilot, app, blank.id)
+
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        # the member is already known — the form must not offer to re-pick them
+        assert not app.screen.query("#form-team_member_id")
+        await _fill(pilot, app, "lines", "property")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        rows = {r["id"]: r for r in team_repo.for_org(app.conn, org.id)}
+        assert rows[blank.id]["lines"] == "property"
+        assert rows[casualty.id]["lines"] == "casualty"  # sibling untouched
+
+
+async def test_edit_assignment_never_re_scopes_it(two_assignments) -> None:
+    """Correcting an assignment must not move it between clients — re-scoping
+    is unassign+assign, deliberately not an edit (CLAUDE.md)."""
+    from bookkit.repo import team as team_repo
+
+    path, org, _member, blank, _casualty = two_assignments
+    app = BookkitApp(path)
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await _focus_team_row(pilot, app, blank.id)
+        await pilot.press("e")
+        await pilot.pause()
+
+        for forbidden in ("#form-client", "#form-placement_ref", "#form-org_id"):
+            assert not app.screen.query(forbidden)
+
+        await pilot.press("escape")
+        await pilot.pause()
+        row = {r["id"]: r for r in team_repo.for_org(app.conn, org.id)}[blank.id]
+        assert row["org_id"] == org.id
+        assert row["placement_id"] is None
+
+
+async def test_removed_assignment_comes_back_with_u(two_assignments) -> None:
+    """Soft delete + event log, so the screen's undo restores it."""
+    from bookkit.repo import team as team_repo
+
+    path, org, _member, _blank, casualty = two_assignments
+    app = BookkitApp(path)
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await _focus_team_row(pilot, app, casualty.id)
+        await pilot.press("D")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        assert casualty.id not in {r["id"] for r in team_repo.for_org(app.conn, org.id)}
+
+        await pilot.press("u")
+        await pilot.pause()
+        assert casualty.id in {r["id"] for r in team_repo.for_org(app.conn, org.id)}
