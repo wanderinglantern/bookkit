@@ -18,6 +18,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, Input, Static
 
 from ...repo import interactions, orgs
+from ...repo import placements as placements_repo
 from ...services import renewals
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
@@ -89,23 +90,36 @@ class BookScreen(Screen):
         table = self.query_one("#book-table", ListTable)
         table.clear(columns=True)
         table.add_columns(
-            "ref", "account", "owner", "status", "next renewal",
-            right("days"), right("premium"), "last touch",
+            "ref", "account", "owner", "status", "renews",
+            right("days"), right("bound"), "last touch",
         )
         for org in orgs.list_orgs(conn, kind="client"):
             if filter_text and not _matches(org, filter_text):
                 continue
             nxt_item = renewals.next_for_org(conn, org.id, today)
             last = interactions.last_for_org(conn, org.id)
+            # the ACCOUNT's bound premium, not whichever placement renews
+            # next: that printed one placement's number as the whole account's
+            # and mixed bound with unbound, so an account with $15.6M across
+            # two bound placements read $8M and one with nothing bound read
+            # $900K — neither reconcilable with the navigator's bound-only
+            # headline. Same rule as the account header.
+            bound = [
+                p for p in placements_repo.for_org(conn, org.id)
+                if p.status == "bound"
+            ]
+            premium_cell: Text = money_text(
+                sum(p.total_premium or 0 for p in bound) if bound else None
+            )
             if nxt_item is None:
                 renewal_cell: Text = dash()
                 days_cell: Text = Text("—", style=theme.DIM, justify="right")
-                premium_cell: Text = money_text(None)
             else:
-                nxt = nxt_item.placement
-                renewal_cell = date_text(nxt.period_to, nxt_item.days_remaining)
+                renewal_cell = date_text(
+                    nxt_item.renewal_on or nxt_item.placement.period_to,
+                    nxt_item.days_remaining,
+                )
                 days_cell = days_text(nxt_item.days_remaining)
-                premium_cell = money_text(nxt.total_premium)
             table.add_row(
                 Text(org.ref, style=theme.DIM),
                 org.name,

@@ -56,11 +56,19 @@ def for_org(conn: sqlite3.Connection, org_id: str, limit: int = 200) -> list[Int
 
 
 def reassign_org(conn: sqlite3.Connection, from_org_id: str, to_org_id: str) -> int:
-    """Bulk move for org merges; the service logs the event."""
-    cur = conn.execute(
-        "UPDATE interaction SET org_id = ? WHERE org_id = ?", (to_org_id, from_org_id)
-    )
-    return cur.rowcount
+    """Move every row to the survivor on a merge."""
+    # Row by row through base.update, not one bulk UPDATE: the move is a
+    # field change like any other and must land in the event log, or the
+    # merge cannot be reverted — the record would come back while the rows
+    # that moved stayed moved. Same rule as rfi.reassign_market.
+    rows = conn.execute(
+        f"""SELECT id FROM interaction
+            WHERE org_id = ? AND {base.alive()}""",
+        (from_org_id,),
+    ).fetchall()
+    for row in rows:
+        base.update(conn, "interaction", row[0], {"org_id": to_org_id}, "market merged")
+    return len(rows)
 
 
 def attendees(conn: sqlite3.Connection, interaction_id: str) -> list[Contact]:
@@ -69,7 +77,7 @@ def attendees(conn: sqlite3.Connection, interaction_id: str) -> list[Contact]:
         SELECT c.* FROM contact c
         JOIN interaction_contact ic ON ic.contact_id = c.id
         WHERE ic.interaction_id = ? AND {base.alive('c')}
-        ORDER BY c.last_name
+        ORDER BY c.last_name, c.first_name, c.rowid
         """,
         (interaction_id,),
     ).fetchall()

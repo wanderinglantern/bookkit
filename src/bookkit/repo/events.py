@@ -66,11 +66,26 @@ def stage_entry_count(conn: sqlite3.Connection, stage: str) -> int:
     return int(row[0])
 
 
-# event_log fields that are BOOKKEEPING, not mutations: 'created' marks a
-# row's birth (undone by deleting, not reverting), 'source' is the MCP
-# provenance stamp with no column behind it. One list, two consumers —
-# last_mutation here and SKIP_FIELDS in services/batches.py.
-NON_MUTATION_FIELDS = ("created", "source")
+# event_log fields that are BOOKKEEPING, not mutations — none of them has a
+# column behind it, so undo must never try to write one back:
+#   created       a row's birth (undone by deleting, not reverting)
+#   source        the MCP provenance stamp
+#   import        importers' provenance (source file + sha256)
+#   carrier_alias repo/aliases' UPSERT marker on the market org
+#   merged_from   services/merge's record of what was folded in
+# The last three were missing, which is why `u` raised IndexError straight
+# after any import, any alias write and any merge. base._assert_known_field
+# now refuses at WRITE time for anything not listed here or a real column, so
+# the next one fails loudly instead of arriving as a mystery undo crash.
+# One list, two consumers — last_mutation here and SKIP_FIELDS in
+# services/batches.py.
+NON_MUTATION_FIELDS = (
+    "created",
+    "source",
+    "import",
+    "carrier_alias",
+    "merged_from",
+)
 
 
 def last_mutation(conn: sqlite3.Connection) -> EventLogEntry | None:

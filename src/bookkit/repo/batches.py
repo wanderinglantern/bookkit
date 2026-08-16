@@ -89,6 +89,22 @@ def external_change_count(
     return int(row[0])
 
 
+def last_undoable(conn: sqlite3.Connection, source: str) -> EventBatch | None:
+    """The newest batch this surface wrote that has not been reverted yet.
+
+    Scoped by `source` on purpose: `u` is the TUI's undo and must never reach
+    an assistant batch (that is what `R` on the changes table is for) or a
+    machine write. Ordered by rowid, matching the event_log ordering rule —
+    created_at has second precision, so two batches inside one second would
+    otherwise come back in an arbitrary order."""
+    row = conn.execute(
+        "SELECT * FROM event_batch WHERE source = ? AND reverted_at IS NULL"
+        " ORDER BY rowid DESC LIMIT 1",
+        (source,),
+    ).fetchone()
+    return EventBatch.from_row(row) if row else None
+
+
 def mark_reverted(conn: sqlite3.Connection, batch_id: str, at: str) -> None:
     conn.execute(
         "UPDATE event_batch SET reverted_at = ? WHERE id = ?", (at, batch_id)

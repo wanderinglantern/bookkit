@@ -24,6 +24,10 @@ class BookkitApp(App):
         Binding("slash", "global_search", "Search", key_display="/"),
         Binding("n", "quick_capture", "Log interaction"),
         Binding("ctrl+t", "new_task", "Task", priority=True),
+        # help.py lists u under "everywhere", and it was bound per screen —
+        # Calendar, Markets, Team and Onboarding never got it. show=False so
+        # the screens that DO name it in their footer stay the ones that do.
+        Binding("u", "undo_last", "Undo", show=False),
         Binding("question_mark", "help", "Help", key_display="?"),
         Binding("ctrl+q", "quit", "Quit", priority=True),
     ]
@@ -116,6 +120,12 @@ class BookkitApp(App):
             done,
         )
 
+    def action_undo_last(self) -> None:
+        self.show_undo_result()
+        refresh = getattr(self.screen, "refresh_data", None)
+        if refresh is not None:
+            refresh()
+
     def action_help(self) -> None:
         from .screens.help import HelpScreen
 
@@ -166,9 +176,11 @@ class BookkitApp(App):
         per-site try/except guards remain the graceful path; this is the net
         under the ones nobody thought of.
 
-        NB this covers actions, not message handlers: something raised from an
-        `on_data_table_row_highlighted` still reaches Textual's fatal path.
-        Those are where the existing stale-key guards live, and they stay."""
+        This covers actions. Message handlers are covered separately by
+        `_guard_message_dispatch` at the bottom of this module — they used to
+        reach Textual's fatal path, which is how three DuplicateID bugs killed
+        whole sessions. The per-site stale-key guards remain the graceful path
+        for both."""
         try:
             return await super().run_action(action, default_namespace, namespaces)
         except Exception as exc:  # noqa: BLE001 — the point is to catch anything
@@ -244,9 +256,57 @@ class BookkitApp(App):
         result = undo.undo_last(self.conn)
         if result is None:
             self.notify("nothing to undo", severity="warning")
+        elif not result.applied:
+            # a refusal is not a failure to report quietly: it names the field
+            # that blocks it so the user's next move is obvious
+            self.notify(result.description, severity="warning", timeout=10)
         else:
-            self.notify(f"undid {result.description}")
+            self.notify(result.description)
 
 
 def run(db_path: Path | str | None = None) -> None:
     BookkitApp(db_path).run()
+
+
+_DISPATCH_GUARDED = False
+
+
+def _guard_message_dispatch() -> None:
+    """Make a raising message handler non-fatal, app-wide.
+
+    `App.run_action` is the net under ACTIONS. Message handlers had none, and
+    that is how three separate DuplicateID bugs — an OptionList keyed on a
+    non-unique org_id, in search, team and market exposure — took whole
+    sessions down: screen stack, open forms, the quick-capture draft.
+
+    The catch has to sit INSIDE `_dispatch_message`, not in
+    `App._handle_exception`. By the time Textual calls the latter, the pump
+    that raised has already stopped, so the app survives with a widget that
+    silently never processes another message again — worse than crashing,
+    because it looks fine. Catching at dispatch keeps the loop alive.
+
+    Patched once, at import, because the guard has to cover every MessagePump
+    (screens, widgets, the app), not a base class we happen to own."""
+    global _DISPATCH_GUARDED
+    from textual.message_pump import MessagePump
+
+    if _DISPATCH_GUARDED:
+        return
+    original = MessagePump._dispatch_message
+
+    async def guarded(self, message):
+        try:
+            return await original(self, message)
+        except Exception as exc:  # noqa: BLE001 — the point is to catch anything
+            app = getattr(self, "app", None)
+            report = getattr(app, "_report_action_failure", None)
+            if report is None:
+                raise
+            report(f"handling {type(message).__name__}", exc)
+            return None
+
+    MessagePump._dispatch_message = guarded  # type: ignore[method-assign]
+    _DISPATCH_GUARDED = True
+
+
+_guard_message_dispatch()

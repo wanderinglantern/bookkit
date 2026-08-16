@@ -110,7 +110,16 @@ def check(db_override: Path | str | None = None) -> CheckReport:
 
 
 def fields(db_override: Path | str | None = None) -> ConnectorFields:
-    resolved = Path(db_override) if db_override else db.default_db_path()
+    # .resolve() for the same reason `command` is absolute: the connector is
+    # launched by a GUI app that inherits no shell environment and no useful
+    # cwd. A relative --db here fails SILENTLY, because build_server creates
+    # the file on connect — the connector starts clean and reports an empty
+    # book.
+    resolved = (
+        Path(db_override).expanduser().resolve()
+        if db_override
+        else db.default_db_path()
+    )
     inherited = db.default_db_path(env={})
     arguments = ["mcp"] if resolved == inherited else ["--db", str(resolved), "mcp"]
     return ConnectorFields(

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..app import BookkitApp
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
@@ -50,7 +51,12 @@ class ImportScreen(ModalScreen):
                 "tip: bookctl template book book.xlsx writes a fill-in template",
                 classes="hint",
             )
-            yield Static("", id="import-preview")
+            # the verdict sits OUTSIDE the scroller: a clipped pane used to
+            # hide "ERRORS — cannot commit", which is the only line that
+            # decides what happens next
+            yield Static("", id="import-verdict")
+            with VerticalScroll(id="import-preview"):
+                yield Static("", id="import-preview-body")
             yield Static("enter previews · ctrl+s commits · esc cancels", classes="hint")
 
     def on_mount(self) -> None:
@@ -58,12 +64,13 @@ class ImportScreen(ModalScreen):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         path = Path(event.value).expanduser()
-        preview = self.query_one("#import-preview", Static)
+        preview = self.query_one("#import-preview-body", Static)
         self._staged = None
         try:
             table = read_table(path)
         except (ValueError, OSError) as exc:
             preview.update(str(exc))
+            self._set_verdict("cannot read that file")
             return
         from rich.text import Text
 
@@ -71,6 +78,15 @@ class ImportScreen(ModalScreen):
         self._staged = stage_book(self.app.conn, table, mapping)
         self._staged_path = path
         preview.update(Text(self._staged.report()))
+        self._set_verdict(self._staged.verdict(), ok=self._staged.ok)
+
+    def _set_verdict(self, text: str, ok: bool = False) -> None:
+        from ... import tui
+
+        style = tui.theme.GREEN if ok else tui.theme.RED
+        self.query_one("#import-verdict", Static).update(
+            Text(text, style=f"bold {style}")
+        )
 
     def action_commit(self) -> None:
         from ...imports.commit import commit_book

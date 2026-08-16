@@ -43,7 +43,13 @@ class PasteImportModal(ModalScreen):
         with VerticalScroll(classes="modal-box"):
             yield Static(self._title.upper(), classes="modal-title")
             yield TextArea(id="paste-text")
-            yield Static("", id="paste-preview")
+            # verdict outside the scroller — the renewal paste's own safety
+            # line ("committing would renew with the OLD terms and silently
+            # drop everything pasted") is the LAST line report() emits, and
+            # was the first thing a clipped pane hid
+            yield Static("", id="paste-verdict")
+            with VerticalScroll(id="paste-preview"):
+                yield Static("", id="paste-preview-body")
             yield Static(
                 "ctrl+s previews, ctrl+s again commits · ctrl+r re-previews · esc cancels",
                 classes="hint",
@@ -67,8 +73,19 @@ class PasteImportModal(ModalScreen):
         self._staged_text = text
         # verbose: show every parsed field — the point of previewing a paste.
         # Text() keeps pasted brackets from being eaten as Rich markup.
-        self.query_one("#paste-preview", Static).update(
+        self.query_one("#paste-preview-body", Static).update(
             Text(self._staged.report(verbose=True))
+        )
+        self._set_verdict(self._staged.verdict(), ok=self._staged.ok)
+
+    def _set_verdict(self, text: str, ok: bool = False) -> None:
+        from rich.text import Text
+
+        from .. import theme
+
+        style = theme.GREEN if ok else theme.RED
+        self.query_one("#paste-verdict", Static).update(
+            Text(text, style=f"bold {style}")
         )
 
     def action_commit(self) -> None:

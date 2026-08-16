@@ -19,7 +19,7 @@ from .repo import tasks as tasks_repo
 from .services import renewals, sla, staleness
 
 
-def main(argv: list[str] | None = None) -> int:
+def _run(argv: list[str] | None) -> int:
     parser = argparse.ArgumentParser(prog="bookctl", description=__doc__)
     parser.add_argument("--db", type=Path, default=None, help="database path override")
     sub = parser.add_subparsers(dest="command")
@@ -28,7 +28,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("migrate", help="apply pending migrations")
 
     seed_p = sub.add_parser("seed", help="load the demo fixture")
-    seed_p.add_argument("--demo", action="store_true", required=True)
+    seed_p.add_argument("--demo", action="store_true", required=True,
+                        help="load the demo fixture (the only mode there is)")
+    seed_p.add_argument("--force", action="store_true",
+                        help="seed a book that already has accounts — takes a "
+                             "backup first")
     seed_p.add_argument("--programs-dir", type=Path, default=None,
                         help="also write three linked towerkit program files here")
 
@@ -82,6 +86,10 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
+    guard = _refuse_a_missing_book(args)
+    if guard is not None:
+        return guard
+
     if args.command is None:
         from .tui.app import BookkitApp
 
@@ -123,6 +131,62 @@ def main(argv: list[str] | None = None) -> int:
         conn.close()
 
 
+# Commands that only READ. db.connect creates the file on demand, so without
+# this a typo in --db (or a wrong $BOOKKIT_DB, or the wrong machine) produced
+# a cheerful all-zeros brief and exit 0 — indistinguishable from a quiet book,
+# and it left an empty database behind. Creation belongs to init/migrate/seed.
+READ_ONLY_COMMANDS = frozenset(
+    {"today", "renewals", "search", "export", "open"}
+)
+
+
+def _refuse_a_missing_book(args: argparse.Namespace) -> int | None:
+    if args.command not in READ_ONLY_COMMANDS:
+        return None
+    path = Path(args.db) if args.db else db.default_db_path()
+    if path.exists():
+        return None
+    print(
+        f"no book at {path} — run `bookctl init` to create one",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Thin wrapper: `_run` does the work, this makes a failure legible.
+
+    argparse still exits 2 on usage errors. What this catches is everything
+    below it — a --db pointing at a text file, a read-only filesystem, a
+    backup destination that already exists. Each of those used to reach the
+    terminal as a raw traceback, and a typo'd --db is a routine mistake, not
+    a crash."""
+    # sys.argv when called from the entry point, or the hint below names the
+    # DEFAULT database while the failure is about the --db you passed —
+    # misleading in exactly the message meant to clear that up
+    argv = list(sys.argv[1:]) if argv is None else argv
+    try:
+        return _run(argv)
+    except (sqlite3.DatabaseError, OSError, ValueError) as exc:
+        path = _db_hint(argv)
+        where = f" ({path})" if path else ""
+        print(f"bookctl: {exc}{where}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+def _db_hint(argv: list[str] | None) -> str:
+    """Which database the failure is about — the single most useful thing to
+    add, because the usual cause is that it is not the one you meant."""
+    try:
+        if argv and "--db" in argv:
+            return str(Path(argv[argv.index("--db") + 1]))
+        return str(db.default_db_path())
+    except (IndexError, ValueError):
+        return ""
+
+
 def resolve_org(conn: sqlite3.Connection, who: str) -> Org | None:
     """Find one account by ref or by name. An exact ref wins outright; a name
     goes through the same fuzzy matcher the book filter uses, so
@@ -160,8 +224,29 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
         return 0
 
     if args.command == "seed":
+        from .repo import orgs as orgs_repo
         from .seed import seed
 
+        # $BOOKKIT_DB defaults to the REAL book and this command is in the
+        # README quick start, so an unguarded seed interleaves 35 fake
+        # accounts and 200 fake interactions into live data. The rows carry
+        # no provenance and are not a batch, so they cannot be cleanly
+        # removed afterwards — refusing is the only cheap undo.
+        path = args.db or db.default_db_path()
+        existing = len(orgs_repo.list_orgs(conn))
+        if existing and not args.force:
+            print(
+                f"{path} already has {existing} accounts — refusing to seed "
+                f"demo data into a book in use.\n"
+                f"  pass --force to seed anyway (a backup is taken first), "
+                f"or point --db at a scratch file.",
+                file=sys.stderr,
+            )
+            return 2
+        if existing:
+            made = db.snapshot(conn, Path(path))
+            print(f"backed up {existing} accounts to {made}")
+        print(f"seeding demo data into {path}")
         counts = seed(conn, programs_dir=args.programs_dir)
         print("seeded: " + ", ".join(f"{v} {k}" for k, v in counts.items()))
         return 0
@@ -234,10 +319,15 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
         if args.paths:
             missing = [p for p in args.paths if not p.expanduser().is_dir()]
             if missing:
-                print(f"not a directory: {missing[0]}")
+                # stderr, so `roots --json` stdout stays parseable on the
+                # error path too — towerctl json.loads() it either way
+                print(f"not a directory: {missing[0]}", file=sys.stderr)
                 return 2
+            # .resolve(), not just .expanduser(): a relative root validates
+            # against the CURRENT cwd and then means nothing from anywhere
+            # else, including inside towerctl's own process
             settings_repo.set_program_roots(
-                conn, [str(p.expanduser()) for p in args.paths]
+                conn, [str(p.expanduser().resolve()) for p in args.paths]
             )
         roots = sync.configured_roots(conn)
         if args.json:

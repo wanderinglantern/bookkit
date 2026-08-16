@@ -52,6 +52,42 @@ def raw_row(
     return row
 
 
+_columns_cache: dict[str, frozenset[str]] = {}
+
+
+def _columns(conn: sqlite3.Connection, entity_type: str) -> frozenset[str]:
+    cached = _columns_cache.get(entity_type)
+    if cached is None:
+        table = ENTITY_TABLES[entity_type]
+        cached = frozenset(
+            str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})")
+        )
+        _columns_cache[entity_type] = cached
+    return cached
+
+
+def _assert_known_field(
+    conn: sqlite3.Connection, entity_type: str, field: str
+) -> None:
+    """An event's field must be a real column, or declared bookkeeping.
+
+    Undo reads event_log back and writes `field` to that column, so an event
+    naming something the table does not have is a landmine that only goes off
+    when a user presses `u` — as IndexError, days later, on an unrelated
+    record. That shipped three times ('source', then 'import', then
+    'carrier_alias'/'merged_from'), each time fixed one name at a time. This
+    turns the whole class into an immediate, loud failure at the write that
+    causes it: declare the name in NON_MUTATION_FIELDS or use a real column."""
+    from .events import NON_MUTATION_FIELDS
+
+    if field in NON_MUTATION_FIELDS or field in _columns(conn, entity_type):
+        return
+    raise ValueError(
+        f"event_log field {field!r} is neither a column of {entity_type!r} nor "
+        f"declared in events.NON_MUTATION_FIELDS — undo would fail on it later"
+    )
+
+
 def log_event(
     conn: sqlite3.Connection,
     entity_type: str,
@@ -63,6 +99,7 @@ def log_event(
 ) -> None:
     from .. import db  # function-level: db imports nothing from repo, but keep the seam thin
 
+    _assert_known_field(conn, entity_type, field)
     batch = db.current_batch()
     if batch is not None:
         batch.touch(entity_id)

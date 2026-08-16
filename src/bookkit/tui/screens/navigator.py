@@ -33,6 +33,7 @@ from ...repo import tasks as tasks_repo
 from ...services import book, renewals, sla
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
+from ..widgets.entity_actions import batched_write as _batched
 from ..widgets.forms import Field
 from ..widgets.inline_edit import InlineTable
 from ..widgets.tables import (
@@ -230,13 +231,22 @@ class BatchDetail(ModalScreen):
 class NavigatorScreen(Screen):
     app: BookkitApp
     BINDINGS = [
-        Binding("t", "open_today", "Today"),
-        Binding("b", "open_book", "Book"),
-        Binding("c", "open_calendar", "Calendar"),
-        Binding("p", "open_pipeline", "Pipeline"),
-        Binding("m", "open_markets", "Markets"),
-        Binding("w", "open_team", "Team"),
-        Binding("comma", "settings", "Setup", key_display=","),
+        # screen jumps live in the palette and in ? — the footer is one
+        # row and the ROW ACTIONS are what a user needs named there
+        # the glance card says "j/k move" and help.py teaches j/k as THE
+        # movement keys; they were bound on ListTable only, and the card
+        # renders while the TREE has focus — so the first guidance the app
+        # ever showed was wrong. Cheaper to make them real than to withdraw
+        # the promise, and it makes vim movement uniform.
+        Binding("j", "tree_down", "Down", show=False),
+        Binding("k", "tree_up", "Up", show=False),
+        Binding("t", "open_today", "Today", show=False),
+        Binding("b", "open_book", "Book", show=False),
+        Binding("c", "open_calendar", "Calendar", show=False),
+        Binding("p", "open_pipeline", "Pipeline", show=False),
+        Binding("m", "open_markets", "Markets", show=False),
+        Binding("w", "open_team", "Team", show=False),
+        Binding("comma", "settings", "Setup", key_display=",", show=False),
         Binding("a", "add_row", "Add", show=False),
         Binding("e", "edit_row", "Edit", show=False),
         Binding("d", "task_done", "Done (task)", show=False),
@@ -878,18 +888,30 @@ class NavigatorScreen(Screen):
 
     # -- table row context -------------------------------------------------------
 
-    def _selected_row(self) -> tuple[str, str] | None:
+    def _selected_row(self, quiet: bool = False) -> tuple[str, str] | None:
+        """The row under the cursor, or None with a reason said out loud.
+
+        Row actions require the TABLE to hold focus — pressing e/d/r/l while
+        browsing the tree must never mutate a row the user isn't looking at.
+        The gate is right; returning in SILENCE was the bug. Six of seven row
+        actions produced no modal, no message and no change, which is
+        indistinguishable from a broken app, and the hint line lists those
+        keys on the same screen. `quiet=True` is for callers that already
+        have a better message."""
         from textual.coordinate import Coordinate
 
         table = self.query_one("#nav-table", ListTable)
-        # row actions require the TABLE to hold focus — pressing e/d/r/l while
-        # browsing the tree must never mutate a row the user isn't looking at
-        if (
-            not table.display
-            or not table.has_focus
-            or table.cursor_row is None
-            or table.row_count == 0
-        ):
+        if not table.display or table.row_count == 0:
+            if not quiet:
+                self.notify("nothing to act on here", severity="warning")
+            return None
+        if not table.has_focus:
+            if not quiet:
+                self.notify(
+                    "press tab or enter to work the rows first", severity="warning"
+                )
+            return None
+        if table.cursor_row is None:
             return None
         value = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
         if not value:
@@ -966,9 +988,19 @@ class NavigatorScreen(Screen):
         kind, _, entity_id = event.row_key.partition(":")
         conn = self.app.conn
         if kind == "contact":
-            contacts.update(conn, entity_id, **{event.field.key: event.value})
+            with _batched(
+                self, tool="inline_edit", summary=f"edited contact {event.field.key}"
+            ):
+                contacts.update(
+                    conn, entity_id, **{event.field.key: event.value}
+                )
         elif kind == "task":
-            tasks_repo.update(conn, entity_id, **{event.field.key: event.value})
+            with _batched(
+                self, tool="inline_edit", summary=f"edited task {event.field.key}"
+            ):
+                tasks_repo.update(
+                    conn, entity_id, **{event.field.key: event.value}
+                )
         else:
             return
         self.notify(f"{event.field.label} saved — u undoes")
@@ -981,12 +1013,33 @@ class NavigatorScreen(Screen):
 
     # -- row actions ---------------------------------------------------------------
 
+    def action_tree_down(self) -> None:
+        self._move_tree(1)
+
+    def action_tree_up(self) -> None:
+        self._move_tree(-1)
+
+    def _move_tree(self, delta: int) -> None:
+        from textual.widgets import Tree
+
+        tree = self.query_one("#nav-tree", Tree)
+        if not tree.has_focus:
+            return          # j/k belong to whichever widget holds focus
+        tree.action_cursor_down() if delta > 0 else tree.action_cursor_up()
+
     def action_add_row(self) -> None:
         from ..widgets import entity_actions
         from ..widgets import entity_forms as ef
 
         kind, payload = self._current
         if kind != "group":
+            # `a` is listed in the hint on attention tables that have no
+            # account to hang a new row on, so it looked broken rather than
+            # inapplicable
+            self.notify(
+                "a adds to an account's group — open a client first",
+                severity="warning",
+            )
             return
         group, org_id = payload
         conn = self.app.conn
@@ -1066,7 +1119,8 @@ class NavigatorScreen(Screen):
         row = self._selected_row()
         if row is None or row[0] != "task":
             return
-        tasks_repo.complete(self.app.conn, row[1])
+        with _batched(self, tool="task_done", summary="completed a task"):
+            tasks_repo.complete(self.app.conn, row[1])
         self.notify("task done — u to undo")
         self.refresh_data()
 
@@ -1079,7 +1133,8 @@ class NavigatorScreen(Screen):
             task = tasks_repo.get(self.app.conn, row[1])
         except KeyError:  # stale row key after a rebuild
             return
-        tasks_repo.drop(self.app.conn, row[1])
+        with _batched(self, tool="task_drop", summary="dropped a task"):
+            tasks_repo.drop(self.app.conn, row[1])
         self.notify(f"dropped {task.title!r} — u to undo")
         self.refresh_data()
 
@@ -1235,6 +1290,14 @@ class NavigatorScreen(Screen):
             return
         except KeyError:
             self.notify("that change no longer exists")
+            self.refresh_data()
+            return
+        except ValueError as exc:
+            # a program_* batch wrote a towerkit FILE; services/batches refuses
+            # with a message naming the right tool. It used to escape through
+            # this dismiss callback — which run_action never covered — and take
+            # the whole session down with a traceback.
+            self.notify(str(exc), severity="error", timeout=12)
             self.refresh_data()
             return
         if result.applied:

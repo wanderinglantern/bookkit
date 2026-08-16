@@ -84,20 +84,35 @@ def outstanding(conn: sqlite3.Connection, sent_on_or_before: str | None = None) 
 
 
 def reassign_market(conn: sqlite3.Connection, from_org_id: str, to_org_id: str) -> int:
-    """Bulk move for market merges; the service logs the event."""
-    cur = conn.execute(
-        "UPDATE submission SET market_org_id = ? WHERE market_org_id = ?",
-        (to_org_id, from_org_id),
-    )
-    return cur.rowcount
+    """Move every row to the surviving market on a merge."""
+    # Row by row through base.update, not one bulk UPDATE: the move is a
+    # field change like any other and must land in the event log, or the
+    # merge cannot be reverted — the record would come back while the rows
+    # that moved stayed moved. Same rule as rfi.reassign_market.
+    rows = conn.execute(
+        f"""SELECT id FROM submission
+            WHERE market_org_id = ? AND {base.alive()}""",
+        (from_org_id,),
+    ).fetchall()
+    for row in rows:
+        base.update(conn, "submission", row[0], {"market_org_id": to_org_id}, "market merged")
+    return len(rows)
 
 
 def reassign_placement(conn: sqlite3.Connection, from_id: str, to_id: str) -> int:
-    """Bulk move for placement merges; the service logs the event."""
-    cur = conn.execute(
-        "UPDATE submission SET placement_id = ? WHERE placement_id = ?", (to_id, from_id)
-    )
-    return cur.rowcount
+    """Move every row to the surviving placement on a merge."""
+    # Row by row through base.update, not one bulk UPDATE: the move is a
+    # field change like any other and must land in the event log, or the
+    # merge cannot be reverted — the record would come back while the rows
+    # that moved stayed moved. Same rule as rfi.reassign_market.
+    rows = conn.execute(
+        f"""SELECT id FROM submission
+            WHERE placement_id = ? AND {base.alive()}""",
+        (from_id,),
+    ).fetchall()
+    for row in rows:
+        base.update(conn, "submission", row[0], {"placement_id": to_id}, "placement merged")
+    return len(rows)
 
 
 def outstanding_for_org(conn: sqlite3.Connection, org_id: str) -> list[sqlite3.Row]:
@@ -141,6 +156,8 @@ def market_counts(
         f"""
         SELECT s.market_org_id, o.name AS market_name,
                COUNT(*) AS sent,
+               SUM(CASE WHEN s.status IN ('quoted', 'bound', 'declined')
+                        THEN 1 ELSE 0 END) AS decided,
                SUM(CASE WHEN s.status IN ('quoted', 'bound') THEN 1 ELSE 0 END) AS quoted,
                SUM(CASE WHEN s.status = 'bound' THEN 1 ELSE 0 END) AS bound,
                SUM(CASE WHEN s.status = 'declined' THEN 1 ELSE 0 END) AS declined

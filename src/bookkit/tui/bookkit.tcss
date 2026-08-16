@@ -11,6 +11,18 @@ Screen {
     scrollbar-size-horizontal: 1;
 }
 
+/* ...except the Footer, which is ONE row tall. App CSS outranks a widget's
+   DEFAULT_CSS, so the rule above overrode Textual's own
+   `Footer { scrollbar-size: 0 0 }`: the moment the bindings exceeded the
+   terminal width, the scrollbar took the footer's only row and the whole
+   thing painted BLANK — not truncated, empty. It was blank on the home
+   screen at the reference size, and the snapshots recorded that as correct.
+   Hidden overflow crops instead; FooterKey children already elide. */
+Footer {
+    overflow-x: hidden;
+    scrollbar-size: 0 0;
+}
+
 .pane {
     border: round $panel-lighten-2;
     padding: 0 1;
@@ -148,12 +160,22 @@ ImportChooser, ImportScreen, FormModal, Picker, ConfirmRenew, MergePicker {
     align: center middle;
 }
 
+/* A Static with max-height CLAMPS its virtual size, so content past the cap
+   is not scrollable — it is gone, with no scrollbar and no ellipsis, and
+   Static cannot take focus to scroll anyway. These are scroll containers
+   now; the go/no-go verdict is rendered outside them. */
 #paste-preview, #import-preview {
     border: round $panel-lighten-2;
     padding: 0 1;
-    height: auto;
+    height: 1fr;
+    min-height: 6;
     max-height: 16;
     overflow-y: auto;
+}
+
+#import-verdict, #paste-verdict {
+    height: auto;
+    padding: 0 1;
 }
 
 .modal-box {

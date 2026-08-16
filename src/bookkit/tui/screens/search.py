@@ -44,9 +44,12 @@ class SearchModal(ModalScreen):
     def on_mount(self) -> None:
         self.query_one("#search-input", Input).focus()
 
+    _org_by_option: dict[str, str] = {}
+
     def on_input_changed(self, event: Input.Changed) -> None:
         results = self.query_one("#search-results", OptionList)
         results.clear_options()
+        self._org_by_option.clear()
         if len(event.value) < 2:
             return
         hits = search_repo.search(self.app.conn, event.value, limit=20)
@@ -56,7 +59,14 @@ class SearchModal(ModalScreen):
                 current_kind = hit.kind
                 results.add_option(Option(f"— {hit.kind.upper()}S —", disabled=True))
             snippet = f"   {hit.snippet}" if hit.snippet else ""
-            results.add_option(Option(f"{hit.title}{snippet}", id=f"{hit.kind}:{hit.org_id}"))
+            # keyed on entity_id, NOT org_id: two interactions at one account
+            # share an org and Textual raises DuplicateID, which — firing from
+            # a message handler — took the whole session down. The owning org
+            # is what we dismiss with, so it is carried alongside.
+            self._org_by_option[hit.entity_id] = hit.org_id
+            results.add_option(
+                Option(f"{hit.title}{snippet}", id=hit.entity_id)
+            )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.action_focus_results()
@@ -77,8 +87,9 @@ class SearchModal(ModalScreen):
         # here ran while this modal was still on the stack, so open_account
         # could not tell it was already on an account screen (review F7)
         if event.option.id:
-            _, org_id = event.option.id.split(":", 1)
-            self.dismiss(org_id)
+            org_id = self._org_by_option.get(event.option.id)
+            if org_id:
+                self.dismiss(org_id)
 
     def action_dismiss_modal(self) -> None:
         self.dismiss(None)

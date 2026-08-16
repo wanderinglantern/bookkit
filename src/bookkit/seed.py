@@ -107,7 +107,23 @@ def seed(
     today: date | None = None,
     programs_dir: Path | None = None,
 ) -> dict[str, int]:
-    """Populate an empty database. Returns row counts by table."""
+    """Populate an empty database. Returns row counts by table.
+
+    ONE transaction: seeding writes hundreds of rows and can be refused
+    part-way (the team-name guard fires the moment a second seed reaches the
+    demo colleagues), and a half-seeded book is worse than either outcome.
+    All or nothing."""
+    from . import db as db_mod
+
+    with db_mod.transaction(conn):
+        return _seed(conn, today, programs_dir)
+
+
+def _seed(
+    conn: sqlite3.Connection,
+    today: date | None,
+    programs_dir: Path | None,
+) -> dict[str, int]:
     rng = Random(42)
     today = today or date.today()
 

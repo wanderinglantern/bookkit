@@ -27,6 +27,9 @@ def _add_months(d: date, months: int) -> date:
     raise AssertionError("unreachable")
 
 
+_BARE_NUMBER_RE = re.compile(r"^-?\d{1,2}$")
+
+
 def parse_human_date(text: str, today: date | None = None) -> date | None:
     """Parse a human-entered date; None when it cannot be understood."""
     text = text.strip().lower()
@@ -37,6 +40,13 @@ def parse_human_date(text: str, today: date | None = None) -> date | None:
         return today
     if text == "tomorrow":
         return today + timedelta(days=1)
+    # A bare 1-2 digit number is what a broker types for "the 5th", and
+    # dateparser reads it as a MONTH and future-biases it — "5" became
+    # 2027-05-01, nine months out, and the task fell off every 120-day
+    # attention window with nothing on screen saying so. Ambiguous input is
+    # refused, not guessed.
+    if _BARE_NUMBER_RE.match(text):
+        return None
     match = _RELATIVE_RE.match(text)
     if match:
         n, unit = int(match.group(1)), match.group(2)

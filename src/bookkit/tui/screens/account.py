@@ -38,6 +38,7 @@ from ...repo import tasks as tasks_repo
 from ...services import book
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
+from ..widgets.entity_actions import batched_write as _batched
 from ..widgets.forms import Field
 from ..widgets.inline_edit import InlineTable
 from ..widgets.tables import (
@@ -270,18 +271,21 @@ class AccountScreen(Screen):
         Binding("escape", "app.pop_screen", "Back"),
         Binding("a", "add_here", "Add (this tab)"),
         Binding("e", "edit_here", "Edit"),
-        Binding("s", "new_submission", "Submission"),
-        Binding("r", "renew_placement", "Renew"),
-        Binding("l", "edit_layer", "Layer"),
+        # these are named by the per-tab hint line one row above the
+        # footer, so the footer spends its 140 columns on the keys
+        # nothing else advertises
+        Binding("s", "new_submission", "Submission", show=False),
+        Binding("r", "renew_placement", "Renew", show=False),
+        Binding("l", "edit_layer", "Layer", show=False),
         Binding("L", "add_layer", "Add layer", show=False),
-        Binding("o", "open_towerkit", "Open in towerkit"),
+        Binding("o", "open_towerkit", "Open in towerkit", show=False),
         Binding("w", "assign_team", "Assign team", show=False),
         Binding("t", "scaffold_tower", "Tower file", show=False),
         # x is screen-wide (Grant's call 2026-08-13): the placements tab still
         # merges under it (unchanged flow), every other tab exports open items —
         # see action_export_open_items
         Binding("x", "export_open_items", "Export / merge"),
-        Binding("i", "import_here", "Import (paste)"),
+        Binding("i", "import_here", "Import (paste)", show=False),
         Binding("d", "task_done", "Done (task)", show=False),
         # D is delete, taking the shift key as L and P do — d is already
         # "done", and the destructive sibling should never be one keystroke
@@ -425,7 +429,9 @@ class AccountScreen(Screen):
         else:
             style = theme.AMBER if nxt_item.days_remaining <= 60 else theme.FG
             renewal = (
-                f"renewal [{style}]{nxt_item.placement.period_to} · "
+                # renewal_on, not period_to — see today.py
+                f"renewal [{style}]"
+                f"{nxt_item.renewal_on or nxt_item.placement.period_to} · "
                 f"{nxt_item.days_remaining}d[/]"
             )
         bound = [p for p in placements.for_org(conn, org.id) if p.status == "bound"]
@@ -1035,9 +1041,19 @@ class AccountScreen(Screen):
     def on_inline_table_cell_edited(self, event: InlineTable.CellEdited) -> None:
         conn = self.app.conn
         if event.table.id == "open-items-table":
-            tasks_repo.update(conn, event.row_key, **{event.field.key: event.value})
+            with _batched(
+                self, tool="inline_edit", summary=f"edited task {event.field.key}"
+            ):
+                tasks_repo.update(
+                    conn, event.row_key, **{event.field.key: event.value}
+                )
         elif event.table.id == "rfi-items":
-            rfi_repo.update_item(conn, event.row_key, **{event.field.key: event.value})
+            with _batched(
+                self, tool="inline_edit", summary=f"edited request item {event.field.key}"
+            ):
+                rfi_repo.update_item(
+                    conn, event.row_key, **{event.field.key: event.value}
+                )
         else:
             return
         self.notify(f"{event.field.label} saved — u undoes")
@@ -1088,7 +1104,10 @@ class AccountScreen(Screen):
             return
         key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
         if key:
-            tasks_repo.complete(self.app.conn, key)
+            with _batched(
+                self, tool="task_done", summary="completed a task"
+            ):
+                tasks_repo.complete(self.app.conn, key)
             self.notify("task done — u to undo")
             self.refresh_data()
 
@@ -1128,13 +1147,24 @@ class AccountScreen(Screen):
             else:
                 self._confirm_delete_interaction(str(key))
             return
+        # nothing matched: D is bound screen-wide but only these tables can
+        # remove a row, so on the other five tabs it did nothing at all — and
+        # the screen's own rule is that an inapplicable key says so (r, t, l
+        # and x all do). Silence is what made it look broken.
+        self.notify(
+            "D removes a task or an interaction — tab into one of those rows",
+            severity="warning",
+        )
 
     def _drop_task(self, task_id: str) -> None:
         try:
             task = tasks_repo.get(self.app.conn, task_id)
         except KeyError:  # row key went stale under a concurrent rebuild
             return
-        tasks_repo.drop(self.app.conn, task_id)
+        with _batched(
+            self, tool="task_drop", summary=f"dropped task {task.title}"
+        ):
+            tasks_repo.drop(self.app.conn, task_id)
         self.notify(f"dropped {task.title!r} — u to undo")
         self.refresh_data()
 
@@ -1151,7 +1181,10 @@ class AccountScreen(Screen):
     def _delete_interaction(self, interaction_id: str, confirmed: bool | None) -> None:
         if not confirmed:
             return
-        interactions.delete(self.app.conn, interaction_id)
+        with _batched(
+            self, tool="interaction_delete", summary="deleted an interaction"
+        ):
+            interactions.delete(self.app.conn, interaction_id)
         self.notify("interaction deleted — u to undo")
         self.refresh_data()
 
@@ -1194,10 +1227,32 @@ class AccountScreen(Screen):
         return self.query_one(TabbedContent).active
 
     def _selected_key(self, table_id: str) -> str | None:
+        """The row under the cursor, focused or not. RENDERING uses this — the
+        detail panes track the cursor whether or not the table has focus."""
         table = self.query_one(f"#{table_id}", ListTable)
         if table.cursor_row is None or table.row_count == 0:
             return None
         return table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+
+    def _acting_key(self, table_id: str) -> str | None:
+        """The row an ACTION may act on.
+
+        d, D and p checked focus from the start; e, r, s, t, w, x and l did
+        not, so `tab tab r` fired ConfirmRenew with focus on the TAB BAR — and
+        r clones a placement and its towerkit file, acting on a cursor the
+        user cannot see.
+
+        The gate is "focus is on a table", not "focus is on THIS table":
+        several flows deliberately act on the placement under the cursor while
+        a sibling table on the same tab holds focus (`l` edits the layer of
+        the shown placement from the carriers table). Requiring this exact
+        table broke that, which is what test_l_edits_layer_under_cursor caught.
+        What must be refused is chrome — the tab bar, a scroll container —
+        where there is no visible cursor at all."""
+        if not isinstance(self.focused, ListTable):
+            self.notify("press tab to work the rows first", severity="warning")
+            return None
+        return self._selected_key(table_id)
 
     def _push_form(self, spec, on_save) -> None:
         from ..widgets.forms import FormModal
@@ -1448,7 +1503,7 @@ class AccountScreen(Screen):
         if self._active_tab() != "tab-placements":
             self.notify("r renews the selected placement (placements tab)", severity="warning")
             return
-        key = self._selected_key("placements-table")
+        key = self._acting_key("placements-table")
         if key is None:
             return
         from ..widgets import entity_actions
@@ -1571,7 +1626,7 @@ class AccountScreen(Screen):
         if self._active_tab() != "tab-placements":
             self.notify("t scaffolds a tower file (placements tab)", severity="warning")
             return
-        key = self._selected_key("placements-table")
+        key = self._acting_key("placements-table")
         if key is None:
             return
         placement = placements.get(self.app.conn, key)
@@ -1617,7 +1672,7 @@ class AccountScreen(Screen):
         if self._active_tab() != "tab-placements":
             self.notify("layer keys work on the placements tab", severity="warning")
             return None
-        key = self._selected_key("placements-table")
+        key = self._acting_key("placements-table")
         if key is None:
             return None
         placement = placements.get(self.app.conn, key)
@@ -1739,7 +1794,7 @@ class AccountScreen(Screen):
         from ...repo import projects as projects_repo
 
         conn = self.app.conn
-        need_key = self._selected_key("needs-table")
+        need_key = self._acting_key("needs-table")
         if need_key is None:
             self.notify("select a need first (needs table)", severity="warning")
             return
@@ -1839,7 +1894,7 @@ class AccountScreen(Screen):
             self.notify("no team members yet — press w on Today, then a", severity="warning")
             return
         placement_id = (
-            self._selected_key("placements-table")
+            self._acting_key("placements-table")
             if self._active_tab() == "tab-placements"
             else None
         )
@@ -1929,7 +1984,7 @@ class AccountScreen(Screen):
         if self._active_tab() != "tab-placements":
             self.notify("x merges the selected placement (placements tab)", severity="warning")
             return
-        key = self._selected_key("placements-table")
+        key = self._acting_key("placements-table")
         if key is None:
             return
         source = placements.get(self.app.conn, key)
@@ -1945,10 +2000,20 @@ class AccountScreen(Screen):
         def done(target_id: str | None) -> None:
             if target_id is None:
                 return
+            from ...repo import placements as placements_repo
             from ...services.merge import MergeError, merge_placements
 
+            # refs, not ULIDs: this sentence is what the changes list shows
+            source_ref = placements_repo.get(self.app.conn, source_id).ref
+            target_ref = placements_repo.get(self.app.conn, target_id).ref
             try:
-                result = merge_placements(self.app.conn, source_id, target_id)
+                with _batched(
+                    self,
+                    tool="merge_placements",
+                    summary=f"merged {source_ref} into {target_ref}",
+                    org_id=self.current_org_id,
+                ):
+                    result = merge_placements(self.app.conn, source_id, target_id)
             except MergeError as exc:
                 self.notify(str(exc), severity="error")
                 return
@@ -1971,8 +2036,8 @@ class AccountScreen(Screen):
                         severity="warning")
             return
         tab = self._active_tab()
-        placement_id = self._selected_key("placements-table") if tab == "tab-placements" else None
-        opportunity_id = self._selected_key("pipeline-opps") if tab == "tab-pipeline" else None
+        placement_id = self._acting_key("placements-table") if tab == "tab-placements" else None
+        opportunity_id = self._acting_key("pipeline-opps") if tab == "tab-pipeline" else None
         if placement_id is None and opportunity_id is None:
             self.notify("select a placement or opportunity first (s works on those tabs)",
                         severity="warning")
