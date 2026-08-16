@@ -660,6 +660,33 @@ def apply_rfi_item(
 ) -> RfiItem:
     core = dropped(values)
     if existing:
+        # dropped() strips None so a blank optional never clobbers on edit —
+        # but on an ITEM every one of these is a value a user legitimately
+        # takes back: a group filed under the wrong heading, a date that turned
+        # out not to apply, an answer typed against the wrong question. The
+        # in-cell editor (i) writes those blanks straight through, so without
+        # this the same field cleared two ways gave two different results.
+        for key in ("category", "due_on", "detail", "response"):
+            if getattr(existing, key) and not values.get(key):
+                core[key] = None
+    # status OWNS received_on, so the pair can never disagree. `d` sets both
+    # together (services.rfi.mark_received) and this form is the only other
+    # door — and the TUI's only way to WAIVE an item. Putting an item back to
+    # outstanding used to leave the date stamped, so the datasheet rendered an
+    # outstanding row carrying a date in its "received" column.
+    status = core.get("status") or (existing.status if existing else "outstanding")
+    if status != "received":
+        if existing and existing.received_on:
+            core["received_on"] = None
+    elif not core.get("received_on"):
+        # a blank date on a received item stamps today, unless one was already
+        # recorded — back-dating stays possible, it just cannot be lost
+        core["received_on"] = (
+            existing.received_on
+            if existing and existing.received_on
+            else date.today().isoformat()
+        )
+    if existing:
         return rfi_repo.update_item(conn, existing.id, **core)
     prompt = core.pop("prompt")
     return rfi_repo.add_item(conn, request_id, prompt, **core)

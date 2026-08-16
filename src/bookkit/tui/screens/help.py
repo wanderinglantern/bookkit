@@ -48,6 +48,8 @@ e        edit the selected row
 i        edit in cell — contacts, tasks, items
            enter saves · tab saves + next
            esc abandons · one save, one undo
+         On the account screen i is ONLY this;
+         its paste-imports moved to I.
 D        delete the selected interaction
            (account tabs 1 and 3), soft
 
@@ -96,7 +98,7 @@ e  on a submission records the response
      (quote / decline / bind)
 p  mark a contact primary (contacts tab)
 x  export open items (merge on placements)
-i  paste import        w  assign a colleague
+I  paste import        w  assign a colleague
 
 enter on a placement shows its tower.
 enter on a document opens the file.""",
@@ -117,13 +119,41 @@ L  add a pending layer
 o  open the file in towerkit's editor
 t  create the towerkit file FROM this
      placement (nothing is typed twice)
-i  paste a schedule or renewal terms
+I  paste a schedule or renewal terms
 w  assign a colleague to this placement
 x  merge a duplicate into another placement
 
 Binding a submission (e on it → bound) offers
 to put the market on a layer at its share.
 towerkit validation gates every write.""",
+    ),
+    (
+        "requests tab (9)",
+        """\
+What a client still owes. The request list on
+top, the selected one's items below; tab hops
+between the two, and both answer the keys.
+
+a  new request (top) · new item (bottom)
+P  paste a whole emailed list — one line per
+     item, numbering and bullets stripped
+i  edit an item in its cell
+e  edit the request, or the item, as a form
+d  the item under the cursor came back,
+     dated today
+
+state column reads the request, not a count:
+  N open · closed · withdrawn · no items yet
+
+Withdrawn is a date in the form's "cancelled
+on" field. It drops the request from the
+chase queue and the client export — nothing
+else, and it is reversible by clearing it.
+
+An UNDATED request never reaches the 120-day
+chase queue, but it is still owed: it shows
+here and on the export. One with no items
+reaches neither.""",
     ),
     (
         "book, calendar, pipeline",

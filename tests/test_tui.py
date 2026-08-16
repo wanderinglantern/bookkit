@@ -1482,8 +1482,9 @@ async def test_rfi_items_show_an_inherited_due_date_dimmed(seeded_db: Path) -> N
         await pilot.pause()
 
         items = app.screen.query_one("#rfi-items", InlineTable)
-        own_cell = items.get_row(own.id)[3]
-        inherited_cell = items.get_row(inherited.id)[3]
+        # column 4 — item, detail, type, group, NEEDED BY, ...
+        own_cell = items.get_row(own.id)[4]
+        inherited_cell = items.get_row(inherited.id)[4]
 
         assert str(own_cell) == "2026-08-15"
         assert str(inherited_cell) == "2026-08-19"
@@ -1495,7 +1496,7 @@ async def test_rfi_items_show_an_inherited_due_date_dimmed(seeded_db: Path) -> N
         requests = app.screen.query_one("#rfi-requests", ListTable)
         requests.move_cursor(row=requests.get_row_index(f"rfi:{undated_req.id}"))
         await pilot.pause()
-        assert str(items.get_row(undated.id)[3]) == "—"
+        assert str(items.get_row(undated.id)[4]) == "—"
 
 
 async def test_rfi_inline_edit_of_an_inherited_due_starts_blank(seeded_db: Path) -> None:
@@ -1520,6 +1521,177 @@ async def test_rfi_inline_edit_of_an_inherited_due_starts_blank(seeded_db: Path)
         screen = app.screen
         assert screen._rfi_item_inline_initial(item.id, "due_on") == ""
         assert rfi.get_item(app.conn, item.id).due_on is None
+
+
+async def test_i_on_the_requests_tab_is_only_edit_in_cell(seeded_db: Path) -> None:
+    """The tab lands the cursor on the REQUEST list, where nothing is inline
+    editable — and a screen-level `i` used to win there and open the account's
+    paste-import chooser (contact signature / program schedule / renewal
+    terms), while the tab's own hint promised "i edit in cell". One key, two
+    unrelated actions, decided by which of two adjacent tables had focus.
+    Import moved to I (Grant's call 2026-08-14)."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.paste_import import ImportChooser
+    from bookkit.tui.widgets.tables import ListTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(app.conn, org.id, "Sompo questions", "2026-08-05")
+    rfi.add_item(app.conn, req.id, "how many vehicles?")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        assert app.screen.focused is app.screen.query_one("#rfi-requests", ListTable)
+
+        await pilot.press("i")
+        await pilot.pause()
+        assert not isinstance(app.screen, ImportChooser), (
+            "i on the requests tab opened the paste-import chooser"
+        )
+
+        await pilot.press("I")
+        await pilot.pause()
+        assert isinstance(app.screen, ImportChooser)
+
+
+async def test_paste_items_answers_from_the_request_list(seeded_db: Path) -> None:
+    """P is the intake gesture this tab exists for, and the cursor lands on
+    the request list — so requiring items-table focus left it dead, silently,
+    exactly where a user first presses it. The highlighted request is the one
+    pasted into."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.forms import FormModal
+    from bookkit.tui.widgets.tables import ListTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    first = rfi.create_request(app.conn, org.id, "Sompo questions", "2026-08-05")
+    second = rfi.create_request(app.conn, org.id, "Chubb questions", "2026-08-06")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        table = app.screen.query_one("#rfi-requests", ListTable)
+        table.move_cursor(row=table.get_row_index(f"rfi:{second.id}"))
+        await pilot.pause()
+
+        await pilot.press("P")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        from textual.widgets import TextArea
+
+        app.screen.query_one("#form-pasted", TextArea).text = (
+            "1. loss runs\n2. vehicle count"
+        )
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        # pasted into the HIGHLIGHTED request, not the first one
+        assert [i.prompt for i in rfi.items_for_request(app.conn, second.id)] == [
+            "loss runs", "vehicle count",
+        ]
+        assert rfi.items_for_request(app.conn, first.id) == []
+
+
+async def test_d_from_the_request_list_names_the_table(seeded_db: Path) -> None:
+    """`d` is per-ITEM by design; from the master table it used to do nothing
+    at all and say nothing — the same silent no-op `a` was already fixed for."""
+    from bookkit.repo import rfi
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(app.conn, org.id, "Sompo questions", "2026-08-05")
+    item = rfi.add_item(app.conn, req.id, "how many vehicles?")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+
+        assert any("item" in str(n.message) for n in app._notifications), (
+            "d on the request list said nothing"
+        )
+        assert rfi.get_item(app.conn, item.id).status == "outstanding"
+
+
+async def test_a_withdrawn_request_says_it_is_withdrawn(seeded_db: Path) -> None:
+    """Cancelling a request drops it out of the chase queue, the export and
+    open_items. Both surfaces that list requests rendered it identically to a
+    live one — same amber count — so nothing on screen said why it vanished."""
+    from bookkit.repo import rfi
+    from bookkit.tui.widgets.tables import ListTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    live = rfi.create_request(app.conn, org.id, "Live ask", "2026-08-05")
+    rfi.add_item(app.conn, live.id, "q1")
+    dead = rfi.create_request(app.conn, org.id, "Withdrawn ask", "2026-08-05")
+    rfi.add_item(app.conn, dead.id, "q2")
+    rfi.update_request(app.conn, dead.id, cancelled_at="2026-08-10")
+    empty = rfi.create_request(app.conn, org.id, "Nothing typed up", "2026-08-05")
+    closed = rfi.create_request(app.conn, org.id, "All back", "2026-08-05")
+    back = rfi.add_item(app.conn, closed.id, "q3")
+    rfi.update_item(app.conn, back.id, status="received", received_on="2026-08-09")
+
+    async with app.run_test(size=(160, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        table = app.screen.query_one("#rfi-requests", ListTable)
+        # column 2 — ref, request, STATE, due, ...
+        state = {
+            key.value: str(table.get_row(key.value)[2]) for key in table.rows
+        }
+        assert state[f"rfi:{live.id}"] == "1 open"
+        assert state[f"rfi:{dead.id}"] == "withdrawn"
+        assert state[f"rfi:{empty.id}"] == "no items yet"
+        assert state[f"rfi:{closed.id}"] == "closed"
+
+        # column order is load-bearing, not cosmetic: a DataTable crops from
+        # the right, and with state last it rendered as "wi" at 80 columns,
+        # the narrowest width the app supports
+        assert [str(c.label) for c in table.columns.values()][:4] == [
+            "ref", "request", "state", "due",
+        ]
+
+
+
+async def test_item_detail_is_visible_on_the_datasheet(seeded_db: Path) -> None:
+    """The item form has a detail textarea and no table showed it: typed in,
+    then invisible everywhere in the TUI, reachable only via the export. The
+    same shape as F33's interaction body. First line, dimmed and clipped."""
+    from bookkit.repo import rfi
+    from bookkit.tui import theme
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    req = rfi.create_request(app.conn, org.id, "Sompo questions", "2026-08-05")
+    item = rfi.add_item(
+        app.conn, req.id, "loss runs 2021-2025",
+        detail="all lines, valued within 90 days\nand a second line",
+    )
+    bare = rfi.add_item(app.conn, req.id, "how many vehicles?")
+
+    async with app.run_test(size=(170, 48)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("9")
+        await pilot.pause()
+        items = app.screen.query_one("#rfi-items", InlineTable)
+        cell = items.get_row(item.id)[1]
+        assert str(cell) == "all lines, valued within 90 days"
+        assert theme.DIM in str(getattr(cell, "style", ""))
+        assert str(items.get_row(bare.id)[1]) == "—"
 
 
 async def test_delete_interaction_confirms_then_removes_it_undoably(seeded_db: Path) -> None:

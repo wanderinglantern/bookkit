@@ -264,3 +264,75 @@ def test_apply_rfi_item_creates_then_updates(conn) -> None:
         existing=item,
     )
     assert done.status == "received"
+
+
+def test_editing_an_item_back_to_outstanding_clears_the_received_date(conn) -> None:
+    """status OWNS received_on. `d` sets the pair together, and this form is
+    the only other door — and the TUI's only way to WAIVE. It used to leave
+    the date stamped when the status moved off "received", so the datasheet
+    rendered an outstanding row carrying a date in its "received" column."""
+    org = orgs.create(conn, name="Endeavour", kind="client")
+    req = rfi.create_request(conn, org.id, "docs", "2026-08-05")
+    item = rfi.add_item(conn, req.id, "loss runs")
+    received = ef.apply_rfi_item(
+        conn, {"status": "received", "received_on": "2026-08-12"}, req.id,
+        existing=item,
+    )
+    assert (received.status, received.received_on) == ("received", "2026-08-12")
+
+    back = ef.apply_rfi_item(
+        conn, {"status": "outstanding", "received_on": None}, req.id,
+        existing=received,
+    )
+    assert (back.status, back.received_on) == ("outstanding", None)
+
+    waived = ef.apply_rfi_item(
+        conn, {"status": "waived", "received_on": None}, req.id, existing=received
+    )
+    assert waived.received_on is None
+
+
+def test_marking_an_item_received_without_a_date_stamps_today(conn) -> None:
+    """The other half of the coupling: "received" with the date left blank is
+    received today, never received-with-no-date."""
+    from datetime import date
+
+    org = orgs.create(conn, name="Endeavour", kind="client")
+    req = rfi.create_request(conn, org.id, "docs", "2026-08-05")
+    item = rfi.add_item(conn, req.id, "loss runs")
+    got = ef.apply_rfi_item(
+        conn, {"status": "received", "received_on": None}, req.id, existing=item
+    )
+    assert got.received_on == date.today().isoformat()
+
+    # a date already on the record is kept, so back-dating survives a re-save
+    again = ef.apply_rfi_item(
+        conn, {"status": "received", "received_on": None}, req.id,
+        existing=rfi.update_item(conn, got.id, received_on="2026-08-01"),
+    )
+    assert again.received_on == "2026-08-01"
+
+
+def test_blanking_an_item_field_in_the_form_writes_it_through(conn) -> None:
+    """dropped() strips None so a blank optional never clobbers on edit — but
+    on an item these are values a user legitimately takes back, and the
+    in-cell editor (i) already wrote the blanks straight through. The same
+    field cleared two ways gave two different results."""
+    org = orgs.create(conn, name="Endeavour", kind="client")
+    req = rfi.create_request(conn, org.id, "docs", "2026-08-05")
+    item = rfi.add_item(
+        conn, req.id, "loss runs", category="Financials", due_on="2026-08-20",
+        detail="all lines", response="attached",
+    )
+    cleared = ef.apply_rfi_item(
+        conn,
+        {"prompt": "loss runs", "category": None, "due_on": None, "detail": None,
+         "response": None, "status": "outstanding"},
+        req.id,
+        existing=item,
+    )
+    assert cleared.category is None
+    assert cleared.due_on is None
+    assert cleared.detail is None
+    assert cleared.response is None
+    assert cleared.prompt == "loss runs"  # required fields still land

@@ -39,6 +39,7 @@ from ..widgets.tables import (
     ListTable,
     grouped_by_category,
     rfi_asker_cell,
+    rfi_state_cell,
     task_detail_cell,
 )
 from ..widgets.tower_preview import TowerPreview
@@ -813,17 +814,19 @@ class NavigatorScreen(Screen):
                     project.start_on or dash(), project.end_on or dash(), key=key,
                 )
         elif group == "requests":
-            table.add_columns("ref", "request", "asked by", "asked", "due", "open")
+            # same column order as the account tab's request list: the signal
+            # columns lead so a narrow terminal crops the descriptive ones
+            table.add_columns("ref", "request", "state", "due", "asked by", "asked")
             for request in rfi_repo.requests_for_org(conn, org_id):
                 key = f"rfi:{request.id}"
                 self._row_org[key] = org_id
-                open_count = rfi_repo.open_item_count(conn, request.id)
                 table.add_row(
-                    request.ref, request.title, rfi_asker_cell(conn, request),
-                    request.requested_on,
+                    request.ref, request.title,
+                    rfi_state_cell(conn, request),
                     date_text(request.due_on, days_until(request.due_on))
                     if request.due_on else dash(),
-                    Text(str(open_count), style=theme.AMBER if open_count else theme.DIM),
+                    rfi_asker_cell(conn, request),
+                    request.requested_on,
                     key=key,
                 )
 

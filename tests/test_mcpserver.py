@@ -1608,6 +1608,26 @@ def test_edit_field_redirects_active_to_the_deactivate_tools(server_db):
     assert "member_reactivate" in message
 
 
+def test_edit_field_redirects_item_status_to_the_transition_tools(server_db):
+    """status and received_on move together (services.rfi.mark_received), so
+    neither is a single-field compare-and-set. Without a redirect the model
+    got the generic "not editable; allowed: [...]" list and no idea where the
+    transition actually lives."""
+    rw, _ = _rw(server_db)
+    created = mcpserver._request_create(rw, "Acme", "Sompo questions", ["loss runs"])
+    item = mcpserver._request_items(rw, created["request_ref"])["items"][0]
+
+    for field, expected in (
+        ("status", "request_item_received"),
+        ("received_on", "request_item_received"),
+    ):
+        with pytest.raises(ValueError) as err:
+            mcpserver._edit_field(
+                rw, "rfi_item", item["item_ref"], field, "received", expecting=None,
+            )
+        assert expected in str(err.value)
+
+
 def test_assignment_notes_round_trip_through_the_roster(server_db):
     """notes is only editable if a read hands the model its current value —
     compare-and-set has nothing to compare against otherwise."""

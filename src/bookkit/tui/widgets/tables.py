@@ -68,6 +68,34 @@ def rfi_asker_cell(conn: sqlite3.Connection, request: RfiRequest) -> str | Text:
     return Text(name, style=theme.DIM) if name in rfi_svc.ASKER_PLACEHOLDERS else name
 
 
+def rfi_state_cell(conn: sqlite3.Connection, request: RfiRequest) -> Text:
+    """The 'state' column, shared by the account tab and the navigator's
+    requests group.
+
+    This used to be a bare outstanding COUNT on both surfaces, which left a
+    WITHDRAWN request rendering exactly like a live one — same amber number —
+    while it had silently dropped out of the chase queue, the export and
+    open_items with nothing on screen saying why. The count alone also could
+    not tell "everything came back" from "nothing is written down yet".
+
+    The rule lives in services.rfi.is_open; this only picks the word and the
+    style. Every state carries a word, not just a color."""
+    from ...repo import rfi as rfi_repo
+    from ...services import rfi as rfi_svc
+
+    if request.cancelled_at:
+        return Text("withdrawn", style=theme.DIM)
+    open_count = rfi_repo.open_item_count(conn, request.id)
+    if open_count:
+        return Text(f"{open_count} open", style=theme.AMBER)
+    # is_open is what separates "nothing left to chase" from "nothing typed up
+    # yet": a request with no items reaches no chase queue and no export, so
+    # saying so here is the only place a user can learn it
+    if rfi_svc.is_open(conn, request.id):
+        return Text("no items yet", style=theme.AMBER)
+    return Text("closed", style=theme.GREEN)
+
+
 def rfi_due_cell(item: RfiItem, request: RfiRequest) -> str | Text:
     """The 'needed by' column for an RFI item. An item's own date reads plain;
     one inherited from its request is DIM, so an inherited date is never
@@ -82,13 +110,23 @@ def rfi_due_cell(item: RfiItem, request: RfiRequest) -> str | Text:
     return Text(inherited, style=theme.DIM) if inherited else dash()
 
 
-def task_detail_cell(task: Task) -> Text:
-    """First line of the long notes, dimmed and clipped — full text lives in
-    the e form; this is for review at a glance."""
-    if not task.detail:
+def detail_cell(value: str | None, width: int = 58) -> Text:
+    """First line of a long free-text field, dimmed and clipped — the full
+    text lives in the `e` form; this is for review at a glance.
+
+    Shared, because a field the form lets you TYPE and no table ever shows is
+    a note that vanishes the moment you save it (review F33, and again for RFI
+    item detail)."""
+    if not value:
         return dash()
-    first = task.detail.strip().splitlines()[0]
-    return Text(first[:57] + "…" if len(first) > 58 else first, style=theme.DIM)
+    first = value.strip().splitlines()[0]
+    return Text(
+        first[: width - 1] + "…" if len(first) > width else first, style=theme.DIM
+    )
+
+
+def task_detail_cell(task: Task) -> Text:
+    return detail_cell(task.detail)
 
 
 def grouped_by_category(tasks: list[Task]) -> list[Task]:

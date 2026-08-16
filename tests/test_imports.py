@@ -603,7 +603,9 @@ async def test_account_import_chooser_contact_paste(tmp_path: Path) -> None:
     async with app.run_test(size=(120, 40)) as pilot:
         app.open_account(org.id)
         await pilot.pause()
-        await pilot.press("i")
+        # I, not i: i is "edit in cell" and InlineTable claims it at widget
+        # level, so a screen-level i changed meaning under the cursor
+        await pilot.press("I")
         await pilot.pause()
         assert isinstance(app.screen, ImportChooser)
         await pilot.press("enter")  # first option: contact paste

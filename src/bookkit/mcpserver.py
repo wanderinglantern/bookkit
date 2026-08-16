@@ -1655,6 +1655,11 @@ _EDITABLE: dict[str, dict[str, Any]] = _editable()
 # only lists what IS editable; these say where the caller should go instead.
 _EDIT_REDIRECTS: dict[tuple[str, str], str] = {
     ("team_member", "active"): "member_deactivate / member_reactivate",
+    # status and received_on move together (services.rfi.mark_received), so
+    # neither is a single-field compare-and-set. Without these the model got
+    # the generic "not editable; allowed: [...]" list and no idea where to go.
+    ("rfi_item", "status"): "request_item_received / request_item_waive",
+    ("rfi_item", "received_on"): "request_item_received",
 }
 
 

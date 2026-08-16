@@ -42,9 +42,11 @@ from ..widgets.forms import Field
 from ..widgets.inline_edit import InlineTable
 from ..widgets.tables import (
     ListTable,
+    detail_cell,
     grouped_by_category,
     rfi_asker_cell,
     rfi_due_cell,
+    rfi_state_cell,
     task_detail_cell,
 )
 from ..widgets.tower_preview import TowerPreview
@@ -80,7 +82,7 @@ TAB_HINTS: dict[str, str] = {
     "tab-placements": (
         "[b]a[/b] add · [b]e[/b] edit · [b]s[/b] submission · [b]r[/b] renew · "
         "[b]l[/b]/[b]L[/b] layer · [b]o[/b] towerkit · [b]t[/b] tower file · "
-        "[b]i[/b] paste · [b]w[/b] assign · [b]x[/b] merge"
+        "[b]I[/b] paste · [b]w[/b] assign · [b]x[/b] merge"
     ),
     "tab-projects": (
         "[b]a[/b] add project/need · [b]e[/b] edit · "
@@ -99,7 +101,7 @@ TAB_HINTS: dict[str, str] = {
     # creates, so neither is a single undoable mutation (see services/rfi)
     "tab-requests": (
         "[b]i[/b] edit in cell · [b]a[/b] add · [b]P[/b] paste list · "
-        "[b]e[/b] edit form · [b]d[/b] received"
+        "[b]e[/b] edit form · [b]d[/b] received · [b]tab[/b] requests ⇄ items"
     ),
 }
 
@@ -110,11 +112,16 @@ TAB_HINTS: dict[str, str] = {
 # (services.rfi.mark_received sets both together), and two ways to make one
 # state change is the coupling to avoid. The response IS here — an answer you
 # cannot see on the datasheet defeats the point of the tab.
+#
+# `detail` shows but is NOT inline-editable: it is a textarea in the form and
+# the cell editor is one line, which would flatten a multi-line note on save.
+# Showing it at all is the point — it used to be typed into the form and then
+# be invisible everywhere in the TUI, reachable only through the export.
 RFI_ITEM_INLINE = {
     0: Field("prompt", "item", required=True),
-    2: Field("category", "group"),
-    3: Field("due_on", "needed by", "date"),
-    6: Field("response", "response"),
+    3: Field("category", "group"),
+    4: Field("due_on", "needed by", "date"),
+    7: Field("response", "response"),
 }
 
 # tabs whose `a` creates a row, so an empty one can name the way out of itself
@@ -281,7 +288,13 @@ class AccountScreen(Screen):
         # merges under it (unchanged flow), every other tab exports open items —
         # see action_export_open_items
         Binding("x", "export_open_items", "Export / merge"),
-        Binding("i", "import_here", "Import (paste)"),
+        # I, not i: `i` is "edit in cell" and InlineTable binds it at WIDGET
+        # level, so a screen-level `i` silently won on every table that is not
+        # inline-editable — landing on the requests tab and pressing the key
+        # its own hint advertised opened the paste-import chooser instead
+        # (Grant's call 2026-08-14). The rarer, heavier flow takes shift, as
+        # D, L and P already do.
+        Binding("I", "import_here", "Import (paste)"),
         Binding("d", "task_done", "Done (task)", show=False),
         # D is delete, taking the shift key as L and P do — d is already
         # "done", and the destructive sibling should never be one keystroke
@@ -603,18 +616,22 @@ class AccountScreen(Screen):
         conn = self.app.conn
         table = self.query_one("#rfi-requests", ListTable)
         table.clear(columns=True)
+        # state and due LEAD, the descriptive columns trail: a DataTable crops
+        # from the right, and with state last "withdrawn" rendered as "wi" at
+        # 80 columns — a signal you cannot read is not a signal. What crops now
+        # is asked-by/scope/asked, all of which the `e` form also carries.
         table.add_columns(
-            "ref", "request", "asked by", "scope", "asked", "due", "open"
+            "ref", "request", "state", "due", "asked by", "scope", "asked"
         )
         requests = rfi_repo.requests_for_org(conn, self.current_org_id)
         for request in requests:
-            open_count = rfi_repo.open_item_count(conn, request.id)
             table.add_row(
-                request.ref, request.title, rfi_asker_cell(conn, request),
+                request.ref, request.title,
+                rfi_state_cell(conn, request),
+                request.due_on or dash(),
+                rfi_asker_cell(conn, request),
                 Text(rfi_svc.scope_label(conn, request), style=theme.DIM),
                 request.requested_on,
-                request.due_on or dash(),
-                Text(str(open_count), style=theme.AMBER if open_count else theme.DIM),
                 key=f"rfi:{request.id}",
             )
         ids = [r.id for r in requests]
@@ -629,7 +646,8 @@ class AccountScreen(Screen):
         items = self.query_one("#rfi-items", InlineTable)
         items.clear(columns=True)
         items.add_columns(
-            "item", "type", "group", "needed by", "status", "received", "response"
+            "item", "detail", "type", "group", "needed by", "status", "received",
+            "response",
         )
         title = self.query_one("#rfi-hint", Static)
         # this runs from a RowHighlighted handler; a request that vanished
@@ -650,7 +668,8 @@ class AccountScreen(Screen):
         items.inline_fields = RFI_ITEM_INLINE
         for item in rfi_repo.items_for_request(conn, request.id):
             items.add_row(
-                item.prompt, item.kind, item.category or dash(),
+                item.prompt, detail_cell(item.detail), item.kind,
+                item.category or dash(),
                 rfi_due_cell(item, request), status_text(item.status),
                 item.received_on or dash(), item.response or dash(),
                 key=item.id,
@@ -1161,21 +1180,41 @@ class AccountScreen(Screen):
         promised: a single u would revert only received_on."""
         from ...services import rfi as rfi_svc
 
-        if self._rfi_focus() != "items":
+        where = self._rfi_focus()
+        if where is None:
+            return  # no table focused: the house rule for every row action
+        if where != "items":
+            # from the master table this used to do nothing at all, silently.
+            # `d` is per-ITEM by design — a request closes when its last item
+            # comes back — so say which table answers instead of no-op'ing.
+            self.notify(
+                "d marks one ITEM received — tab down to the items",
+                severity="warning",
+            )
             return
         item_id = self._selected_key("rfi-items")
         if not item_id:
+            self.notify("no item to mark received", severity="warning")
             return
         rfi_svc.mark_received(self.app.conn, str(item_id), date.today().isoformat())
         self.notify("received")
         self.refresh_data()
 
     def action_paste_items(self) -> None:
-        """One pasted block of underwriter questions → one item per line."""
+        """One pasted block of underwriter questions → one item per line.
+
+        EITHER table answers. Pasting a litany is the intake gesture this tab
+        exists for (rfi_paste: typing them one form at a time is the failure
+        mode that kills the feature), and the cursor lands on the REQUEST list
+        when the tab opens — so demanding items-table focus left the key dead
+        exactly where a user first presses it, silently. The highlighted master
+        row names the request to paste into, which is what it means anyway."""
         from ..widgets import entity_actions
 
-        if self._active_tab() != "tab-requests" or self._rfi_focus() != "items":
-            return
+        if self._active_tab() != "tab-requests":
+            return  # P means nothing on the other tabs; silence is right there
+        if self._rfi_focus() is None:
+            return  # no table focused: the house rule for every row action
         if not self._rfi_request_id:
             self.notify("pick a request first", severity="warning")
             return
