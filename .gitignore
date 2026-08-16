@@ -10,7 +10,12 @@ __pycache__/
 .ruff_cache/
 dist/
 *.egg-info/
-tests/snapshots/          # dead: the write-only artifacts F14 replaced
+# dead: the write-only artifacts F14 replaced. Nothing writes here any more;
+# the baselines the snapshot suite actually compares against are the tracked
+# ones in tests/__snapshots__/. This pattern carried its comment inline until
+# now, and git has no inline comments — so it matched nothing and the stale
+# artifacts showed up as untracked in every status. Comments go on their own line.
+tests/snapshots/
 wheelhouse/
 bookkit-wheelhouse-macos.zip
 .install-pypi.log

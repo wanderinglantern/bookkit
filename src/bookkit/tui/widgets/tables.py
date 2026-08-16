@@ -44,11 +44,11 @@ class ListTable(DataTable):
         separated, which pastes into a spreadsheet as cells."""
         if self.cursor_row is None or not self.row_count:
             return
-        cells = [
-            str(cell).strip()
-            for cell in self.get_row_at(self.cursor_row)
-            if str(cell).strip() not in ("", "—")
-        ]
+        # a wrapped cell (see task_detail_wrapped) carries real newlines, and
+        # those would break the row apart into extra spreadsheet rows — flatten
+        # every cell to one line before joining
+        flat = (" ".join(str(cell).split()) for cell in self.get_row_at(self.cursor_row))
+        cells = [cell for cell in flat if cell not in ("", "—")]
         if not cells:
             return
         email = next((c for c in cells if "@" in c and " " not in c), None)
@@ -126,7 +126,21 @@ def detail_cell(value: str | None, width: int = 58) -> Text:
 
 
 def task_detail_cell(task: Task) -> Text:
+    """For the one-line task tables. A table that gives its detail column a
+    fixed width and its rows auto-height wants task_detail_wrapped instead."""
     return detail_cell(task.detail)
+
+
+def task_detail_wrapped(task: Task) -> Text:
+    """The whole of the long notes, dimmed, for a fixed-width column on an
+    auto-height row — Rich wraps it to the column and the row grows to fit.
+
+    Only safe on a plain ListTable: the inline cell editor is one line tall and
+    anchors to the top of the cell, so on a table with auto-height rows it would
+    float over line one with stale text still showing beneath it."""
+    if not task.detail:
+        return dash()
+    return Text(task.detail.strip(), style=theme.DIM)
 
 
 def grouped_by_category(tasks: list[Task]) -> list[Task]:
