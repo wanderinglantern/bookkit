@@ -461,11 +461,15 @@ def test_deleting_an_appetite_is_undoable(conn) -> None:
     """It is a soft delete, so `u` puts it back — the same promise every other
     delete in the app makes."""
     from bookkit.repo import orgs
+    from bookkit.services import batches as batches_svc
     from bookkit.services import undo
 
     market = orgs.create(conn, kind="market", name="Beazley")
     row = orgs.add_appetite(conn, market.id, line="marine", appetite="target")
-    orgs.delete_appetite(conn, row.id)
+    with batches_svc.open_batch(
+        conn, source="tui", tool="appetite_delete", summary="removed an appetite line"
+    ):
+        orgs.delete_appetite(conn, row.id)
     assert orgs.appetite_for_market(conn, market.id) == []
 
     assert undo.undo_last(conn) is not None

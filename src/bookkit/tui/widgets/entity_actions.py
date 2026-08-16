@@ -5,6 +5,8 @@ Screen: it supplies .app (conn, push_screen), .notify, and refresh_data()."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -24,10 +26,44 @@ def _refresh(screen: Screen) -> None:
         refresh()
 
 
-def push_form(screen: Screen, spec: Any, on_save: Any) -> None:
+@contextmanager
+def batched_write(
+    screen: Screen, *, tool: str, summary: str, org_id: str | None = None
+) -> Iterator[None]:
+    """One direct (non-form) TUI write as one undo unit.
+
+    Forms get this automatically from FormModal; the keystroke actions —
+    d done, D drop, delete interaction, inline cell edits, appetite delete —
+    call repos directly and would otherwise write outside any batch, which
+    means `u` cannot reach them at all now that undo is batch-granular.
+
+        with batched_write(self, tool="task_done", summary=f"completed {title}"):
+            tasks_repo.complete(conn, key)
+    """
+    from ...services import batches as batches_svc
+
+    with batches_svc.open_batch(
+        _app(screen).conn, source="tui", tool=tool, summary=summary, org_id=org_id
+    ):
+        yield
+
+
+def push_form(
+    screen: Screen, spec: Any, on_save: Any, batch: Any = None, org_id: str | None = None
+) -> None:
     """The commit/done wrapper: on_save runs while the form is open; any
-    raise keeps the form up with the input intact."""
-    from .forms import FormModal
+    raise keeps the form up with the input intact.
+
+    Every save is ONE undo unit. `batch` defaults to one derived from the
+    form's own title, so a caller gets atomicity and a `R`-revertible entry
+    without opting in — a save that writes four rows can no longer be half
+    applied, and no longer needs `u` to guess which of the four to put back.
+    Pass an explicit BatchSpec when the changes list deserves a better
+    sentence than the form title."""
+    from .forms import BatchSpec, FormModal
+
+    if batch is None:
+        batch = BatchSpec.for_title(spec.title, org_id=org_id)
 
     def commit(values: dict) -> str | None:
         on_save(values)
@@ -37,7 +73,8 @@ def push_form(screen: Screen, spec: Any, on_save: Any) -> None:
         if values is not None:
             _refresh(screen)
 
-    _app(screen).push_screen(FormModal(spec, commit=commit), done)
+    _app(screen).push_screen(FormModal(spec, commit=commit, batch=batch), done)
+
 
 
 def edit_placement(screen: Screen, placement: Placement) -> None:

@@ -69,6 +69,10 @@ _current_batch: ContextVar[BatchState | None] = ContextVar(
     "bookkit_current_batch", default=None
 )
 
+_tx_depth: ContextVar[int] = ContextVar("bookkit_tx_depth", default=0)
+"""How many transaction() blocks deep this context is. Only the outermost
+issues BEGIN/COMMIT; see transaction() for why nesting joins."""
+
 
 def current_batch() -> BatchState | None:
     """The batch events written right now belong to, or None.
@@ -125,8 +129,26 @@ def transaction(
 
     `batch` groups every event written inside the block under one id, so one
     writer action becomes one undoable unit. It defaults to None, which is why
-    imports/commit.py stays unbatched without needing a special case."""
-    token = _current_batch.set(batch)
+    imports/commit.py stays unbatched without needing a special case.
+
+    NESTING JOINS, it does not nest: SQLite has no nested BEGIN, and once the
+    TUI opens a batch around a whole writer action, inner helpers that already
+    wrap their own writes (entity_actions' RFI paste, services/merge) would
+    otherwise raise "cannot start a transaction within a transaction". An
+    inner call joins the outer one — same lock, same commit, all-or-nothing
+    across both — and an inner `batch=` is deliberately IGNORED, because the
+    outermost writer action is what the user thinks of as one undo unit."""
+    depth = _tx_depth.get()
+    if depth:
+        token = _tx_depth.set(depth + 1)
+        try:
+            yield
+        finally:
+            _tx_depth.reset(token)
+        return
+
+    batch_token = _current_batch.set(batch)
+    depth_token = _tx_depth.set(1)
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -136,7 +158,8 @@ def transaction(
             raise
         conn.execute("COMMIT")
     finally:
-        _current_batch.reset(token)
+        _tx_depth.reset(depth_token)
+        _current_batch.reset(batch_token)
 
 
 def connect(path: Path | str | None = None, migrate: bool = True) -> sqlite3.Connection:
@@ -214,6 +237,22 @@ def apply_migrations(conn: sqlite3.Connection) -> list[int]:
 
 def integrity_check(conn: sqlite3.Connection) -> bool:
     return bool(conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok")
+
+
+def snapshot(conn: sqlite3.Connection, db_path: Path) -> Path:
+    """Timestamped backup into `backups/` beside the database.
+
+    The importers' rollback story, and now `seed --force`'s too — one
+    implementation rather than a second copy that drifts. Collisions inside
+    one second get a counter, because two writes in the same second must not
+    silently overwrite each other's only rollback."""
+    backups = db_path.parent / "backups"
+    backups.mkdir(parents=True, exist_ok=True)
+    stamp = utc_now().replace(":", "-")
+    dest, n = backups / f"{db_path.name}.{stamp}.bak", 2
+    while dest.exists():
+        dest, n = backups / f"{db_path.name}.{stamp}.{n}.bak", n + 1
+    return backup(conn, dest)
 
 
 def backup(conn: sqlite3.Connection, dest: Path) -> Path:

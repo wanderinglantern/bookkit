@@ -36,18 +36,25 @@ PANE_HEIGHT = 12
 class TodayScreen(Screen):
     app: BookkitApp
     BINDINGS = [
-        Binding("b", "open_book", "Book"),
-        Binding("c", "open_calendar", "Calendar"),
-        Binding("p", "open_pipeline", "Pipeline"),
-        Binding("m", "open_markets", "Markets"),
-        Binding("w", "open_team", "Team"),
+        # screen jumps live in the palette and in ? — the footer is one
+        # row and the ROW ACTIONS are what a user needs named there
+        # every other working screen pops on escape; Today was the exception,
+        # so `t` was a one-way door with no on-screen way back
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("b", "open_book", "Book", show=False),
+        Binding("c", "open_calendar", "Calendar", show=False),
+        Binding("p", "open_pipeline", "Pipeline", show=False),
+        Binding("m", "open_markets", "Markets", show=False),
+        Binding("w", "open_team", "Team", show=False),
         Binding("a", "new_task", "New task"),
         Binding("e", "edit_task", "Edit task"),
         Binding("d", "task_done", "Done (task)"),
         Binding("u", "undo", "Undo"),
         Binding("i", "import_book", "Import"),
-        Binding("y", "sync_programs", "Sync programs"),
-        Binding("comma", "settings", "Setup", key_display=","),
+        # esc Back earned its footer slot back (Today was a one-way door);
+        # sync is a maintenance action that lives in ? and the palette
+        Binding("y", "sync_programs", "Sync programs", show=False),
+        Binding("comma", "settings", "Setup", key_display=",", show=False),
         Binding("r", "refresh", "Refresh", show=False),
     ]
 
@@ -105,12 +112,17 @@ class TodayScreen(Screen):
         renewals_table = self.query_one("#renewals-table", ListTable)
         renewals_table.clear(columns=True)
         renewals_table.add_columns(
-            "expiry", right("due in"), "account", "program", "lines", "status",
+            "renews", right("due in"), "account", "program", "lines", "status",
             right("premium"),
         )
         for item in renewals.upcoming(conn, today, days=120):
             renewals_table.add_row(
-                date_text(item.placement.period_to, item.days_remaining),
+                # renewal_on, NOT period_to: days_remaining counts to the
+                # earliest LINE end, so printing the program end beside it put
+                # a future date under a red "70d over" (the Navigator has
+                # always done this correctly)
+                date_text(item.renewal_on or item.placement.period_to,
+                          item.days_remaining),
                 days_text(item.days_remaining),
                 item.org.name,
                 item.placement.program_name,

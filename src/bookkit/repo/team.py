@@ -9,7 +9,28 @@ from ..models import TeamAssignment, TeamMember
 from . import base
 
 
+def _guard_name(
+    conn: sqlite3.Connection, name: str, member_id: str | None = None
+) -> None:
+    """Two colleagues sharing a name makes every lookup ambiguous — the MCP
+    server's _find_member and _edit_target both take the FIRST match, so a
+    later write lands on the wrong row.
+
+    The guard used to live only in mcpserver, which meant the TUI wrote
+    straight past it: renaming Dana to "Leo Novak" in the team screen saved
+    silently and every subsequent team_assign / edit_field / member_deactivate
+    naming Leo Novak hit Dana's row. It belongs here, where both surfaces
+    inherit it."""
+    for other in list_members(conn, active_only=False):
+        if other.id != member_id and other.name.lower() == name.lower():
+            raise ValueError(
+                f"team member {other.name} already holds that name — rename "
+                f"or deactivate them first"
+            )
+
+
 def create_member(conn: sqlite3.Connection, name: str, **fields: Any) -> TeamMember:
+    _guard_name(conn, name)
     member_id = base.insert(conn, "team_member", {"name": name, **fields})
     return get_member(conn, member_id)
 
@@ -34,6 +55,8 @@ def list_members(conn: sqlite3.Connection, active_only: bool = True) -> list[Tea
 def update_member(
     conn: sqlite3.Connection, member_id: str, note: str | None = None, **changes: Any
 ) -> TeamMember:
+    if changes.get("name"):
+        _guard_name(conn, str(changes["name"]), member_id)
     base.update(conn, "team_member", member_id, changes, note)
     return get_member(conn, member_id)
 

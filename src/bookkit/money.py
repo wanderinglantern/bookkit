@@ -7,6 +7,8 @@ JSON files also carry whole dollars — sync.py uses these same helpers.
 
 from __future__ import annotations
 
+import re
+
 from babel.numbers import format_currency
 from towerkit.money import MoneyParseError, format_money, format_money_compact, parse_money
 
@@ -25,8 +27,29 @@ _LOCALE = "en_US"
 BPS_SCALE = 10_000
 
 
+# a plain decimal amount: "1,234.56", "$1234.5". Shorthand ("2m", "250k")
+# and thousands-separated whole amounts go to towerkit's parser below.
+_CENTS_RE = re.compile(r"^\$?\s*(-?\d{1,3}(?:,\d{3})*|-?\d+)\.(\d{1,2})$")
+
+
 def parse_money_cents(text: str) -> int:
-    """'2m', '250k', '$1,500,000' → integer cents. Rejects ambiguity."""
+    """'2m', '250k', '$1,500,000', '1,234.56' → integer cents.
+
+    bookkit stores CENTS, so its own parser has to accept them: format_cents
+    renders a stored 123456 as "$1,234.56", and a form that pre-fills a value
+    its parser then refuses makes the whole record unsaveable — not the
+    status, not the dates — until the money is manually rounded, destroying
+    the cents in the process.
+
+    The whole-dollar rule belongs to towerkit files, not to entry, and it
+    stays enforced where it applies: cents_to_dollars still refuses sub-dollar
+    amounts on write-through."""
+    match = _CENTS_RE.match(text.strip())
+    if match:
+        whole_text, frac_text = match.group(1), match.group(2).ljust(2, "0")
+        whole = int(whole_text.replace(",", ""))
+        cents = abs(whole) * 100 + int(frac_text)
+        return -cents if whole_text.lstrip("$ ").startswith("-") else cents
     return parse_money(text) * 100
 
 

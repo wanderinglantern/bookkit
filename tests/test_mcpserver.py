@@ -11,6 +11,7 @@ import pytest
 
 from bookkit import db, mcpserver
 from bookkit.mcpserver import build_server
+from bookkit.repo import batches as batches_repo
 from bookkit.repo import (
     contacts,
     interactions,
@@ -22,6 +23,7 @@ from bookkit.repo import (
     tasks,
 )
 from bookkit.repo import tasks as tasks_repo
+from bookkit.services import batches as batches_svc
 
 
 @pytest.fixture
@@ -789,8 +791,12 @@ def test_activity_delete_removes_it_and_stays_undoable(server_db):
     assert out["deleted"] is True
     assert interactions.for_org(rw, org.id) == []
 
-    restored = undo.undo_last(rw)
-    assert restored is not None and restored.entity_type == "interaction"
+    # `u` is the TUI's undo and is scoped to source='tui' (Grant 2026-08-15),
+    # so the correction path for an MCP mistake is R / revert_batch, not u.
+    assert undo.undo_last(rw) is None
+    batch = batches_repo.last_undoable(rw, source="mcp")
+    assert batch is not None
+    batches_svc.revert(rw, batch.ref, now="2026-08-14T09:00:00+00:00")
     assert [i.id for i in interactions.for_org(rw, org.id)] == [ref]
 
 
@@ -824,10 +830,12 @@ def test_activity_delete_is_registered_as_a_write_tool(server_db):
 
 
 def test_undo_after_an_mcp_write_reverts_the_write_not_the_provenance(server_db):
-    """Regression: the MCP server stamps a 'source' provenance event after
-    every write. last_mutation counted it as undoable, so `u` in the TUI hit
-    IndexError ("No item with that key") straight after any MCP write —
-    there is no `source` column to revert. Provenance is bookkeeping."""
+    """Regression, twice over. The MCP server stamps a 'source' provenance
+    event after every write; treating it as undoable made `u` raise
+    IndexError straight after any MCP write. base._assert_known_field now
+    refuses such a field at write time, and `u` no longer reaches MCP writes
+    at all — it is scoped to source='tui'. Reverting the batch is what undoes
+    an assistant write, and it must revert the WRITE, not the provenance."""
     from bookkit.services import undo
 
     conn = db.connect(server_db)
@@ -838,10 +846,13 @@ def test_undo_after_an_mcp_write_reverts_the_write_not_the_provenance(server_db)
     mcpserver._enrich_field(rw, "Acme", "website", "https://acme.example")
     assert orgs.get(rw, org.id).website == "https://acme.example"
 
-    result = undo.undo_last(rw)  # used to raise IndexError
-    assert result is not None
-    assert result.field == "website"
-    assert orgs.get(rw, org.id).website is None
+    assert undo.undo_last(rw) is None            # not this app's write
+
+    batch = batches_repo.last_undoable(rw, source="mcp")
+    assert batch is not None
+    result = batches_svc.revert(rw, batch.ref, now="2026-08-14T09:00:00+00:00")
+    assert result.applied
+    assert orgs.get(rw, org.id).website is None  # the write, not the provenance
 
 
 # -- batching: one call, one undo unit ----------------------------------------

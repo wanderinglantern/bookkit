@@ -20,6 +20,7 @@ from ...money import format_cents_compact, weighted_cents
 from ...repo import opportunities, orgs
 from ...services import pipeline
 from .. import theme
+from ..widgets.entity_actions import batched_write as _batched
 
 
 class PipelineScreen(Screen):
@@ -33,7 +34,7 @@ class PipelineScreen(Screen):
     """
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
-        Binding("h,left", "prev_column", "◀ column", key_display="h"),
+        Binding("h,left", "prev_column", "◀ column", key_display="h", show=False),
         Binding("l,right", "next_column", "column ▶", key_display="l"),
         Binding("greater_than_sign", "advance_card", "Advance card", key_display=">"),
         Binding("less_than_sign", "close_lost", "Mark lost", key_display="<"),
@@ -131,7 +132,11 @@ class PipelineScreen(Screen):
         opp = opportunities.get(self.app.conn, opp_id)
         try:
             nxt = pipeline.allowed_next(opp.stage)[0]
-            moved = pipeline.move_stage(self.app.conn, opp_id, nxt)
+            with _batched(
+                self, tool="advance_card",
+                summary=f"advanced {opp.ref} to {nxt}", org_id=opp.org_id,
+            ):
+                moved = pipeline.move_stage(self.app.conn, opp_id, nxt)
         except (pipeline.StageError, IndexError):
             self.notify("cannot advance from here", severity="warning")
             return
@@ -144,7 +149,12 @@ class PipelineScreen(Screen):
         if opp_id is None:
             return
         try:
-            moved = pipeline.move_stage(self.app.conn, opp_id, "lost")
+            opp = opportunities.get(self.app.conn, opp_id)
+            with _batched(
+                self, tool="close_lost",
+                summary=f"marked {opp.ref} lost", org_id=opp.org_id,
+            ):
+                moved = pipeline.move_stage(self.app.conn, opp_id, "lost")
         except pipeline.StageError:
             self.notify("cannot close from here", severity="warning")
             return

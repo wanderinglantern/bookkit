@@ -61,6 +61,31 @@ class StagedImport:
     def ok(self) -> bool:
         return not self.errors
 
+    def verdict(self) -> str:
+        """The go/no-go line, on its own.
+
+        report() puts this last, and the preview pane clips — so the single
+        line the user needs to read was the first to disappear. Callers render
+        this OUTSIDE the scrolling detail, where truncation cannot reach it."""
+        # count ERRORS, the same thing `ok` is decided by — counting every
+        # issue on skipped records would report warnings as blockers and
+        # miss an error on a record staged to commit
+        errors = sum(
+            1
+            for record in self.records
+            for issue in record.issues
+            if issue.severity is Severity.ERROR
+        )
+        bits = [
+            "OK to commit" if self.ok else "ERRORS — cannot commit",
+            f"{len(self.records)} record(s)",
+        ]
+        if errors:
+            bits.append(f"{errors} error(s)")
+        if self.unmapped:
+            bits.append(f"{len(self.unmapped)} column(s) ignored")
+        return " · ".join(bits)
+
     def report(self, verbose: bool = False) -> str:
         """The dry-run text: counts by kind/action, per-record issues,
         unmapped headers. With verbose (paste previews), every record shows

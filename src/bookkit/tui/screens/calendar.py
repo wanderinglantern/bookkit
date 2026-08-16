@@ -36,13 +36,18 @@ def _add_months(d: date, months: int) -> date:
     return date(d.year + month0 // 12, month0 % 12 + 1, 1)
 
 
-def _cell(status: str, expiry: date, today: date) -> Text:
-    """A month cell: status glyph + day of month; overdue goes bold red ◆."""
+def _cell(status: str, renews: date, overdue: bool) -> Text:
+    """A month cell: status glyph + day of month; overdue goes bold red ◆.
+
+    `overdue` comes from days_remaining, not from the cell's own position:
+    driving it off `renews < today` meant a renewal that had already lapsed
+    but sat in a future grid column rendered as comfortable, and the legend's
+    "◆ overdue" was a marker that could essentially never appear."""
     glyph = STATUS_GLYPH.get(status, "??")
-    if expiry < today:
-        return Text(f"◆ {glyph} {expiry.day}", style=f"bold {theme.RED}")
+    if overdue:
+        return Text(f"◆ {glyph} {renews.day}", style=f"bold {theme.RED}")
     return Text(
-        f"{glyph} {expiry.day}", style=theme.STATUS_STYLES.get(status, theme.FG)
+        f"{glyph} {renews.day}", style=theme.STATUS_STYLES.get(status, theme.FG)
     )
 
 
@@ -80,16 +85,30 @@ class CalendarScreen(Screen):
             Text(m.strftime("%b %y"), style=f"bold {theme.GOLD}" if i == 0 else "")
             for i, m in enumerate(months)
         ]
-        table.add_columns("account", *headers)
+        # column 0 is "overdue": the grid used to start at THIS month and
+        # silently drop everything earlier, so every already-lapsed renewal —
+        # the one category CLAUDE.md says must never fall off — was invisible
+        # on the screen meant to make the year legible.
+        table.add_columns("account", Text("overdue", style=f"bold {theme.RED}"),
+                          *headers)
         rows: dict[str, list[Text | str]] = {}
         keys: dict[str, str] = {}
         for item in renewals.upcoming(self.app.conn, today, days=365):
-            cells = rows.setdefault(item.org.name, [""] * 12)
+            cells = rows.setdefault(item.org.name, [""] * 13)
             keys[item.org.name] = item.org.id
-            expiry = date.fromisoformat(item.placement.period_to)
-            idx = (expiry.year - months[0].year) * 12 + expiry.month - months[0].month
-            if 0 <= idx < 12:
-                cells[idx] = _cell(item.placement.status, expiry, today)
+            # renewal_on, not period_to: the countdown is measured to the
+            # earliest LINE end, so bucketing on the program end plotted
+            # Atomic three months late, on the wrong side of today
+            renews = date.fromisoformat(
+                item.renewal_on or item.placement.period_to
+            )
+            overdue = item.days_remaining < 0
+            idx = (renews.year - months[0].year) * 12 + renews.month - months[0].month
+            cell = _cell(item.placement.status, renews, overdue)
+            if overdue:
+                cells[0] = cell
+            elif 0 <= idx < 12:
+                cells[idx + 1] = cell
         for name in sorted(rows):
             table.add_row(name, *rows[name], key=keys[name])
         table.focus()

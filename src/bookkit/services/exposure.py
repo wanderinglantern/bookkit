@@ -20,6 +20,7 @@ class ExposureRow:
     placement_ref: str
     program_name: str
     period_to: str
+    status: str  # the PLACEMENT's status — quoted exposure is not placed
     layer_name: str
     attach: int  # cents
     limit: int  # cents
@@ -37,7 +38,7 @@ def _rows(
         ExposureRow(
             r["org_id"], r["org_ref"], r["org_name"],
             r["placement_id"], r["placement_ref"], r["program_name"], r["period_to"],
-            r["layer_name"], r["attach"], r["lim"], r["carrier"],
+            r["status"], r["layer_name"], r["attach"], r["lim"], r["carrier"],
             r["share_bps"], r["premium"],
         )
         for r in projection.carrier_exposure(

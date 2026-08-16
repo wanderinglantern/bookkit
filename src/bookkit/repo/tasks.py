@@ -67,11 +67,19 @@ def open_tasks_for_client(conn: sqlite3.Connection, org_id: str) -> list[Task]:
 
 
 def reassign_placement(conn: sqlite3.Connection, from_id: str, to_id: str) -> int:
-    """Bulk move for placement merges; the service logs the event."""
-    cur = conn.execute(
-        "UPDATE task SET placement_id = ? WHERE placement_id = ?", (to_id, from_id)
-    )
-    return cur.rowcount
+    """Move every row to the surviving placement on a merge."""
+    # Row by row through base.update, not one bulk UPDATE: the move is a
+    # field change like any other and must land in the event log, or the
+    # merge cannot be reverted — the record would come back while the rows
+    # that moved stayed moved. Same rule as rfi.reassign_market.
+    rows = conn.execute(
+        f"""SELECT id FROM task
+            WHERE placement_id = ? AND {base.alive()}""",
+        (from_id,),
+    ).fetchall()
+    for row in rows:
+        base.update(conn, "task", row[0], {"placement_id": to_id}, "placement merged")
+    return len(rows)
 
 
 def complete(conn: sqlite3.Connection, task_id: str) -> Task:

@@ -260,13 +260,9 @@ def _maybe_int(value: object) -> int | None:
 
 
 def _snapshot(conn: sqlite3.Connection, db_path: Path) -> Path:
-    backups = db_path.parent / "backups"
-    backups.mkdir(parents=True, exist_ok=True)
-    stamp = db.utc_now().replace(":", "-")
-    dest, n = backups / f"{db_path.name}.{stamp}.bak", 2
-    while dest.exists():  # two imports inside one second — keep both snapshots
-        dest, n = backups / f"{db_path.name}.{stamp}.{n}.bak", n + 1
-    return db.backup(conn, dest)
+    """The pre-import rollback. Lives in db.snapshot so `seed --force` takes
+    the same one rather than growing a second copy."""
+    return db.snapshot(conn, db_path)
 
 
 def _count(result: CommitResult, record: StagedRecord) -> None:

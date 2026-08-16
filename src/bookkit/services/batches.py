@@ -9,6 +9,8 @@ neither the before nor the after of any single action."""
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from ..models import EventBatch
@@ -19,6 +21,34 @@ from ..repo import events as events_repo
 # Provenance, not a mutation — derived from the one skip-list in repo/events
 # ('created' is not skipped here: the planner handles it as its own kind).
 SKIP_FIELDS = frozenset(events_repo.NON_MUTATION_FIELDS) - {"created"}
+
+
+@contextmanager
+def open_batch(
+    conn: sqlite3.Connection,
+    *,
+    source: str,
+    tool: str,
+    summary: str,
+    org_id: str | None = None,
+) -> Iterator[EventBatch]:
+    """One writer action, one undo unit: opens the transaction AND the batch,
+    so every event written inside is grouped, revertible together, and counted
+    against the blast cap.
+
+    `source` says which surface wrote it ('mcp' or 'tui') — the only reason
+    both callers are not identical. This lives in services/ rather than in
+    either caller because the MCP server had it first and the TUI grew a
+    second, subtly different copy; one home is what keeps `R` able to revert
+    both."""
+    from .. import db
+
+    batch_id = batches_repo.new_batch_id()
+    with db.transaction(conn, batch=db.BatchState(batch_id=batch_id)):
+        yield batches_repo.create(
+            conn, batch_id=batch_id, source=source, tool=tool,
+            summary=summary, org_id=org_id,
+        )
 
 
 @dataclass(frozen=True)
@@ -215,6 +245,14 @@ def revert(
     updates = [c for c in plan.updates if clean(c)]
     creates = [c for c in plan.creates if clean(c)]
 
+    reverted = [*updates, *creates, *deletes]
+    if not reverted:
+        # force on a fully conflicted batch: nothing to apply. Marking it
+        # reverted here would report success for a no-op AND burn the batch,
+        # so the user could never put it back even after undoing their own
+        # change. applied means "the book moved", not "the call ran".
+        return RevertResult(batch, reverted=[], refused=plan.conflicts, applied=False)
+
     with db.transaction(conn):                     # deliberately unbatched
         # undeletes FIRST: a batch that edited then soft-deleted one row needs
         # the row alive again before base.update (alive-filtered) restores it
@@ -234,7 +272,7 @@ def revert(
 
     return RevertResult(
         batch=batch,
-        reverted=[*updates, *creates, *deletes],
+        reverted=reverted,
         refused=plan.conflicts,
         applied=True,
     )

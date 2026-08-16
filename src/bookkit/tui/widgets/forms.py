@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from ..app import BookkitApp
@@ -59,6 +59,45 @@ class FormSpec:
     initial: dict[str, Any] = dc_field(default_factory=dict)
 
 
+@dataclass
+class BatchSpec:
+    """What undo unit this form's save belongs to.
+
+    A form passes this instead of opening its own transaction: FormModal wraps
+    the whole `commit` callback in one batch, so a save that writes four rows
+    is reverted as one thing by `R` — and rolls back entirely if any part of
+    it refuses. `summary` may be a callable when the sentence needs the values
+    the user just typed."""
+
+    tool: str
+    summary: str | Callable[[dict[str, Any]], str]
+    org_id: str | None = None
+
+    def sentence(self, values: dict[str, Any]) -> str:
+        return self.summary(values) if callable(self.summary) else self.summary
+
+    @staticmethod
+    def for_title(title: str, org_id: str | None = None) -> BatchSpec:
+        """The default every form gets. 'edit contact — Atomic Industries'
+        becomes tool 'edit_contact' with the whole title as the summary: the
+        changes list groups by tool, so the slug must not carry the record's
+        name, while the sentence should."""
+        head = title.split("—")[0].split("(")[0].strip().lower()
+        return BatchSpec(
+            tool="_".join(head.split()[:3]) or "form", summary=title, org_id=org_id
+        )
+
+
+class _Refused(Exception):
+    """A commit callback returned an error string. Raised so the surrounding
+    transaction rolls back — a refused save must leave nothing behind — then
+    unwrapped back into that same string for the form to display."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 class FormModal(ModalScreen):
     """Dismisses with a {key: parsed_value} dict, or None on cancel.
 
@@ -72,15 +111,22 @@ class FormModal(ModalScreen):
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+s", "save", "Save", priority=True),
     ]
-    # the box hugs its content; only the field list scrolls, so the title and
-    # the "^s save" hint stay on screen however long the form is
+    # The box hugs its content and only the field list scrolls, so the title
+    # and the "^s save" hint stay on screen however long the form is.
+    #
+    # `max-height: 55vh` on the fields USED to break that promise: it is
+    # measured against the viewport, while the box is capped at 80% by
+    # bookkit.tcss, and the two add up. Below ~34 rows the hint and the Save
+    # button landed outside the box — invisible, while Tab still reached them
+    # and Enter still fired. `1fr` makes the scroller absorb whatever is left
+    # after the chrome instead of claiming its own slice of the screen.
     DEFAULT_CSS = """
     FormModal .modal-box {
         height: auto;
     }
     FormModal .modal-fields {
-        height: auto;
-        max-height: 55vh;
+        height: 1fr;
+        min-height: 3;
     }
     """
 
@@ -89,11 +135,19 @@ class FormModal(ModalScreen):
         spec: FormSpec,
         commit: Callable[[dict[str, Any]], str | None] | None = None,
         draft_key: str | None = None,
+        batch: BatchSpec | Literal[False] | None = None,
     ) -> None:
         super().__init__()
         self.spec = spec
         self._commit = commit
         self._draft_key = draft_key
+        # Batching is the DEFAULT, not an opt-in: 33 call sites build a
+        # FormModal directly rather than through entity_actions.push_form, and
+        # any one of them left unbatched is a save that `R` cannot reach and
+        # that `u` can only half undo. `batch=False` opts a form out.
+        if batch is None:
+            batch = BatchSpec.for_title(spec.title)
+        self._batch: BatchSpec | None = batch or None
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-box"):
@@ -205,7 +259,7 @@ class FormModal(ModalScreen):
                 return
         if self._commit is not None:
             try:
-                error = self._commit(values)
+                error = self._run_commit(values)
             except Exception as exc:  # a failed save must never crash the TUI
                 error = str(exc)
             if error is not None:
@@ -216,6 +270,33 @@ class FormModal(ModalScreen):
 
             drafts.clear(self.app.conn, self._draft_key)
         self.dismiss(values)
+
+    def _run_commit(self, values: dict[str, Any]) -> str | None:
+        """Run the save, inside one batch when the form declared one.
+
+        Without a BatchSpec this is the old behaviour verbatim, so a form that
+        has not been converted yet still works — the conversion is per-form,
+        not all-or-nothing."""
+        assert self._commit is not None
+        if self._batch is None:
+            return self._commit(values)
+
+        from ...services import batches as batches_svc
+
+        try:
+            with batches_svc.open_batch(
+                self.app.conn,
+                source="tui",
+                tool=self._batch.tool,
+                summary=self._batch.sentence(values),
+                org_id=self._batch.org_id,
+            ):
+                error = self._commit(values)
+                if error is not None:
+                    raise _Refused(error)
+        except _Refused as refused:
+            return refused.message
+        return None
 
     def _drain(self, f: Field) -> str | None:
         widget = self.query_one(f"#form-{f.key}")

@@ -20,6 +20,7 @@ from ...repo import contacts, orgs, submissions
 from ...services import exposure, hit_rate
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
+from ..widgets.entity_actions import batched_write as _batched
 from ..widgets.tables import ListTable
 
 # appetite vocabulary → state colors, same grammar as theme.STATUS_STYLES
@@ -39,6 +40,18 @@ def _appetite_text(value: str) -> Text:
 
 def _pretty(value: str | None) -> Text:
     return Text(value.replace("_", " ")) if value else dash()
+
+
+def _pct(value: float | None) -> str:
+    """A rate, or an em dash. 0% and "nothing has come back yet" are
+    different things and must not render alike."""
+    return f"{value:.0%}" if value is not None else "—"
+
+
+def _rate_cell(value: float | None) -> Text:
+    if value is None:
+        return Text("—", style=theme.DIM, justify="right")
+    return Text(f"{value:.0%}", justify="right")
 
 
 class MarketsScreen(Screen):
@@ -137,8 +150,10 @@ class MarketsScreen(Screen):
         # short headers: "bind rate" rendered as "bin" at 80 columns, and a
         # truncated header is worse than a terse one (review F25)
         table.add_columns(
+            # "n" is what the rates are OUT OF: a bare 100% over one decided
+            # submission is not a hit rate anyone can act on
             "market", "type", "rating", "target lines",
-            right("out"), right("quote"), right("bind"),
+            right("out"), right("n"), right("quote"), right("bind"),
         )
         def add(org, depth: int) -> None:
             profile = orgs.get_market_profile(conn, org.id)
@@ -155,9 +170,10 @@ class MarketsScreen(Screen):
                 Text(profile.am_best_rating) if profile and profile.am_best_rating else dash(),
                 Text(", ".join(targets), style=theme.GREEN) if targets else dash(),
                 Text(str(out), justify="right", style=theme.BLUE if out else theme.DIM),
-                Text(f"{rate.quote_rate:.0%}", justify="right")
+                Text(str(rate.decided) if rate else "0", justify="right"),
+                _rate_cell(rate.quote_rate)
                 if rate else Text("—", style=theme.DIM, justify="right"),
-                Text(f"{rate.bind_rate:.0%}", justify="right")
+                _rate_cell(rate.bind_rate)
                 if rate else Text("—", style=theme.DIM, justify="right"),
                 key=org.id,
             )
@@ -223,7 +239,10 @@ class MarketsScreen(Screen):
             if target_id is None:
                 return
             try:
-                result = merge_markets(self.app.conn, source_id, target_id)
+                with _batched(
+                    self, tool="merge_markets", summary="merged two markets"
+                ):
+                    result = merge_markets(self.app.conn, source_id, target_id)
             except MergeError as exc:
                 self.notify(str(exc), severity="error")
                 return
@@ -314,7 +333,7 @@ class MarketDetailScreen(Screen):
         Binding("escape", "app.pop_screen", "Back"),
         Binding("a", "add_appetite", "Add appetite"),
         Binding("w", "add_underwriter", "Add underwriter"),
-        Binding("i", "import_underwriter", "Import (paste sig)"),
+        Binding("i", "import_underwriter", "Import (paste sig)", show=False),
         # e and D resolve by which table has focus, the same way the account
         # screen does it. Without them, everything `a` and `w` created here
         # was permanent (review F18).
@@ -397,6 +416,11 @@ class MarketDetailScreen(Screen):
         it — no confirmation, because the app prefers forgiveness to friction."""
         row = self._focused_row()
         if row is None:
+            # action_edit_row notifies here and this one did not — the same
+            # refusal, told in one place and swallowed in the other
+            self.notify(
+                "select an appetite row first", severity="warning"
+            )
             return
         kind, row_id = row
         if kind != "appetite":
@@ -406,7 +430,8 @@ class MarketDetailScreen(Screen):
             existing = orgs.get_appetite(self.app.conn, row_id)
         except KeyError:
             return
-        orgs.delete_appetite(self.app.conn, row_id)
+        with _batched(self, tool="appetite_delete", summary="removed an appetite line"):
+            orgs.delete_appetite(self.app.conn, row_id)
         self.notify(f"removed {_pretty(existing.line)} appetite — u to undo")
         self._refresh()
 
@@ -524,8 +549,9 @@ class MarketDetailScreen(Screen):
             (r for r in hit_rate.by_market(conn) if r.market_org_id == market.id), None
         )
         rate_text = (
-            f"   quote {rate.quote_rate:.0%} · bind {rate.bind_rate:.0%}"
-            f" [{theme.DIM}]({rate.sent} sent)[/]" if rate else ""
+            f"   quote {_pct(rate.quote_rate)} · bind {_pct(rate.bind_rate)}"
+            f" [{theme.DIM}](of {rate.decided} decided, {rate.pending} still out)[/]"
+            if rate else ""
         )
         from ...repo import aliases
 
@@ -572,20 +598,28 @@ class MarketDetailScreen(Screen):
 
         table = self.query_one("#md-exposure", ListTable)
         table.add_columns(
+            # status, because a QUOTED tower is exposure worth seeing but is
+            # not placed business — rendering both alike had this screen
+            # reading $650K where the book's bound-only total read nothing
             "account", "expiry", right("due in"), "program", "layer",
-            "as written", right("share"), right("premium"),
+            "status", "as written", right("share"), right("premium"),
         )
         for row in exposure.for_market(conn, market.id, days=90):
             days = days_until(row.period_to)
             table.add_row(
                 row.org_name, date_text(row.period_to, days), days_text(days),
                 row.program_name, row.layer_name,
+                status_text(row.status),
                 row.carrier if row.carrier != market.name else dash(),
                 Text(f"{row.share_bps / 100:g}%", justify="right"),
                 money_text(row.premium),
-                key=row.org_id,
+                # one carrier can sit on two layers of the same tower, so the
+                # owning org is not a unique row key — DuplicateKey here kills
+                # the screen. Composite key; the org is resolved on select.
+                key=f"{row.placement_id}:{row.layer_name}:{row.org_id}",
             )
 
     def on_data_table_row_selected(self, event: ListTable.RowSelected) -> None:
         if event.data_table.id == "md-exposure" and event.row_key.value:
-            self.app.open_account(event.row_key.value)
+            # the key is placement:layer:org — the org is the last segment
+            self.app.open_account(event.row_key.value.rsplit(":", 1)[-1])

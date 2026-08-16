@@ -109,12 +109,19 @@ def get_market_profile(conn: sqlite3.Connection, org_id: str) -> MarketProfile |
 
 
 def reassign_appetite(conn: sqlite3.Connection, from_org_id: str, to_org_id: str) -> int:
-    """Bulk move for market merges; the service logs the event."""
-    cur = conn.execute(
-        "UPDATE appetite SET market_org_id = ? WHERE market_org_id = ?",
-        (to_org_id, from_org_id),
-    )
-    return cur.rowcount
+    """Move every row to the surviving market on a merge."""
+    # Row by row through base.update, not one bulk UPDATE: the move is a
+    # field change like any other and must land in the event log, or the
+    # merge cannot be reverted — the record would come back while the rows
+    # that moved stayed moved. Same rule as rfi.reassign_market.
+    rows = conn.execute(
+        f"""SELECT id FROM appetite
+            WHERE market_org_id = ? AND {base.alive()}""",
+        (from_org_id,),
+    ).fetchall()
+    for row in rows:
+        base.update(conn, "appetite", row[0], {"market_org_id": to_org_id}, "market merged")
+    return len(rows)
 
 
 def add_appetite(conn: sqlite3.Connection, market_org_id: str, **fields: Any) -> Appetite:

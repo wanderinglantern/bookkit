@@ -26,19 +26,35 @@ def for_org(conn: sqlite3.Connection, org_id: str) -> list[Document]:
 
 
 def reassign_org(conn: sqlite3.Connection, from_org_id: str, to_org_id: str) -> int:
-    """Bulk move for org merges; the service logs the event."""
-    cur = conn.execute(
-        "UPDATE document SET org_id = ? WHERE org_id = ?", (to_org_id, from_org_id)
-    )
-    return cur.rowcount
+    """Move every row to the survivor on a merge."""
+    # Row by row through base.update, not one bulk UPDATE: the move is a
+    # field change like any other and must land in the event log, or the
+    # merge cannot be reverted — the record would come back while the rows
+    # that moved stayed moved. Same rule as rfi.reassign_market.
+    rows = conn.execute(
+        f"""SELECT id FROM document
+            WHERE org_id = ? AND {base.alive()}""",
+        (from_org_id,),
+    ).fetchall()
+    for row in rows:
+        base.update(conn, "document", row[0], {"org_id": to_org_id}, "market merged")
+    return len(rows)
 
 
 def reassign_placement(conn: sqlite3.Connection, from_id: str, to_id: str) -> int:
-    """Bulk move for placement merges; the service logs the event."""
-    cur = conn.execute(
-        "UPDATE document SET placement_id = ? WHERE placement_id = ?", (to_id, from_id)
-    )
-    return cur.rowcount
+    """Move every row to the surviving placement on a merge."""
+    # Row by row through base.update, not one bulk UPDATE: the move is a
+    # field change like any other and must land in the event log, or the
+    # merge cannot be reverted — the record would come back while the rows
+    # that moved stayed moved. Same rule as rfi.reassign_market.
+    rows = conn.execute(
+        f"""SELECT id FROM document
+            WHERE placement_id = ? AND {base.alive()}""",
+        (from_id,),
+    ).fetchall()
+    for row in rows:
+        base.update(conn, "document", row[0], {"placement_id": to_id}, "placement merged")
+    return len(rows)
 
 
 def delete(conn: sqlite3.Connection, doc_id: str) -> None:

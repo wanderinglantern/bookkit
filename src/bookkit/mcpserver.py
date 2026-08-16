@@ -760,17 +760,14 @@ def _resolve_client(conn: sqlite3.Connection, ref_or_name: str) -> Any:
 def _open_batch(
     conn: sqlite3.Connection, *, tool: str, summary: str, org_id: str | None = None
 ) -> Iterator[EventBatch]:
-    """One MCP call, one undo unit. Opens the transaction AND the batch, so
-    every event written inside is grouped and revertible together (and counted
-    against the blast cap)."""
-    from .repo import batches as batches_repo
+    """One MCP call, one undo unit — services.batches.open_batch with this
+    surface's source stamp. The TUI opens batches the same way."""
+    from .services import batches as batches_svc
 
-    batch_id = batches_repo.new_batch_id()
-    with db.transaction(conn, batch=db.BatchState(batch_id=batch_id)):
-        yield batches_repo.create(
-            conn, batch_id=batch_id, source="mcp", tool=tool,
-            summary=summary, org_id=org_id,
-        )
+    with batches_svc.open_batch(
+        conn, source="mcp", tool=tool, summary=summary, org_id=org_id
+    ) as batch:
+        yield batch
 
 
 def _provenance(conn: sqlite3.Connection, entity: str, entity_id: str) -> None:

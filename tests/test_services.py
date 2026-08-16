@@ -107,20 +107,44 @@ def test_book_summary(seeded) -> None:
 
 
 def test_undo_field_change(seeded) -> None:
+    """`u` reverts a TUI write. It is batch-granular now, so the write has to
+    be made the way the TUI makes it — inside a batch."""
+    from bookkit.services import batches as batches_svc
+
     org = orgs.list_orgs(seeded, kind="client")[0]
-    orgs.update(seeded, org.id, status="dormant")
+    with batches_svc.open_batch(
+        seeded, source="tui", tool="edit_account", summary="set status"
+    ):
+        orgs.update(seeded, org.id, status="dormant")
+
     result = undo.undo_last(seeded)
-    assert result is not None and result.field == "status"
+    assert result is not None and result.applied
     assert orgs.get(seeded, org.id).status == org.status
 
 
 def test_undo_soft_delete(seeded) -> None:
+    from bookkit.services import batches as batches_svc
+
     org = orgs.list_orgs(seeded, kind="client")[0]
     task = tasks.create(seeded, "Ephemeral", org_id=org.id)
-    tasks.delete(seeded, task.id)
+    with batches_svc.open_batch(
+        seeded, source="tui", tool="task_delete", summary="deleted a task"
+    ):
+        tasks.delete(seeded, task.id)
+
     result = undo.undo_last(seeded)
-    assert result is not None and result.field == "deleted_at"
+    assert result is not None and result.applied
     assert tasks.get(seeded, task.id).status == "open"
+
+
+def test_undo_ignores_a_write_this_app_did_not_make(seeded) -> None:
+    """Unbatched writes are sync projections and imports. `u` used to revert
+    placement.synced_at on a freshly opened app; now it finds nothing."""
+    org = orgs.list_orgs(seeded, kind="client")[0]
+    orgs.update(seeded, org.id, status="dormant")      # no batch = not ours
+
+    assert undo.undo_last(seeded) is None
+    assert orgs.get(seeded, org.id).status == "dormant"
 
 
 def test_capture_suggests_task() -> None:

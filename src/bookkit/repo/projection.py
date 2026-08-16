@@ -98,7 +98,14 @@ def carrier_exposure(
 ) -> list[sqlite3.Row]:
     """Every account where any of these carrier strings (a market's name plus
     its aliases) is on the tower, renewing in the window — the query the
-    proj_ tables exist for."""
+    proj_ tables exist for.
+
+    Carries `status`, and does NOT filter by it. A tower a carrier has quoted
+    but not bound is real exposure worth seeing, but it is not placed
+    business: rendering both alike made "ON THE TOWER" read $650K where the
+    book's bound-only total read nothing, from the same data. The caller
+    labels each row; market_premiums stays bound-only, because a premium
+    TOTAL is a different question from a list."""
     if not carriers:
         return []
     marks = ", ".join("?" for _ in carriers)
@@ -106,7 +113,7 @@ def carrier_exposure(
         f"""
         SELECT o.name AS org_name, o.ref AS org_ref, o.id AS org_id,
                p.id AS placement_id, p.ref AS placement_ref, p.program_name,
-               p.period_to, pl.name AS layer_name, pl.attach, pl.lim,
+               p.period_to, p.status, pl.name AS layer_name, pl.attach, pl.lim,
                pp.carrier, pp.share_bps, pp.premium
         FROM proj_participant pp
         JOIN placement p ON p.id = pp.placement_id

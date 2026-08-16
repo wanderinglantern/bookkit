@@ -17,6 +17,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
+from .. import db
 from ..models import Org, Placement
 from ..repo import (
     aliases,
@@ -61,33 +62,41 @@ def merge_placements(
             "truth cannot merge; unlink one first"
         )
 
-    moved_subs = submissions.reassign_placement(conn, source.id, target.id)
-    moved_tasks = tasks.reassign_placement(conn, source.id, target.id)
-    moved_docs = documents.reassign_placement(conn, source.id, target.id)
+    # ONE transaction: eight writes on an AUTOCOMMIT connection each committed
+    # separately, so any failure mid-merge left the submissions on the target
+    # while the source was still live — neither the before nor the after of
+    # anything, with no error path that restored it. Nesting joins, so a
+    # caller that has already opened a batch keeps owning the undo unit.
+    with db.transaction(conn):
+        moved_subs = submissions.reassign_placement(conn, source.id, target.id)
+        moved_tasks = tasks.reassign_placement(conn, source.id, target.id)
+        moved_docs = documents.reassign_placement(conn, source.id, target.id)
 
-    carried_link = False
-    if source.program_path and not target.program_path:
-        projection.reassign(conn, source.id, target.id)
-        placements.update(
-            conn,
-            target.id,
-            note=f"link carried from {source.ref} on merge",
-            program_path=source.program_path,
-            source_sha256=source.source_sha256,
-            synced_at=source.synced_at,
-        )
-        placements.update(
-            conn, source.id, note="link moved on merge",
-            program_path=None, source_sha256=None, synced_at=None,
-        )
-        # program_link is path→org and both placements share the org: unchanged.
-        carried_link = True
+        carried_link = False
+        if source.program_path and not target.program_path:
+            projection.reassign(conn, source.id, target.id)
+            placements.update(
+                conn,
+                target.id,
+                note=f"link carried from {source.ref} on merge",
+                program_path=source.program_path,
+                source_sha256=source.source_sha256,
+                synced_at=source.synced_at,
+            )
+            placements.update(
+                conn, source.id, note="link moved on merge",
+                program_path=None, source_sha256=None, synced_at=None,
+            )
+            # program_link is path→org, both placements share the org: unchanged.
+            carried_link = True
 
-    base.log_event(
-        conn, "placement", target.id, "merged_from", None, source.ref,
-        note=f"{moved_subs} submissions, {moved_tasks} tasks, {moved_docs} documents",
-    )
-    base.soft_delete(conn, "placement", source.id, note=f"merged into {target.ref}")
+        base.log_event(
+            conn, "placement", target.id, "merged_from", None, source.ref,
+            note=f"{moved_subs} submissions, {moved_tasks} tasks, {moved_docs} documents",
+        )
+        base.soft_delete(
+            conn, "placement", source.id, note=f"merged into {target.ref}"
+        )
     return MergeResult(
         placements.get(conn, target.id), moved_subs, moved_tasks, moved_docs, carried_link
     )
@@ -113,33 +122,37 @@ def merge_markets(conn: sqlite3.Connection, source_id: str, target_id: str) -> M
     if source.kind != "market" or target.kind != "market":
         raise MergeError("market merge is for market orgs only")
 
-    moved_contacts = contacts.reassign_org(conn, source.id, target.id)
-    moved_appetite = orgs.reassign_appetite(conn, source.id, target.id)
-    moved_subs = submissions.reassign_market(conn, source.id, target.id)
-    moved_requests = rfi_repo.reassign_market(conn, source.id, target.id)
-    interactions.reassign_org(conn, source.id, target.id)
-    documents.reassign_org(conn, source.id, target.id)
-    aliases.reassign_market(conn, source.id, target.id)
-    aliases.set_alias(conn, source.name, target.id)
+    # ONE transaction, for the same reason merge_placements needs one: ten
+    # writes committing independently means a mid-way failure leaves contacts
+    # and submissions on the survivor while the duplicate is still live.
+    with db.transaction(conn):
+        moved_contacts = contacts.reassign_org(conn, source.id, target.id)
+        moved_appetite = orgs.reassign_appetite(conn, source.id, target.id)
+        moved_subs = submissions.reassign_market(conn, source.id, target.id)
+        moved_requests = rfi_repo.reassign_market(conn, source.id, target.id)
+        interactions.reassign_org(conn, source.id, target.id)
+        documents.reassign_org(conn, source.id, target.id)
+        aliases.reassign_market(conn, source.id, target.id)
+        aliases.set_alias(conn, source.name, target.id)
 
-    profile = orgs.get_market_profile(conn, source.id)
-    if profile and orgs.get_market_profile(conn, target.id) is None:
-        fields = {
-            k: v
-            for k, v in profile.model_dump().items()
-            if k != "org_id" and v is not None
-        }
-        if fields:
-            orgs.set_market_profile(conn, target.id, **fields)
+        profile = orgs.get_market_profile(conn, source.id)
+        if profile and orgs.get_market_profile(conn, target.id) is None:
+            fields = {
+                k: v
+                for k, v in profile.model_dump().items()
+                if k != "org_id" and v is not None
+            }
+            if fields:
+                orgs.set_market_profile(conn, target.id, **fields)
 
-    base.log_event(
-        conn, "org", target.id, "merged_from", None, source.name,
-        note=(
-            f"{moved_contacts} contacts, {moved_appetite} appetite, "
-            f"{moved_subs} submissions, {moved_requests} requests"
-        ),
-    )
-    base.soft_delete(conn, "org", source.id, note=f"merged into {target.name}")
+        base.log_event(
+            conn, "org", target.id, "merged_from", None, source.name,
+            note=(
+                f"{moved_contacts} contacts, {moved_appetite} appetite, "
+                f"{moved_subs} submissions, {moved_requests} requests"
+            ),
+        )
+        base.soft_delete(conn, "org", source.id, note=f"merged into {target.name}")
     return MarketMergeResult(
         orgs.get(conn, target.id), moved_contacts, moved_appetite, moved_subs, source.name
     )

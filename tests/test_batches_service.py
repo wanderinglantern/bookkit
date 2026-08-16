@@ -260,8 +260,13 @@ def test_user_edits_to_a_batch_created_row_block_its_revert(conn):
     # force's contract is "revert the clean rest, skip the conflicted" — it
     # never destroys post-batch user work. The edited row SURVIVES force,
     # reported as refused; removing it is what the delete flows are for.
+    # Here there IS no clean rest, so nothing moves: applied means "the book
+    # moved", not "the call ran" (changed 2026-08-15). Reporting success for
+    # a no-op also used to mark the batch reverted, which burned it — the
+    # user could never put it back even after undoing their own edit.
     forced = batches_svc.revert(conn, made.ref, now=NOW, force=True)
-    assert forced.applied
+    assert not forced.applied
+    assert batches_repo.get_by_ref(conn, made.ref).reverted_at is None
     assert orgs.get(conn, org.id).website == "https://grant-typed.example"
     assert {(c.change.entity_id, c.change.field) for c in forced.refused} == {
         (org.id, "created")

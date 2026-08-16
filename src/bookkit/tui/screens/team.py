@@ -39,7 +39,7 @@ class TeamScreen(Screen):
         Binding("escape", "app.pop_screen", "Back"),
         Binding("a", "new_member", "New member"),
         Binding("e", "edit_member", "Edit"),
-        Binding("i", "import_colleague", "Import (paste sig)"),
+        Binding("i", "import_colleague", "Import (paste sig)", show=False),
         Binding("w", "assign_selected", "Assign to account"),
         Binding("f", "focus_filter", "Who for…?"),
     ]
@@ -174,6 +174,7 @@ class TeamScreen(Screen):
             self.notify("no assignments yet — assign from an account (w)")
             return
         options = []
+        org_by_assignment: dict[str, str] = {}
         for row in assignments:
             deal = (
                 f" · {row['placement_ref']} {row['program_name']}"
@@ -183,9 +184,15 @@ class TeamScreen(Screen):
             label = f"{row['org_name']}{deal} — {row['role'] or '—'}"
             if row["lines"]:
                 label += f" ({row['lines']})"
-            options.append((label, str(row["resolved_org_id"])))
+            # keyed on the assignment row, NOT the org it resolves to: one
+            # colleague can hold an account-level AND a placement-level
+            # assignment at the same client, and two options sharing an id is
+            # a DuplicateID that kills the app from a message handler
+            org_by_assignment[str(row["id"])] = str(row["resolved_org_id"])
+            options.append((label, str(row["id"])))
 
-        def picked(org_id: str | None) -> None:
+        def picked(assignment_id: str | None) -> None:
+            org_id = org_by_assignment.get(assignment_id or "")
             if org_id:
                 self.app.open_account(org_id)
 
