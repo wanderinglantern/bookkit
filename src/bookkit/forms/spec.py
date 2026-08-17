@@ -125,7 +125,9 @@ def parse_value(field: Field, raw: str | None) -> Any:
     if field.kind == "date":
         parsed = parse_human_date(text)
         if parsed is None:
-            raise ValueError(f"cannot read a date from {text!r}")
+            raise ValueError(
+                "enter a date like 2026-10-15, friday, or +2w — a bare number is ambiguous"
+            )
         return parsed.isoformat()
     if field.kind == "money":
         try:

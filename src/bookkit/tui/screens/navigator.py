@@ -24,7 +24,7 @@ from textual.widgets import Footer, Static, Tree
 from textual.widgets.tree import TreeNode
 
 from ...dates import days_until
-from ...forms.spec import Field
+from ...forms import inline as forms_inline
 from ...money import format_cents_compact
 from ...repo import batches as batches_repo
 from ...repo import contacts, opportunities, orgs, placements
@@ -76,19 +76,11 @@ ROW_HINTS = {
 ADDABLE = ("placements", "contacts", "opportunities", "tasks", "projects", "requests")
 
 # columns editable straight in the table (i) — values parse exactly like the
-# modal forms, and each commit is one undoable field write
-CONTACT_INLINE = {
-    2: Field("role", "role"),
-    3: Field("title", "title"),
-    4: Field("email", "email", "email"),
-    5: Field("phone", "phone", "phone"),
-}
-TASK_INLINE = {
-    0: Field("due_on", "due", "date"),
-    1: Field("title", "task", required=True),
-    2: Field("category", "category"),
-    3: Field("description", "description"),
-}
+# modal forms, and each commit is one undoable field write. The Field list
+# itself lives in forms/inline.py: which fields are inline-editable is not a
+# per-surface choice, only the column position is.
+CONTACT_INLINE = dict(zip((2, 3, 4, 5), forms_inline.CONTACT_FIELDS, strict=True))
+TASK_INLINE = dict(zip((0, 1, 2, 3), forms_inline.TASK_FIELDS, strict=True))
 
 
 def _section(label: str, count: int | None = None) -> str:

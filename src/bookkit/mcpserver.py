@@ -1682,7 +1682,9 @@ def _clean_typed(vtype: Any, field: str, value: str | None) -> Any:
 
         parsed = parse_human_date(value)
         if parsed is None:
-            raise ValueError(f"cannot read a date from {value!r}")
+            raise ValueError(
+                "enter a date like 2026-10-15, friday, or +2w — a bare number is ambiguous"
+            )
         return parsed.isoformat()
     if vtype == "int":
         return int(value)

@@ -25,6 +25,7 @@ from textual.widgets import Footer, OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
 from ...dates import days_until
+from ...forms import inline as forms_inline
 from ...forms.spec import Field
 from ...money import format_cents_compact
 from ...repo import (
@@ -122,12 +123,8 @@ TAB_HINTS: dict[str, str] = {
 # the cell editor is one line, which would flatten a multi-line note on save.
 # Showing it at all is the point — it used to be typed into the form and then
 # be invisible everywhere in the TUI, reachable only through the export.
-RFI_ITEM_INLINE = {
-    0: Field("prompt", "item", required=True),
-    3: Field("category", "group"),
-    4: Field("due_on", "needed by", "date"),
-    7: Field("response", "response"),
-}
+# the Field list itself lives in forms/inline.py — see the comment there.
+RFI_ITEM_INLINE = dict(zip((0, 3, 4, 7), forms_inline.RFI_ITEM_FIELDS, strict=True))
 
 # narrower than this and a wrapped detail column is not worth the rows it
 # costs: the note comes out three characters wide, three lines tall, saying
