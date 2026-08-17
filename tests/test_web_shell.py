@@ -37,13 +37,25 @@ def test_cli_registers_the_web_command():
     assert args.port == 8931
 
 
-def test_serve_binds_loopback_only():
-    """The database is 0600 and holds client contacts and premium figures.
-    0.0.0.0 would publish the whole book to the LAN."""
-    import inspect
+def test_serve_binds_loopback_only(db_path: Path, monkeypatch):
+    """The database is 0600 and holds client contacts and premium figures, so
+    the server must never bind 0.0.0.0 and publish the book to the LAN.
 
-    from bookkit.web import serve
+    This asserts the host uvicorn is actually handed, not the module's source
+    text — a substring scan cannot tell a bind from a comment warning against
+    one, and made the comment worse to stay green.
 
-    source = inspect.getsource(serve)
-    assert "127.0.0.1" in source
-    assert "0.0.0.0" not in source
+    Uses the tmp_path-backed db_path fixture rather than db_path=None: None
+    resolves through db.default_db_path() to the real book, and a test has
+    no business creating or migrating that file."""
+    import uvicorn
+
+    from bookkit.web import serve as serve_mod
+
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(kw))
+
+    serve_mod.serve(db_path, 8931, open_browser=False)
+
+    assert seen["host"] == "127.0.0.1"
+    assert seen["port"] == 8931

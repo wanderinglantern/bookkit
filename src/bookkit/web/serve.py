@@ -1,6 +1,6 @@
 """uvicorn bootstrap. Loopback only — the database holds client contacts and
-premium figures at mode 0600, and binding to every interface would publish it
-to the LAN."""
+premium figures at mode 0600. Never `0.0.0.0` — that would publish the whole
+book to the LAN."""
 
 from __future__ import annotations
 
