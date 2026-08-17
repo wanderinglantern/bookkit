@@ -35,6 +35,55 @@
 
 ---
 
+## Design handoff amendment (2026-08-17, after Task 7)
+
+A Design package landed mid-build: the Claude Design project *BookKit and TowerKit
+design*, `Account View.dc.html` plus a README. `docs/superpowers/specs/2026-08-17-web-visual-direction.md`
+has been rewritten from it and is binding. Grant's three calls on it:
+
+1. **Stack stays server-rendered.** The handoff recommends React + Vite on the
+   premise that the repos have no web stack; that is stale. Tasks 1–6 stand.
+2. **The account page becomes four tabs plus a right rail**, replacing the nine
+   TUI tabs *and* our five. Note the handoff's own README §5 still describes the
+   nine — the `.dc.html` is the later artefact and wins.
+3. **The renewal rail is dropped**, replaced by a header badge and a snapshot row.
+
+### How the remaining tasks re-map
+
+| Tab | Holds | Built by |
+|---|---|---|
+| **Program** | placements, tower, carriers | later slice (towerkit writes) |
+| **Relationship** | contacts, interactions | Tasks 8, 9, 10 |
+| **Work** | tasks, project needs, RFI requests | Tasks 11, 12, 13 |
+| **Pipeline** | opportunities, submissions | later slice |
+
+The tasks keep their substance — same repos, same forms, same batching, same
+tests. What changes is which tab their panel is mounted in, and that they render
+per the handoff's tokens. **There is no Overview tab**; the right rail's SNAPSHOT
+replaces it, so Task 7's five overview cards are removed rather than restyled.
+
+### New work the handoff introduces
+
+- **The undo surface** — toast, top-bar `Undo <last change>` pill, and
+  `RECENT CHANGES` in the right rail with a per-row `Revert`. The batch machinery
+  exists (Tasks 1–5); this gives it a face and flips `undo` in the parity ledger.
+  Folded into Task 15, which already owns batch grouping.
+- **The dashed editable underline** (`1px dashed #cfd6e8`) and **blur cancels**.
+  Both belong to the cell macros from Task 6; folded into Task 8, the first task
+  that renders real cells.
+- **Self-hosted fonts** — NotoSans/NotoSerif ship in `towerkit/src/towerkit/fonts/`
+  under OFL. Folded into Task 16 with the wheelhouse work, since both touch
+  packaging.
+
+### Two deviations from the handoff, recorded deliberately
+
+- It asks for **Noto Serif 600**; only Regular and Bold ship. Use **700**, because
+  a synthesised weight looks smeared.
+- It specifies **JetBrains Mono**; it is in neither repo. Use the system mono
+  stack until the OFL files are added — a one-token change later.
+
+---
+
 ## File Structure
 
 **Created:**
