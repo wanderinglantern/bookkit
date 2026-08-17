@@ -3,17 +3,29 @@
      GET  …/cell/{key}/edit  -> the editor cell (this macro's `editor`)
      POST …/cell/{key}       -> save; returns display on success, or editor
                                  again with the error and the typed value
-   `action` passed to both macros below is the base `…/cell/{key}` URL. #}
+   `action` passed to both macros below is the base `…/cell/{key}` URL.
 
-{% macro display(field, value, action) %}
-  {# The persistent state: a plain, tab-reachable table cell. Activation
-     swaps the WHOLE <td> (outerHTML, not innerHTML) — an innerHTML swap
-     left this cell's own click/Enter listener sitting on the <td> around
-     the injected editor, so clicking into the input to fix a typo, opening
-     a select, or pressing Enter to commit all bubbled back up through it
-     and re-fired this fetch, discarding whatever had just been typed.
-     outerHTML replaces the listener along with everything else, so there
-     is nothing left for a bubbled event to reach.
+   `tag` (default "td") is the wrapping element. Task 6 built this against a
+   real `<table class="rows">`, where `<td>` is the only element the HTML
+   parser accepts in that position — WHATWG "in body" insertion mode ignores
+   a `<td>`/`<th>` start tag outright (drops it and every attribute on it,
+   silently) when there is no table-row ancestor to receive it, whether the
+   markup arrives via a full document parse OR via htmx's outerHTML fragment
+   parse (whose context is the swapped element's PARENT). Task 8's contacts
+   card panel has no table ancestor, so its cells pass tag="div" — verified
+   against WHATWG's tree-construction algorithm before making this change,
+   at Grant's explicit request not to let the tag drift silently. Every
+   existing table-based caller is unaffected: the default is unchanged. #}
+
+{% macro display(field, value, action, tag="td") %}
+  {# The persistent state: a plain, tab-reachable cell. Activation swaps the
+     WHOLE element (outerHTML, not innerHTML) — an innerHTML swap left this
+     cell's own click/Enter listener sitting around the injected editor, so
+     clicking into the input to fix a typo, opening a select, or pressing
+     Enter to commit all bubbled back up through it and re-fired this fetch,
+     discarding whatever had just been typed. outerHTML replaces the
+     listener along with everything else, so there is nothing left for a
+     bubbled event to reach — true regardless of which element tag this is.
 
      data-cell-action carries the base cell URL as a plain attribute (not
      just baked into hx-get) so inline-cell.js can read it without string
@@ -21,27 +33,29 @@
      and the blur-cancel fetch. is-editable is the dashed-underline
      discoverability affordance from the visual-direction spec: without it
      a mouse-first user has no way to tell this value is editable. #}
-  <td class="cell" data-field="{{ field.key }}" data-cell-action="{{ action }}" tabindex="0"
+  <{{ tag }} class="cell" data-field="{{ field.key }}" data-cell-action="{{ action }}" tabindex="0"
       hx-get="{{ action }}/edit" hx-trigger="click, keyup[key=='Enter']"
-      hx-swap="outerHTML"><span class="is-editable">{{ value if value else "—" }}</span></td>
+      hx-swap="outerHTML"><span class="is-editable">{{ value if value else "—" }}</span></{{ tag }}>
 {% endmacro %}
 
-{% macro editor(field, value, placeholder, action, error) %}
+{% macro editor(field, value, placeholder, action, error, tag="td") %}
   {# Same outerHTML reasoning going the other way: Escape reverts by
-     re-fetching the display cell and replacing this whole <td> — form,
-     input and this td's own Escape listener all at once — rather than
-     leaving a stale editor listening on an element htmx just swapped out
+     re-fetching the display cell and replacing this whole element — form,
+     input and this element's own Escape listener all at once — rather than
+     leaving a stale editor listening on something htmx just swapped out
      from under it. The keyup bubbles here from the input inside.
      focusout is the declarative half of "blur cancels": a genuine
      click-away re-fetches the display cell exactly like Escape does.
      inline-cell.js suppresses the request this would otherwise fire on a
-     Tab/Enter commit (both remove this td via their own swap, which also
-     fires focusout) by tracking a `committing` flag around the submit. #}
-  <td class="cell cell-editing{% if error %} cell-error{% endif %}"
+     Tab/Enter commit (both remove this element via their own swap, which
+     also fires focusout) by tracking a `committing` flag around the
+     submit. hx-target below tracks `tag` too — a literal "closest td"
+     would silently no-op when tag="div". #}
+  <{{ tag }} class="cell cell-editing{% if error %} cell-error{% endif %}"
       data-field="{{ field.key }}" data-cell-action="{{ action }}"
       hx-get="{{ action }}" hx-trigger="keyup[key=='Escape'], focusout" hx-swap="outerHTML">
     <form class="cell-editor" method="post" action="{{ action }}"
-          hx-post="{{ action }}" hx-target="closest td" hx-swap="outerHTML">
+          hx-post="{{ action }}" hx-target="closest {{ tag }}" hx-swap="outerHTML">
       {% if field.kind == "select" %}
         <select name="{{ field.key }}" aria-label="{{ field.label }}"
                 {% if field.required %}required{% endif %} autofocus>
@@ -67,5 +81,5 @@
       {% endif %}
       {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
     </form>
-  </td>
+  </{{ tag }}>
 {% endmacro %}

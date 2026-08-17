@@ -2,10 +2,10 @@
  * declarative half of macros/cell.html (hx-get/hx-post/hx-trigger) cannot
  * express on its own. Mirrors tui/widgets/inline_edit.py's CellEditor:
  * Enter commits and closes, Tab commits and hops to the next editable cell
- * in the row, Escape and blur both cancel — never a surprise write.
+ * in the same record, Escape and blur both cancel — never a surprise write.
  *
  * Enter and Escape need no JS: Enter is a native form submit (the editor's
- * <form> already carries hx-post), Escape is the td's own
+ * <form> already carries hx-post), Escape is the cell's own
  * hx-trigger="keyup[key=='Escape']". This file covers what's left:
  *
  *   - Tab's default action (move focus) is prevented so it never leaves via
@@ -17,15 +17,23 @@
  *     it removes the focused input from the DOM. The `committing` flag
  *     below suppresses exactly that one case, so a commit is never followed
  *     by a spurious revert race.
- */
+ *
+ * Selectors below are class-only, never tag-qualified (no "td.cell" or
+ * "td.cell-editing") — macros/cell.html's `tag` parameter means a cell is a
+ * <td> inside a table.rows row or a <div> inside a .contact-card, and this
+ * script has to work for both without knowing which one it's looking at.
+ * ".record-scope" below is whatever ancestor groups one record's cells —
+ * a <tr>, or a .contact-card. */
 (function () {
   "use strict";
 
-  var committing = false;
-  var pendingHop = null; // { tr: <tr>, nextTd: <td> } set by a Tab keydown
+  var RECORD_SCOPE = "tr, .contact-card";
 
-  function editableCells(tr) {
-    return Array.prototype.slice.call(tr.querySelectorAll("td.cell[data-field]"));
+  var committing = false;
+  var pendingHop = null; // { scope: <element>, nextCell: <element> } set by a Tab keydown
+
+  function editableCells(scope) {
+    return Array.prototype.slice.call(scope.querySelectorAll(".cell[data-field]"));
   }
 
   // Capture phase: runs before htmx's own submit listener, so `committing`
@@ -58,17 +66,17 @@
     if (evt.key !== "Tab") return;
     var form = evt.target.closest && evt.target.closest("form.cell-editor");
     if (!form) return;
-    var td = form.closest("td.cell-editing");
-    var tr = td && td.closest("tr");
-    if (!tr) return;
-    var cells = editableCells(tr);
-    var idx = cells.indexOf(td);
+    var cell = form.closest(".cell-editing");
+    var scope = cell && cell.closest(RECORD_SCOPE);
+    if (!scope) return;
+    var cells = editableCells(scope);
+    var idx = cells.indexOf(cell);
     var next = cells[idx + (evt.shiftKey ? -1 : 1)];
     // Always prevent the default focus-jump: whether or not there's a next
     // cell, Tab commits this one rather than abandoning the browser to its
     // own tab order mid-edit.
     evt.preventDefault();
-    pendingHop = next ? { tr: tr, nextTd: next } : null;
+    pendingHop = next ? { scope: scope, nextCell: next } : null;
     form.requestSubmit();
   });
 
@@ -76,8 +84,8 @@
     if (evt.key === "Escape") pendingHop = null;
   });
 
-  // A commit's outerHTML swap replaces the editing <td> with a plain
-  // display <td> on success, or a fresh (still cell-editing) one carrying
+  // A commit's outerHTML swap replaces the editing cell with a plain
+  // display cell on success, or a fresh (still cell-editing) one carrying
   // the refusal on failure. Only the success case advances the hop — the
   // TUI's CellEditor.action_commit_next has the same guard (`if
   // self._table._commit(...)`) before it hops.
@@ -98,9 +106,9 @@
     if (!pendingHop) return;
     var hop = pendingHop;
     pendingHop = null;
-    if (!el.classList.contains("cell") || !hop.tr.contains(el)) return; // wrong swap, or a refusal
-    var action = hop.nextTd.getAttribute("data-cell-action");
+    if (!el.classList.contains("cell") || !hop.scope.contains(el)) return; // wrong swap, or a refusal
+    var action = hop.nextCell.getAttribute("data-cell-action");
     if (!action || typeof htmx === "undefined") return;
-    htmx.ajax("GET", action + "/edit", { target: hop.nextTd, swap: "outerHTML" });
+    htmx.ajax("GET", action + "/edit", { target: hop.nextCell, swap: "outerHTML" });
   });
 })();

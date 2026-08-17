@@ -55,32 +55,48 @@ def _contact_field(key: str) -> Field:
     return field
 
 
+_CONTACT_FIELD_LABELS: dict[str, str] = {"role": "ROLE", "email": "EMAIL", "phone": "PHONE"}
+
+
 def _contact_row(request: Request, ref: str, contact: Any) -> dict[str, Any]:
-    """One contact rendered to the shape _contacts_panel.html iterates: a
-    display cell per CONTACT_FIELDS key (Task 6's render_cell_display, one
-    call per field) plus the name/star columns the TUI doesn't declare
-    inline (first_name/last_name stay display-only — CONTACT_INLINE has no
-    entry for them either)."""
-    cells = {
-        field.key: render_cell_display(
-            request, field, initial_text(field, getattr(contact, field.key, None)),
-            _cell_action(ref, contact.id, field.key),
+    """One contact rendered as a card (Account View.dc.html's PEOPLE block,
+    Grant's fix round 1: cards, not table.rows). DOM order here IS tab
+    order for inline-cell.js's Tab-hop (it walks `.cell[data-field]` inside
+    the nearest `.contact-card`, not CONTACT_FIELDS' own declared order) —
+    title sits with the name per the design, role/email/phone stack below
+    it, so that's the order cells are built in.
+
+    Every cell passes tag="div": there's no <table> here for a bare <td> to
+    live in, and one dropped silently by the HTML parser is worse than one
+    that's merely wrong. first_name/last_name stay plain text — the TUI's
+    CONTACT_INLINE has no entry for them either, so neither surface makes
+    them inline-editable."""
+    fields_by_key = {f.key: f for f in CONTACT_FIELDS}
+
+    def cell(key: str) -> str:
+        field = fields_by_key[key]
+        value = initial_text(field, getattr(contact, key, None))
+        return render_cell_display(
+            request, field, value, _cell_action(ref, contact.id, key), tag="div"
         )
-        for field in CONTACT_FIELDS
-    }
+
     return {
         "id": contact.id,
         "first_name": contact.first_name,
         "last_name": contact.last_name,
         "is_primary": contact.is_primary,
-        "cells": cells,
+        "title_cell": cell("title"),
+        "fields": [
+            {"label": _CONTACT_FIELD_LABELS[key], "cell": cell(key)}
+            for key in ("role", "email", "phone")
+        ],
     }
 
 
 def _contacts_context(request: Request, org: Org) -> dict[str, Any]:
     contacts = contacts_repo.for_org(_conn(request), org.id)
     rows = [_contact_row(request, org.ref, c) for c in contacts]
-    return {"rows": rows, "field_keys": [f.key for f in CONTACT_FIELDS]}
+    return {"rows": rows, "count": len(rows)}
 
 
 def _contacts_panel(request: Request, org: Org) -> HTMLResponse:
@@ -122,7 +138,9 @@ def _contact_display_cell(request: Request, ref: str, contact_id: str, key: str)
     existing = contacts_repo.get(_conn(request), contact_id)
     value = initial_text(field, getattr(existing, key, None))
     action = _cell_action(ref, contact_id, key)
-    return HTMLResponse(render_cell_display(request, field, value, action))
+    # tag="div": these swaps land inside a .contact-card, not a <table> row
+    # (see _contact_row and forms_render.render_cell_display's docstring).
+    return HTMLResponse(render_cell_display(request, field, value, action, tag="div"))
 
 
 def _contact_editor_cell(
@@ -132,9 +150,8 @@ def _contact_editor_cell(
     field = _contact_field(key)
     existing = contacts_repo.get(_conn(request), contact_id)
     value = typed if typed is not None else initial_text(field, getattr(existing, key, None))
-    return HTMLResponse(
-        render_cell(request, field, value, _cell_action(ref, contact_id, key), error=error)
-    )
+    action = _cell_action(ref, contact_id, key)
+    return HTMLResponse(render_cell(request, field, value, action, error=error, tag="div"))
 
 
 @router.get("/accounts/{ref}/contacts/{contact_id}/cell/{key}", response_class=HTMLResponse)

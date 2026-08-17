@@ -1,57 +1,57 @@
-{# Contacts panel — read, add, and edit in place.
+{# Contacts panel — read, add, and edit in place. Cards, not a table
+   (Grant, fix round 1, 2026-08-17): Account View.dc.html's PEOPLE block is
+   a scrolling column of contact cards, not a grid — this was table.rows in
+   the first pass, flagged as a deviation, and corrected here to match the
+   design source exactly.
 
-   Each editable <td> is pre-rendered by web.forms_render.render_cell_display
-   (Task 6's cell contract) and injected via `| safe`; the value/action/error
-   wiring lives in Python (routes/relationship.py), not here. first_name and
-   last_name stay plain text: CONTACT_INLINE (the TUI's shared source of
-   truth, bookkit.forms.inline.CONTACT_FIELDS) never declares them, so
-   neither surface makes them inline-editable.
-
-   Uses table.rows (Task 6/7's already-built, already-styled schedule-table
-   CSS) rather than the design mockup's card-per-contact layout: the cell
-   macros render a <td> by contract, and a second cell-rendering path for a
-   div/card layout would fork that contract rather than reuse it. Flagged in
-   the task report as a deliberate deviation from Account View.dc.html's
-   pixel layout, not from any functional requirement — row height, hover,
-   the dashed-underline affordance and the Enter/Tab/Escape/blur behaviour
-   are all the same either way. #}
-<div class="panel-head">
-  <h2 class="panel-title">Contacts</h2>
-  <button type="button" class="btn-pill btn-pill-primary"
+   Each editable field is pre-rendered by web.forms_render.render_cell /
+   render_cell_display (Task 6's cell contract) with tag="div" — a card has
+   no <table> ancestor for a bare <td> to live in, and the wrapping element
+   now tracks the caller's actual container (see forms_render.py). The
+   value/action/error wiring lives in Python (routes/relationship.py), not
+   here. first_name and last_name stay plain text: CONTACT_INLINE (the
+   TUI's shared source of truth, bookkit.forms.inline.CONTACT_FIELDS) never
+   declares them, so neither surface makes them inline-editable — and they
+   render without the dashed-editable underline, on purpose, so the
+   affordance never promises an edit that isn't there. #}
+<div class="people-head">
+  <h2 class="people-label">People</h2>
+  <span class="people-count">{{ count }}</span>
+  <span class="people-head-spacer"></span>
+  <button type="button" class="people-add"
           hx-get="/accounts/{{ header.org.ref }}/contacts/new"
           hx-target="next .form-host" hx-swap="innerHTML">+ Add contact</button>
 </div>
 <div class="form-host"></div>
 {% if rows %}
-  <div class="table-scroll">
-    <table class="rows">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Role</th>
-          <th>Title</th>
-          <th>Email</th>
-          <th>Phone</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-          <tr>
-            <td>{% if row.is_primary %}★ {% endif %}{{ row.first_name }} {{ row.last_name }}</td>
-            {% for key in field_keys %}
-              {{ row.cells[key] | safe }}
-            {% endfor %}
-            <td>
-              {% if not row.is_primary %}
-                <span class="row-action" aria-disabled="true"
-                      title="Not wired yet — marking a contact primary is a later task">Make primary</span>
-              {% endif %}
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="contact-cards">
+    {% for row in rows %}
+      <div class="contact-card{% if row.is_primary %} is-primary{% endif %}">
+        <div class="contact-head">
+          <span class="contact-star">{% if row.is_primary %}★{% endif %}</span>
+          <span class="contact-name">{{ row.first_name }} {{ row.last_name }}</span>
+          {{ row.title_cell | safe }}
+        </div>
+        <div class="contact-fields">
+          {% for f in row.fields %}
+            <div class="contact-field">
+              <span class="contact-field-label">{{ f.label }}</span>
+              {{ f.cell | safe }}
+            </div>
+          {% endfor %}
+        </div>
+        <div class="contact-actions">
+          {% if row.is_primary %}
+            <span class="row-action-static">Primary contact</span>
+          {% else %}
+            <span class="row-action" aria-disabled="true"
+                  title="Not wired yet — marking a contact primary is a later task">Make primary</span>
+          {% endif %}
+          <span class="row-action" aria-disabled="true"
+                title="Not wired yet — logging an interaction is a later task">Log interaction</span>
+        </div>
+      </div>
+    {% endfor %}
   </div>
 {% else %}
   <div class="panel-empty">

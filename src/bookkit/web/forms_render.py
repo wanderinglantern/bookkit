@@ -9,12 +9,17 @@ persistent state (one per row/column, always in the DOM), the editor half is
 fetched and swapped in on activation, so a table never carries a hidden form
 per cell — only the one cell being edited ever has one.
 
-Both macros ASSUME a route contract that nothing here wires up yet (Task 8
-owns the routes): `action` is the base `…/cell/{key}` URL; the display cell
-fetches its editor from `action + "/edit"`; the editor posts to `action` and
-reverts (Escape) by re-fetching `action`. Both swaps are outerHTML — see
+Both macros ASSUME a route contract that Task 8 wires up: `action` is the
+base `…/cell/{key}` URL; the display cell fetches its editor from
+`action + "/edit"`; the editor posts to `action` and reverts (Escape or
+blur) by re-fetching `action`. Both swaps are outerHTML — see
 macros/cell.html's comments for why innerHTML left a stale listener that
-discarded a click into the input as a re-fetch."""
+discarded a click into the input as a re-fetch.
+
+`tag` (default "td") is the wrapping element. Contacts' card panel (Task 8,
+fix round 1) passes "div" — a `<td>` outside a table-row ancestor is
+silently dropped by the HTML parser, so the tag has to track whatever the
+caller's actual container is, not stay hardcoded."""
 
 from __future__ import annotations
 
@@ -63,14 +68,22 @@ def render_cell_display(
     field: Field,
     value: str,
     action: str,
+    tag: str = "td",
 ) -> str:
     """The persistent state of one inline-editable cell: its value, or an
     em-dash when empty. `action` is the base cell URL; activation (click, or
-    Enter while focused) fetches the editor from `action + "/edit"`."""
+    Enter while focused) fetches the editor from `action + "/edit"`.
+
+    `tag` is the wrapping element — "td" for a real `<table class="rows">`
+    row (every caller before Task 8), "div" for a container that isn't a
+    table (Task 8's contacts card panel). A `<td>` outside a table-row
+    ancestor is dropped outright by the HTML parser, attributes and all —
+    see macros/cell.html's docstring comment — so this can't default to
+    anything but the caller's actual container."""
     template = TEMPLATES.env.get_template("macros/cell.html")
     module = template.make_module({})
     render = module.display  # type: ignore[attr-defined]
-    return str(render(field, value, action))
+    return str(render(field, value, action, tag))
 
 
 def render_cell(
@@ -79,14 +92,15 @@ def render_cell(
     value: str,
     action: str,
     error: str | None = None,
+    tag: str = "td",
 ) -> str:
     """The editor swapped into one cell on activation: the same input the
     form macro renders for this field's kind, `autofocus` because exactly one
     of these is ever on the page at a time. On a refusal `value` is what the
     user typed (not the stored value) and `error` sits beside the input —
-    nothing is retyped, nothing is written."""
+    nothing is retyped, nothing is written. `tag` — see render_cell_display."""
     template = TEMPLATES.env.get_template("macros/cell.html")
     module = template.make_module({})
     render = module.editor  # type: ignore[attr-defined]
     placeholder = field.placeholder or PLACEHOLDERS.get(field.kind, "")
-    return str(render(field, value, placeholder, action, error))
+    return str(render(field, value, placeholder, action, error, tag))

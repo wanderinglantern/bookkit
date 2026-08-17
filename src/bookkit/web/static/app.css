@@ -391,36 +391,178 @@ a {
   font-size: var(--body-size);
 }
 
-/* --- pane header: title + a primary "+ Add ..." pill (contacts, Task 8;
-   other tabs' add flows land in later tasks) ------------------------------- */
-
-.panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.875rem;
-}
-
-.panel-title {
-  margin: 0;
-  font-family: var(--serif);
-  font-weight: 700;
-  font-size: 1rem;
-  color: var(--ink);
-}
-
 .form-host:empty {
   display: none;
 }
 
-/* Row actions in a table's trailing column: plain text, muted until hover,
-   per the visual-direction spec ("contacts Make primary"). Not wired this
-   task — aria-disabled keeps it in the pending treatment already used for
-   revert-link/rail-action, so it matches without duplicating the rule. */
+/* --- PEOPLE (contacts, Task 8) — Account View.dc.html's card list, not a
+   table. Fix round 1, 2026-08-17: the first pass used table.rows, flagged
+   as a deviation, corrected here to match the design source. The cell
+   contract underneath is unchanged (macros/cell.html, tag="div") — only
+   the container changed from a table row to a card. ------------------- */
+
+.people-head {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding-bottom: 0.5rem;
+}
+
+.people-label {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.people-count {
+  font-family: var(--mono);
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.people-head-spacer {
+  flex: 1;
+}
+
+/* A plain accent link, not a pill — the design's own "+ Add contact" is
+   text, unlike the header's "+ Log interaction"/"+ Task" pills. */
+.people-add {
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.people-add:hover {
+  text-decoration: underline;
+}
+
+.contact-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.contact-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4375rem;
+  padding: 0.6875rem 0.75rem;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+}
+
+.contact-card:hover {
+  border-color: var(--accent);
+}
+
+/* The design's own primary-card border colour is `--grid` — the same token
+   the calendar's bound block already uses, not a new one. */
+.contact-card.is-primary {
+  border-color: var(--grid);
+}
+
+.contact-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4375rem;
+}
+
+.contact-star {
+  display: inline-block;
+  width: 12px;
+  flex: none;
+  color: var(--warn);
+}
+
+.contact-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--ink);
+  /* Deliberately no dashed underline: first_name/last_name are display-only
+     (CONTACT_FIELDS doesn't declare them) — the affordance must not promise
+     an edit that isn't there. */
+}
+
+/* The title cell (a macros/cell.html div, tag="div") sits beside the name
+   per the design; sized down to the small muted label it renders as there,
+   while keeping the dashed is-editable underline the macro already draws. */
+.contact-head .cell {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  flex: none;
+}
+
+.contact-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding-left: 1.1875rem;
+}
+
+.contact-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.contact-field-label {
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  width: 48px;
+  flex: none;
+}
+
+.contact-field .cell {
+  flex: 1;
+  min-width: 0;
+}
+
+.contact-field .is-editable,
+.contact-head .is-editable {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.contact-actions {
+  display: flex;
+  gap: 0.75rem;
+  padding-left: 1.1875rem;
+  padding-top: 0.125rem;
+}
+
+/* Row actions ("Make primary", "Log interaction"): plain text, muted until
+   hover, per the visual-direction spec. Not wired this task — aria-disabled
+   keeps it in the pending treatment already used for revert-link/
+   rail-action, so it matches without duplicating the rule. */
 .row-action {
   font-size: var(--hint-size);
   color: var(--muted);
   cursor: default;
+}
+
+/* "Primary contact" — the label a card already showing ★ gets instead of
+   "Make primary". Purely descriptive, never a control: no aria-disabled
+   pairing needed because it never claimed to be clickable. */
+.row-action-static {
+  font-size: var(--hint-size);
+  color: var(--muted);
 }
 
 /* --- right rail (296px) --------------------------------------------------
