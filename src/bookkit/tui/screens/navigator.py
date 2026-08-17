@@ -854,7 +854,7 @@ class NavigatorScreen(Screen):
         bound = [
             p for p in placements.for_org(conn, org_id) if p.status == "bound"
         ]
-        premium = sum(p.total_premium or 0 for p in bound)
+        premium = book.bound_premium_for_org(conn, org_id)
         n_contacts = len(contacts.for_org(conn, org_id))
         n_tasks = len(tasks_repo.open_tasks(conn, org_id=org_id))
         lines = [

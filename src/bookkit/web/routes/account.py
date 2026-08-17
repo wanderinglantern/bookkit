@@ -11,6 +11,7 @@ from the SAME object, never `placement.period_to`."""
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -29,6 +30,7 @@ from ...repo import rfi as rfi_repo
 from ...repo import submissions as submissions_repo
 from ...repo import tasks as tasks_repo
 from ...repo import team as team_repo
+from ...services import book as book_service
 from ...services import renewals
 from ...services import rfi as rfi_service
 from ..app import TEMPLATES
@@ -105,8 +107,10 @@ def _open_work_count(conn: sqlite3.Connection, org_id: str) -> int:
     return len(open_tasks) + _open_needs_count(conn, org_id) + _open_requests_count(conn, org_id)
 
 
-def _counts(conn: sqlite3.Connection, org: Org) -> dict[str, int]:
-    """Tab badge counts — every one a real repo read, never a placeholder."""
+def _counts(conn: sqlite3.Connection, org: Org, open_work: int) -> dict[str, int]:
+    """Tab badge counts — every one a real repo read, never a placeholder.
+    `open_work` is computed once by the caller and shared with `_snapshot`
+    (review round 1, 2026-08-17: it was computed twice per render)."""
     contacts = contacts_repo.for_org(conn, org.id)
     interactions = interactions_repo.for_org(conn, org.id, limit=200)
     opportunities = opportunities_repo.for_org(conn, org.id, open_only=False)
@@ -116,12 +120,14 @@ def _counts(conn: sqlite3.Connection, org: Org) -> dict[str, int]:
     return {
         "program": len(placements_repo.for_org(conn, org.id)),
         "relationship": len(contacts) + len(interactions),
-        "work": _open_work_count(conn, org.id),
+        "work": open_work,
         "pipeline": len(opportunities) + submissions_count,
     }
 
 
-def _snapshot(conn: sqlite3.Connection, org: Org, header: dict[str, Any]) -> list[dict[str, Any]]:
+def _snapshot(
+    conn: sqlite3.Connection, org: Org, header: dict[str, Any], open_work: int
+) -> list[dict[str, Any]]:
     """Only rows with a real read behind them. `program premium`,
     `top of tower` and `unplaced` are omitted entirely — this task has no
     towerkit tower read to source them from ("omit a row rather than invent
@@ -135,58 +141,75 @@ def _snapshot(conn: sqlite3.Connection, org: Org, header: dict[str, Any]) -> lis
             "label": "next renewal",
             "value": f"{header['renewal_on']} · {suffix}",
             "overdue": overdue,
+            "muted": False,
         })
-    bound_cents = sum(
-        p.total_premium or 0
-        for p in placements_repo.for_org(conn, org.id)
-        if p.status == "bound"
-    )
     rows.append({
         "label": "bound premium",
-        "value": money.format_cents_compact(bound_cents),
+        "value": money.format_cents_compact(book_service.bound_premium_for_org(conn, org.id)),
         "overdue": False,
+        "muted": False,
     })
     rows.append({
         "label": "open work",
-        "value": str(_open_work_count(conn, org.id)),
+        "value": str(open_work),
         "overdue": False,
+        "muted": False,
     })
     last = interactions_repo.last_for_org(conn, org.id)
     if last is not None:
-        rows.append({"label": "last touch", "value": last.occurred_on, "overdue": False})
+        # muted per the design source's own inline style for this row
+        # (color:#7B7974) — every other snapshot value takes --ink.
+        rows.append({
+            "label": "last touch", "value": last.occurred_on, "overdue": False, "muted": True,
+        })
     return rows
 
 
-def _changes(conn: sqlite3.Connection, org: Org, limit: int = 8) -> list[EventBatch]:
-    """Recent batches for THIS account, newest first. Scoped by org_id — the
-    right rail's log is this account's activity, not the whole book's."""
-    candidates = batches_repo.recent(conn, since="", limit=200)
-    return [b for b in candidates if b.org_id == org.id][:limit]
+def _change_time(created_at: str, today: date) -> str:
+    """HH:MM for a change from today; the bare ISO date otherwise — a change
+    from three days ago must not read as if it just happened."""
+    if "T" not in created_at:
+        return created_at
+    day, time_part = created_at.split("T", 1)
+    return time_part[:5] if day == today.isoformat() else day
 
 
-def _last_undo(conn: sqlite3.Connection, org: Org) -> EventBatch | None:
-    """The newest not-yet-reverted batch for this account — read via
-    repo.batches.recent, the one verified read for this. Nothing is invented
-    when there is nothing to undo: the pill simply doesn't render."""
-    for batch in batches_repo.recent(conn, since="", limit=200):
-        if batch.org_id == org.id and batch.reverted_at is None:
-            return batch
-    return None
+def _change_row(batch: EventBatch, today: date) -> dict[str, Any]:
+    return {
+        "time": _change_time(batch.created_at, today),
+        "what": batch.summary,
+        "who": batch.source,
+        "reverted": batch.reverted_at is not None,
+    }
 
 
 def _context(conn: sqlite3.Connection, org: Org, tab: str) -> dict[str, Any]:
     header = _header(conn, org)
-    counts = _counts(conn, org)
+    open_work = _open_work_count(conn, org.id)
+    counts = _counts(conn, org, open_work)
+
+    # One read of recent batches, scoped to this account, shared by both the
+    # RECENT CHANGES list and the top-bar Undo pill (review round 1,
+    # 2026-08-17: batches_repo.recent used to be called twice per render).
+    # since="" sorts before every real ISO timestamp — "most recent N, no
+    # cutoff" — the one verified read for this (repo.batches.recent).
+    org_batches = [
+        b for b in batches_repo.recent(conn, since="", limit=200) if b.org_id == org.id
+    ]
+    today = date.today()
+    changes = [_change_row(b, today) for b in org_batches[:8]]
+    last_undo = next((b for b in org_batches if b.reverted_at is None), None)
+
     return {
         "header": header,
         "tab": tab,
         "tabs": [
             {"id": tab_id, "label": label, "count": counts[tab_id]} for tab_id, label in TABS
         ],
-        "snapshot": _snapshot(conn, org, header),
+        "snapshot": _snapshot(conn, org, header, open_work),
         "team": team_repo.for_org(conn, org.id),
-        "changes": _changes(conn, org),
-        "last_undo": _last_undo(conn, org),
+        "changes": changes,
+        "last_undo": last_undo,
     }
 
 

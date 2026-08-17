@@ -133,6 +133,9 @@ a {
   text-overflow: ellipsis;
 }
 
+/* Not wired yet (aria-disabled="true" in the markup) — no hover affordance,
+   muted colour, default cursor. A control that looks live and is dead is
+   worse than one that looks pending (Grant, review round 1, 2026-08-17). */
 .undo-pill {
   display: flex;
   align-items: center;
@@ -145,11 +148,8 @@ a {
   white-space: nowrap;
   max-width: 220px;
   overflow: hidden;
-}
-
-.undo-pill:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  color: var(--muted);
+  cursor: default;
 }
 
 .undo-pill-detail {
@@ -251,36 +251,29 @@ a {
 }
 
 /* Header actions and pane "+ Add ..." pills are rendered but inert this
-   task — none of them write yet. */
+   task (aria-disabled="true" in the markup) — none of them write yet.
+   Pending treatment, not a live one: no hover affordance, muted colour,
+   default cursor. Same shape/padding/radius as a wired pill so wiring one
+   later is a behaviour change, not a layout change; btn-pill-primary loses
+   its accent fill for the same reason a filled CTA is the strongest
+   "click me" signal on the page — the filled treatment comes back with the
+   wiring (Grant, review round 1, 2026-08-17). */
 .btn-pill {
   display: inline-block;
   padding: 0.5rem 0.875rem;
   border-radius: 18px;
   border: 1px solid var(--border);
   font-size: 0.75rem;
-  color: var(--ink);
-}
-
-.btn-pill:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  color: var(--muted);
+  cursor: default;
 }
 
 .btn-pill-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--paper);
   font-weight: 600;
-}
-
-.btn-pill-primary:hover {
-  opacity: 0.85;
-  color: var(--paper);
 }
 
 .btn-pill-icon {
   padding: 0.5rem 0.75rem;
-  color: var(--muted);
 }
 
 /* --- tabs -----------------------------------------------------------------
@@ -412,10 +405,13 @@ a {
   font-weight: 700;
 }
 
+/* Not wired yet (aria-disabled="true") — muted, not accent, so it doesn't
+   read as a working link. */
 .rail-action {
   margin-left: auto;
   font-size: 0.75rem;
-  color: var(--accent);
+  color: var(--muted);
+  cursor: default;
 }
 
 .empty {
@@ -452,6 +448,12 @@ a {
 .snapshot-row.is-overdue .snapshot-value {
   font-weight: 700;
   color: var(--danger);
+}
+
+/* last touch — muted per the design source's own inline style for this
+   row; every other snapshot value takes --ink. */
+.snapshot-value.is-muted {
+  color: var(--muted);
 }
 
 /* TEAM */
@@ -544,12 +546,14 @@ a {
   color: var(--muted);
 }
 
-/* Rendered, not wired — reverting a batch from the account page is Task
-   15's work. This is the affordance, not the action. */
+/* Rendered, not wired (aria-disabled="true") — reverting a batch from the
+   account page is Task 15's work. This is the affordance, not the action:
+   muted, not the accent blue real links use, and no pointer cursor. */
 .revert-link {
   margin-left: auto;
   font-size: var(--hint-size);
-  color: var(--accent);
+  color: var(--muted);
+  cursor: default;
 }
 
 .change-reverted {

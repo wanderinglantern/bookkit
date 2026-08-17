@@ -540,7 +540,7 @@ class AccountScreen(Screen):
                 f"{nxt_item.days_remaining}d[/]"
             )
         bound = [p for p in placements.for_org(conn, org.id) if p.status == "bound"]
-        bound_premium = sum(p.total_premium or 0 for p in bound)
+        bound_premium = book.bound_premium_for_org(conn, org.id)
         status_style = theme.STATUS_STYLES.get(org.status, theme.FG)
         parts = [
             f"[b {theme.GOLD}]{org.name}[/]  [{theme.DIM}]{org.ref}[/]",

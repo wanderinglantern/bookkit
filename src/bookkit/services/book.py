@@ -58,6 +58,23 @@ def summary(conn: sqlite3.Connection) -> BookSummary:
     )
 
 
+def bound_premium_for_org(conn: sqlite3.Connection, org_id: str) -> int:
+    """The ACCOUNT's bound premium, in cents — not whichever placement
+    renews next, which showed one placement's number as the whole account's
+    and mixed bound with unbound (an account with $15.6M across two bound
+    placements read $8M; one with nothing bound read $900K — neither
+    reconcilable with the navigator's bound-only headline). Extracted
+    because this exact sum was hand-copied in four places (tui/screens/
+    account.py, tui/screens/book.py, tui/screens/navigator.py, and the web
+    account page) and money columns must say whose money — review round 1,
+    2026-08-17."""
+    return sum(
+        p.total_premium or 0
+        for p in placements.for_org(conn, org_id)
+        if p.status == "bound"
+    )
+
+
 def _program_label(program_name: str) -> str:
     """'2025 Casualty Program' → 'Casualty Program' so years group together."""
     parts = program_name.split()
