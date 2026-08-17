@@ -91,7 +91,13 @@ def test_batch_spec_derives_tool_from_title_without_the_record_name():
 
 def test_mcp_cleans_exactly_like_the_forms_do():
     """mcpserver kept a hand-copied duplicate of the cleaner map, held in sync
-    by a comment. One home, or the surfaces drift."""
+    by a comment. One home, or the surfaces drift.
+
+    This checks the cleaner primitive (_clean_by_kind) directly with real
+    KINDS, which is safe: unlike a field NAME, a kind is never ambiguous.
+    Field-name-to-kind resolution (where the actual bug lived — a NAME is
+    not globally 1:1 with a kind, e.g. `description`) is covered end-to-end
+    through _edit_field/_enrich_field in tests/test_mcpserver.py, not here."""
     from bookkit import mcpserver
     from bookkit.forms.spec import Field, parse_value
 
@@ -104,7 +110,7 @@ def test_mcp_cleans_exactly_like_the_forms_do():
         ("naics", "524126"),
         ("text", "  spaced  "),
     ]:
-        mcp_cleaned = mcpserver._clean_field_value(kind, raw)
+        mcp_cleaned = mcpserver._clean_by_kind(kind, raw)
         form_cleaned = parse_value(Field(kind, kind, kind), raw)
         assert mcp_cleaned == form_cleaned, kind
 
@@ -116,32 +122,3 @@ def test_mcp_has_no_second_cleaner_map():
 
     source = (Path(bookkit.__file__).parent / "mcpserver.py").read_text()
     assert "_FIELD_CLEANERS" not in source, "the duplicate cleaner map is back"
-
-
-@pytest.mark.parametrize("field", ["notes", "description", "detail", "response"])
-def test_mcp_stores_multi_line_prose_verbatim(field: str):
-    """These are all `textarea` fields in the form builders and all reachable
-    through edit_field. CLEANERS is keyed by KIND and the call site passes a
-    NAME, so each one fell through to clean_text and had its newlines collapsed.
-    Only `notes` was ever protected, and only by the map that was deleted."""
-    from bookkit import mcpserver
-
-    prose = "called Dana\n\n- loss runs promised Friday\n- wants EL quoted separately"
-    assert mcpserver._clean_field_value(field, prose) == prose
-
-
-@pytest.mark.parametrize(
-    "field,kind", [("mobile", "phone"), ("website", "url")]
-)
-def test_mcp_normalises_fields_whose_name_differs_from_their_kind(
-    field: str, kind: str
-):
-    """mobile is a phone and website is a url. The old name-keyed map knew that;
-    a kind-keyed lookup does not unless the bridge tells it."""
-    from bookkit import mcpserver
-    from bookkit.forms.spec import Field, parse_value
-
-    raw = " 312.555.0142 " if kind == "phone" else "company.com"
-    assert mcpserver._clean_field_value(field, raw) == parse_value(
-        Field(kind, kind, kind), raw
-    )

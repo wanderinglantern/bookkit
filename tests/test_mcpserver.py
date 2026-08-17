@@ -1103,6 +1103,88 @@ def test_edit_field_edits_rfi_item_response(server_db):
     assert rfi.get_item(rw, item.id).response == "42 vehicles"
 
 
+# -- edit_field/enrich_field: kind is per-(entity, field), never per-name ----
+#
+# `description` means two different things: task.description is a one-line
+# summary (entity_forms.py:185); project.description is the textarea
+# (:490). A field NAME is not globally 1:1 with a kind, so these go through
+# the real edit_field/enrich_field entry points on a seeded connection —
+# never by poking a cleaner helper with a bare field name, which is exactly
+# the assumption that let the description bug through undetected.
+
+
+def test_task_description_is_a_one_line_summary_and_is_collapsed(server_db):
+    """task.description is plain text (entity_forms.py:185, 'one-line summary');
+    project.description is a textarea (:490). The same NAME, two kinds — which is
+    why the kind is declared per entity and never looked up by name alone."""
+    rw, org = _rw(server_db)
+    task = tasks.create(rw, "chase quote", org_id=org.id)
+    out = mcpserver._edit_field(
+        rw, "task", task.id, "description",
+        value="  called twice   this week  ", expecting=None,
+    )
+    assert out["value"] == "called twice this week"
+    assert tasks.get(rw, task.id).description == "called twice this week"
+
+
+def test_project_description_is_stored_verbatim(server_db):
+    """project.description is entity_forms.py's textarea (:490) — the
+    opposite of task.description above, on the same field name."""
+    rw, org = _rw(server_db)
+    project = projects.create_project(rw, org.id, "HQ Build")
+    prose = "site visit Monday\n\n- confirm access\n- bring hard hats"
+    out = mcpserver._edit_field(
+        rw, "project", project.ref, "description", value=prose, expecting=None,
+    )
+    assert out["value"] == prose
+    assert projects.get_project(rw, project.id).description == prose
+
+
+def test_task_detail_is_stored_verbatim(server_db):
+    rw, org = _rw(server_db)
+    task = tasks.create(rw, "chase quote", org_id=org.id)
+    prose = "called Dana\n\n- loss runs promised Friday\n- wants EL quoted separately"
+    out = mcpserver._edit_field(
+        rw, "task", task.id, "detail", value=prose, expecting=None,
+    )
+    assert out["value"] == prose
+    assert tasks.get(rw, task.id).detail == prose
+
+
+def test_rfi_item_response_is_stored_verbatim(server_db):
+    """The existing rfi_item.response test above only ever sent a single
+    word, which clean_text would return unchanged too — vacuous. Multi-line
+    input is what actually discriminates textarea from text."""
+    rw, org = _rw(server_db)
+    req = rfi.create_request(rw, org.id, "Sompo questions", "2026-08-05")
+    item = rfi.add_item(rw, req.id, "how many vehicles?")
+    prose = "42 vehicles total:\n- 30 pickups\n- 12 sedans"
+    out = mcpserver._edit_field(
+        rw, "rfi_item", item.id, "response", value=prose, expecting=None,
+    )
+    assert out["value"] == prose
+    assert rfi.get_item(rw, item.id).response == prose
+
+
+def test_enrich_field_normalises_mobile_as_a_phone(server_db):
+    """mobile is a phone (entity_forms.py:145); the bare field name is not."""
+    rw, org = _rw(server_db)
+    ann = contacts.create(rw, org.id, first_name="Ann", last_name="Lee")
+    out = mcpserver._enrich_field(
+        rw, "Acme", "mobile", " 312.555.0142 ", contact="Ann Lee",
+    )
+    assert out["value"] == "(312) 555-0142"
+    assert contacts.get(rw, ann.id).mobile == "(312) 555-0142"
+
+
+def test_enrich_field_normalises_website_as_a_url(server_db):
+    """website is a url (entity_forms.py:86); the bare field name is not."""
+    rw, org = _rw(server_db)
+    out = mcpserver._enrich_field(rw, "Acme", "website", "company.com")
+    assert out["value"] == "https://company.com"
+    assert orgs.get(rw, org.id).website == "https://company.com"
+
+
 def test_edit_field_team_member_by_exact_name(server_db):
     from bookkit.repo import team
 
