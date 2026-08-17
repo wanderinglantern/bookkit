@@ -26,3 +26,20 @@ def test_no_raw_sql_in_tui_imports_or_services():
 def test_no_raw_sql_in_mcpserver():
     text = (SRC / "mcpserver.py").read_text()
     assert ".execute(" not in text, "mcpserver must consume repo/services only"
+
+
+def test_no_raw_sql_in_web():
+    for path in (SRC / "web").rglob("*.py"):
+        assert ".execute(" not in path.read_text(), \
+            f"raw SQL in {path.relative_to(SRC)} — queries live in repo/"
+
+
+def test_web_and_tui_never_import_each_other():
+    """Shared code lives in bookkit.forms or it is not shared. A helper copied
+    across the boundary is how the surfaces drift."""
+    for path in (SRC / "web").rglob("*.py"):
+        assert "bookkit.tui" not in path.read_text() and "from ..tui" not in path.read_text(), \
+            f"{path.relative_to(SRC)} imports the TUI"
+    for path in (SRC / "tui").rglob("*.py"):
+        assert "bookkit.web" not in path.read_text() and "from ..web" not in path.read_text(), \
+            f"{path.relative_to(SRC)} imports the web layer"
