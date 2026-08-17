@@ -157,7 +157,7 @@ class BookScreen(Screen):
         return table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
 
     def action_new_account(self) -> None:
-        from ..widgets.entity_forms import apply_org, org_form
+        from ...forms.entities import apply_org, org_form
         from ..widgets.forms import FormModal
 
         def commit(values: dict) -> str | None:
@@ -174,8 +174,8 @@ class BookScreen(Screen):
         )
 
     def action_edit_account(self) -> None:
+        from ...forms.entities import apply_org, org_form_initial_profile
         from ...repo import orgs
-        from ..widgets.entity_forms import apply_org, org_form_initial_profile
         from ..widgets.forms import FormModal
 
         org_id = self._selected_org_id()

@@ -93,7 +93,7 @@ class BookkitApp(App):
 
     def action_new_task(self) -> None:
         """ctrl+t anywhere: a task, attached to the client you're looking at."""
-        from .widgets.entity_forms import apply_task, task_form
+        from ..forms.entities import apply_task, task_form
         from .widgets.forms import FormModal
 
         if self._modal_open():

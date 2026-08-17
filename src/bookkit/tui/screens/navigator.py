@@ -1031,8 +1031,8 @@ class NavigatorScreen(Screen):
         tree.action_cursor_down() if delta > 0 else tree.action_cursor_up()
 
     def action_add_row(self) -> None:
+        from ...forms import entities as ef
         from ..widgets import entity_actions
-        from ..widgets import entity_forms as ef
 
         kind, payload = self._current
         if kind != "group":
@@ -1075,8 +1075,8 @@ class NavigatorScreen(Screen):
             entity_actions.add_request(self, org_id)
 
     def action_edit_row(self) -> None:
+        from ...forms import entities as ef
         from ..widgets import entity_actions
-        from ..widgets import entity_forms as ef
 
         row = self._selected_row()
         if row is None:
@@ -1171,8 +1171,8 @@ class NavigatorScreen(Screen):
 
     def action_onboard(self) -> None:
         """o — resume onboarding for the selected client, or start a new one."""
+        from ...forms import entities as ef
         from ..screens.onboarding import OnboardingScreen
-        from ..widgets import entity_forms as ef
         from ..widgets.forms import FormModal
 
         conn = self.app.conn

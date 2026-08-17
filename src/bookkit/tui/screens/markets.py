@@ -204,7 +204,7 @@ class MarketsScreen(Screen):
         return table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
 
     def action_new_market(self) -> None:
-        from ..widgets.entity_forms import apply_org, org_form
+        from ...forms.entities import apply_org, org_form
         from ..widgets.forms import FormModal
 
         def commit(values: dict) -> str | None:
@@ -286,7 +286,7 @@ class MarketsScreen(Screen):
         self.app.push_screen(FormModal(spec, commit=commit))
 
     def action_edit_market(self) -> None:
-        from ..widgets.entity_forms import apply_org, org_form_initial_profile
+        from ...forms.entities import apply_org, org_form_initial_profile
         from ..widgets.forms import FormModal
 
         market_id = self._selected_market_id()
@@ -364,12 +364,12 @@ class MarketDetailScreen(Screen):
         return None
 
     def action_edit_row(self) -> None:
-        from ...forms.spec import dropped
-        from ..widgets.entity_forms import (
+        from ...forms.entities import (
             appetite_form,
             apply_contact,
             contact_form,
         )
+        from ...forms.spec import dropped
         from ..widgets.forms import FormModal
 
         row = self._focused_row()
@@ -478,8 +478,8 @@ class MarketDetailScreen(Screen):
         self.on_mount()
 
     def action_add_appetite(self) -> None:
+        from ...forms.entities import appetite_form
         from ...forms.spec import dropped
-        from ..widgets.entity_forms import appetite_form
         from ..widgets.forms import FormModal
 
         def commit(values: dict) -> str | None:
@@ -496,7 +496,7 @@ class MarketDetailScreen(Screen):
         )
 
     def action_add_underwriter(self) -> None:
-        from ..widgets.entity_forms import apply_contact, contact_form
+        from ...forms.entities import apply_contact, contact_form
         from ..widgets.forms import FormModal
 
         def commit(values: dict) -> str | None:

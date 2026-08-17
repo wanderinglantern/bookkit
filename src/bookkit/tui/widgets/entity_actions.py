@@ -82,9 +82,9 @@ def edit_placement(screen: Screen, placement: Placement) -> None:
     """Dual-owner edit for linked placements (name/dates write through the
     towerkit file), plain form for unlinked ones."""
     from ... import sync
+    from ...forms import entities as ef
     from ...forms.spec import Field, FormSpec
     from ...repo import placements
-    from . import entity_forms as ef
     from .forms import FormModal
 
     conn = _app(screen).conn
@@ -283,7 +283,7 @@ def export_open_items_flow(screen: Screen, org_id: str) -> None:
 
 
 def add_request(screen: Screen, org_id: str) -> None:
-    from . import entity_forms as ef
+    from ...forms import entities as ef
 
     conn = _app(screen).conn
     push_form(
@@ -294,7 +294,7 @@ def add_request(screen: Screen, org_id: str) -> None:
 
 
 def edit_request(screen: Screen, request: RfiRequest) -> None:
-    from . import entity_forms as ef
+    from ...forms import entities as ef
 
     conn = _app(screen).conn
     push_form(
@@ -305,7 +305,7 @@ def edit_request(screen: Screen, request: RfiRequest) -> None:
 
 
 def add_rfi_item(screen: Screen, request_id: str) -> None:
-    from . import entity_forms as ef
+    from ...forms import entities as ef
 
     conn = _app(screen).conn
     push_form(
@@ -316,7 +316,7 @@ def add_rfi_item(screen: Screen, request_id: str) -> None:
 
 
 def edit_rfi_item(screen: Screen, item: RfiItem) -> None:
-    from . import entity_forms as ef
+    from ...forms import entities as ef
 
     conn = _app(screen).conn
     push_form(

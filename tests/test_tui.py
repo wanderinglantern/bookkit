@@ -1286,9 +1286,9 @@ async def test_request_survives_a_merged_away_market(seeded_db: Path) -> None:
     """A market merge soft-deletes the loser. A request still pointing at a
     dead market must not take the app down: the navigator's requests group
     renders it, and its edit form builds instead of handing Select a dead id."""
+    from bookkit.forms import entities as ef
     from bookkit.repo import base as repo_base
     from bookkit.repo import rfi
-    from bookkit.tui.widgets import entity_forms as ef
     from bookkit.tui.widgets.inline_edit import InlineTable
 
     app = BookkitApp(seeded_db)

@@ -165,7 +165,7 @@ class PipelineScreen(Screen):
     def action_edit_card(self) -> None:
         """Edit the selected opportunity in place — lines and target
         effective included; the form stays open on a refused save."""
-        from ..widgets.entity_forms import apply_opportunity, opportunity_form
+        from ...forms.entities import apply_opportunity, opportunity_form
         from ..widgets.forms import FormModal
 
         opp_id = self._selected_opp_id()

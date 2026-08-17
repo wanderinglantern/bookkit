@@ -1361,8 +1361,8 @@ class AccountScreen(Screen):
         self.refresh_data()
 
     def _edit_assignment(self, assignment_id: str) -> None:
+        from ...forms import entities as ef
         from ...repo import team as team_repo
-        from ..widgets import entity_forms as ef
 
         conn = self.app.conn
         try:
@@ -1474,7 +1474,7 @@ class AccountScreen(Screen):
         self.app.push_screen(FormModal(spec, commit=commit), done)
 
     def action_add_here(self) -> None:
-        from ..widgets import entity_forms as ef
+        from ...forms import entities as ef
 
         conn = self.app.conn
         org_id = self.current_org_id
@@ -1562,8 +1562,8 @@ class AccountScreen(Screen):
             )
 
     def action_edit_here(self) -> None:
+        from ...forms import entities as ef
         from ...repo import opportunities as opps_repo
-        from ..widgets import entity_forms as ef
 
         conn = self.app.conn
         tab = self._active_tab()
@@ -1681,7 +1681,7 @@ class AccountScreen(Screen):
             self._edit_org()
 
     def _edit_interaction_or_org(self, table_id: str) -> None:
-        from ..widgets import entity_forms as ef
+        from ...forms import entities as ef
 
         conn = self.app.conn
         table = self.query_one(f"#{table_id}", ListTable)
@@ -1700,7 +1700,7 @@ class AccountScreen(Screen):
         )
 
     def _edit_org(self) -> None:
-        from ..widgets import entity_forms as ef
+        from ...forms import entities as ef
 
         conn = self.app.conn
         existing = orgs.get(conn, self.current_org_id)
@@ -2099,9 +2099,9 @@ class AccountScreen(Screen):
     def action_assign_team(self) -> None:
         """Assign a colleague: to the account, or to the selected placement
         when the placements tab is open."""
+        from ...forms.entities import assignment_form
         from ...forms.spec import dropped
         from ...repo import team as team_repo
-        from ..widgets.entity_forms import assignment_form
         from ..widgets.forms import FormModal
 
         conn = self.app.conn
@@ -2116,7 +2116,7 @@ class AccountScreen(Screen):
         )
         org_id = None if placement_id else self.current_org_id
 
-        from ..widgets.entity_forms import NEW_MEMBER
+        from ...forms.entities import NEW_MEMBER
 
         def commit(values: dict) -> str | None:
             if values["team_member_id"] == NEW_MEMBER:
@@ -2154,9 +2154,9 @@ class AccountScreen(Screen):
         the member and complete the assignment in one transaction, so a
         refused member save keeps that form open with input intact."""
         from ...db import transaction
+        from ...forms import entities as ef
         from ...forms.spec import dropped
         from ...repo import team as team_repo
-        from ..widgets import entity_forms as ef
         from ..widgets.forms import FormModal
 
         conn = self.app.conn
@@ -2244,8 +2244,8 @@ class AccountScreen(Screen):
         return done
 
     def action_new_submission(self) -> None:
+        from ...forms import entities as ef
         from ...repo import orgs as orgs_repo
-        from ..widgets import entity_forms as ef
 
         conn = self.app.conn
         if not orgs_repo.list_orgs(conn, kind="market"):

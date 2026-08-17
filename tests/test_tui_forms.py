@@ -244,7 +244,7 @@ async def test_form_commit_exception_is_an_error_not_a_crash(empty_db: Path) -> 
 async def test_form_fields_carry_dropdown_and_ghost_suggestions(seeded_db: Path) -> None:
     from textual_autocomplete import AutoComplete
 
-    from bookkit.tui.widgets.entity_forms import placement_form
+    from bookkit.forms.entities import placement_form
     from bookkit.tui.widgets.forms import FormModal
 
     app = BookkitApp(seeded_db)
