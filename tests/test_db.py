@@ -227,6 +227,36 @@ def test_blast_cap_defaults_to_250(tmp_path):
     assert db.BatchState(batch_id="01B").cap == 250
 
 
+def test_concurrent_transactions_do_not_collide(db_path):
+    """_tx_depth is a ContextVar, so a second THREAD on the same connection
+    sees depth 0 and would issue its own BEGIN IMMEDIATE. Unreachable until the
+    web layer started running handlers in uvicorn's threadpool."""
+    import threading
+    import time
+
+    from bookkit import db
+
+    conn = db.connect(db_path, check_same_thread=False)
+    errors: list[str] = []
+
+    def writer(hold: float) -> None:
+        try:
+            with db.transaction(conn):
+                time.sleep(hold)
+        except Exception as exc:  # noqa: BLE001 — the assertion is the point
+            errors.append(f"{type(exc).__name__}: {exc}")
+
+    first = threading.Thread(target=writer, args=(0.25,))
+    second = threading.Thread(target=writer, args=(0.0,))
+    first.start()
+    time.sleep(0.05)
+    second.start()
+    first.join()
+    second.join()
+
+    assert not errors, errors
+
+
 def test_connect_sets_a_busy_timeout(tmp_path):
     """F2, as REDUCED: this value is also Python's sqlite3 default, so the
     guarantee already held — what was missing is anything pinning it. The TUI

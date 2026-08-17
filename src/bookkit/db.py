@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import threading
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -72,6 +73,17 @@ _current_batch: ContextVar[BatchState | None] = ContextVar(
 _tx_depth: ContextVar[int] = ContextVar("bookkit_tx_depth", default=0)
 """How many transaction() blocks deep this context is. Only the outermost
 issues BEGIN/COMMIT; see transaction() for why nesting joins."""
+
+_tx_lock = threading.RLock()
+"""Serializes the OUTERMOST transaction across threads.
+
+_tx_depth is a ContextVar, so a second thread on the same connection sees
+depth 0 and issues its own BEGIN IMMEDIATE — "cannot start a transaction
+within a transaction". Unreachable while the TUI, CLI and MCP server were
+each single-threaded on their connection; reachable the moment the web layer
+runs handlers in uvicorn's threadpool. SQLite serializes writers at the file
+level anyway, so waiting here costs nothing a writer was not already going to
+wait for."""
 
 
 def current_batch() -> BatchState | None:
@@ -137,7 +149,11 @@ def transaction(
     otherwise raise "cannot start a transaction within a transaction". An
     inner call joins the outer one — same lock, same commit, all-or-nothing
     across both — and an inner `batch=` is deliberately IGNORED, because the
-    outermost writer action is what the user thinks of as one undo unit."""
+    outermost writer action is what the user thinks of as one undo unit.
+
+    Only the OUTERMOST call takes `_tx_lock` (see its docstring): a joining
+    call already runs inside the holder's BEGIN IMMEDIATE/COMMIT, so there is
+    nothing left for it to serialize against."""
     depth = _tx_depth.get()
     if depth:
         token = _tx_depth.set(depth + 1)
@@ -149,6 +165,7 @@ def transaction(
 
     batch_token = _current_batch.set(batch)
     depth_token = _tx_depth.set(1)
+    _tx_lock.acquire()
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -158,6 +175,7 @@ def transaction(
             raise
         conn.execute("COMMIT")
     finally:
+        _tx_lock.release()
         _tx_depth.reset(depth_token)
         _current_batch.reset(batch_token)
 
