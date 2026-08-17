@@ -1,5 +1,6 @@
 /* bookkit web — visual direction implementation.
-   Binding spec: docs/superpowers/specs/2026-08-17-web-visual-direction.md
+   Binding spec: docs/superpowers/specs/2026-08-17-web-visual-direction.md,
+   the account page: .superpowers/sdd/2026-08-17-web-account-page/design/Account View.dc.html
 
    No literal colour lives in this file. Every colour is a `--` custom
    property served by GET /static/theme.css (generated from
@@ -8,24 +9,28 @@
    means. `@import` runs before anything below needs the variables. */
 @import url("/static/theme.css");
 
-/* --- type -------------------------------------------------------------- */
+/* --- type -----------------------------------------------------------------
+   Two deliberate deviations from the handoff, both flagged there and in the
+   binding spec: Noto Serif ships Regular/Bold only (no 600) here, so 700 is
+   used rather than a browser-synthesised 600; JetBrains Mono ships in
+   neither repo, so the system mono stack stands in. Neither font is
+   self-hosted this round — family names with system fallbacks only; adding
+   the OFL files is later packaging work. */
 
 :root {
-  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
-  --serif: "Iowan Old Style", Charter, Georgia, "Noto Serif", serif;
+  --sans: "Noto Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --serif: "Noto Serif", Georgia, serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 
-  --label-size: 0.5625rem;   /* table/section labels, uppercase, tracked */
-  --hint-size: 0.6875rem;
-  --body-size: 0.8125rem;    /* table and log body */
-  --prose-size: 0.9375rem;
-  --name-size: 1.6rem;       /* account name, serif */
-  --count-size: 2.75rem;     /* the day count, mono, tabular */
+  --label-size: 0.625rem;    /* 10px section labels, uppercase, tracked */
+  --hint-size: 0.6875rem;    /* 11px */
+  --body-size: 0.8125rem;    /* 13px */
+  --name-size: 1.5625rem;    /* 25px account name, serif */
 
-  --row-height: 32px;
+  --row-height: 30px;        /* compact, never below this */
 }
 
-/* --- ground -------------------------------------------------------------
+/* --- ground -----------------------------------------------------------
    Single theme by choice: one user, one machine, a document that wants to
    look like paper. body paints background/color explicitly rather than
    inheriting the viewer's theme. */
@@ -38,13 +43,12 @@ html, body {
   margin: 0;
   padding: 0;
   /* the page body never scrolls sideways — wide content scrolls inside its
-     own overflow-x: auto container instead (tables, the rail on narrow
-     windows) */
+     own overflow-x: auto container instead (tables, on a narrow window) */
   overflow-x: hidden;
 }
 
 body {
-  background: var(--ground);
+  background: var(--paper);
   color: var(--ink);
   font-family: var(--sans);
   font-size: var(--body-size);
@@ -53,263 +57,512 @@ body {
 
 a {
   color: inherit;
+  text-decoration: none;
 }
 
 #main {
-  max-width: 78rem;
-  margin: 0 auto;
-  padding: 0 1.5rem 3rem;
-}
-
-/* --- masthead ------------------------------------------------------------
-   Account name in serif Regular, status as a small outlined pill, the
-   renewal rail beneath. Closed by the tab bar's 2px ink rule. */
-
-.account-header {
-  padding: 1.5rem 0 1rem;
-  border-bottom: 2px solid var(--ink);
-}
-
-.account-header h1 {
+  max-width: none;
   margin: 0;
-  display: inline-block;
+  padding: 0;
+}
+
+/* --- top bar (56px) --------------------------------------------------- */
+
+.topbar {
+  height: 56px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0 1.25rem;
+  border-bottom: 1px solid var(--ink);
+}
+
+.topbar-wordmark {
+  flex: none;
   font-family: var(--serif);
-  font-weight: 400; /* Marsh Serif has no bold — regular weight only */
-  font-size: var(--name-size);
-  color: var(--ink);
+  font-weight: 700;
+  font-size: 1.1875rem;
 }
 
-.status-pill {
-  display: inline-block;
-  margin-left: 0.75rem;
-  padding: 0.15rem 0.6rem;
-  border: 1px solid var(--rule-firm);
-  border-radius: 2px;
-  font-family: var(--mono);
-  font-size: var(--hint-size);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.topbar-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.topbar-nav-item {
+  padding: 0.375rem 0.6875rem;
+  border-radius: 15px;
+  font-size: 0.78125rem;
   color: var(--muted);
-  vertical-align: middle;
+  white-space: nowrap;
 }
 
-/* --- the renewal rail — the signature element -----------------------------
-   RenewalItem.renewal_on and RenewalItem.days_remaining, printed from the
-   same object, are the only source for both the date and the count. Overdue
-   is decided by days_remaining < 0 (the .is-overdue class the server sets),
-   never by rail-marker position — an overdue rail never renders a marker or
-   a fill, only .rail-overrun. */
-
-.rail {
-  margin-top: 1rem;
-  max-width: 40rem;
+.topbar-nav-item.is-current-section {
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 600;
 }
 
-.rail-track {
-  position: relative;
-  height: 6px;
-  background: var(--rule);
-  border-radius: 2px;
-  overflow: visible;
+.topbar-spacer {
+  flex: 1;
 }
 
-.rail-fill {
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  background: var(--sky);
-  border-radius: 2px;
+.search-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.5625rem;
+  height: 34px;
+  padding: 0 0.875rem;
+  background: var(--stone);
+  border-radius: 17px;
+  color: var(--muted);
+  flex: 0 1 240px;
+  min-width: 0;
+  overflow: hidden;
 }
 
-.rail-marker {
-  position: absolute;
-  top: 50%;
-  width: 10px;
-  height: 10px;
-  margin-left: -5px;
-  transform: translateY(-50%) rotate(45deg);
-  background: var(--accent);
+.search-pill span {
+  font-size: var(--body-size);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.rail-tick {
-  position: absolute;
-  top: -3px;
-  width: 1px;
-  height: 12px;
-  background: var(--rule-firm);
+.undo-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+  height: 34px;
+  padding: 0 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: 17px;
+  flex: none;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
 }
 
-.rail-overrun {
-  position: absolute;
-  inset: 0;
+.undo-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.undo-pill-detail {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 16px;
+  background: var(--ink);
+  color: var(--paper);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--over);
-  color: var(--paper);
-  font-family: var(--mono);
-  font-size: var(--hint-size);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  border-radius: 2px;
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
-.rail-scale {
+/* --- header block -------------------------------------------------------
+   Breadcrumb, then a baseline row: name, ref, status badge, and (only when
+   overdue) the danger badge — the header's half of the renewal invariant.
+   No renewal rail: removed in favour of this badge plus the right rail's
+   snapshot row (Grant, 2026-08-17). */
+
+.account-header {
+  flex: none;
   display: flex;
-  justify-content: space-between;
-  margin-top: 0.35rem;
-  font-family: var(--mono);
-  font-size: var(--label-size);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 1rem 1.25rem 0.75rem;
+}
+
+.breadcrumb {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 
-.rail-date {
-  margin: 0.75rem 0 0;
-  font-family: var(--sans);
-  font-size: var(--prose-size);
-  color: var(--ink);
-}
-
-.rail-date time {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-}
-
-.rail-count {
+.header-baseline {
   display: flex;
   align-items: baseline;
-  gap: 0.4rem;
-  margin-top: 0.25rem;
+  gap: 0.625rem;
+  flex-wrap: nowrap;
 }
 
-.rail-days {
+.header-baseline h1 {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: var(--name-size);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.account-ref {
+  flex: none;
+  white-space: nowrap;
   font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--count-size);
-  line-height: 1;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.badge-status,
+.badge-overdue {
+  flex: none;
+  white-space: nowrap;
+  padding: 0.125rem 0.5rem;
+  border-radius: 3px;
+  font-size: var(--hint-size);
+  font-weight: 600;
+}
+
+.badge-status {
+  background: var(--good-badge);
+  color: var(--good);
+}
+
+.badge-overdue {
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+
+.header-spacer {
+  flex: 1;
+}
+
+.header-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex: none;
+}
+
+/* Header actions and pane "+ Add ..." pills are rendered but inert this
+   task — none of them write yet. */
+.btn-pill {
+  display: inline-block;
+  padding: 0.5rem 0.875rem;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  font-size: 0.75rem;
   color: var(--ink);
 }
 
-.rail-unit {
-  font-family: var(--sans);
-  font-size: var(--hint-size);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.btn-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-pill-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--paper);
+  font-weight: 600;
+}
+
+.btn-pill-primary:hover {
+  opacity: 0.85;
+  color: var(--paper);
+}
+
+.btn-pill-icon {
+  padding: 0.5rem 0.75rem;
   color: var(--muted);
-}
-
-.rail-lines {
-  margin: 0.35rem 0 0;
-  font-family: var(--mono);
-  font-size: var(--body-size);
-  color: var(--muted);
-}
-
-/* Overdue: colour plus the word "over" (rendered by .rail-overrun and
-   .rail-unit's "days over" text) — colour never carries meaning alone. */
-.rail.is-overdue .rail-days,
-.account-header.is-overdue .status-pill {
-  color: var(--over);
-}
-
-.account-header.is-overdue .status-pill {
-  border-color: var(--over);
 }
 
 /* --- tabs -----------------------------------------------------------------
-   Mono, uppercase, letter-spaced, sitting on the masthead's ink rule; the
-   current tab takes --ink with a 3px --accent underline. A document
-   masthead, not an app navbar. */
+   Four tabs, each with a count badge, on a 1px ink rule. The current tab
+   takes ink at weight 600 with a 2px accent underline. */
 
-nav.tabs {
+.tabs {
+  flex: none;
   display: flex;
+  align-items: stretch;
   gap: 1.5rem;
-  margin-top: -2px; /* sit on the .account-header rule, not below it */
+  padding: 0 1.25rem;
+  border-bottom: 1px solid var(--ink);
 }
 
-nav.tabs a {
-  display: inline-block;
-  padding: 0.6rem 0.1rem 0.5rem;
-  font-family: var(--mono);
-  font-size: var(--hint-size);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+  padding: 0.6875rem 0.125rem;
+  margin-bottom: -1px;
+  font-size: 0.8125rem;
   color: var(--muted);
-  text-decoration: none;
-  border-bottom: 3px solid transparent;
+  border-bottom: 2px solid transparent;
 }
 
-nav.tabs a.is-current {
+.tab:hover {
+  color: var(--accent);
+}
+
+.tab.is-current {
   color: var(--ink);
+  font-weight: 600;
   border-bottom-color: var(--accent);
 }
 
-.tab-panel {
-  padding-top: 1.5rem;
-}
-
-/* --- overview: five ruled sections -----------------------------------
-   Sections of one document, not floating cards: no shadows, no gradients. */
-
-.card {
-  background: var(--paper);
-  border-top: 1px solid var(--rule);
-  padding: 1rem 0 1.5rem;
-}
-
-.card:first-child {
-  border-top: none;
-  padding-top: 0;
-}
-
-.card h2 {
-  margin: 0 0 0.6rem;
+.tab-badge {
   font-family: var(--mono);
-  font-size: var(--label-size);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
+  font-size: 0.625rem;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 8px;
+  background: var(--stone);
   color: var(--muted);
-  font-weight: 400;
 }
 
-.card ul {
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.tab.is-current .tab-badge {
+  background: var(--accent-wash);
+  color: var(--accent);
 }
 
-.card li {
-  min-height: var(--row-height);
+/* --- layout: tab panel + right rail ------------------------------------- */
+
+.layout {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  border-bottom: 1px solid var(--rule);
+  align-items: stretch;
+}
+
+.tab-panel {
+  flex: 1;
+  min-width: 0;
+  padding: 1.25rem;
+  overflow: auto;
+  animation: settle 120ms ease-out;
+}
+
+@keyframes settle {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-panel {
+    animation: none;
+  }
+}
+
+.panel-empty {
+  padding: 2.5rem 0;
+  color: var(--muted);
+}
+
+.panel-empty p {
+  margin: 0;
   font-size: var(--body-size);
 }
 
-.card li:last-child {
+/* --- right rail (296px) --------------------------------------------------
+   SNAPSHOT, TEAM, DOCUMENTS, RECENT CHANGES — four stacked sections, each
+   with a mono uppercase tracked label. Own scroll. */
+
+.right-rail {
+  width: 296px;
+  flex: none;
+  border-left: 1px solid var(--hairline);
+  background: var(--wash);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.rail-section {
+  padding: 0.875rem 1rem 0.75rem;
+  border-bottom: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5625rem;
+}
+
+.rail-section:last-child {
   border-bottom: none;
 }
 
-.card li time {
+.rail-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.rail-label {
+  margin: 0;
   font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
+  font-size: var(--label-size);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
   color: var(--muted);
+  font-weight: 700;
+}
+
+.rail-action {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--accent);
 }
 
 .empty {
   margin: 0;
-  padding: 0.4rem 0;
+  padding: 0.25rem 0;
   color: var(--muted);
   font-style: normal;
+  font-size: var(--body-size);
 }
 
-/* --- schedule tables (contacts, requests, items, open items) --------------
-   --band headers, hairline rows, mono for every value that aligns, cells
-   editable in place. Rows sit at roughly 32px — density is a feature. */
+/* SNAPSHOT */
+
+.snapshot-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.625rem;
+  min-height: var(--row-height);
+}
+
+.snapshot-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.snapshot-value {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+  color: var(--ink);
+  text-align: right;
+}
+
+.snapshot-row.is-overdue .snapshot-value {
+  font-weight: 700;
+  color: var(--danger);
+}
+
+/* TEAM */
+
+.team-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-height: var(--row-height);
+  justify-content: center;
+}
+
+.team-who {
+  font-weight: 500;
+}
+
+.team-detail {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* DOCUMENTS */
+
+.documents-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  align-items: flex-start;
+  padding: 0.875rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.documents-empty p {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.documents-empty p:last-child {
+  font-size: var(--hint-size);
+  line-height: 1.45;
+}
+
+/* RECENT CHANGES */
+
+.change-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--hairline-2);
+}
+
+.change-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.change-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.change-time {
+  flex: none;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.change-what {
+  flex: 1;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.change-bottom {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.change-who {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+/* Rendered, not wired — reverting a batch from the account page is Task
+   15's work. This is the affordance, not the action. */
+.revert-link {
+  margin-left: auto;
+  font-size: var(--hint-size);
+  color: var(--accent);
+}
+
+.change-reverted {
+  margin-left: auto;
+  font-size: var(--hint-size);
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* --- schedule tables (forward-styled: no table markup renders yet in this
+   task's tab panels — Tasks 8-13 build the rows that use these) -----------
+   --stone headers, hairline rows, mono for every value that aligns, a
+   trailing actions column, CSS grid never table layout per the spec. */
 
 .table-scroll {
   overflow-x: auto;
@@ -322,7 +575,7 @@ table.rows {
 }
 
 table.rows th {
-  background: var(--band);
+  background: var(--stone);
   text-align: left;
   padding: 0.4rem 0.6rem;
   font-family: var(--mono);
@@ -331,14 +584,18 @@ table.rows th {
   letter-spacing: 0.1em;
   color: var(--muted);
   font-weight: 400;
-  border-bottom: 1px solid var(--rule-firm);
+  border-bottom: 1px solid var(--ink);
 }
 
 table.rows td {
   height: var(--row-height);
   padding: 0.3rem 0.6rem;
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--hairline-2);
   vertical-align: middle;
+}
+
+table.rows tr:hover td {
+  background: var(--hover);
 }
 
 table.rows td.num,
@@ -347,14 +604,15 @@ table.rows td.mono {
   font-variant-numeric: tabular-nums;
 }
 
-/* --- inline cell editing (macros/cell.html) --------------------------- */
+/* --- inline cell editing (macros/cell.html), forward-styled: no tab panel
+   renders a .cell this task ------------------------------------------- */
 
 .cell {
   cursor: pointer;
 }
 
 .cell:hover {
-  background: var(--band);
+  background: var(--hover);
 }
 
 .cell.cell-editing {
@@ -363,7 +621,7 @@ table.rows td.mono {
 }
 
 .cell.cell-error {
-  outline: 1px solid var(--over);
+  outline: 1px solid var(--danger);
   outline-offset: -1px;
 }
 
@@ -379,8 +637,8 @@ table.rows td.mono {
   font: inherit;
   font-family: var(--mono);
   padding: 0.15rem 0.3rem;
-  border: 1px solid var(--rule-firm);
-  border-radius: 2px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
   background: var(--paper);
   color: var(--ink);
 }
@@ -388,25 +646,31 @@ table.rows td.mono {
 .cell-error-msg {
   font-family: var(--sans);
   font-size: var(--hint-size);
-  color: var(--over);
+  color: var(--danger);
 }
 
-/* --- interactions ledger --------------------------------------------------
+/* the discoverability affordance for an editable value at rest */
+.is-editable {
+  border-bottom: 1px dashed var(--edit-underline);
+  padding-bottom: 1px;
+}
+
+/* --- interactions ledger, forward-styled: the timeline lands in Tasks
+   8-10 -------------------------------------------------------------------
    A continuous hairline down the left margin, dates hanging in that margin
-   in mono, the type as a small accent label, and the note body in prose
-   sans indented past the rule — always shown, never truncated. */
+   in mono, the type as a small accent label, the note body in prose. */
 
 .ledger {
   position: relative;
   padding-left: 5.5rem;
-  border-left: 1px solid var(--rule);
+  border-left: 1px solid var(--hairline);
   margin-left: 5rem;
 }
 
 .ledger-entry {
   position: relative;
   padding: 0.6rem 0 0.9rem;
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .ledger-entry:last-child {
@@ -436,15 +700,13 @@ table.rows td.mono {
 
 .ledger-body {
   font-family: var(--sans);
-  font-size: var(--prose-size);
+  font-size: var(--body-size);
   color: var(--ink);
   white-space: pre-wrap;
 }
 
-/* --- forms (macros/form.html) ------------------------------------------
-   On --paper, with a 2px --ink top rule so they read as a slip laid on the
-   page. Labels above inputs in the uppercase mono label style. Radius 2px
-   on controls, 0 elsewhere. No shadows, no gradients. */
+/* --- forms (macros/form.html), forward-styled: no form renders in this
+   task's panels ----------------------------------------------------------- */
 
 .entity-form {
   background: var(--paper);
@@ -455,7 +717,7 @@ table.rows td.mono {
 .form-title {
   margin: 0 0 1rem;
   font-family: var(--serif);
-  font-weight: 400;
+  font-weight: 700;
   font-size: var(--name-size);
   color: var(--ink);
 }
@@ -463,10 +725,10 @@ table.rows td.mono {
 .form-error {
   margin: 0 0 1rem;
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--over);
-  border-radius: 2px;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
   background: var(--paper);
-  color: var(--over);
+  color: var(--danger);
   font-size: var(--body-size);
 }
 
@@ -486,7 +748,7 @@ table.rows td.mono {
 }
 
 .entity-form .field .req {
-  color: var(--over);
+  color: var(--danger);
 }
 
 .entity-form input,
@@ -495,8 +757,8 @@ table.rows td.mono {
   font: inherit;
   font-family: var(--sans);
   padding: 0.4rem 0.5rem;
-  border: 1px solid var(--rule-firm);
-  border-radius: 2px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
   background: var(--paper);
   color: var(--ink);
 }
@@ -510,19 +772,49 @@ table.rows td.mono {
   font-family: var(--sans);
   padding: 0.45rem 1rem;
   border: 1px solid var(--ink);
-  border-radius: 2px;
+  border-radius: 4px;
   background: var(--ink);
   color: var(--paper);
   cursor: pointer;
 }
 
+/* --- the undo toast, forward-styled: nothing writes on the web yet, so
+   nothing triggers a toast this task --------------------------------------
+   Exactly two shadows exist on the whole surface (Geometry, spec): this is
+   one of them, the other is card hover above. */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.625rem;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.625rem 1rem;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 8px;
+  box-shadow: var(--shadow-toast);
+  font-size: var(--body-size);
+  z-index: 50;
+}
+
+.card {
+  box-shadow: none;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-card);
+}
+
 /* --- status colours: signal, never decoration alone --------------------
    Every coloured state also carries a word or glyph in the markup itself
-   (e.g. "over", "bound") — these classes only ever supply the colour. */
+   ("over", "◆", "bound") — these classes only ever supply the colour. */
 
-.is-bound { color: var(--bound-tx); }
+.is-bound { color: var(--good); }
 .is-due-soon { color: var(--warn); }
-.is-overdue, .is-error { color: var(--over); }
+.is-overdue, .is-error { color: var(--danger); }
 
 /* --- focus ------------------------------------------------------------- */
 
@@ -532,33 +824,20 @@ table.rows td.mono {
 }
 
 /* --- narrow window -------------------------------------------------------
-   The rail collapses to date plus count; tables already scroll inside their
-   own .table-scroll container; the page body never scrolls sideways. */
+   Below ~1000px the right rail drops beneath the tab body rather than
+   squeezing beside it. The search pill's own flex basis (flex:0 1 240px;
+   min-width:0) already shrinks it as the top bar narrows — no breakpoint
+   needed for that. Tables always scroll inside .table-scroll rather than
+   dropping columns; the page body itself never scrolls sideways. */
 
-@media (max-width: 36rem) {
-  .rail-track,
-  .rail-scale {
-    display: none;
+@media (max-width: 62.5rem) {
+  .layout {
+    flex-direction: column;
   }
 
-  .rail-date {
-    margin-top: 0;
-  }
-}
-
-/* --- motion -------------------------------------------------------------- */
-
-.tab-panel {
-  animation: settle 120ms ease-out;
-}
-
-@keyframes settle {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tab-panel {
-    animation: none;
+  .right-rail {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--hairline);
   }
 }

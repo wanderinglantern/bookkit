@@ -1,18 +1,121 @@
 {% extends "base.html" %}
 {% block title %}{{ header.org.name }} — bookkit{% endblock %}
 {% block content %}
-  <header class="account-header{% if header.overdue %} is-overdue{% endif %}">
-    <h1>{{ header.org.name }}</h1>
-    <span class="status-pill">{{ header.org.status }}</span>
-    {% if header.renewal_on %}{% include "account/_renewal_rail.html" %}{% endif %}
+  {# Top bar. Nav items and the search pill have nowhere to go yet — no other
+     web route exists outside the account page — so they render as inert
+     placeholders. "Book" is highlighted because that's the section this
+     page lives under. #}
+  <div class="topbar">
+    <span class="topbar-wordmark">BookKit</span>
+    <nav class="topbar-nav">
+      {% for label in ("Today", "Navigator", "Book", "Pipeline", "Calendar", "Markets", "Towers") %}
+        <span class="topbar-nav-item{% if label == 'Book' %} is-current-section{% endif %}">{{ label }}</span>
+      {% endfor %}
+    </nav>
+    <span class="topbar-spacer"></span>
+    <div class="search-pill"><span>Search</span></div>
+    {% if last_undo %}
+      {# Inert on purpose: undo is not wired on the web yet (see
+         bookkit/web/parity.py PENDING["undo"]). This shows the last
+         undoable change; it does not revert it. #}
+      <span class="undo-pill">Undo <span class="undo-pill-detail">{{ last_undo.summary }}</span></span>
+    {% endif %}
+    <div class="avatar">GB</div>
+  </div>
+
+  <header class="account-header">
+    <p class="breadcrumb">Book <span class="crumb-sep">/</span> {{ header.org.name }}</p>
+    <div class="header-baseline">
+      <h1>{{ header.org.name }}</h1>
+      <span class="account-ref">{{ header.org.ref }}</span>
+      <span class="badge-status">{{ header.org.status }}</span>
+      {% if header.overdue %}
+        {# Same header dict as the snapshot's "next renewal" row — one
+           RenewalItem, never placement.period_to. #}
+        <span class="badge-overdue">◆ renewal {{ -header.days_remaining }}d overdue</span>
+      {% endif %}
+      <span class="header-spacer"></span>
+      <div class="header-actions">
+        {# Inert this task: none of these write yet (log interaction, add
+           task, renew, the overflow menu all land in later tasks). #}
+        <span class="btn-pill btn-pill-primary">+ Log interaction</span>
+        <span class="btn-pill">+ Task</span>
+        <span class="btn-pill">Renew</span>
+        <span class="btn-pill btn-pill-icon">···</span>
+      </div>
+    </div>
   </header>
+
   <nav class="tabs">
-    <a href="/accounts/{{ header.org.ref }}/overview"
-       class="{% if tab == 'overview' %}is-current{% endif %}">Overview</a>
-    <a href="/accounts/{{ header.org.ref }}/contacts"
-       class="{% if tab == 'contacts' %}is-current{% endif %}">Contacts</a>
-    <a href="/accounts/{{ header.org.ref }}/interactions"
-       class="{% if tab == 'interactions' %}is-current{% endif %}">Interactions</a>
+    {% for t in tabs %}
+      <a href="/accounts/{{ header.org.ref }}/{{ t.id }}" class="tab{% if t.id == tab %} is-current{% endif %}">{{ t.label }} <span class="tab-badge">{{ t.count }}</span></a>
+    {% endfor %}
   </nav>
-  <div class="tab-panel">{% block panel %}{% endblock %}</div>
+
+  <div class="layout">
+    <div class="tab-panel">{% block panel %}{% endblock %}</div>
+
+    <aside class="right-rail">
+      <section class="rail-section">
+        <h2 class="rail-label">Snapshot</h2>
+        {% for row in snapshot %}
+          <div class="snapshot-row{% if row.overdue %} is-overdue{% endif %}">
+            <span class="snapshot-label">{{ row.label }}</span>
+            <span class="snapshot-value">{{ row.value }}</span>
+          </div>
+        {% endfor %}
+      </section>
+
+      <section class="rail-section">
+        <div class="rail-section-head">
+          <h2 class="rail-label">Team</h2>
+          <span class="rail-action">Assign</span>
+        </div>
+        {% if team %}
+          {% for a in team %}
+            <div class="team-row">
+              <span class="team-who">{{ a['member_name'] }}</span>
+              {% set detail = [a['role'], a['lines']] | select | join(' · ') %}
+              {% if detail %}<span class="team-detail">{{ detail }}</span>{% endif %}
+            </div>
+          {% endfor %}
+        {% else %}
+          <p class="empty">no one assigned</p>
+        {% endif %}
+      </section>
+
+      <section class="rail-section">
+        <h2 class="rail-label">Documents</h2>
+        <div class="documents-empty">
+          <p>no documents yet</p>
+          <p>Drop a binder, loss run or SOV here — BookKit records the path, not the file.</p>
+        </div>
+      </section>
+
+      <section class="rail-section">
+        <h2 class="rail-label">Recent changes</h2>
+        {% if changes %}
+          {% for c in changes %}
+            <div class="change-row">
+              <div class="change-top">
+                <span class="change-time">{{ c.created_at.split('T')[1][:5] if 'T' in c.created_at else c.created_at }}</span>
+                <span class="change-what">{{ c.summary }}</span>
+              </div>
+              <div class="change-bottom">
+                <span class="change-who">{{ c.source }}</span>
+                {% if c.reverted_at is none %}
+                  {# Rendered, not wired — Task 15's work. #}
+                  <span class="revert-link">Revert</span>
+                {% else %}
+                  <span class="change-reverted">reverted</span>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        {% else %}
+          <p class="empty">no changes yet</p>
+        {% endif %}
+      </section>
+    </aside>
+  </div>
 {% endblock %}

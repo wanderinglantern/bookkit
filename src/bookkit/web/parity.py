@@ -16,7 +16,11 @@ catches the next one."""
 from __future__ import annotations
 
 # action name -> the web route that covers it
-IMPLEMENTED: dict[str, str] = {}
+IMPLEMENTED: dict[str, str] = {
+    "show_tab": "GET /accounts/{ref}/{tab} — Program/Relationship/Work/Pipeline, "
+    "each a real route with its own count badge (see routes/account.py, "
+    "docs/superpowers/specs/2026-08-17-web-visual-direction.md)",
+}
 
 # action name -> why it is not covered yet
 PENDING: dict[str, str] = {
@@ -57,10 +61,10 @@ PENDING: dict[str, str] = {
         "deferred by decision, not yet reached: bulk paste-import needs a "
         "browser-side parser design of its own; the TUI flow does not port"
     ),
-    "undo": "undo is not built on the web yet",
-    "show_tab": (
-        "the web equivalent is a tab link per route, built with the account "
-        "page — flip this to IMPLEMENTED when those land"
+    "undo": (
+        "undo is not built on the web yet — the top-bar 'Undo <last change>' "
+        "pill on the account page is display-only (reads repo.batches.recent) "
+        "and does not revert anything"
     ),
     # the following two are bound on ListTable/InlineTable, not AccountScreen
     # itself — see _WIDGET_SOURCES in tests/test_web_parity.py, added in fix
