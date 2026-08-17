@@ -24,12 +24,25 @@ PENDING: dict[str, str] = {
     "open_towerkit": "placements tab — later slice, needs towerkit writes",
     "assign_team": "team assignment editing not built on the web yet",
     "scaffold_tower": "placements tab — later slice, needs towerkit writes",
-    "export_open_items": "screen-wide export/merge not built on the web yet",
-    "import_here": "paste-import is a TUI-only intake flow for now",
+    "export_open_items": (
+        "deferred by decision, not yet reached: an XLSX export needs a "
+        "file-download response, a mechanism the web spec does not cover — "
+        "see docs/superpowers/specs/2026-08-17-web-frontend-design.md"
+    ),
+    "import_here": (
+        "deferred by decision, not yet reached: bulk paste-import needs a "
+        "browser-side parser design of its own; the TUI flow does not port"
+    ),
     "task_done": "task mutation not built on the web yet",
     "delete_row": "row deletion not built on the web yet",
     "mark_primary": "contact mutation not built on the web yet",
-    "paste_items": "paste-import is a TUI-only intake flow for now",
+    "paste_items": (
+        "deferred by decision, not yet reached: bulk paste-import needs a "
+        "browser-side parser design of its own; the TUI flow does not port"
+    ),
     "undo": "undo is not built on the web yet",
-    "show_tab": "slice 1 renders separate routes, not a tabbed shell",
+    "show_tab": (
+        "the web equivalent is a tab link per route, built with the account "
+        "page — flip this to IMPLEMENTED when those land"
+    ),
 }
