@@ -1,0 +1,28 @@
+{% extends "account/page.html" %}
+{% block panel %}
+  <section class="card"><h2>Team</h2>
+    {% if team %}<ul>{% for a in team %}
+      <li>{{ a['member_name'] }}{% if a['role'] %} — {{ a['role'] }}{% endif %}{% if a['lines'] %} ({{ a['lines'] }}){% endif %}</li>
+    {% endfor %}</ul>{% else %}<p class="empty">No one assigned.</p>{% endif %}
+  </section>
+  <section class="card"><h2>Key contacts</h2>
+    {% if contacts %}<ul>{% for c in contacts %}
+      <li>{{ c.first_name }} {{ c.last_name }}{% if c.title %} — {{ c.title }}{% endif %}</li>
+    {% endfor %}</ul>{% else %}<p class="empty">No contacts yet. Add the first one.</p>{% endif %}
+  </section>
+  <section class="card"><h2>Recent interactions</h2>
+    {% if interactions %}<ul>{% for i in interactions %}
+      <li><time>{{ i.occurred_on }}</time> {{ i.subject }}</li>
+    {% endfor %}</ul>{% else %}<p class="empty">Nothing logged yet.</p>{% endif %}
+  </section>
+  <section class="card"><h2>Open tasks</h2>
+    {% if tasks %}<ul>{% for t in tasks %}
+      <li>{{ t.title }}{% if t.due_on %} <time>{{ t.due_on }}</time>{% endif %}</li>
+    {% endfor %}</ul>{% else %}<p class="empty">Nothing open.</p>{% endif %}
+  </section>
+  <section class="card"><h2>Open opportunities</h2>
+    {% if opportunities %}<ul>{% for o in opportunities %}
+      <li>{{ o.title }} — {{ o.stage }}</li>
+    {% endfor %}</ul>{% else %}<p class="empty">Nothing in the pipeline.</p>{% endif %}
+  </section>
+{% endblock %}

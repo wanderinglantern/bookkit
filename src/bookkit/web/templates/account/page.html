@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ header.org.name }} — bookkit{% endblock %}
+{% block content %}
+  <header class="account-header{% if header.overdue %} is-overdue{% endif %}">
+    <h1>{{ header.org.name }}</h1>
+    <span class="status-pill">{{ header.org.status }}</span>
+    {% if header.renewal_on %}{% include "account/_renewal_rail.html" %}{% endif %}
+  </header>
+  <nav class="tabs">
+    <a href="/accounts/{{ header.org.ref }}/overview"
+       class="{% if tab == 'overview' %}is-current{% endif %}">Overview</a>
+    <a href="/accounts/{{ header.org.ref }}/contacts"
+       class="{% if tab == 'contacts' %}is-current{% endif %}">Contacts</a>
+    <a href="/accounts/{{ header.org.ref }}/interactions"
+       class="{% if tab == 'interactions' %}is-current{% endif %}">Interactions</a>
+  </nav>
+  <div class="tab-panel">{% block panel %}{% endblock %}</div>
+{% endblock %}
