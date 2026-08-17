@@ -1689,6 +1689,16 @@ that pairing wrong on four surfaces."
 >     return f"/accounts/{ref}/contacts/{contact_id}/cell/{key}"
 >
 >
+> # Three representations, settled in Task 6 so Escape has somewhere to go:
+> #   GET  .../cell/{key}        -> the display cell
+> #   GET  .../cell/{key}/edit   -> the editor cell
+> #   POST .../cell/{key}        -> save; display cell, or editor + error + typed
+> # Both macros render a whole <td> and swap outerHTML, so activating a cell
+> # REPLACES the display element and its htmx listener. Swapping innerHTML left
+> # the listener in place, and clicks inside the editor bubbled back to it and
+> # re-fetched the cell, discarding the edit.
+>
+>
 > def _contact_cell(request: Request, ref: str, contact_id: str, key: str,
 >                   error: str | None = None, typed: str | None = None) -> HTMLResponse:
 >     field = _CONTACT_CELLS.get(key)
