@@ -44,16 +44,19 @@
      input and this element's own Escape listener all at once — rather than
      leaving a stale editor listening on something htmx just swapped out
      from under it. The keyup bubbles here from the input inside.
-     focusout is the declarative half of "blur cancels": a genuine
-     click-away re-fetches the display cell exactly like Escape does.
-     inline-cell.js suppresses the request this would otherwise fire on a
-     Tab/Enter commit (both remove this element via their own swap, which
-     also fires focusout) by tracking a `committing` flag around the
-     submit. hx-target below tracks `tag` too — a literal "closest td"
-     would silently no-op when tag="div". #}
+
+     "Blur cancels" is handled entirely in inline-cell.js, not here — fix
+     round 2, 2026-08-17. A declarative hx-trigger="focusout" alongside it
+     used to do this instead, racing a commit's own removal-triggered
+     focusout unconditionally (the `committing` flag next to it was set and
+     cleared but never actually read by anything). One place, one guard
+     that's actually consulted, beats a declarative trigger and a JS flag
+     both reaching for the same event and only one of them checking it.
+     hx-target below tracks `tag` too — a literal "closest td" would
+     silently no-op when tag="div". #}
   <{{ tag }} class="cell cell-editing{% if error %} cell-error{% endif %}"
       data-field="{{ field.key }}" data-cell-action="{{ action }}"
-      hx-get="{{ action }}" hx-trigger="keyup[key=='Escape'], focusout" hx-swap="outerHTML">
+      hx-get="{{ action }}" hx-trigger="keyup[key=='Escape']" hx-swap="outerHTML">
     <form class="cell-editor" method="post" action="{{ action }}"
           hx-post="{{ action }}" hx-target="closest {{ tag }}" hx-swap="outerHTML">
       {% if field.kind == "select" %}

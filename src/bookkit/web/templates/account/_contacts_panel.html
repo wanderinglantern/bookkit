@@ -13,48 +13,68 @@
    TUI's shared source of truth, bookkit.forms.inline.CONTACT_FIELDS) never
    declares them, so neither surface makes them inline-editable — and they
    render without the dashed-editable underline, on purpose, so the
-   affordance never promises an edit that isn't there. #}
-<div class="people-head">
-  <h2 class="people-label">People</h2>
-  <span class="people-count">{{ count }}</span>
-  <span class="people-head-spacer"></span>
-  <button type="button" class="people-add"
-          hx-get="/accounts/{{ header.org.ref }}/contacts/new"
-          hx-target="next .form-host" hx-swap="innerHTML">+ Add contact</button>
-</div>
-<div class="form-host"></div>
-{% if rows %}
-  <div class="contact-cards">
-    {% for row in rows %}
-      <div class="contact-card{% if row.is_primary %} is-primary{% endif %}">
-        <div class="contact-head">
-          <span class="contact-star">{% if row.is_primary %}★{% endif %}</span>
-          <span class="contact-name">{{ row.first_name }} {{ row.last_name }}</span>
-          {{ row.title_cell | safe }}
-        </div>
-        <div class="contact-fields">
-          {% for f in row.fields %}
-            <div class="contact-field">
-              <span class="contact-field-label">{{ f.label }}</span>
-              {{ f.cell | safe }}
-            </div>
-          {% endfor %}
-        </div>
-        <div class="contact-actions">
-          {% if row.is_primary %}
-            <span class="row-action-static">Primary contact</span>
-          {% else %}
+   affordance never promises an edit that isn't there.
+
+   Fix round 2: #contacts-panel is THIS partial's own root, not a wrapper
+   applied by relationship.html — a successful "+ Add contact" needs to
+   replace it via an out-of-band swap (hx-swap-oob, `oob` below), and OOB
+   matching is by id, so the id has to be present regardless of whether
+   this partial is rendered standalone (a panel refresh) or included into
+   the full tab page. See routes/relationship.py's _contacts_panel and the
+   bug this fixes: the form itself targets "closest .form-host" with an
+   innerHTML swap (macros/form.html, unchanged — every other form still
+   uses it), and .form-host lives INSIDE this panel. Returning the whole
+   panel as that swap's primary content nested a second copy of it one
+   level down inside itself. The fix keeps the form's target/swap exactly
+   as they are (so a REFUSAL — which returns just the form + error, not
+   the panel — still swaps correctly, as it always did) and instead makes
+   a SUCCESSFUL add return an out-of-band #contacts-panel plus nothing
+   else: the primary swap clears .form-host to empty (closing the form,
+   .form-host:empty already hides it), and the OOB swap replaces the panel
+   in one shot, as a completely separate DOM operation. #}
+<div id="contacts-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="people-head">
+    <h2 class="people-label">People</h2>
+    <span class="people-count">{{ count }}</span>
+    <span class="people-head-spacer"></span>
+    <button type="button" class="people-add"
+            hx-get="/accounts/{{ header.org.ref }}/contacts/new"
+            hx-target="next .form-host" hx-swap="innerHTML">+ Add contact</button>
+  </div>
+  <div class="form-host"></div>
+  {% if rows %}
+    <div class="contact-cards">
+      {% for row in rows %}
+        <div class="contact-card{% if row.is_primary %} is-primary{% endif %}">
+          <div class="contact-head">
+            <span class="contact-star">{% if row.is_primary %}★{% endif %}</span>
+            <span class="contact-name">{{ row.first_name }} {{ row.last_name }}</span>
+            {{ row.title_cell | safe }}
+          </div>
+          <div class="contact-fields">
+            {% for f in row.fields %}
+              <div class="contact-field">
+                <span class="contact-field-label">{{ f.label }}</span>
+                {{ f.cell | safe }}
+              </div>
+            {% endfor %}
+          </div>
+          <div class="contact-actions">
+            {% if row.is_primary %}
+              <span class="row-action-static">Primary contact</span>
+            {% else %}
+              <span class="row-action" aria-disabled="true"
+                    title="Not wired yet — marking a contact primary is a later task">Make primary</span>
+            {% endif %}
             <span class="row-action" aria-disabled="true"
-                  title="Not wired yet — marking a contact primary is a later task">Make primary</span>
-          {% endif %}
-          <span class="row-action" aria-disabled="true"
-                title="Not wired yet — logging an interaction is a later task">Log interaction</span>
+                  title="Not wired yet — logging an interaction is a later task">Log interaction</span>
+          </div>
         </div>
-      </div>
-    {% endfor %}
-  </div>
-{% else %}
-  <div class="panel-empty">
-    <p>empty — add the first row</p>
-  </div>
-{% endif %}
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="panel-empty">
+      <p>empty — add the first row</p>
+    </div>
+  {% endif %}
+</div>

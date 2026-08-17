@@ -230,6 +230,40 @@ def test_render_cell_editor_input_has_an_accessible_name():
     assert 'aria-label="role"' in html
 
 
+def test_the_editor_cell_has_no_declarative_focusout_trigger():
+    """Fix round 2, 2026-08-17: blur-cancel used to be split across a
+    declarative hx-trigger="focusout" on the editor AND a JS `committing`
+    flag that was set and cleared but never actually consulted — so every
+    commit's own removal-triggered focusout fired a spurious revert GET
+    unconditionally, racing the save it sat right next to. Blur-cancel now
+    lives entirely in inline-cell.js, where `committing` is genuinely read.
+    Checked on the rendered macro OUTPUT (not the template source) so a
+    source comment that happens to mention "focusout" can't make this pass
+    by accident — Jinja comments never reach rendered output."""
+    field = Field("role", "role")
+    html = render_cell(None, field, value="broker", action="/probe")
+    assert "focusout" not in html
+
+
+def test_the_committing_guard_is_actually_read():
+    """The bug fix round 2 caught: `committing` existed in inline-cell.js,
+    set on submit and cleared on htmx:afterRequest, referenced nowhere else
+    — a flag nothing ever consulted is not a guard, however confidently the
+    surrounding comments describe it as one. This is a static/textual
+    check, not a behavioural proof — this repo has no JS test harness to
+    drive a real browser — but it is real: it fails if `committing` reverts
+    to being set-and-forgotten, which is exactly the mistake that shipped."""
+    import re
+    from pathlib import Path
+
+    import bookkit
+
+    js = (Path(bookkit.__file__).parent / "web" / "static" / "inline-cell.js").read_text()
+    assert re.search(r"if\s*\([^)]*\bcommitting\b[^)]*\)", js), (
+        "committing is set/cleared but never read inside a conditional"
+    )
+
+
 def test_the_date_refusal_says_how_to_fix_it():
     """The old message ('cannot read a date from 5') named the objection, not
     the remedy, and mcpserver.py held four more copies of it that could (and

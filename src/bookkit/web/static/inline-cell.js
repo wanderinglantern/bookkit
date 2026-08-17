@@ -4,25 +4,32 @@
  * Enter commits and closes, Tab commits and hops to the next editable cell
  * in the same record, Escape and blur both cancel — never a surprise write.
  *
- * Enter and Escape need no JS: Enter is a native form submit (the editor's
- * <form> already carries hx-post), Escape is the cell's own
- * hx-trigger="keyup[key=='Escape']". This file covers what's left:
+ * Enter needs no JS: it's a native form submit (the editor's <form> already
+ * carries hx-post). Escape is still declarative — the cell's own
+ * hx-trigger="keyup[key=='Escape']" in macros/cell.html. Both Tab-hop and
+ * blur-cancel are handled entirely here, in JS, not split against a
+ * declarative trigger:
  *
  *   - Tab's default action (move focus) is prevented so it never leaves via
  *     the browser's own tab order; we commit the cell instead, then open
  *     the next editable cell's editor once the commit lands.
- *   - Blur cancels by re-fetching the display cell (already wired via
- *     hx-trigger="focusout" in the template) — but that same trigger would
- *     also fire on the focusout a commit's own outerHTML swap causes when
- *     it removes the focused input from the DOM. The `committing` flag
- *     below suppresses exactly that one case, so a commit is never followed
- *     by a spurious revert race.
+ *   - Blur cancels by re-fetching the display cell — but a COMMIT's own
+ *     outerHTML swap removes the focused input from the DOM too, which
+ *     ALSO fires focusout. Fix round 2, 2026-08-17: this used to be a
+ *     declarative hx-trigger="focusout" on the cell, running unconditionally
+ *     alongside a `committing` flag that was set and cleared but never
+ *     actually read anywhere — so every commit raced a spurious revert GET
+ *     against its own save (harmless by luck here, since both requests
+ *     converge on the same display value, but a real bug: the flag existed
+ *     to prevent exactly this and did not). focusout is now handled here in
+ *     JS, where `committing` actually gates the revert fetch — the flag is
+ *     read on every focusout, not just carried.
  *
  * Selectors below are class-only, never tag-qualified (no "td.cell" or
  * "td.cell-editing") — macros/cell.html's `tag` parameter means a cell is a
  * <td> inside a table.rows row or a <div> inside a .contact-card, and this
  * script has to work for both without knowing which one it's looking at.
- * ".record-scope" below is whatever ancestor groups one record's cells —
+ * RECORD_SCOPE below is whatever ancestor groups one record's cells —
  * a <tr>, or a .contact-card. */
 (function () {
   "use strict";
@@ -37,7 +44,9 @@
   }
 
   // Capture phase: runs before htmx's own submit listener, so `committing`
-  // is already true by the time htmx issues the request.
+  // is already true by the time htmx issues the request — and therefore
+  // already true by the time the eventual outerHTML swap's own focusout
+  // reaches the listener below.
   document.body.addEventListener(
     "submit",
     function (evt) {
@@ -60,6 +69,17 @@
     ) {
       committing = false;
     }
+  });
+
+  // Blur cancels — never a surprise write. `committing` is what stops a
+  // commit's own removal-triggered focusout from firing a second, spurious
+  // revert request right behind its own save.
+  document.body.addEventListener("focusout", function (evt) {
+    var cell = evt.target.closest && evt.target.closest(".cell-editing");
+    if (!cell || committing) return;
+    var action = cell.getAttribute("data-cell-action");
+    if (!action || typeof htmx === "undefined") return;
+    htmx.ajax("GET", action, { target: cell, swap: "outerHTML" });
   });
 
   document.body.addEventListener("keydown", function (evt) {

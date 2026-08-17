@@ -117,6 +117,39 @@ def test_adding_a_contact_writes_one_web_batch(app_and_org):
     assert batch is not None and batch.source == "web"
 
 
+def test_adding_a_contact_replaces_the_panel_exactly_once(app_and_org):
+    """Fix round 2: contact_create used to return the WHOLE panel as the
+    primary swap for a form whose own hx-target is "closest .form-host" —
+    and .form-host lives INSIDE the panel, so the response nested a second
+    copy of the panel one level down inside itself. A presence check
+    ('people-head' in response.text) passes on that broken version just as
+    well as the fixed one; only a count tells them apart."""
+    client, org = app_and_org
+
+    response = client.post(
+        f"/accounts/{org.ref}/contacts/new",
+        data={"first_name": "Priya", "last_name": "Nair", "email": "priya@example.com",
+              "phone": "", "mobile": "", "title": "", "role": "", "linkedin": "",
+              "notes": ""},
+    )
+    assert response.status_code == 200
+    # class="people-head" exactly — a bare substring check also matches
+    # "people-head-spacer" and would pass at count==2 even on the fixed
+    # response, which is no better than the presence check this replaces.
+    assert response.text.count('class="people-head"') == 1
+    assert response.text.count('id="contacts-panel"') == 1
+    assert response.text.count("Priya Nair") == 1
+    # The count checks above are necessary but NOT sufficient: TestClient
+    # never executes htmx, so a raw response body looks identical whether
+    # or not it will nest once a real browser applies the swap — the panel
+    # markup itself is the same either way. What differs is whether the
+    # panel carries hx-swap-oob: without it, the response becomes the
+    # innerHTML of .form-host (which is INSIDE this very panel already on
+    # the page) — nesting a second copy one level down. With it, htmx
+    # swaps #contacts-panel out-of-band instead, as a separate operation.
+    assert 'id="contacts-panel" hx-swap-oob="true"' in response.text
+
+
 def test_a_non_editable_key_is_404_not_a_write(app_and_org):
     """first_name is display-only server-side, not just in the template —
     CONTACT_INLINE (and its web mirror, CONTACT_FIELDS) never declares it,

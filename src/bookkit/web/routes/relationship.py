@@ -99,8 +99,18 @@ def _contacts_context(request: Request, org: Org) -> dict[str, Any]:
     return {"rows": rows, "count": len(rows)}
 
 
-def _contacts_panel(request: Request, org: Org) -> HTMLResponse:
-    context = {"header": {"org": org}, **_contacts_context(request, org)}
+def _contacts_panel(request: Request, org: Org, *, oob: bool = False) -> HTMLResponse:
+    """`oob=True` renders the panel as an out-of-band swap (a lone
+    `#contacts-panel` element carrying `hx-swap-oob="true"`, nothing else in
+    the response) rather than the plain fragment a full tab-page render
+    embeds. contact_create's success path needs this: the form that POSTed
+    still targets "closest .form-host" with an innerHTML swap (unchanged),
+    and .form-host lives INSIDE this panel — returning the whole panel as
+    that primary swap's content nested a second copy of it inside itself.
+    OOB makes it two independent swaps instead of one nested one: the
+    primary swap clears .form-host (closing the form), the OOB swap
+    replaces #contacts-panel."""
+    context = {"header": {"org": org}, "oob": oob, **_contacts_context(request, org)}
     return TEMPLATES.TemplateResponse(request, "account/_contacts_panel.html", context)
 
 
@@ -110,6 +120,7 @@ def relationship_tab(request: Request, ref: str) -> HTMLResponse:
     org = _org(request, ref)
     context = _context(conn, org, "relationship")
     context.update(_contacts_context(request, org))
+    context["oob"] = False  # a full tab-page render is never an OOB swap
     return TEMPLATES.TemplateResponse(request, "account/relationship.html", context)
 
 
@@ -130,7 +141,10 @@ async def contact_create(request: Request, ref: str) -> HTMLResponse:
         request, org, spec, action, raw,
         lambda values: apply_contact(_conn(request), org.id, values),
     )
-    return refused or _contacts_panel(request, org)
+    # oob=True on success only: a refusal returns just the form + error
+    # (from _save, unmodified), which correctly swaps into .form-host as
+    # it always did — only a successful add needs the OOB panel replace.
+    return refused or _contacts_panel(request, org, oob=True)
 
 
 def _contact_display_cell(request: Request, ref: str, contact_id: str, key: str) -> HTMLResponse:
