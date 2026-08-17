@@ -3198,7 +3198,160 @@ is a mechanism the spec does not cover yet."
 
 ---
 
-### Task 14: One palette, and the wheelhouse
+### Task 14: Two pre-existing defects, fixed in this branch
+
+Both were found during Tasks 2–3 review and logged as out-of-scope. **Grant ruled 2026-08-17 that they get fixed here rather than on a later branch.** Neither is caused by this work.
+
+**Files:**
+- Modify: `src/bookkit/mcpserver.py`, `src/bookkit/tui/widgets/entity_actions.py`, `tests/test_conventions.py`, `tests/test_rfi_paste.py`
+- Create: `src/bookkit/imports/rfi_paste.py`
+- Test: `tests/test_mcpserver.py` (append)
+
+**Defect A — `_EDITABLE["opportunity"]["notes"]` is offered but cannot work.** The `opportunity` table has no `notes` column (`migrations/001_initial.sql:145-166`: id, ref, org_id, title, lines, stage, target_premium, target_effective, probability_pct, source, incumbent_broker, competitor, closed_at, outcome, loss_reason, created_at) and `opportunity_form` declares no such field. `edit_field(kind="opportunity", field="notes", …)` fails at the DB layer, and the tool advertises it in its refusal message as an allowed field.
+
+Remove the entry. Do **not** add a column — that is a feature, not a fix.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_mcpserver.py`:
+
+```python
+def test_editable_fields_all_exist_on_their_table(server_db):
+    """A field offered by edit_field that has no column fails at the DB layer,
+    after the tool has already told the caller it was allowed. `opportunity.notes`
+    was advertised that way; the table never had the column."""
+    from bookkit import mcpserver
+
+    conn = server_db
+    for kind, fields in mcpserver._EDITABLE.items():
+        table = mcpserver._TABLE_FOR_KIND.get(kind, kind)
+        columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        missing = set(fields) - columns
+        assert not missing, f"{kind}: {sorted(missing)} offered but not on {table}"
+```
+
+`_TABLE_FOR_KIND` may not exist — check how `_edit_target` resolves a kind to its table and reuse that mapping rather than inventing one. If the mapping is implicit, derive it there and say so in your report. This test is allowed raw SQL because it is a schema assertion in a test, not a query in `web/` or `services/`.
+
+- [ ] **Step 2: Run it, confirm it fails naming `opportunity: ['notes']`, then delete the entry and confirm it passes.**
+
+**Defect B — `mcpserver.py` imports from `bookkit.tui`.** Line ~1944: `from .tui.widgets.rfi_paste import split_items`. `split_items` is a pure text splitter with no Textual dependency, sitting in a widgets module because that is where it was first needed. Nothing tests the boundary, which is why it went unnoticed.
+
+- [ ] **Step 3: Move `split_items`**
+
+`git mv` is wrong here — `tui/widgets/rfi_paste.py` holds widget code too. Move only the `split_items` function (and any module-level constant it uses) into a new `src/bookkit/imports/rfi_paste.py`, sibling to `readers.py`, with a docstring saying it parses pasted RFI item text and is shared by every surface. Re-point all three importers: `mcpserver.py:1944`, `tui/widgets/entity_actions.py:335`, and `tests/test_rfi_paste.py:3`. Leave `tui/widgets/rfi_paste.py`'s widget code where it is, importing `split_items` from the new home.
+
+- [ ] **Step 4: Add the convention test that would have caught it**
+
+Append to `tests/test_conventions.py`:
+
+```python
+def test_mcpserver_never_imports_the_tui():
+    """The MCP server is headless. It imported split_items from tui/widgets for
+    a long time because nothing asserted otherwise."""
+    text = (SRC / "mcpserver.py").read_text()
+    for bad in ("from .tui", "from bookkit.tui", "import bookkit.tui"):
+        assert bad not in text, f"mcpserver imports the TUI ({bad})"
+```
+
+- [ ] **Step 5: Prove it can fail.** Append `# from .tui import x` to `mcpserver.py`, watch the test fail, revert. It is a negative assertion; this codebase has a documented history of those passing trivially.
+
+- [ ] **Step 6: Gates and commit**
+
+```bash
+uv run --no-sync python -m pytest tests/test_mcpserver.py tests/test_conventions.py tests/test_rfi_paste.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
+git add -- src/bookkit tests
+git commit -m "fix: two pre-existing defects found during the web build
+
+opportunity.notes was offered by edit_field but has no column, so calling it
+failed at the DB layer after the tool said it was allowed. And mcpserver
+imported split_items from tui/widgets — it is a plain text splitter and now
+lives in imports/, with a convention test so the boundary stops drifting."
+```
+
+---
+
+### Task 15: One edit run is one undo unit
+
+**Grant's call 2026-08-17.** Inline editing makes every field its own batch, so correcting four cells on a contact leaves four entries in the changes list and needs four reverts. He wants a burst of edits to the same record to revert as one thing.
+
+**This applies to both surfaces, not just the web.** The TUI already writes one batch per inline cell edit (`entity_actions.batched_write` wraps each `CellEdited` commit; `inline_edit.py`'s docstring says "every commit is a single field write in the event log — u undoes it"). Building this web-only would make the surfaces diverge, and parity is the destination. It goes in `services/batches.py` where both callers inherit it.
+
+**Files:**
+- Modify: `src/bookkit/services/batches.py`, `src/bookkit/repo/batches.py` (read helper only if needed)
+- Test: `tests/test_batches_service.py` (append)
+
+**Design — join, do not invent a session.**
+
+`open_batch` gains an optional `entity_id: str | None = None`. When it is given, before creating a new batch the service looks at the most recent batch and reuses it when **all** of these hold:
+
+- same `source`, same `tool`, same `org_id`
+- not already reverted
+- created within `JOIN_WINDOW_SECONDS` (start at 60)
+- every event already in it targets that same `entity_id`
+
+Otherwise it creates a new batch exactly as today. `entity_id` omitted means today's behaviour, unchanged — so every existing caller is unaffected until it opts in.
+
+Keying on `entity_id` and not just `(source, tool, org_id)` is load-bearing: editing contact A then contact B within the window are two different actions, and merging them would make one revert undo work on a record the user never touched.
+
+**No schema change.** Do not add a column for `entity_id` — read the existing batch's events via `batches_repo.events_for` and compare their entity ids. Migrations here are additive-only and a nullable column is not worth a migration for something derivable.
+
+**Watch the blast cap.** `db.BLAST_CAP` is 250 entities per batch and is enforced under `log_event`. A joined batch accumulates toward it. Since joining is keyed to one entity this should never bind in practice, but if the cap is hit the failure must be legible — check what `log_event` raises and make sure a user mid-edit gets a sentence, not a traceback. Report what you find.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+def test_consecutive_edits_to_one_record_join_a_single_batch(conn):
+    """Correcting four cells on a contact is one edit run, and should revert as
+    one thing rather than four."""
+
+
+def test_edits_to_different_records_do_not_join(conn):
+    """Same tool, same account, different contact — two actions, two batches.
+    Merging them would let one revert undo work on a record the user never
+    touched."""
+
+
+def test_a_batch_older_than_the_window_does_not_join(conn):
+    """Come back after lunch and finish the row: that is a new action."""
+
+
+def test_a_reverted_batch_is_never_joined(conn):
+    """Joining a reverted batch would resurrect it."""
+
+
+def test_omitting_entity_id_keeps_todays_behaviour(conn):
+    """Every existing caller passes no entity_id and must be unaffected."""
+```
+
+Write each body against the real `open_batch` and `services.batches.revert`, using the `conn` fixture and `db.utc_now` monkeypatched for the window test — `tests/conftest.py`'s `frozen_clock` shows the pattern. Assert on batch identity and on what `revert` restores, never on event counts alone.
+
+- [ ] **Step 2: Run them, confirm each fails for the stated reason, then implement.**
+
+- [ ] **Step 3: Opt the inline writers in.** Pass `entity_id=` from the TUI's inline-cell write path in `tui/widgets/entity_actions.py` and from the web's cell-save routes. Do not opt forms in — a form save is already one action and one batch.
+
+- [ ] **Step 4: Prove the join can fail to happen.** Set `JOIN_WINDOW_SECONDS = 0`, confirm `test_consecutive_edits_to_one_record_join_a_single_batch` fails, restore.
+
+- [ ] **Step 5: Full gates and commit.**
+
+```bash
+git add -- src/bookkit tests
+git commit -m "batches: consecutive edits to one record join one undo unit
+
+Inline editing makes every field its own batch, so fixing four cells left four
+entries in the changes list. Consecutive writes with the same source, tool,
+account and entity, inside a 60s window, now join the open batch. Keyed on the
+entity as well as the tool: editing two different contacts is two actions, and
+merging them would let one revert touch a record the user never edited.
+
+Lives in services/batches.py so the TUI's inline editor inherits it too — the
+surfaces must not diverge on what an undo unit is."
+```
+
+---
+
+### Task 16: One palette, and the wheelhouse
 
 **Files:**
 - Create: `src/bookkit/web/theme_css.py`
