@@ -19,7 +19,14 @@
 - **Date inputs are `<input type="text">`.** Never `type="date"` — a native picker bypasses `parse_human_date`, whose job is to *refuse* bare 1–2 digit input.
 - **The renewal date is `RenewalItem.renewal_on`**, never `placement.period_to`. Print the same date you count to. Overdue is `days_remaining < 0`.
 - **Every write goes through `services.batches.open_batch(conn, source="web", tool=…, summary=…, org_id=…)`.** No repo write outside a batch.
-- **Gates before every commit:** `uv run pytest -q`, `uv run mypy src`, `uv run ruff check src tests`. Redirect output to the scratchpad; put the gate on the command itself, never after a pipe — pipes eat exit codes.
+- **Gates before every commit:** `uv run pytest -q`, `uv run mypy src`, `uv run ruff check src tests`. Put the gate on the command itself, never after a pipe — pipes eat exit codes and red suites get committed.
+- **Gate output goes to `$GATE`, never `/tmp`.** Concurrent pytest runs interleave in `/tmp`. Set it once per shell session to this session's scratchpad directory before running any gate:
+  ```bash
+  export GATE=<this session's scratchpad directory>
+  ```
+  Every gate command below writes to `"$GATE/out.txt"`, `"$GATE/mypy.txt"`, or `"$GATE/ruff.txt"`.
+- **Baseline for this branch: 757 passed, 38 snapshots, exit 0.** Any task that ends with a different passing count has changed behaviour — find out why before committing.
+- **`uvicorn` and `starlette` are already installed transitively via `mcp`.** Task 4 still declares them explicitly (a transitive dependency is not a contract), but expect `uv sync` to report a smaller delta than the four new names suggest.
 - **Line length 100** (ruff config), target `py311`.
 - Work in the worktree `.claude/worktrees/web-account` on branch `web-account`. A fresh worktree needs `uv sync --group dev`, and gates run as `uv run --no-sync python -m pytest`.
 
@@ -175,7 +182,7 @@ def test_batch_spec_derives_tool_from_title_without_the_record_name():
 - [ ] **Step 2: Run the test and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_forms_spec.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_forms_spec.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: collection error, `ModuleNotFoundError: No module named 'bookkit.forms'`.
@@ -355,7 +362,7 @@ def dropped(values: dict[str, Any]) -> dict[str, Any]:
 - [ ] **Step 4: Run the new test and confirm it passes**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_forms_spec.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_forms_spec.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: 12 passed.
@@ -410,7 +417,7 @@ from ...forms.spec import (
 - [ ] **Step 6: Run the whole suite — the existing tests are the gate on this move**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
 ```
 
 Expected: PASS, same count as before the change. `tests/test_tui_forms.py` and `tests/test_form_entry.py` are the ones that would catch a behaviour change; if either fails, the move changed semantics — fix the move, do not adjust the test.
@@ -418,8 +425,8 @@ Expected: PASS, same count as before the change. `tests/test_tui_forms.py` and `
 - [ ] **Step 7: Run mypy and ruff**
 
 ```bash
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -5 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -5 /tmp/ruff.txt
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -5 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -5 "$GATE/ruff.txt"
 ```
 
 Expected: both clean.
@@ -484,7 +491,7 @@ def test_mcp_has_no_second_cleaner_map():
 - [ ] **Step 2: Run it and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_forms_spec.py -q -k mcp > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_forms_spec.py -q -k mcp > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 Expected: `test_mcp_has_no_second_cleaner_map` FAILS on the assert. The equivalence test may already pass — that is fine and expected; it is the regression guard, not the driver.
@@ -508,7 +515,7 @@ def _clean_field_value(field: str, value: str) -> str:
 - [ ] **Step 4: Run the tests and confirm they pass**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_forms_spec.py tests/test_mcpserver.py -q > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_forms_spec.py tests/test_mcpserver.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 Expected: PASS. If `test_mcpserver.py` fails on a `notes` field, note that the old map mapped `"notes"` to `None` (verbatim) while `CLEANERS` keys on *kind* not field name — check whether the failing call passes a field named `notes` and, if so, keep behaviour by leaving `notes` out of the enrich path rather than re-adding a map.
@@ -516,9 +523,9 @@ Expected: PASS. If `test_mcpserver.py` fails on a `notes` field, note that the o
 - [ ] **Step 5: Full gates and commit**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add src/bookkit/mcpserver.py tests/test_web_forms_spec.py
 git commit -m "mcp: delete the duplicated field-cleaner map
 
@@ -544,7 +551,7 @@ A pure move. The existing suite is the gate — every screen already exercises t
 - [ ] **Step 1: Find every importer**
 
 ```bash
-grep -rn "entity_forms" src tests | tee /tmp/importers.txt
+grep -rn "entity_forms" src tests | tee "$GATE/importers.txt"
 ```
 
 Record the list — every one gets rewritten in Step 3.
@@ -559,12 +566,12 @@ Then in `src/bookkit/forms/entities.py` fix the now-wrong relative imports: `fro
 
 - [ ] **Step 3: Rewrite the call sites**
 
-For each path in `/tmp/importers.txt`, replace the import with `from bookkit.forms import entities as entity_forms` (absolute) or the matching relative form — e.g. in `src/bookkit/tui/screens/account.py`, `from ..widgets import entity_forms` becomes `from ...forms import entities as entity_forms`. Keeping the local alias `entity_forms` means the ~100 usage sites in the screens need no edit.
+For each path in `"$GATE/importers.txt"`, replace the import with `from bookkit.forms import entities as entity_forms` (absolute) or the matching relative form — e.g. in `src/bookkit/tui/screens/account.py`, `from ..widgets import entity_forms` becomes `from ...forms import entities as entity_forms`. Keeping the local alias `entity_forms` means the ~100 usage sites in the screens need no edit.
 
 - [ ] **Step 4: Run the whole suite**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
 ```
 
 Expected: PASS with the same count as Task 2. A failure here is a missed import, not a behaviour change.
@@ -580,8 +587,8 @@ Expected: no output.
 - [ ] **Step 6: Gates and commit**
 
 ```bash
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add -A
 git commit -m "forms: move entity_forms into bookkit.forms.entities
 
@@ -705,7 +712,7 @@ def test_serve_binds_loopback_only():
 - [ ] **Step 4: Run it and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_shell.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_shell.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: `ModuleNotFoundError: No module named 'bookkit.web'`.
@@ -835,7 +842,7 @@ Add `"web"` to `READ_ONLY_COMMANDS` so a typo'd `--db` refuses instead of conjur
 - [ ] **Step 7: Run the test and confirm it passes**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_shell.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_shell.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: 4 passed.
@@ -868,7 +875,7 @@ They are negative assertions — the class that passes for the wrong reason. Pro
 
 ```bash
 echo "# bookkit.tui" >> src/bookkit/web/app.py
-uv run --no-sync python -m pytest tests/test_conventions.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_conventions.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: `test_web_and_tui_never_import_each_other` FAILS. Now revert:
@@ -882,9 +889,9 @@ Repeat for the SQL rule by appending `# .execute(` to a web module, confirming `
 - [ ] **Step 10: Full gates and commit**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add -A
 git commit -m "web: FastAPI shell, bookctl web, and the boundary conventions
 
@@ -988,7 +995,7 @@ def test_an_action_is_not_both_implemented_and_pending():
 - [ ] **Step 3: Run it to get the real action list**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_parity.py -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_parity.py -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
 ```
 
 Expected: `test_every_account_action_is_implemented_or_explicitly_pending` FAILS, and the assertion message prints the complete sorted list of action names.
@@ -1012,7 +1019,7 @@ Do not invent names. Every key must come from the test's output.
 - [ ] **Step 5: Run it and confirm it passes**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_parity.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_parity.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: 3 passed.
@@ -1028,7 +1035,7 @@ first = re.search(r'^\s+"(\w+)": ', text, re.M).group(1)
 p.write_text(text.replace(f'"{first}": ', '"__removed__": ', 1))
 print("removed", first)
 PY
-uv run --no-sync python -m pytest tests/test_web_parity.py -q > /tmp/out.txt 2>&1; tail -8 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_parity.py -q > "$GATE/out.txt" 2>&1; tail -8 "$GATE/out.txt"
 git checkout src/bookkit/web/parity.py
 ```
 
@@ -1037,7 +1044,7 @@ Expected: two failures — the missing action, and the now-stale `__removed__` e
 - [ ] **Step 7: Commit**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
 git add src/bookkit/web/parity.py tests/test_web_parity.py
 git commit -m "web: parity ledger for the account screen
 
@@ -1139,7 +1146,7 @@ def test_the_error_message_is_rendered():
 - [ ] **Step 2: Run it and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_form_render.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_form_render.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: `ModuleNotFoundError: No module named 'bookkit.web.forms_render'`.
@@ -1246,7 +1253,7 @@ def render_form(
 - [ ] **Step 5: Run the test and confirm it passes**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_form_render.py -q > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_form_render.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 Expected: all pass. If a `kind` fails, add a branch to the macro — do not weaken the test.
@@ -1258,9 +1265,9 @@ Temporarily change the macro's final `{% else %}` branch to render nothing, run 
 - [ ] **Step 7: Gates and commit**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add -A
 git commit -m "web: one macro renders any FormSpec, asserted over every builder
 
@@ -1367,7 +1374,7 @@ def test_overview_shows_the_five_sections(app_and_org):
 - [ ] **Step 2: Run it and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_account.py -q > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_account.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 Expected: every test fails with 404, because no routes exist yet.
@@ -1527,7 +1534,7 @@ Create `src/bookkit/web/templates/account/overview.html`:
 - [ ] **Step 5: Run the test and confirm it passes**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_account.py -q > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_account.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 Expected: all pass, with at most the two renewal tests skipped if the seeded account has no live renewal. **If they skip, pick an account that does have one** — a skipped renewal test protects nothing. Find one with:
@@ -1535,7 +1542,7 @@ Expected: all pass, with at most the two renewal tests skipped if the seeded acc
 ```bash
 uv run --no-sync python -c "
 from bookkit import db, seed, sync
-" ; uv run --no-sync python -m pytest tests/test_web_account.py -q -rs > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+" ; uv run --no-sync python -m pytest tests/test_web_account.py -q -rs > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 If skipped, change the fixture to select the first org for which `renewals.next_for_org` is not None, and assert that at least one exists.
@@ -1547,9 +1554,9 @@ In `_header`, temporarily return `item.placement.period_to` as `renewal_on`. Run
 - [ ] **Step 7: Gates and commit**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add -A
 git commit -m "web: account header and Overview
 
@@ -1694,7 +1701,7 @@ Expected: `def recent(` at roughly line 53 — verified as of this plan. Check i
 - [ ] **Step 3: Run the test and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_writes.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 Expected: 404s — the routes do not exist.
@@ -1844,7 +1851,7 @@ Create `src/bookkit/web/templates/account/contacts.html`:
 - [ ] **Step 6: Run the test and confirm it passes**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q > /tmp/out.txt 2>&1; tail -15 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_writes.py -q > "$GATE/out.txt" 2>&1; tail -15 "$GATE/out.txt"
 ```
 
 Expected: 3 passed.
@@ -1860,9 +1867,9 @@ In `src/bookkit/web/parity.py`, move the contact-related actions from `PENDING` 
 - [ ] **Step 9: Gates and commit**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add -A
 git commit -m "web: contacts read, add, and edit through the shared apply
 
@@ -1940,7 +1947,7 @@ def test_a_bare_number_is_refused_as_a_date_on_the_web_too(app_and_org):
 - [ ] **Step 2: Run the first test only and confirm behaviour**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q -k "refused" > /tmp/out.txt 2>&1; tail -15 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_writes.py -q -k "refused" > "$GATE/out.txt" 2>&1; tail -15 "$GATE/out.txt"
 ```
 
 Expected: `test_a_refused_save_keeps_every_value_and_writes_nothing` passes if Task 8's `_save` is correct. If it fails on a missing value, the renderer is not receiving `raw` as `submitted` — fix `_save`, not the test. The second test fails with 404 until Task 10.
@@ -1952,7 +1959,7 @@ Temporarily make `_save` swallow the `FieldError` and write anyway. Confirm the 
 - [ ] **Step 4: Commit the passing half**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q -k "refused" > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_writes.py -q -k "refused" > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 git add tests/test_web_writes.py
 git commit -m "web: assert the refusal contract — input intact, nothing written
 
@@ -2016,7 +2023,7 @@ def test_deleting_an_interaction_is_confirmed_then_batched(app_and_org):
 - [ ] **Step 2: Run and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q > /tmp/out.txt 2>&1; tail -15 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_writes.py -q > "$GATE/out.txt" 2>&1; tail -15 "$GATE/out.txt"
 ```
 
 Expected: the three interaction tests fail with 404.
@@ -2156,7 +2163,7 @@ Create `src/bookkit/web/templates/account/interactions.html`:
 - [ ] **Step 5: Run the whole write suite**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q > /tmp/out.txt 2>&1; tail -15 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_writes.py -q > "$GATE/out.txt" 2>&1; tail -15 "$GATE/out.txt"
 ```
 
 Expected: all pass, including `test_a_bare_number_is_refused_as_a_date_on_the_web_too` from Task 9.
@@ -2170,9 +2177,9 @@ Temporarily make the `GET .../delete` route perform the delete. Confirm `test_de
 Move the interaction actions from `PENDING` to `IMPLEMENTED` in `src/bookkit/web/parity.py`.
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add -A
 git commit -m "web: interactions read, edit, and delete behind a server confirm
 
@@ -2226,7 +2233,7 @@ def test_the_web_layer_does_not_import_the_tui():
 - [ ] **Step 2: Run and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_shell.py -q > /tmp/out.txt 2>&1; tail -8 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_shell.py -q > "$GATE/out.txt" 2>&1; tail -8 "$GATE/out.txt"
 ```
 
 Expected: `ModuleNotFoundError: No module named 'bookkit.palette'`.
@@ -2301,7 +2308,7 @@ Replace `src/bookkit/web/static/app.css` with a stylesheet that uses only the `-
 - [ ] **Step 6: Run the tests and confirm they pass**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_shell.py tests/test_conventions.py -q > /tmp/out.txt 2>&1; tail -8 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_shell.py tests/test_conventions.py -q > "$GATE/out.txt" 2>&1; tail -8 "$GATE/out.txt"
 ```
 
 Expected: all pass, including the convention rule that `web/` never imports the TUI.
@@ -2309,9 +2316,9 @@ Expected: all pass, including the convention rule that `web/` never imports the 
 - [ ] **Step 7: Full gates**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 ```
 
 All three must be clean.
