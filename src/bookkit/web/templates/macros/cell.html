@@ -13,10 +13,17 @@
      a select, or pressing Enter to commit all bubbled back up through it
      and re-fired this fetch, discarding whatever had just been typed.
      outerHTML replaces the listener along with everything else, so there
-     is nothing left for a bubbled event to reach. #}
-  <td class="cell" data-field="{{ field.key }}" tabindex="0"
+     is nothing left for a bubbled event to reach.
+
+     data-cell-action carries the base cell URL as a plain attribute (not
+     just baked into hx-get) so inline-cell.js can read it without string
+     surgery on hx-get — needed for Tab-hop (finding the next cell's URL)
+     and the blur-cancel fetch. is-editable is the dashed-underline
+     discoverability affordance from the visual-direction spec: without it
+     a mouse-first user has no way to tell this value is editable. #}
+  <td class="cell" data-field="{{ field.key }}" data-cell-action="{{ action }}" tabindex="0"
       hx-get="{{ action }}/edit" hx-trigger="click, keyup[key=='Enter']"
-      hx-swap="outerHTML">{{ value if value else "—" }}</td>
+      hx-swap="outerHTML"><span class="is-editable">{{ value if value else "—" }}</span></td>
 {% endmacro %}
 
 {% macro editor(field, value, placeholder, action, error) %}
@@ -24,10 +31,15 @@
      re-fetching the display cell and replacing this whole <td> — form,
      input and this td's own Escape listener all at once — rather than
      leaving a stale editor listening on an element htmx just swapped out
-     from under it. The keyup bubbles here from the input inside. #}
+     from under it. The keyup bubbles here from the input inside.
+     focusout is the declarative half of "blur cancels": a genuine
+     click-away re-fetches the display cell exactly like Escape does.
+     inline-cell.js suppresses the request this would otherwise fire on a
+     Tab/Enter commit (both remove this td via their own swap, which also
+     fires focusout) by tracking a `committing` flag around the submit. #}
   <td class="cell cell-editing{% if error %} cell-error{% endif %}"
-      data-field="{{ field.key }}"
-      hx-get="{{ action }}" hx-trigger="keyup[key=='Escape']" hx-swap="outerHTML">
+      data-field="{{ field.key }}" data-cell-action="{{ action }}"
+      hx-get="{{ action }}" hx-trigger="keyup[key=='Escape'], focusout" hx-swap="outerHTML">
     <form class="cell-editor" method="post" action="{{ action }}"
           hx-post="{{ action }}" hx-target="closest td" hx-swap="outerHTML">
       {% if field.kind == "select" %}

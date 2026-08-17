@@ -1,0 +1,60 @@
+{# Contacts panel — read, add, and edit in place.
+
+   Each editable <td> is pre-rendered by web.forms_render.render_cell_display
+   (Task 6's cell contract) and injected via `| safe`; the value/action/error
+   wiring lives in Python (routes/relationship.py), not here. first_name and
+   last_name stay plain text: CONTACT_INLINE (the TUI's shared source of
+   truth, bookkit.forms.inline.CONTACT_FIELDS) never declares them, so
+   neither surface makes them inline-editable.
+
+   Uses table.rows (Task 6/7's already-built, already-styled schedule-table
+   CSS) rather than the design mockup's card-per-contact layout: the cell
+   macros render a <td> by contract, and a second cell-rendering path for a
+   div/card layout would fork that contract rather than reuse it. Flagged in
+   the task report as a deliberate deviation from Account View.dc.html's
+   pixel layout, not from any functional requirement — row height, hover,
+   the dashed-underline affordance and the Enter/Tab/Escape/blur behaviour
+   are all the same either way. #}
+<div class="panel-head">
+  <h2 class="panel-title">Contacts</h2>
+  <button type="button" class="btn-pill btn-pill-primary"
+          hx-get="/accounts/{{ header.org.ref }}/contacts/new"
+          hx-target="next .form-host" hx-swap="innerHTML">+ Add contact</button>
+</div>
+<div class="form-host"></div>
+{% if rows %}
+  <div class="table-scroll">
+    <table class="rows">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Role</th>
+          <th>Title</th>
+          <th>Email</th>
+          <th>Phone</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>{% if row.is_primary %}★ {% endif %}{{ row.first_name }} {{ row.last_name }}</td>
+            {% for key in field_keys %}
+              {{ row.cells[key] | safe }}
+            {% endfor %}
+            <td>
+              {% if not row.is_primary %}
+                <span class="row-action" aria-disabled="true"
+                      title="Not wired yet — marking a contact primary is a later task">Make primary</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="panel-empty">
+    <p>empty — add the first row</p>
+  </div>
+{% endif %}

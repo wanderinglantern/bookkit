@@ -20,12 +20,29 @@ IMPLEMENTED: dict[str, str] = {
     "show_tab": "GET /accounts/{ref}/{tab} — Program/Relationship/Work/Pipeline, "
     "each a real route with its own count badge (see routes/account.py, "
     "docs/superpowers/specs/2026-08-17-web-visual-direction.md)",
+    "inline_edit": (
+        "GET/POST /accounts/{ref}/contacts/{contact_id}/cell/{key} — click-to-edit "
+        "cells for role/title/email/phone (bookkit.forms.inline.CONTACT_FIELDS), "
+        "Enter/Tab/Escape/blur per the visual-direction spec (routes/relationship.py, "
+        "the cell contract settled in Task 6). Contacts is the first table this "
+        "lands on; other tabs' rows get it as they're built."
+    ),
 }
 
 # action name -> why it is not covered yet
 PENDING: dict[str, str] = {
-    "add_here": "slice 1 has no per-tab add route built yet",
-    "edit_here": "slice 1 has no per-tab edit route built yet",
+    "add_here": (
+        "generic per-tab add ('a') — contacts now has one "
+        "(POST /accounts/{ref}/contacts/new, routes/relationship.py); "
+        "placements/pipeline/projects/tasks/requests tabs don't yet, and the "
+        "action covers all of them, so it stays PENDING as a whole"
+    ),
+    "edit_here": (
+        "generic per-tab edit ('e', a whole-form modal) — for contacts this is "
+        "deliberately NOT what got built (Grant's 2026-08-17 amendment replaced "
+        "it with inline_edit's cell-by-cell editing instead, see that entry); "
+        "no tab implements the whole-form edit flow this action names"
+    ),
     "new_submission": (
         "a plain DB write (repo/submissions.create, no towerkit involvement) — "
         "not built on the web yet"
@@ -56,7 +73,12 @@ PENDING: dict[str, str] = {
     ),
     "task_done": "task mutation not built on the web yet",
     "delete_row": "row deletion not built on the web yet",
-    "mark_primary": "contact mutation not built on the web yet",
+    "mark_primary": (
+        "rendered as a pending row action on the contacts table "
+        "(_contacts_panel.html, aria-disabled) — not wired; the rest of a "
+        "contact's fields are now editable (see inline_edit), this one write "
+        "specifically is not built yet"
+    ),
     "paste_items": (
         "deferred by decision, not yet reached: bulk paste-import needs a "
         "browser-side parser design of its own; the TUI flow does not port"
@@ -73,9 +95,5 @@ PENDING: dict[str, str] = {
         "row-to-clipboard shortcut for a terminal; the web has native text "
         "selection/copy, so no dedicated route is planned unless that proves "
         "insufficient"
-    ),
-    "inline_edit": (
-        "the web's primary edit affordance — in-place cell editing lands in a "
-        "later task building on this account page; flip to IMPLEMENTED then"
     ),
 }

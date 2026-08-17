@@ -1,7 +1,7 @@
 {% extends "account/page.html" %}
 {% block panel %}
-  {# Contacts, interactions (the timeline) — Tasks 8-10. Default tab. #}
-  <div class="panel-empty">
-    <p>empty — add the first row</p>
+  {# Contacts (Task 8) — interactions (the timeline) join them in Task 10. #}
+  <div id="contacts-panel">
+    {% include "account/_contacts_panel.html" %}
   </div>
 {% endblock %}

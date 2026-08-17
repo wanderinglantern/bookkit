@@ -1,12 +1,23 @@
-"""Account page routes. No SQL here — reads go through repo/ and services/.
+"""Account page shell: header, tabs, right rail, and the helpers every tab
+module shares. No SQL here — reads go through repo/ and services/.
 
 Four tabs (Program, Relationship, Work, Pipeline) replace the old three-tab
 Overview/Contacts/Interactions shell — see
-docs/superpowers/specs/2026-08-17-web-visual-direction.md. Every tab this
-task ships is an empty panel; Tasks 8-13 fill them in. The renewal invariant
-survives the rail's removal: the header badge and the right rail's snapshot
-row both print `RenewalItem.renewal_on` and `RenewalItem.days_remaining`
-from the SAME object, never `placement.period_to`."""
+docs/superpowers/specs/2026-08-17-web-visual-direction.md. The renewal
+invariant survives the rail's removal: the header badge and the right
+rail's snapshot row both print `RenewalItem.renewal_on` and
+`RenewalItem.days_remaining` from the SAME object, never
+`placement.period_to`.
+
+This module used to own every tab's route. Task 8 split it: it now keeps
+only the shell (this file) plus the helpers below (_conn, _org, _header,
+_context, _save) — routes/relationship.py, routes/work.py and
+routes/pipeline.py import them rather than redefining them, so the four
+tasks that touch a tab each land in one file instead of colliding here.
+"relationship" is no longer in _PANEL_TEMPLATE: routes/relationship.py
+registers its own GET /accounts/{ref}/relationship, and app.py includes
+that router before this one so the specific route wins over this module's
+generic {tab} catch-all (both match the same two-segment path)."""
 
 from __future__ import annotations
 
@@ -18,6 +29,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ... import money
+from ...forms.spec import BatchSpec, FieldError, FormSpec, parse_values
 from ...models import EventBatch, Org
 from ...repo import batches as batches_repo
 from ...repo import contacts as contacts_repo
@@ -30,10 +42,12 @@ from ...repo import rfi as rfi_repo
 from ...repo import submissions as submissions_repo
 from ...repo import tasks as tasks_repo
 from ...repo import team as team_repo
+from ...services import batches as batches_svc
 from ...services import book as book_service
 from ...services import renewals
 from ...services import rfi as rfi_service
 from ..app import TEMPLATES
+from ..forms_render import render_form
 
 router = APIRouter()
 
@@ -48,9 +62,9 @@ TABS: tuple[tuple[str, str], ...] = (
 )
 DEFAULT_TAB = "relationship"
 
+# "relationship" deliberately absent — see the module docstring.
 _PANEL_TEMPLATE = {
     "program": "account/program.html",
-    "relationship": "account/relationship.html",
     "work": "account/work.html",
     "pipeline": "account/pipeline.html",
 }
@@ -65,6 +79,38 @@ def _org(request: Request, ref: str) -> Org:
     if org is None:
         raise HTTPException(status_code=404, detail=f"no account matches {ref!r}")
     return org
+
+
+def _save(
+    request: Request,
+    org: Org,
+    spec: FormSpec,
+    action: str,
+    raw: dict[str, str],
+    write: Any,
+) -> HTMLResponse | None:
+    """Parse, then run `write` inside ONE batch. Returns a re-rendered form
+    fragment on refusal (input intact, nothing written), or None on success.
+
+    Shared by every tab module's whole-record forms (contacts' `new`, and
+    later tasks' own). The exception propagates out of open_batch so the
+    transaction rolls back: a refused save leaves nothing behind and costs
+    nothing retyped."""
+    try:
+        values = parse_values(spec, raw)
+    except FieldError as exc:
+        return HTMLResponse(render_form(request, spec, action, exc.message, raw))
+
+    batch = BatchSpec.for_title(spec.title, org_id=org.id)
+    try:
+        with batches_svc.open_batch(
+            _conn(request), source="web", tool=batch.tool,
+            summary=batch.sentence(values), org_id=org.id,
+        ):
+            write(values)
+    except Exception as exc:  # a refused save is a message, never a 500
+        return HTMLResponse(render_form(request, spec, action, str(exc), raw))
+    return None
 
 
 def _header(conn: sqlite3.Connection, org: Org) -> dict[str, Any]:

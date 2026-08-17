@@ -280,13 +280,18 @@ def test_undo_pill_and_recent_change_appear_after_a_batch_and_revert_is_inert(ap
     assert "undo-pill" in response.text
     assert "premium PLC-0001 → $4.13M" in response.text
     # Rendered, not wired — Task 15's work. The revert affordance is a bare
-    # span with no click target: no href, no hx-post/hx-get anywhere on the
-    # page (the tab links are the only href/hx-bearing elements this task
-    # renders, and neither uses hx-post/hx-get) — and it carries
-    # aria-disabled so a hover never promises a click that does nothing.
-    assert 'class="revert-link" aria-disabled="true"' in response.text
-    assert "hx-post" not in response.text
-    assert "hx-get" not in response.text
+    # span with no click target: no href, no hx-post/hx-get on the
+    # revert-link ITSELF — and it carries aria-disabled so a hover never
+    # promises a click that does nothing. This used to assert no hx-get/
+    # hx-post appeared anywhere on the page at all, back when nothing was
+    # wired yet; Task 8 wires the contacts panel's cell editing and "+ Add
+    # contact" button, so the check narrows to the one tag it was always
+    # actually about.
+    revert_tag = re.search(r'<span class="revert-link"[^>]*>', response.text)
+    assert revert_tag, "no revert-link span found"
+    assert 'aria-disabled="true"' in revert_tag.group(0)
+    assert "hx-post" not in revert_tag.group(0)
+    assert "hx-get" not in revert_tag.group(0)
 
 
 # Every control that isn't wired to anything yet must say so: no href/hx-*
@@ -294,7 +299,9 @@ def test_undo_pill_and_recent_change_appear_after_a_batch_and_revert_is_inert(ap
 # and no href/hx-* attribute WITH aria-disabled="true" either (a control
 # that's actually wired must drop the disabled marker — this is what forces
 # the next task that wires one to remove it, or this test breaks).
-_INERT_CONTROL_MARKERS = frozenset({"btn-pill", "undo-pill", "revert-link", "rail-action"})
+_INERT_CONTROL_MARKERS = frozenset(
+    {"btn-pill", "undo-pill", "revert-link", "rail-action", "row-action"}
+)
 
 
 def _assert_inert_controls_are_consistently_marked(html: str) -> int:

@@ -250,30 +250,59 @@ a {
   flex: none;
 }
 
-/* Header actions and pane "+ Add ..." pills are rendered but inert this
-   task (aria-disabled="true" in the markup) — none of them write yet.
-   Pending treatment, not a live one: no hover affordance, muted colour,
-   default cursor. Same shape/padding/radius as a wired pill so wiring one
-   later is a behaviour change, not a layout change; btn-pill-primary loses
-   its accent fill for the same reason a filled CTA is the strongest
-   "click me" signal on the page — the filled treatment comes back with the
-   wiring (Grant, review round 1, 2026-08-17). */
+/* A pill's base look is the LIVE treatment — Task 8 is the first to wire
+   one ("+ Add contact"). Header actions and other pane "+ Add ..." pills
+   still rendered but inert carry aria-disabled="true", which the
+   [aria-disabled="true"] rules below override back to the pending look: no
+   hover affordance, muted colour, default cursor. Same shape/padding/radius
+   either way, so wiring one is a behaviour change, not a layout change —
+   btn-pill-primary's accent fill is the strongest "click me" signal on the
+   page and comes back the moment aria-disabled is dropped (Grant, review
+   round 1, 2026-08-15; Task 8 is the first pill to actually drop it). */
 .btn-pill {
   display: inline-block;
   padding: 0.5rem 0.875rem;
   border-radius: 18px;
   border: 1px solid var(--border);
+  background: var(--paper);
+  font: inherit;
   font-size: 0.75rem;
-  color: var(--muted);
-  cursor: default;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.btn-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .btn-pill-primary {
+  border-color: var(--accent);
+  background: var(--accent);
   font-weight: 600;
+  color: var(--paper);
+}
+
+.btn-pill-primary:hover {
+  color: var(--paper);
+  opacity: 0.9;
 }
 
 .btn-pill-icon {
   padding: 0.5rem 0.75rem;
+}
+
+.btn-pill[aria-disabled="true"] {
+  background: var(--paper);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: default;
+}
+
+.btn-pill[aria-disabled="true"]:hover {
+  border-color: var(--border);
+  color: var(--muted);
+  opacity: 1;
 }
 
 /* --- tabs -----------------------------------------------------------------
@@ -360,6 +389,38 @@ a {
 .panel-empty p {
   margin: 0;
   font-size: var(--body-size);
+}
+
+/* --- pane header: title + a primary "+ Add ..." pill (contacts, Task 8;
+   other tabs' add flows land in later tasks) ------------------------------- */
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.875rem;
+}
+
+.panel-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--ink);
+}
+
+.form-host:empty {
+  display: none;
+}
+
+/* Row actions in a table's trailing column: plain text, muted until hover,
+   per the visual-direction spec ("contacts Make primary"). Not wired this
+   task — aria-disabled keeps it in the pending treatment already used for
+   revert-link/rail-action, so it matches without duplicating the rule. */
+.row-action {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  cursor: default;
 }
 
 /* --- right rail (296px) --------------------------------------------------

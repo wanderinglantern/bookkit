@@ -56,7 +56,15 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
-    from .routes import account
+    from .routes import account, pipeline, relationship, work
 
+    # relationship's GET /accounts/{ref}/relationship must be registered
+    # before account's generic GET /accounts/{ref}/{tab}: both patterns
+    # match the same two-segment path, and Starlette resolves routes in
+    # registration order across routers, not by specificity — the router
+    # added first wins a request either could serve.
+    app.include_router(relationship.router)
+    app.include_router(work.router)
+    app.include_router(pipeline.router)
     app.include_router(account.router)
     return app
