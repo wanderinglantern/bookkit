@@ -7,7 +7,14 @@ render_cell render the same Field, one at a time, for the inline-editable
 columns declared once in bookkit.forms.inline: the display half is the
 persistent state (one per row/column, always in the DOM), the editor half is
 fetched and swapped in on activation, so a table never carries a hidden form
-per cell — only the one cell being edited ever has one."""
+per cell — only the one cell being edited ever has one.
+
+Both macros ASSUME a route contract that nothing here wires up yet (Task 8
+owns the routes): `action` is the base `…/cell/{key}` URL; the display cell
+fetches its editor from `action + "/edit"`; the editor posts to `action` and
+reverts (Escape) by re-fetching `action`. Both swaps are outerHTML — see
+macros/cell.html's comments for why innerHTML left a stale listener that
+discarded a click into the input as a re-fetch."""
 
 from __future__ import annotations
 
@@ -58,9 +65,8 @@ def render_cell_display(
     action: str,
 ) -> str:
     """The persistent state of one inline-editable cell: its value, or an
-    em-dash when empty. `action` is the GET the cell fetches its editor from
-    on activation (click, or Enter while focused) — this is what Task 8's
-    routes wire `hx-get` to."""
+    em-dash when empty. `action` is the base cell URL; activation (click, or
+    Enter while focused) fetches the editor from `action + "/edit"`."""
     template = TEMPLATES.env.get_template("macros/cell.html")
     module = template.make_module({})
     render = module.display  # type: ignore[attr-defined]

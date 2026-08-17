@@ -5,11 +5,14 @@ while dropping that field with no error anywhere."""
 from __future__ import annotations
 
 import inspect
+import sqlite3
+from collections.abc import Callable
 
 import pytest
 
 from bookkit.forms import entities
 from bookkit.forms.spec import Field, FormSpec
+from bookkit.repo import interactions, orgs, placements, submissions
 from bookkit.web.forms_render import render_cell, render_cell_display, render_form
 
 
@@ -21,19 +24,82 @@ def _spec_builders():
 
 
 def test_there_are_builders_to_check():
-    """Guards the loop below: if the discovery breaks, the parametrised tests
-    silently pass on an empty set."""
+    """Guards test_the_macro_renders_every_field_of_every_builder below: if
+    discovery breaks, that test's real coverage collapses to zero silently
+    (it walks `builders`, and an empty list means the for-loop never runs —
+    the assertion below is what stops that from passing quietly)."""
     assert len(list(_spec_builders())) >= 17
 
 
-@pytest.mark.parametrize("kind", ["text", "textarea", "select", "date", "money", "int",
-                                  "email", "phone", "url", "domain", "linkedin", "naics"])
-def test_every_field_kind_renders_a_named_input(kind: str):
-    spec = FormSpec("probe", [Field("probe_key", "probe label", kind,
-                                    options=(("a", "a"),) if kind == "select" else ())])
-    html = render_form(None, spec, action="/probe")
-    assert 'name="probe_key"' in html, f"kind {kind!r} rendered no named input"
-    assert "probe label" in html
+def _stub_org(conn: sqlite3.Connection, kind: str = "client"):
+    return orgs.create(conn, name=f"Stub {kind} {id(conn)}", kind=kind)
+
+
+def _stub_submission(conn: sqlite3.Connection):
+    """response_form(existing: Submission) needs a real row — a submission
+    is a market's response to a placement, so build both first."""
+    client = _stub_org(conn, "client")
+    market = _stub_org(conn, "market")
+    placement = placements.create(
+        conn, client.id, "Stub Program", "2026-01-01", "2027-01-01"
+    )
+    return submissions.create(conn, market.id, "2026-01-01", placement_id=placement.id)
+
+
+def _stub_interaction(conn: sqlite3.Connection):
+    org = _stub_org(conn)
+    return interactions.log(
+        conn, org.id, type="note", subject="stub", occurred_on="2026-01-01"
+    )
+
+
+# Every one of the 17 builders discovered by _spec_builders, mapped to how it
+# is actually called. Explicit rather than generic reflection: several take
+# `conn`, some don't accept it at all, and three require a real model
+# instance — getting any of those wrong should fail loudly, not fall back to
+# a guess. A builder not in this map fails the completeness test by name.
+_BUILD_CALLS: dict[str, Callable[[Callable, sqlite3.Connection], FormSpec]] = {
+    "document_form": lambda build, conn: build(),
+    "contact_form": lambda build, conn: build(),
+    "project_form": lambda build, conn: build(),
+    "org_form": lambda build, conn: build(conn=conn),
+    "task_form": lambda build, conn: build(conn=conn),
+    "placement_form": lambda build, conn: build(conn=conn),
+    "opportunity_form": lambda build, conn: build(conn=conn),
+    "member_form": lambda build, conn: build(conn=conn),
+    "assignment_form": lambda build, conn: build(conn=conn),
+    "appetite_form": lambda build, conn: build(conn=conn),
+    "need_form": lambda build, conn: build(conn=conn),
+    "request_form": lambda build, conn: build(conn=conn),
+    "rfi_item_form": lambda build, conn: build(conn=conn),
+    "submission_form": lambda build, conn: build(conn),
+    "response_form": lambda build, conn: build(_stub_submission(conn)),
+    "interaction_form": lambda build, conn: build(_stub_interaction(conn)),
+    "org_form_initial_profile": lambda build, conn: build(conn, _stub_org(conn)),
+}
+
+
+def test_the_macro_renders_every_field_of_every_builder(conn: sqlite3.Connection):
+    """The real completeness test. A hand-typed list of kind strings can
+    drift from what the builders actually declare — this walks the builders
+    themselves, so a new Field(..., kind="whatever") in any of the 17 fails
+    here, by name, instead of rendering nothing and saving anyway."""
+    builders = list(_spec_builders())
+    assert builders, "builder discovery found nothing — see test_there_are_builders_to_check"
+    failures: list[str] = []
+    for name, build in builders:
+        call = _BUILD_CALLS.get(name)
+        if call is None:
+            failures.append(f"{name}: no stub construction registered — add one to _BUILD_CALLS")
+            continue
+        spec = call(build, conn)
+        html = render_form(None, spec, action="/probe")
+        for field in spec.fields:
+            if f'name="{field.key}"' not in html:
+                failures.append(
+                    f"{name}: field {field.key!r} (kind={field.kind!r}) rendered no input"
+                )
+    assert not failures, "\n".join(failures)
 
 
 def test_money_and_date_are_text_inputs():
@@ -112,11 +178,13 @@ def test_render_cell_shows_a_refusal_beside_the_value_it_kept():
 def test_render_cell_display_is_keyboard_reachable_and_fetches_its_editor():
     """The display half is the persistent state — one per row/column, always
     in the DOM — so it must be tab-reachable and activatable without a mouse,
-    not just clickable."""
+    not just clickable. It fetches the editor from action + "/edit" and swaps
+    its own outerHTML, so no listener from this cell survives activation."""
     field = Field("role", "role")
     html = render_cell_display(None, field, value="broker", action="/probe")
     assert 'tabindex="0"' in html
-    assert 'hx-get="/probe"' in html
+    assert 'hx-get="/probe/edit"' in html
+    assert 'hx-swap="outerHTML"' in html
     assert "broker" in html
 
 
@@ -126,6 +194,40 @@ def test_render_cell_editor_has_exactly_one_autofocus():
     field = Field("role", "role")
     html = render_cell(None, field, value="broker", action="/probe")
     assert html.count("autofocus") == 1
+
+
+def test_render_cell_editor_and_display_both_swap_outerhtml():
+    """Regression for the bubbling bug: an innerHTML swap on the display cell
+    left its own click/Enter listener wrapped around the freshly-injected
+    editor, so clicking into the input (or pressing Enter to commit) bubbled
+    back up and re-fired the same fetch, discarding the typed value. Both
+    halves must replace the whole <td>, listener included."""
+    field = Field("role", "role")
+    editor_html = render_cell(None, field, value="broker", action="/probe")
+    display_html = render_cell_display(None, field, value="broker", action="/probe")
+    assert 'hx-swap="outerHTML"' in editor_html
+    assert 'hx-swap="outerHTML"' in display_html
+    assert 'hx-swap="innerHTML"' not in editor_html
+    assert 'hx-swap="innerHTML"' not in display_html
+
+
+def test_render_cell_editor_reverts_on_escape():
+    """Design doc, non-negotiable: 'Enter commits; Escape reverts to the
+    rendered value.' Escape re-fetches the display cell from the base
+    action (not action + "/edit") and replaces the whole editor <td>."""
+    field = Field("role", "role")
+    html = render_cell(None, field, value="broker", action="/probe")
+    assert "keyup[key=='Escape']" in html
+    assert 'hx-get="/probe"' in html
+
+
+def test_render_cell_editor_input_has_an_accessible_name():
+    """The column header supplies visual context; the fragment itself has
+    none without this — form.html's render_field gets a <label>, the cell
+    editor gets aria-label instead since there is no room for a label row."""
+    field = Field("role", "role")
+    html = render_cell(None, field, value="", action="/probe")
+    assert 'aria-label="role"' in html
 
 
 def test_the_date_refusal_says_how_to_fix_it():

@@ -1,42 +1,59 @@
+{# Assumes (does not wire) the route contract:
+     GET  …/cell/{key}       -> the display cell (this macro's `display`)
+     GET  …/cell/{key}/edit  -> the editor cell (this macro's `editor`)
+     POST …/cell/{key}       -> save; returns display on success, or editor
+                                 again with the error and the typed value
+   `action` passed to both macros below is the base `…/cell/{key}` URL. #}
+
 {% macro display(field, value, action) %}
-  {# The persistent state: a plain table cell carrying the value, reachable
-     by tab and activated by click or Enter — no hidden editor sitting in
-     the DOM for every row/column pair (a 40-row, 4-column table would
-     otherwise carry 160 idle <form>s). Task 8's routes fetch the editor
-     fragment on activation and swap it into this cell's own innerHTML. #}
+  {# The persistent state: a plain, tab-reachable table cell. Activation
+     swaps the WHOLE <td> (outerHTML, not innerHTML) — an innerHTML swap
+     left this cell's own click/Enter listener sitting on the <td> around
+     the injected editor, so clicking into the input to fix a typo, opening
+     a select, or pressing Enter to commit all bubbled back up through it
+     and re-fired this fetch, discarding whatever had just been typed.
+     outerHTML replaces the listener along with everything else, so there
+     is nothing left for a bubbled event to reach. #}
   <td class="cell" data-field="{{ field.key }}" tabindex="0"
-      hx-get="{{ action }}" hx-trigger="click, keyup[key=='Enter']" hx-swap="innerHTML"
-      >{{ value if value else "—" }}</td>
+      hx-get="{{ action }}/edit" hx-trigger="click, keyup[key=='Enter']"
+      hx-swap="outerHTML">{{ value if value else "—" }}</td>
 {% endmacro %}
 
 {% macro editor(field, value, placeholder, action, error) %}
-  {# Swapped into exactly one cell at a time, so a single `autofocus` here is
-     never ambiguous — unlike a page carrying one per row, which is invalid
-     HTML and leaves the browser to guess. #}
-  <form class="cell-editor{% if error %} cell-error{% endif %}" method="post" action="{{ action }}"
-        hx-post="{{ action }}" hx-target="closest td" hx-swap="innerHTML">
-    {% if field.kind == "select" %}
-      <select name="{{ field.key }}"{% if field.required %} required{% endif %} autofocus>
-        {% if field.optional_select or not field.required %}<option value=""></option>{% endif %}
-        {% for label, val in field.options %}
-          <option value="{{ val }}"{% if value == val %} selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    {% else %}
-      {# text for every remaining kind, same rule as the form macro: money
-         and date stay type=text so the browser never refuses "1,234.56"
-         or bypasses parse_human_date's bare-number refusal #}
-      <input type="text" name="{{ field.key }}" value="{{ value }}"
-             placeholder="{{ placeholder }}"
-             {% if field.suggestions %}list="cl-{{ field.key }}"{% endif %}
-             {% if field.required %}required{% endif %}
-             autofocus>
-      {% if field.suggestions %}
-        <datalist id="cl-{{ field.key }}">
-          {% for s in field.suggestions %}<option value="{{ s }}"></option>{% endfor %}
-        </datalist>
+  {# Same outerHTML reasoning going the other way: Escape reverts by
+     re-fetching the display cell and replacing this whole <td> — form,
+     input and this td's own Escape listener all at once — rather than
+     leaving a stale editor listening on an element htmx just swapped out
+     from under it. The keyup bubbles here from the input inside. #}
+  <td class="cell cell-editing{% if error %} cell-error{% endif %}"
+      data-field="{{ field.key }}"
+      hx-get="{{ action }}" hx-trigger="keyup[key=='Escape']" hx-swap="outerHTML">
+    <form class="cell-editor" method="post" action="{{ action }}"
+          hx-post="{{ action }}" hx-target="closest td" hx-swap="outerHTML">
+      {% if field.kind == "select" %}
+        <select name="{{ field.key }}" aria-label="{{ field.label }}"
+                {% if field.required %}required{% endif %} autofocus>
+          {% if field.optional_select or not field.required %}<option value=""></option>{% endif %}
+          {% for label, val in field.options %}
+            <option value="{{ val }}"{% if value == val %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      {% else %}
+        {# text for every remaining kind, same rule as the form macro: money
+           and date stay type=text so the browser never refuses "1,234.56"
+           or bypasses parse_human_date's bare-number refusal #}
+        <input type="text" name="{{ field.key }}" value="{{ value }}"
+               placeholder="{{ placeholder }}" aria-label="{{ field.label }}"
+               {% if field.suggestions %}list="cl-{{ field.key }}"{% endif %}
+               {% if field.required %}required{% endif %}
+               autofocus>
+        {% if field.suggestions %}
+          <datalist id="cl-{{ field.key }}">
+            {% for s in field.suggestions %}<option value="{{ s }}"></option>{% endfor %}
+          </datalist>
+        {% endif %}
       {% endif %}
-    {% endif %}
-    {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
-  </form>
+      {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+    </form>
+  </td>
 {% endmacro %}
