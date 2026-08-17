@@ -791,6 +791,7 @@ def _log_activity(
     conn: sqlite3.Connection, client: str, note: str, follow_up: str | None = None
 ) -> dict[str, Any]:
     from .dates import parse_human_date
+    from .forms.spec import date_refusal
     from .repo import interactions
     from .repo import tasks as tasks_repo
 
@@ -799,7 +800,7 @@ def _log_activity(
     if follow_up:
         parsed = parse_human_date(follow_up)
         if parsed is None:
-            raise ValueError(f"cannot read a date from {follow_up!r}")
+            raise ValueError(date_refusal(follow_up))
         due = parsed.isoformat()
     with _open_batch(
         conn, tool="log_activity", org_id=org.id,
@@ -868,6 +869,7 @@ def _task_create(
     category: str | None = None, due: str | None = None,
 ) -> dict[str, Any]:
     from .dates import parse_human_date
+    from .forms.spec import date_refusal
     from .repo import tasks as tasks_repo
 
     fields: dict[str, Any] = {}
@@ -884,7 +886,7 @@ def _task_create(
     if due:
         parsed = parse_human_date(due)
         if parsed is None:
-            raise ValueError(f"cannot read a date from {due!r}")
+            raise ValueError(date_refusal(due))
         fields["due_on"] = parsed.isoformat()
     with _open_batch(
         conn, tool="task_create", org_id=fields.get("org_id"),
@@ -923,6 +925,7 @@ def _client_create(
     from rapidfuzz import fuzz, process
 
     from .dates import parse_human_date
+    from .forms.spec import date_refusal
     from .repo import contacts, interactions, orgs
     from .repo import tasks as tasks_repo
 
@@ -957,7 +960,7 @@ def _client_create(
             if t.get("due"):
                 parsed = parse_human_date(t["due"])
                 if parsed is None:
-                    raise ValueError(f"cannot read a date from {t['due']!r}")
+                    raise ValueError(date_refusal(t["due"]))
                 due = parsed.isoformat()
             task = tasks_repo.create(
                 conn, t["title"], org_id=org.id, due_on=due,
@@ -1679,12 +1682,11 @@ def _clean_typed(vtype: Any, field: str, value: str | None) -> Any:
         return parse_money_cents(value)
     if vtype == "date":
         from .dates import parse_human_date
+        from .forms.spec import date_refusal
 
         parsed = parse_human_date(value)
         if parsed is None:
-            raise ValueError(
-                "enter a date like 2026-10-15, friday, or +2w — a bare number is ambiguous"
-            )
+            raise ValueError(date_refusal(value))
         return parsed.isoformat()
     if vtype == "int":
         return int(value)
@@ -1936,6 +1938,7 @@ def _request_create(
     ONE transaction, so a bad date or an unknown market never leaves a headless
     request behind."""
     from .dates import parse_human_date
+    from .forms.spec import date_refusal
     from .repo import placements
     from .repo import projects as projects_repo
     from .repo import rfi as rfi_repo
@@ -1955,7 +1958,7 @@ def _request_create(
     if due_on:
         parsed = parse_human_date(due_on)
         if parsed is None:
-            raise ValueError(f"cannot read a date from {due_on!r}")
+            raise ValueError(date_refusal(due_on))
         fields["due_on"] = parsed.isoformat()
     if placement_ref:
         placement = placements.find(conn, placement_ref)

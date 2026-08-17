@@ -376,7 +376,7 @@ def test_client_create_bundle_is_atomic_on_bad_task_date(server_db):
     """A bad task date must roll back the WHOLE bundle, including the org
     itself — not leave an org created with a broken/missing task."""
     rw = db.connect(server_db)
-    with pytest.raises(ValueError, match="cannot read a date"):
+    with pytest.raises(ValueError, match="is not a date"):
         mcpserver._client_create(
             rw, "Rollback Co", tasks_in=[{"title": "x", "due": "not a real date"}],
         )

@@ -1,38 +1,42 @@
-{% macro cell(field, value, placeholder, action, error) %}
-  {# <details>/<summary> gives the click-to-activate control for free, with
-     no JS: <summary> is natively focusable and Enter/Space opens it, so the
-     :focus-visible outline and keyboard activation the design doc requires
-     come from the platform rather than a hand-rolled toggle. A refusal opens
-     it back up on re-render so the message and the typed value are not
-     hidden behind another click. #}
-  <details class="cell{% if error %} cell-error{% endif %}"
-            data-field="{{ field.key }}"{% if error %} open{% endif %}>
-    <summary class="cell-value">{{ value if value else "—" }}</summary>
-    <form class="cell-editor" method="post" action="{{ action }}"
-          hx-post="{{ action }}" hx-target="closest .cell" hx-swap="outerHTML">
-      {% if field.kind == "select" %}
-        <select name="{{ field.key }}"{% if field.required %} required{% endif %}>
-          {% if field.optional_select or not field.required %}<option value=""></option>{% endif %}
-          {% for label, val in field.options %}
-            <option value="{{ val }}"{% if value == val %} selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-      {% else %}
-        {# text for every remaining kind, same rule as the form macro: money
-           and date stay type=text so the browser never refuses "1,234.56"
-           or bypasses parse_human_date's bare-number refusal #}
-        <input type="text" name="{{ field.key }}" value="{{ value }}"
-               placeholder="{{ placeholder }}"
-               {% if field.suggestions %}list="cl-{{ field.key }}"{% endif %}
-               {% if field.required %}required{% endif %}
-               autofocus>
-        {% if field.suggestions %}
-          <datalist id="cl-{{ field.key }}">
-            {% for s in field.suggestions %}<option value="{{ s }}"></option>{% endfor %}
-          </datalist>
-        {% endif %}
+{% macro display(field, value, action) %}
+  {# The persistent state: a plain table cell carrying the value, reachable
+     by tab and activated by click or Enter — no hidden editor sitting in
+     the DOM for every row/column pair (a 40-row, 4-column table would
+     otherwise carry 160 idle <form>s). Task 8's routes fetch the editor
+     fragment on activation and swap it into this cell's own innerHTML. #}
+  <td class="cell" data-field="{{ field.key }}" tabindex="0"
+      hx-get="{{ action }}" hx-trigger="click, keyup[key=='Enter']" hx-swap="innerHTML"
+      >{{ value if value else "—" }}</td>
+{% endmacro %}
+
+{% macro editor(field, value, placeholder, action, error) %}
+  {# Swapped into exactly one cell at a time, so a single `autofocus` here is
+     never ambiguous — unlike a page carrying one per row, which is invalid
+     HTML and leaves the browser to guess. #}
+  <form class="cell-editor{% if error %} cell-error{% endif %}" method="post" action="{{ action }}"
+        hx-post="{{ action }}" hx-target="closest td" hx-swap="innerHTML">
+    {% if field.kind == "select" %}
+      <select name="{{ field.key }}"{% if field.required %} required{% endif %} autofocus>
+        {% if field.optional_select or not field.required %}<option value=""></option>{% endif %}
+        {% for label, val in field.options %}
+          <option value="{{ val }}"{% if value == val %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    {% else %}
+      {# text for every remaining kind, same rule as the form macro: money
+         and date stay type=text so the browser never refuses "1,234.56"
+         or bypasses parse_human_date's bare-number refusal #}
+      <input type="text" name="{{ field.key }}" value="{{ value }}"
+             placeholder="{{ placeholder }}"
+             {% if field.suggestions %}list="cl-{{ field.key }}"{% endif %}
+             {% if field.required %}required{% endif %}
+             autofocus>
+      {% if field.suggestions %}
+        <datalist id="cl-{{ field.key }}">
+          {% for s in field.suggestions %}<option value="{{ s }}"></option>{% endfor %}
+        </datalist>
       {% endif %}
-      {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
-    </form>
-  </details>
+    {% endif %}
+    {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+  </form>
 {% endmacro %}

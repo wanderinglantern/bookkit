@@ -113,6 +113,22 @@ class FieldError(Exception):
         self.message = message
 
 
+def date_refusal(text: str) -> str:
+    """The one sentence every surface gives when a date will not parse.
+
+    Names the offending value AND the remedy: the old message said only what
+    the parser objected to, which tells a user nothing about how to fix it.
+    The rule is unchanged — a bare 1-2 digit number is refused, never guessed,
+    because dateparser reads "5" as a month and future-biases it. Every
+    site that raises this (forms/spec.py, mcpserver.py's tool arguments,
+    imports/mappers/book.py's row errors) calls this function rather than
+    writing its own copy, so the wording cannot drift by surface again."""
+    return (
+        f"{text!r} is not a date — enter one like 2026-10-15, friday, or +2w; "
+        "a bare number is ambiguous"
+    )
+
+
 def parse_value(field: Field, raw: str | None) -> Any:
     """One raw widget/form string → the stored representation. Money returns
     integer cents, dates return ISO strings, everything else is cleaned."""
@@ -125,9 +141,7 @@ def parse_value(field: Field, raw: str | None) -> Any:
     if field.kind == "date":
         parsed = parse_human_date(text)
         if parsed is None:
-            raise ValueError(
-                "enter a date like 2026-10-15, friday, or +2w — a bare number is ambiguous"
-            )
+            raise ValueError(date_refusal(text))
         return parsed.isoformat()
     if field.kind == "money":
         try:
