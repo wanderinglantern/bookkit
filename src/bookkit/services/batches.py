@@ -33,20 +33,38 @@ revert as one thing, not four."""
 def _within_join_window(candidate: EventBatch, now: str) -> bool:
     """Strictly less-than, not <=: JOIN_WINDOW_SECONDS = 0 must disable
     joining outright, including two calls issued in the same wall-clock
-    second (created_at has only second precision)."""
+    second (created_at has only second precision).
+
+    A negative elapsed (the clock moved backwards — an NTP correction, a VM
+    resume) is treated as OUT of window, not in it: `< JOIN_WINDOW_SECONDS`
+    alone would read -5s as well inside a 60s window and let a stale batch
+    join years later the moment the clock next slipped."""
     created = datetime.fromisoformat(candidate.created_at)
     current = datetime.fromisoformat(now)
-    return (current - created).total_seconds() < JOIN_WINDOW_SECONDS
+    elapsed = (current - created).total_seconds()
+    return 0 <= elapsed < JOIN_WINDOW_SECONDS
 
 
 def _targets_only(conn: sqlite3.Connection, batch_id: str, entity_id: str) -> bool:
-    """True when every event already in this batch names this entity — the
-    reason joining is keyed on entity_id and not just (source, tool, org_id):
-    editing contact A then contact B inside the window are two different
-    actions, and merging them would let one revert touch a record the user
-    never edited."""
+    """True only when this batch has at least one event, and every event in
+    it names this entity.
+
+    EQUALITY, not subset — this is load-bearing, not stylistic. The join
+    read in `_joinable` happens on a plain SELECT, outside `db.transaction`
+    and before `_tx_lock` is taken (deliberately, to avoid the nested-
+    transaction hazard `db.transaction` warns about). That leaves a
+    time-of-check/time-of-use gap: two threads editing DIFFERENT entities can
+    both read the same EMPTY candidate batch and both see it as joinable,
+    because an empty batch's touched-entity set is `{}`, and `{} <= {x}` is
+    true for every x. Both threads then write into that one batch under
+    different entities — exactly the outcome the design forbids: 'editing
+    contact A then contact B inside the window are two different actions,
+    and merging them would let one revert touch a record the user never
+    edited.' An empty batch that once was joinable by everybody is joinable
+    by nobody now, which is also correct on its own terms: an empty batch
+    has no edit run to continue. Do not relax this back to a subset test."""
     touched = {event.entity_id for event in batches_repo.events_for(conn, batch_id)}
-    return touched <= {entity_id}
+    return touched == {entity_id}
 
 
 def _joinable(
