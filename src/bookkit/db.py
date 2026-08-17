@@ -162,14 +162,28 @@ def transaction(
         _current_batch.reset(batch_token)
 
 
-def connect(path: Path | str | None = None, migrate: bool = True) -> sqlite3.Connection:
-    """Open (creating if needed, mode 0600) and optionally migrate the database."""
+def connect(
+    path: Path | str | None = None,
+    migrate: bool = True,
+    check_same_thread: bool = True,
+) -> sqlite3.Connection:
+    """Open (creating if needed, mode 0600) and optionally migrate the database.
+
+    check_same_thread=False is for the web layer only: a FastAPI app's
+    lifespan and route handlers run on the ASGI event loop's own thread
+    (uvicorn, and TestClient's portal), not the thread that called
+    create_app() — sqlite3's default same-thread check makes even closing
+    that connection on shutdown raise ProgrammingError. The TUI and CLI stay
+    on the strict default: each opens and uses its connection from a single
+    thread, and the check catches a real bug there."""
     db_path = Path(path) if path is not None else default_db_path()
     if str(db_path) != ":memory:":
         db_path.parent.mkdir(parents=True, exist_ok=True)
         if not db_path.exists():
             db_path.touch(mode=0o600)
-    conn = sqlite3.connect(db_path, isolation_level=None)  # autocommit; explicit BEGIN/COMMIT
+    conn = sqlite3.connect(  # autocommit; explicit BEGIN/COMMIT
+        db_path, isolation_level=None, check_same_thread=check_same_thread
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

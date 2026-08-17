@@ -17,10 +17,23 @@ def client(snapshot_db: Path):
         yield test_client
 
 
-def test_healthz_reports_the_database(client):
+def test_healthz_reports_the_database(client, snapshot_db: Path):
     response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json()["ok"] is True
+    body = response.json()
+    assert body["ok"] is True
+    assert body["db"] == str(snapshot_db)
+
+
+def test_the_connection_closes_on_shutdown(snapshot_db: Path):
+    """A WAL database abandoned to the GC never gets a final checkpoint."""
+    import sqlite3
+
+    app = create_app(snapshot_db)
+    with TestClient(app):
+        app.state.conn.execute("SELECT 1")  # open during the app's life
+    with pytest.raises(sqlite3.ProgrammingError):
+        app.state.conn.execute("SELECT 1")  # closed after it
 
 
 def test_static_htmx_is_served(client):
