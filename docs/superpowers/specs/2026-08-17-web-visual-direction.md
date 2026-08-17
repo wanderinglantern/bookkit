@@ -100,19 +100,33 @@ Both of the previous version's typographic rules were wrong.
 ```
 
 - **Serif** — screen titles 20–25px, section/insured names 16–19px, stat figures
-  22–26px. The handoff asks for weight 600; only Regular (400) and Bold (700)
-  ship, so **use 700 and do not request 600** — a missing weight is synthesised
-  by the browser and looks smeared. Record this as a deviation from the handoff.
+  22–26px. **Use 700. Do not add a 600.** Design confirmed this on 2026-08-17
+  after we raised it: only 400 and 700 ship, and a synthesised 600 renders
+  smeared. The handoff's own text now says 700, so this is no longer a deviation.
+
+  **But the app is not the only thing it renders.** Design scoped the
+  `towerkit/CLAUDE.md` rule "serif headings Regular only (Marsh Serif has no
+  bold)" to the **rendered diagram**, not app chrome — it exists so a plotted
+  program matches Marsh house type, where the brand serif has no bold. The app is
+  a tool, not the client deliverable, so app chrome uses 700. **Anything the app
+  renders *for a client* stays Noto Serif 400**: export headers, the PDF/SVG
+  render, and any shareable read-only program view. That boundary is load-bearing
+  for the towerkit conversion, where both live in one codebase.
 - **Sans** — all UI text. Body 13px, secondary 12px, badges 11px.
 - **Mono** — every number, date, id, file name, share, and **all column headers**
   (10px, `letter-spacing:.1em`, uppercase). Column headers are mono *because the
   data under them is*. Use `font-variant-numeric: tabular-nums` wherever digits
   stack.
 
-The handoff specifies JetBrains Mono. **It does not ship anywhere in either
-repo.** Until it is added, use the system mono stack above — on Grant's Mac that
-resolves to SF Mono, which is close in colour and metrics. Flagged as the second
-deviation; adding the OFL files later is a drop-in change to one token.
+**JetBrains Mono is to be vendored** — Design confirmed the specifics on
+2026-08-17: the current stable release from the JetBrains/JetBrainsMono GitHub
+releases (what the mockups were designed against), the **static** TTFs rather
+than the variable font so all three weights are real, weights 400/500/700,
+subset to Latin plus the glyphs the UI uses (`◆ △ ★ ✓ ▶ ▼ · → ···`) if size
+matters. There is no optical-size axis and no version-specific metric to match,
+so latest stable is correct. Self-hosted via `@font-face`; the app fetches no
+fonts at runtime. Until Task 16 vendors it, the system mono stack above stands in
+— a known temporary state, not the target.
 
 ## Geometry
 

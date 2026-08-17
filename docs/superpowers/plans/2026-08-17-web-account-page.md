@@ -3411,7 +3411,143 @@ surfaces must not diverge on what an undo unit is."
 
 ---
 
-### Task 16: One palette, and the wheelhouse
+### Task 18: The way in — index and the Book screen
+
+**Not in the original plan, and the single biggest blocker to the app being
+usable.** Verified 2026-08-17: `GET /` returns 404 and so does `/accounts`. Every
+account tab works, but nothing links to them — you can only reach the app by
+already knowing a ref and typing `/accounts/ACC-0001/relationship`. This task is
+sequenced **first** in the overnight run for that reason.
+
+**Files:** create `src/bookkit/web/routes/book.py`, `templates/book.html`;
+modify `web/app.py` (register the router), `templates/account/page.html` (make the
+top-bar `Book` nav item a real link and drop its `aria-disabled`); test
+`tests/test_web_book.py`.
+
+**The screen**, from the design (`BookKit Web Screens.dc.html`, Book) — a
+full-bleed accounts table:
+
+`ref · account · owner · status · next renewal · due in · premium · last touch`
+
+with a filter field in the header and `New account` / `Export workbook` actions.
+Row height 30px, `#F2F6FF` hover, selected row `#E9F1FF` with `inset 3px 0 0
+#0B4BFF`. Clicking a row opens that account.
+
+**`GET /` redirects to `/book`.** That is the whole point of the task.
+
+**The money column — read this before writing it.** Do **not** use
+`orgs.clients_with_recency`'s `premium` field. That query returns the single
+bound placement with the latest `period_to`, which is fine for the staleness
+service it was written for and wrong here. `CLAUDE.md` records that the book's
+per-account column was once exactly that and "showed revenue that did not exist".
+Use `services.book.bound_premium_for_org(conn, org_id)` — the summed figure
+extracted in Task 7 and already used by all four other call sites.
+
+**The renewal columns** are `RenewalItem.renewal_on` and its own
+`days_remaining`, from `renewals.next_for_org`. Print the date you count to;
+overdue is `days_remaining < 0`, never grid position. Same rule, fifth surface.
+
+- [ ] **Step 1: write the failing tests**
+
+```python
+def test_the_root_path_lands_somewhere_useful():
+    """GET / was a 404. You could not reach the app without knowing a ref."""
+
+def test_the_book_lists_active_clients_with_their_next_renewal(): ...
+
+def test_the_premium_column_is_the_account_total_not_one_placement():
+    """clients_with_recency.premium is the LAST-renewing bound placement. The
+    book's column is bound premium summed over the account — it was once the
+    former, and showed revenue that did not exist."""
+
+def test_a_row_links_to_that_account(): ...
+```
+
+For the premium test, seed an account with **two** bound placements of different
+premiums so the sum and the single-placement figure differ — otherwise the
+assertion passes either way. Assert the exact summed value.
+
+- [ ] **Step 2: run them, confirm each fails for its stated reason.**
+- [ ] **Step 3: implement.** No raw SQL in `web/`; reads go through `repo/` and `services/`.
+- [ ] **Step 4: prove the premium assertion can fail.** Point the column at
+  `clients_with_recency`'s `premium`; confirm the test fails. Restore.
+- [ ] **Step 5:** flip the relevant parity-ledger entries, gates, commit.
+
+---
+
+### Task 17: The tower rows in the SNAPSHOT
+
+**Grant's call, 2026-08-17 (against my recommendation to defer).** The design's
+SNAPSHOT shows `program premium`, `top of tower` and `unplaced`; Task 7 omitted
+them rather than invent figures. They are cheap to add — the read already exists.
+
+**Files:** modify `src/bookkit/web/routes/account.py`, `templates/account/page.html`;
+test `tests/test_web_account.py`.
+
+**The read.** `sync.layer_details(conn, placement_id)` returns each layer with
+`attach_cents`, `limit_cents`, `premium_cents` and `signed_pct`. It loads the
+program JSON and returns `[]` when there is no linked file or the load fails, so
+absence is already handled. From it:
+
+- `program premium` = sum of `premium_cents` (skip `None`)
+- `top of tower` = max of `attach_cents + limit_cents`
+- `unplaced` = the layers whose `signed_pct < 100`, rendered as the design does
+  (`20% on 3rd Excess`) — layer name and the open share, in `warn` colour
+
+**The scope question, which is the whole risk here.** `bound premium` is summed
+over *every* bound placement on the account. These three describe *one program*.
+Mixing scopes in one panel is exactly the hazard `CLAUDE.md` records: money
+columns must say whose money, and the book's per-account figure was once wrong in
+a way that showed revenue that did not exist.
+
+Use the program behind the `next renewal` row — `renewals.next_for_org(...)`
+returns a `RenewalItem` carrying `.placement`. That makes the panel coherent: it
+describes the renewal you are looking at. **Label it so the scope is unambiguous**
+and say in the row label or a title which program it is, so `program premium` can
+never be read as an account total.
+
+Omit all three rows when `layer_details` returns `[]` — no linked program means
+no figures, and a zero would be a lie.
+
+- [ ] **Step 1: write the failing tests**
+
+```python
+def test_snapshot_tower_rows_come_from_the_renewal_placement():
+    """program premium / top of tower / unplaced describe ONE program — the one
+    behind the next renewal — while bound premium is the account total. Mixing
+    the two scopes silently is how the book once showed revenue that did not
+    exist."""
+
+def test_snapshot_omits_tower_rows_when_no_program_is_linked():
+    """layer_details returns [] with no linked file. A zero would be a lie."""
+
+def test_unplaced_names_the_layer_and_the_open_share():
+    """'20% on 3rd Excess' — a bare percentage does not say where the hole is."""
+```
+
+- [ ] **Step 2: run them, confirm each fails for its stated reason, implement.**
+
+- [ ] **Step 3: prove the scope assertion can fail.** Point `program premium` at
+  the account-wide bound sum instead of the renewal placement's program; confirm
+  `test_snapshot_tower_rows_come_from_the_renewal_placement` fails. Restore.
+
+- [ ] **Step 4: gates and commit.** Note `layer_details` does file I/O per call —
+  call it **once** in `_context` and share, the way `_open_work_count` was
+  de-duplicated in Task 7.
+
+---
+
+### Task 16: One palette, the fonts, and the wheelhouse
+
+> **Amended 2026-08-17 (Grant):** self-host **JetBrains Mono** as well as Noto.
+> It ships in neither repo, so fetch the OFL release, vendor the weights actually
+> used (400/500/700), and add them to web package data beside the Noto files.
+> Wire `--mono` to it and drop the system-stack fallback to a fallback only.
+> The no-literal-hex test has a sibling here: assert every `@font-face` `src`
+> resolves to a file that exists in package data, so a missing weight fails the
+> build rather than silently falling back.
+
+
 
 **Files:**
 - Create: `src/bookkit/web/theme_css.py`
