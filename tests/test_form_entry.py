@@ -20,9 +20,9 @@ from datetime import date
 import pytest
 
 from bookkit.dates import parse_human_date
+from bookkit.forms.spec import Field, initial_text
 from bookkit.money import MoneyParseError, format_cents, parse_money_cents
 from bookkit.repo import team as team_repo
-from bookkit.tui.widgets.forms import Field, FormModal
 
 TODAY = date(2026, 8, 14)
 
@@ -32,10 +32,10 @@ TODAY = date(2026, 8, 14)
 
 @pytest.mark.parametrize("cents", [123456, 100, 999, 1, 250050])
 def test_what_the_form_shows_is_what_the_form_accepts(cents: int) -> None:
-    """The round-trip that was broken: _initial_text renders the stored value,
+    """The round-trip that was broken: initial_text renders the stored value,
     the parser has to take it back. Otherwise opening a record and pressing
     save is an error the user cannot clear without destroying data."""
-    shown = FormModal._initial_text(Field("premium", "premium", "money"), cents)
+    shown = initial_text(Field("premium", "premium", "money"), cents)
     assert parse_money_cents(shown) == cents
 
 

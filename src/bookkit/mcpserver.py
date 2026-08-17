@@ -958,7 +958,7 @@ def _client_create(
 
 
 # Route enrich_field values through the SAME cleaners the forms use
-# (tui/widgets/forms.py `_CLEANERS`) so an MCP-entered email/phone/url/domain
+# (bookkit.forms.spec `CLEANERS`) so an MCP-entered email/phone/url/domain
 # ends up identical to one typed through the TUI. `normalize` is imported
 # directly here (never the tui module — mcpserver has no TUI dependency).
 _FIELD_CLEANERS = {

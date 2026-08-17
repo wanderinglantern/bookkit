@@ -19,8 +19,8 @@ from textual.coordinate import Coordinate
 from textual.message import Message
 from textual.widgets import Input
 
+from ...forms.spec import PLACEHOLDERS, Field, parse_value
 from .. import theme
-from .forms import _PLACEHOLDERS, Field, FormModal
 from .tables import ListTable
 
 
@@ -99,7 +99,7 @@ class InlineTable(ListTable):
         editor = CellEditor(
             self, row_key, coordinate, field,
             initial=self.inline_initial(row_key, field.key),
-            placeholder=field.placeholder or _PLACEHOLDERS.get(field.kind, ""),
+            placeholder=field.placeholder or PLACEHOLDERS.get(field.kind, ""),
         )
         self._editor = editor
         self.screen.mount(editor)
@@ -115,7 +115,7 @@ class InlineTable(ListTable):
         row_key was captured when the editor OPENED — a mid-edit refresh can
         reorder rows, and the write must land on the record the user saw."""
         try:
-            value = FormModal._parse(field, raw)
+            value = parse_value(field, raw)
         except ValueError as exc:
             self.app.notify(str(exc), severity="error")
             return False

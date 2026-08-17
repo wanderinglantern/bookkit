@@ -10,8 +10,6 @@ as ISO YYYY-MM-DD.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
-from dataclasses import field as dc_field
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -23,69 +21,15 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static, TextArea
 
-from ...dates import parse_human_date
-from ...money import MoneyParseError, format_cents, parse_money_cents
-from ...normalize import (
-    clean_domain,
-    clean_email,
-    clean_linkedin,
-    clean_naics,
-    clean_phone,
-    clean_text,
-    clean_url,
+from ...forms.spec import (
+    PLACEHOLDERS,
+    BatchSpec,
+    Field,
+    FieldError,
+    FormSpec,
+    initial_text,
+    parse_values,
 )
-
-
-@dataclass(frozen=True)
-class Field:
-    key: str
-    label: str
-    # text | textarea | select | date | money | int
-    # + normalised kinds: email | phone | url | domain | linkedin | naics
-    kind: str = "text"
-    options: tuple[tuple[str, str], ...] = ()  # (label, value) for select
-    required: bool = False
-    placeholder: str = ""
-    optional_select: bool = False  # allow_blank for selects
-    # existing-record vocabulary: dropdown menu (tab/enter picks) plus inline
-    # ghost text (right arrow accepts) — data consistency by completion
-    suggestions: tuple[str, ...] = ()
-
-
-@dataclass
-class FormSpec:
-    title: str
-    fields: list[Field]
-    initial: dict[str, Any] = dc_field(default_factory=dict)
-
-
-@dataclass
-class BatchSpec:
-    """What undo unit this form's save belongs to.
-
-    A form passes this instead of opening its own transaction: FormModal wraps
-    the whole `commit` callback in one batch, so a save that writes four rows
-    is reverted as one thing by `R` — and rolls back entirely if any part of
-    it refuses. `summary` may be a callable when the sentence needs the values
-    the user just typed."""
-
-    tool: str
-    summary: str | Callable[[dict[str, Any]], str]
-    org_id: str | None = None
-
-    def sentence(self, values: dict[str, Any]) -> str:
-        return self.summary(values) if callable(self.summary) else self.summary
-
-    @staticmethod
-    def for_title(title: str, org_id: str | None = None) -> BatchSpec:
-        """The default every form gets. 'edit contact — Atomic Industries'
-        becomes tool 'edit_contact' with the whole title as the summary: the
-        changes list groups by tool, so the slug must not carry the record's
-        name, while the sentence should."""
-        head = title.split("—")[0].split("(")[0].strip().lower()
-        return BatchSpec(
-            tool="_".join(head.split()[:3]) or "form", summary=title, org_id=org_id
-        )
 
 
 class _Refused(Exception):
@@ -179,8 +123,8 @@ class FormModal(ModalScreen):
                 from textual.suggester import SuggestFromList
 
                 yield Input(
-                    value=self._initial_text(f, initial),
-                    placeholder=f.placeholder or _PLACEHOLDERS.get(f.kind, ""),
+                    value=initial_text(f, initial),
+                    placeholder=f.placeholder or PLACEHOLDERS.get(f.kind, ""),
                     id=f"form-{f.key}",
                     suggester=(
                         SuggestFromList(f.suggestions, case_sensitive=False)
@@ -194,14 +138,6 @@ class FormModal(ModalScreen):
                     yield AutoComplete(
                         f"#form-{f.key}", candidates=list(f.suggestions)
                     )
-
-    @staticmethod
-    def _initial_text(f: Field, initial: Any) -> str:
-        if initial is None:
-            return ""
-        if f.kind == "money":
-            return format_cents(int(initial)).lstrip("$")
-        return str(initial)
 
     def on_mount(self) -> None:
         if self._draft_key:
@@ -244,19 +180,13 @@ class FormModal(ModalScreen):
         self.action_save()
 
     def action_save(self) -> None:
-        values: dict[str, Any] = {}
-        for f in self.spec.fields:
-            raw = self._drain(f)
-            try:
-                values[f.key] = self._parse(f, raw)
-            except ValueError as exc:
-                self.notify(f"{f.label}: {exc}", severity="error")
-                self.query_one(f"#form-{f.key}").focus()
-                return
-            if f.required and values[f.key] in (None, ""):
-                self.notify(f"{f.label} is required", severity="error")
-                self.query_one(f"#form-{f.key}").focus()
-                return
+        raw = {f.key: self._drain(f) for f in self.spec.fields}
+        try:
+            values = parse_values(self.spec, raw)
+        except FieldError as exc:
+            self.notify(exc.message, severity="error")
+            self.query_one(f"#form-{exc.field_key}").focus()
+            return
         if self._commit is not None:
             try:
                 error = self._run_commit(values)
@@ -308,29 +238,6 @@ class FormModal(ModalScreen):
             return widget.value
         raise TypeError(f"unexpected form widget for {f.key}: {type(widget).__name__}")
 
-    @staticmethod
-    def _parse(f: Field, raw: str | None) -> Any:
-        text = (raw or "").strip()
-        if not text:
-            return None
-        if f.kind == "date":
-            parsed = parse_human_date(text)
-            if parsed is None:
-                raise ValueError(f"cannot read a date from {text!r}")
-            return parsed.isoformat()
-        if f.kind == "money":
-            try:
-                return parse_money_cents(text)
-            except MoneyParseError as exc:
-                raise ValueError(str(exc)) from exc
-        if f.kind == "int":
-            try:
-                return int(text)
-            except ValueError as exc:
-                raise ValueError(f"{text!r} is not a whole number") from exc
-        cleaner = _CLEANERS.get(f.kind, clean_text)
-        return cleaner(text)
-
     def action_cancel(self) -> None:
         if self._draft_key:
             import json
@@ -343,33 +250,3 @@ class FormModal(ModalScreen):
             else:
                 drafts.clear(self.app.conn, self._draft_key)
         self.dismiss(None)
-
-
-_PLACEHOLDERS = {
-    "date": "today · fri · +2w · 2026-10-15",
-    "money": "1.5m · 250k · 1,500,000",
-    "phone": "312 555 0142 · +44 …",
-    "email": "name@company.com",
-    "linkedin": "profile URL or handle",
-    "url": "https://company.com",
-    "domain": "company.com",
-    "naics": "6-digit code · 524126",
-}
-
-# Everything typed gets cleaned on save; textarea (multi-line notes) is the
-# one kind stored verbatim.
-_CLEANERS = {
-    "text": clean_text,
-    "email": clean_email,
-    "phone": clean_phone,
-    "url": clean_url,
-    "domain": clean_domain,
-    "linkedin": clean_linkedin,
-    "naics": clean_naics,
-    "textarea": lambda text: text,
-}
-
-
-def dropped(values: dict[str, Any]) -> dict[str, Any]:
-    """Strip None entries so optional blanks don't overwrite on edit."""
-    return {k: v for k, v in values.items() if v is not None}

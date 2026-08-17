@@ -24,6 +24,7 @@ from textual.widgets import Footer, Static, Tree
 from textual.widgets.tree import TreeNode
 
 from ...dates import days_until
+from ...forms.spec import Field
 from ...money import format_cents_compact
 from ...repo import batches as batches_repo
 from ...repo import contacts, opportunities, orgs, placements
@@ -34,7 +35,6 @@ from ...services import book, renewals, sla
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.entity_actions import batched_write as _batched
-from ..widgets.forms import Field
 from ..widgets.inline_edit import InlineTable
 from ..widgets.tables import (
     ListTable,

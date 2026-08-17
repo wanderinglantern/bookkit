@@ -25,6 +25,7 @@ from textual.widgets import Footer, OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
 from ...dates import days_until
+from ...forms.spec import Field
 from ...money import format_cents_compact
 from ...repo import (
     contacts,
@@ -42,7 +43,6 @@ from ...services import book
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.entity_actions import batched_write as _batched
-from ..widgets.forms import Field
 from ..widgets.inline_edit import InlineTable
 from ..widgets.tables import (
     ListTable,
@@ -1833,7 +1833,8 @@ class AccountScreen(Screen):
         name, period, and indicated premium flow over; build the tower itself
         in towerkit. Nothing is typed twice."""
         from ... import sync
-        from ..widgets.forms import Field, FormModal, FormSpec
+        from ...forms.spec import FormSpec
+        from ..widgets.forms import FormModal
 
         if self._active_tab() != "tab-placements":
             self.notify("t scaffolds a tower file (placements tab)", severity="warning")
@@ -1917,7 +1918,8 @@ class AccountScreen(Screen):
 
     def action_add_layer(self) -> None:
         from ... import sync
-        from ..widgets.forms import Field, FormModal, FormSpec
+        from ...forms.spec import FormSpec
+        from ..widgets.forms import FormModal
 
         placement = self._selected_linked_placement()
         if placement is None:
@@ -2030,8 +2032,9 @@ class AccountScreen(Screen):
     def _offer_bind_to_layer(self, submission_id: str) -> None:
         """A market bound: offer to put them on a layer at their share."""
         from ... import sync
+        from ...forms.spec import FormSpec
         from ...money import MoneyParseError, parse_share_bps
-        from ..widgets.forms import Field, FormModal, FormSpec
+        from ..widgets.forms import FormModal
         from ..widgets.picker import Picker
 
         conn = self.app.conn
@@ -2096,9 +2099,10 @@ class AccountScreen(Screen):
     def action_assign_team(self) -> None:
         """Assign a colleague: to the account, or to the selected placement
         when the placements tab is open."""
+        from ...forms.spec import dropped
         from ...repo import team as team_repo
         from ..widgets.entity_forms import assignment_form
-        from ..widgets.forms import FormModal, dropped
+        from ..widgets.forms import FormModal
 
         conn = self.app.conn
         members = team_repo.list_members(conn)
@@ -2150,9 +2154,10 @@ class AccountScreen(Screen):
         the member and complete the assignment in one transaction, so a
         refused member save keeps that form open with input intact."""
         from ...db import transaction
+        from ...forms.spec import dropped
         from ...repo import team as team_repo
         from ..widgets import entity_forms as ef
-        from ..widgets.forms import FormModal, dropped
+        from ..widgets.forms import FormModal
 
         conn = self.app.conn
 

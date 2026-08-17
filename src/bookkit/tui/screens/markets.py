@@ -78,7 +78,8 @@ class MarketsScreen(Screen):
         """Nest the selected market under a master company — creating the
         master on the spot when it doesn't exist yet (the AXA XL case).
         Organizational only: aliases and towers keep the issuing entity."""
-        from ..widgets.forms import Field, FormModal, FormSpec
+        from ...forms.spec import Field, FormSpec
+        from ..widgets.forms import FormModal
         from ..widgets.picker import Picker
 
         market_id = self._selected_market_id()
@@ -261,8 +262,9 @@ class MarketsScreen(Screen):
 
     def action_add_alias(self) -> None:
         """Record another tower spelling for the selected market."""
+        from ...forms.spec import Field, FormSpec
         from ...repo import aliases
-        from ..widgets.forms import Field, FormModal, FormSpec
+        from ..widgets.forms import FormModal
 
         market_id = self._selected_market_id()
         if market_id is None:
@@ -362,12 +364,13 @@ class MarketDetailScreen(Screen):
         return None
 
     def action_edit_row(self) -> None:
+        from ...forms.spec import dropped
         from ..widgets.entity_forms import (
             appetite_form,
             apply_contact,
             contact_form,
         )
-        from ..widgets.forms import FormModal, dropped
+        from ..widgets.forms import FormModal
 
         row = self._focused_row()
         if row is None:
@@ -475,8 +478,9 @@ class MarketDetailScreen(Screen):
         self.on_mount()
 
     def action_add_appetite(self) -> None:
+        from ...forms.spec import dropped
         from ..widgets.entity_forms import appetite_form
-        from ..widgets.forms import FormModal, dropped
+        from ..widgets.forms import FormModal
 
         def commit(values: dict) -> str | None:
             orgs.add_appetite(self.app.conn, self.market_org_id, **dropped(values))
