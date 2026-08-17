@@ -28,7 +28,8 @@
 - **Baseline for this branch: 757 passed, 38 snapshots, exit 0.** Any task that ends with a different passing count has changed behaviour — find out why before committing.
 - **`uvicorn` and `starlette` are already installed transitively via `mcp`.** Task 4 still declares them explicitly (a transitive dependency is not a contract), but expect `uv sync` to report a smaller delta than the four new names suggest.
 - **Line length 100** (ruff config), target `py311`.
-- **Appearance is governed by `docs/superpowers/specs/2026-08-17-web-visual-direction.md`.** Read it before writing any template or stylesheet. Where it and a task's inline HTML disagree, it wins on appearance; the task wins on structure and routes. Load-bearing rules from it: no literal hex outside `bookkit/palette.py`; mono only where values align (dates, money, counts, refs) and sans for language; every coloured state also carries a word or glyph; `:focus-visible` is always a visible gold outline; radius is 2px on controls and 0 elsewhere; no shadows or gradients.
+- **Appearance and interaction are governed by `docs/superpowers/specs/2026-08-17-web-visual-direction.md`.** Read it before writing any template or stylesheet. Where it and a task's inline HTML disagree, it wins on appearance and interaction; the task wins on structure and routes. It was revised on 2026-08-17: the palette is towerkit's authoritative brand set on a light document ground — **not** `tui/theme.py`'s dark terminal palette, which was tried and rejected. Load-bearing rules: serif for names only and Regular weight only, sans for language, mono for anything that aligns; white text never on gold, Blue 500, Green 750 or Sky; every coloured state also carries a word or glyph; `:focus-visible` is a 2px accent outline everywhere; radius 2px on controls and 0 elsewhere; no shadows or gradients.
+- **Editing is inline first (Grant, 2026-08-17).** A row's editable cells are edited where they sit — no Edit button, no modal round trip. Forms are for *creating* a record and for the things the TUI deliberately keeps in a form. Which fields are inline-editable is not a per-surface choice: reuse the TUI's declarations. One field edit is one writer action and therefore one batch. The record's id travels in the URL, never its row position — `tui/widgets/inline_edit.py` captures `row_key` when the editor opens precisely because a refresh can reorder rows mid-edit.
 - Work in the worktree `.claude/worktrees/web-account` on branch `web-account`. A fresh worktree needs `uv sync --group dev`, and gates run as `uv run --no-sync python -m pytest`.
 
 ---
@@ -1056,7 +1057,83 @@ so the remaining distance to 1:1 stays a number rather than a memory."
 
 ---
 
-### Task 6: The form macro, and the test that every `FormSpec` renders completely
+### Task 6: Rendering a `Field` — the form macro, the inline cell, and better refusal copy
+
+A `Field` gets rendered two ways: stacked in a form (for creating records) and in place as a table cell (for editing them). Both come from the same dataclass, and the inline-editable field sets come from the TUI's existing declarations rather than a second list.
+
+**Additional files for the inline half:**
+- Create: `src/bookkit/forms/inline.py`, `src/bookkit/web/templates/macros/cell.html`
+- Modify: `src/bookkit/tui/screens/navigator.py` (lines 80–91), `src/bookkit/tui/screens/account.py` (line 125), `src/bookkit/forms/spec.py`
+- Test: `tests/test_web_form_render.py` (the same file)
+
+**Additional interfaces produced:**
+- `bookkit.forms.inline.{CONTACT_FIELDS, TASK_FIELDS, RFI_ITEM_FIELDS}` — each a `tuple[Field, ...]`
+- `bookkit.web.forms_render.render_cell(request, field, value, action) -> str`
+
+**Three extra pieces of work, alongside the form macro the rest of this task describes:**
+
+1. **Extract the inline field sets.** `CONTACT_INLINE` and `TASK_INLINE` (`tui/screens/navigator.py:80-91`) and `RFI_ITEM_INLINE` (`tui/screens/account.py:125`) are `dict[column_index, Field]` — the column index is a TUI presentation detail, the `Field` list is not. Move the field lists to `src/bookkit/forms/inline.py` as ordered tuples, and have the three screens build their column-index dicts from those tuples. Same fields, same order, no behaviour change; the existing TUI tests are the gate. Adding an inline-editable field must now appear on both surfaces.
+
+2. **Add `render_cell`** and `macros/cell.html`: one editable cell, rendered either as its display value (a control that activates the editor) or as a single pre-filled input with the field's placeholder and, on refusal, the message beside it. It uses the same `Field` and the same `initial_text`/`parse_value` as the form macro.
+
+3. **Rewrite the date refusal copy in `src/bookkit/forms/spec.py`.** `parse_value` currently raises `f"cannot read a date from {text!r}"` — the parser naming its objection without naming the remedy. Change it to state the fix:
+
+   ```python
+   raise ValueError(
+       "enter a date like 2026-10-15, friday, or +2w — a bare number is ambiguous")
+   ```
+
+   The refusal itself is unchanged: a bare 1–2 digit number is still refused, never guessed. Only the sentence improves, and it improves on **both** surfaces because there is one home for it. Update any test asserting the old wording — `grep -rn "cannot read a date" src tests` — and check the same phrasing in `mcpserver.py`, which raises its own copy of it for date-typed tool arguments; make the two consistent.
+
+**Tests for the extra work:**
+
+```python
+def test_inline_field_sets_are_shared_not_duplicated():
+    """Which fields are editable in place is not a per-surface choice. The TUI
+    screens build their column maps from these tuples; the web renders the same
+    ones as cells."""
+    from bookkit.forms import inline
+    from bookkit.tui.screens.navigator import CONTACT_INLINE, TASK_INLINE
+
+    assert tuple(CONTACT_INLINE.values()) == inline.CONTACT_FIELDS
+    assert tuple(TASK_INLINE.values()) == inline.TASK_FIELDS
+
+
+@pytest.mark.parametrize("field", [
+    Field("role", "role"),
+    Field("due_on", "due", "date"),
+    Field("email", "email", "email"),
+])
+def test_render_cell_produces_one_named_input(field):
+    html = render_cell(None, field, value="", action="/probe")
+    assert f'name="{field.key}"' in html
+    assert 'type="number"' not in html and 'type="date"' not in html
+
+
+def test_render_cell_shows_a_refusal_beside_the_value_it_kept():
+    field = Field("due_on", "due", "date")
+    html = render_cell(None, field, value="5", action="/probe",
+                       error="enter a date like 2026-10-15, friday, or +2w — a bare number is ambiguous")
+    assert "a bare number is ambiguous" in html
+    assert 'value="5"' in html
+
+
+def test_the_date_refusal_says_how_to_fix_it():
+    """'cannot read a date from 5' names the objection, not the remedy."""
+    import pytest as _pytest
+
+    from bookkit.forms.spec import Field as F
+    from bookkit.forms.spec import parse_value as pv
+
+    with _pytest.raises(ValueError) as caught:
+        pv(F("due_on", "due", "date"), "5")
+    assert "2026-10-15" in str(caught.value)
+    assert "ambiguous" in str(caught.value)
+```
+
+The rest of this task — the form macro itself — follows below unchanged.
+
+#### The form macro, and the test that every `FormSpec` renders completely
 
 Without this test an unhandled `Field.kind` renders nothing, and the form saves while silently dropping a field.
 
@@ -1591,7 +1668,99 @@ that pairing wrong on four surfaces."
 
 ---
 
-### Task 8: Contacts — read, add, and edit through the shared apply, in one batch
+### Task 8: Contacts — read, add, and edit **in place**, in one batch
+
+> **Amended 2026-08-17 (Grant): editing is inline, not behind an Edit button.**
+> The `new` half of this task is unchanged — creating a contact is still a form.
+> The `edit` half is replaced: instead of `GET/POST …/contacts/{id}/edit`
+> rendering the whole `contact_form`, each editable cell edits itself.
+>
+> **Replace the two edit routes with these:**
+>
+> ```python
+> from ...forms.inline import CONTACT_FIELDS
+> from ..forms_render import render_cell
+>
+> _CONTACT_CELLS = {f.key: f for f in CONTACT_FIELDS}
+>
+>
+> def _cell_action(ref: str, contact_id: str, key: str) -> str:
+>     return f"/accounts/{ref}/contacts/{contact_id}/cell/{key}"
+>
+>
+> def _contact_cell(request: Request, ref: str, contact_id: str, key: str,
+>                   error: str | None = None, typed: str | None = None) -> HTMLResponse:
+>     field = _CONTACT_CELLS.get(key)
+>     if field is None:
+>         raise HTTPException(status_code=404, detail=f"{key!r} is not editable here")
+>     existing = contacts_repo.get(_conn(request), contact_id)
+>     value = typed if typed is not None else initial_text(field, getattr(existing, key, None))
+>     return HTMLResponse(render_cell(
+>         request, field, value, _cell_action(ref, contact_id, key), error=error))
+>
+>
+> @router.get("/accounts/{ref}/contacts/{contact_id}/cell/{key}", response_class=HTMLResponse)
+> def contact_cell_edit(request: Request, ref: str, contact_id: str, key: str) -> HTMLResponse:
+>     _org(request, ref)
+>     return _contact_cell(request, ref, contact_id, key)
+>
+>
+> @router.post("/accounts/{ref}/contacts/{contact_id}/cell/{key}", response_class=HTMLResponse)
+> async def contact_cell_save(request: Request, ref: str, contact_id: str,
+>                             key: str) -> HTMLResponse:
+>     """One field, one writer action, one batch. The contact id is in the URL —
+>     never the row position, because a refresh can reorder rows mid-edit."""
+>     org = _org(request, ref)
+>     conn = _conn(request)
+>     field = _CONTACT_CELLS.get(key)
+>     if field is None:
+>         raise HTTPException(status_code=404, detail=f"{key!r} is not editable here")
+>     raw = str((await request.form()).get(key, ""))
+>     try:
+>         value = parse_value(field, raw)
+>     except ValueError as exc:
+>         return _contact_cell(request, ref, contact_id, key, error=str(exc), typed=raw)
+>     if field.required and value in (None, ""):
+>         return _contact_cell(request, ref, contact_id, key,
+>                              error=f"{field.label} is required", typed=raw)
+>     existing = contacts_repo.get(conn, contact_id)
+>     try:
+>         with batches_svc.open_batch(
+>             conn, source="web", tool="edit_contact",
+>             summary=f"set {field.label} on {existing.first_name} {existing.last_name}",
+>             org_id=org.id,
+>         ):
+>             contacts_repo.update(conn, contact_id, **{key: value})
+>     except Exception as exc:
+>         return _contact_cell(request, ref, contact_id, key, error=str(exc), typed=raw)
+>     return _contact_cell(request, ref, contact_id, key)
+> ```
+>
+> Import `initial_text` and `parse_value` from `...forms.spec` alongside the
+> existing imports.
+>
+> **The panel template changes** — each editable cell becomes a control that
+> swaps itself for the editor, rather than a row-level Edit button:
+>
+> ```html
+> <td hx-get="/accounts/{{ header.org.ref }}/contacts/{{ c.id }}/cell/email"
+>     hx-trigger="click" hx-swap="innerHTML" tabindex="0" class="cell">{{ c.email or "—" }}</td>
+> ```
+>
+> Do that for every key in `CONTACT_FIELDS` (`role`, `title`, `email`, `phone`);
+> `first_name` / `last_name` stay display-only here because the TUI's
+> `CONTACT_INLINE` does not declare them.
+>
+> **Test changes:** `test_editing_a_contact_writes_one_web_batch` and
+> `test_the_web_batch_reverts` below POST the whole form. Rewrite both to POST a
+> single cell (`…/cell/title` with `data={"title": "Head of Risk"}`) and assert
+> the same things — a batch exists, `source='web'`, and `revert()` restores the
+> prior value. The assertions that matter are unchanged; only the route moves.
+> Add one test that a non-editable key (`first_name`) returns 404 rather than
+> writing, so the editable set is enforced server-side and not just in the
+> template.
+
+
 
 **Files:**
 - Create: `src/bookkit/web/templates/account/contacts.html`, `src/bookkit/web/templates/account/_contacts_panel.html`
@@ -2544,7 +2713,27 @@ neither is one you cannot chase."
 
 ---
 
-### Task 12: Request items — the detail list, add, edit, and mark received
+### Task 12: Request items — the detail list, add, edit **in place**, and mark received
+
+> **Amended 2026-08-17: editing is inline.** Follow Task 8's cell pattern exactly
+> — same route shape (`…/items/{item_id}/cell/{key}`), same one-field-one-batch
+> rule, same server-side check that the key is in the editable set. The editable
+> fields come from `bookkit.forms.inline.RFI_ITEM_FIELDS` (extracted in Task 6
+> from `RFI_ITEM_INLINE` at `tui/screens/account.py:125`), not from a new list.
+>
+> The `new` form for adding an item is unchanged. `Mark received` stays a POST
+> button rather than a cell, because it writes two fields together
+> (`services.rfi.mark_received` sets `status` and `received_on`) and the pair
+> must move as one — that is a distinct writer action, not a field edit.
+>
+> Note the interaction with `apply_rfi_item`: it owns the status/`received_on`
+> relationship. A cell edit writes one column through `rfi_repo.update_item`, so
+> **`status` must not be inline-editable** unless `RFI_ITEM_FIELDS` declares it —
+> check what the TUI declares and follow it. If `status` is in that set, route
+> its cell save through `apply_rfi_item` rather than a bare column write, so the
+> pairing rule still holds.
+
+
 
 **Files:**
 - Create: `src/bookkit/web/templates/account/request_detail.html`, `src/bookkit/web/templates/account/_items_panel.html`
@@ -2837,7 +3026,18 @@ revert restores the pair instead of leaving a received item with no date."
 
 ---
 
-### Task 13: Open items — the account's task list
+### Task 13: Open items — the account's task list, edited in place
+
+> **Amended 2026-08-17: editing is inline.** Follow Task 8's cell pattern exactly,
+> with editable fields from `bookkit.forms.inline.TASK_FIELDS` (extracted in
+> Task 6 from `TASK_INLINE` at `tui/screens/navigator.py:86-91`): `due_on`,
+> `title`, `category`, `description`. Note `title` is `required=True` — a cell
+> save that blanks it must be refused with the value intact, not written.
+>
+> `Add task` stays a form and `Mark done` stays a POST button — completing a task
+> is a distinct writer action, not a field edit.
+
+
 
 **Files:**
 - Create: `src/bookkit/web/templates/account/open_items.html`, `src/bookkit/web/templates/account/_open_items_panel.html`
