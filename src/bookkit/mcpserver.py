@@ -957,30 +957,15 @@ def _client_create(
             "batch": batch.ref}
 
 
-# Route enrich_field values through the SAME cleaners the forms use
-# (bookkit.forms.spec `CLEANERS`) so an MCP-entered email/phone/url/domain
-# ends up identical to one typed through the TUI. `normalize` is imported
-# directly here (never the tui module — mcpserver has no TUI dependency).
-_FIELD_CLEANERS = {
-    "email": "clean_email",
-    "phone": "clean_phone",
-    "mobile": "clean_phone",
-    "website": "clean_url",
-    "domain": "clean_domain",
-    "naics": "clean_naics",
-    "linkedin": "clean_linkedin",
-    "notes": None,  # textarea: stored as-is, same as the forms' passthrough
-}
-
-
 def _clean_field_value(field: str, value: str) -> str:
-    from . import normalize
+    """One cleaner map, shared with the forms (bookkit.forms.spec.CLEANERS),
+    so an MCP-entered email is identical to one typed on either surface.
+    Unknown fields fall through to clean_text, matching parse_value."""
+    from .forms.spec import CLEANERS
+    from .normalize import clean_text
 
-    cleaner_name = _FIELD_CLEANERS.get(field, "clean_text")
-    if cleaner_name is None:
-        return value
-    cleaner = getattr(normalize, cleaner_name)
-    return cleaner(value)  # type: ignore[no-any-return]
+    cleaner = CLEANERS.get(field, clean_text)
+    return cleaner(value)
 
 
 def _contact_add(
@@ -1593,11 +1578,12 @@ def _request_item_waive(conn: sqlite3.Connection, item_ref: str) -> dict[str, An
 
 
 # edit_field's allowlists: (kind → field → value type). Types: "text" routes
-# through _FIELD_CLEANERS like enrich_field; "money" parses to integer cents;
-# "date" through parse_human_date; "int" plain; a tuple is a closed
-# vocabulary and refusals list it. Deliberate absences are the contract:
-# opportunity stage/outcome/closed_at belong to opportunity_stage, and
-# project_need.status belongs to the queued needs→pipeline reconciler.
+# through the cleaner map (bookkit.forms.spec.CLEANERS) like enrich_field;
+# "money" parses to integer cents; "date" through parse_human_date; "int"
+# plain; a tuple is a closed vocabulary and refusals list it. Deliberate
+# absences are the contract: opportunity stage/outcome/closed_at belong to
+# opportunity_stage, and project_need.status belongs to the queued
+# needs→pipeline reconciler.
 def _editable() -> dict[str, dict[str, Any]]:
     from .models import PROJECT_STATUSES, TEAM_ROLES
 

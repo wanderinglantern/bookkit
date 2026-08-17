@@ -50,7 +50,13 @@ class FormSpec:
 
 @dataclass
 class BatchSpec:
-    """What undo unit this form's save belongs to."""
+    """What undo unit this form's save belongs to.
+
+    A form passes this instead of opening its own transaction: FormModal wraps
+    the whole `commit` callback in one batch, so a save that writes four rows
+    is reverted as one thing by `R` — and rolls back entirely if any part of
+    it refuses. `summary` may be a callable when the sentence needs the values
+    the user just typed."""
 
     tool: str
     summary: str | Callable[[dict[str, Any]], str]
@@ -61,9 +67,10 @@ class BatchSpec:
 
     @staticmethod
     def for_title(title: str, org_id: str | None = None) -> BatchSpec:
-        """'edit contact — Atomic Industries' becomes tool 'edit_contact' with
-        the whole title as the summary: the changes list groups by tool, so the
-        slug must not carry the record's name, while the sentence should."""
+        """The default every form gets. 'edit contact — Atomic Industries'
+        becomes tool 'edit_contact' with the whole title as the summary: the
+        changes list groups by tool, so the slug must not carry the record's
+        name, while the sentence should."""
         head = title.split("—")[0].split("(")[0].strip().lower()
         return BatchSpec(
             tool="_".join(head.split()[:3]) or "form", summary=title, org_id=org_id

@@ -87,3 +87,32 @@ def test_batch_spec_derives_tool_from_title_without_the_record_name():
     batch = BatchSpec.for_title("edit contact — Atomic Industries")
     assert batch.tool == "edit_contact"
     assert batch.sentence({}) == "edit contact — Atomic Industries"
+
+
+def test_mcp_cleans_exactly_like_the_forms_do():
+    """mcpserver kept a hand-copied duplicate of the cleaner map, held in sync
+    by a comment. One home, or the surfaces drift."""
+    from bookkit import mcpserver
+    from bookkit.forms.spec import Field, parse_value
+
+    for kind, raw in [
+        ("email", "  A@B.COM "),
+        ("phone", "(312) 555-0142"),
+        ("url", "company.com"),
+        ("domain", "https://company.com/path"),
+        ("linkedin", "in/someone"),
+        ("naics", "524126"),
+        ("text", "  spaced  "),
+    ]:
+        mcp_cleaned = mcpserver._clean_field_value(kind, raw)
+        form_cleaned = parse_value(Field(kind, kind, kind), raw)
+        assert mcp_cleaned == form_cleaned, kind
+
+
+def test_mcp_has_no_second_cleaner_map():
+    from pathlib import Path
+
+    import bookkit
+
+    source = (Path(bookkit.__file__).parent / "mcpserver.py").read_text()
+    assert "_FIELD_CLEANERS" not in source, "the duplicate cleaner map is back"
