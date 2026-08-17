@@ -20,6 +20,7 @@
 - **The renewal date is `RenewalItem.renewal_on`**, never `placement.period_to`. Print the same date you count to. Overdue is `days_remaining < 0`.
 - **Every write goes through `services.batches.open_batch(conn, source="web", tool=…, summary=…, org_id=…)`.** No repo write outside a batch.
 - **Gates before every commit:** `uv run pytest -q`, `uv run mypy src`, `uv run ruff check src tests`. Put the gate on the command itself, never after a pipe — pipes eat exit codes and red suites get committed.
+- **A fourth gate for anything touching `pyproject.toml` or package data: the wheel must build.** `uv build --wheel` — pytest, mypy and ruff never invoke the build backend, so a packaging error passes all three and only surfaces when `make wheelhouse` fails on the way to the work machine. This was learned the hard way in Task 4: a `force-include` block collided with hatchling's default VCS-based inclusion and made the wheel unbuildable while every other gate stayed green.
 - **Gate output goes to `$GATE`, never `/tmp`.** Concurrent pytest runs interleave in `/tmp`. Set it once per shell session to this session's scratchpad directory before running any gate:
   ```bash
   export GATE=<this session's scratchpad directory>
