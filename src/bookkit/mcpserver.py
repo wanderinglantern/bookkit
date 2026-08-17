@@ -1619,7 +1619,12 @@ def _editable() -> dict[str, dict[str, Any]]:
             "title": "text", "lines": "text", "target_premium": "money",
             "target_effective": "date", "probability_pct": "int",
             "source": "text", "incumbent_broker": "text",
-            "competitor": "text", "notes": "textarea",
+            "competitor": "text",
+            # no "notes" here: the opportunity table has no notes column and
+            # opportunity_form declares no such field. It was offered by this
+            # dict anyway, so edit_field advertised it as allowed and then
+            # failed at the DB layer on the first call — removed, not backed
+            # by a new column (that would be a feature, not a fix).
         },
         "project": {
             "name": "text", "description": "textarea", "site": "text",
@@ -1939,14 +1944,15 @@ def _request_create(
     request behind."""
     from .dates import parse_human_date
     from .forms.spec import date_refusal
-    from .repo import placements
-    from .repo import projects as projects_repo
-    from .repo import rfi as rfi_repo
 
     # A pasted numbered list must be cleaned identically here and in the TUI's
     # paste box, so this shares that splitter rather than re-deriving the
-    # regex. rfi_paste is pure `re` — importing it pulls in no TUI machinery.
-    from .tui.widgets.rfi_paste import split_items
+    # regex. rfi_paste is pure `re` and lives in imports/ — the MCP server is
+    # headless and must never import from tui/ (test_mcpserver_never_imports_the_tui).
+    from .imports.rfi_paste import split_items
+    from .repo import placements
+    from .repo import projects as projects_repo
+    from .repo import rfi as rfi_repo
 
     if placement_ref and project_ref:
         raise ValueError(

@@ -331,8 +331,8 @@ def paste_rfi_items(screen: Screen, request_id: str) -> None:
     (commit-in-place: the form stays up with the text intact)."""
     from ... import db
     from ...forms.spec import Field, FormSpec
+    from ...imports.rfi_paste import split_items
     from ...repo import rfi as rfi_repo
-    from .rfi_paste import split_items
 
     conn = _app(screen).conn
 

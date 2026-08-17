@@ -1828,3 +1828,17 @@ def test_write_expansion_tools_are_registered(server_db):
         "team_roster", "opportunity_stage", "task_reopen",
         "request_item_waive", "member_deactivate", "member_reactivate",
     } <= names
+
+
+def test_editable_fields_all_exist_on_their_table(server_db):
+    """A field offered by edit_field that has no column fails at the DB layer,
+    after the tool has already told the caller it was allowed. `opportunity.notes`
+    was advertised that way; the table never had the column."""
+    from bookkit.repo.base import ENTITY_TABLES
+
+    conn = db.connect(server_db)
+    for kind, fields in mcpserver._EDITABLE.items():
+        table = ENTITY_TABLES[kind]
+        columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        missing = set(fields) - columns
+        assert not missing, f"{kind}: {sorted(missing)} offered but not on {table}"

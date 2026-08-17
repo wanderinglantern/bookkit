@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bookkit.tui.widgets.rfi_paste import split_items
+from bookkit.imports.rfi_paste import split_items
 
 
 def test_strips_numbering_and_bullets() -> None:

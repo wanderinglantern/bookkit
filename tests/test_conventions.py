@@ -43,3 +43,11 @@ def test_web_and_tui_never_import_each_other():
     for path in (SRC / "tui").rglob("*.py"):
         assert "bookkit.web" not in path.read_text() and "from ..web" not in path.read_text(), \
             f"{path.relative_to(SRC)} imports the web layer"
+
+
+def test_mcpserver_never_imports_the_tui():
+    """The MCP server is headless. It imported split_items from tui/widgets for
+    a long time because nothing asserted otherwise."""
+    text = (SRC / "mcpserver.py").read_text()
+    for bad in ("from .tui", "from bookkit.tui", "import bookkit.tui"):
+        assert bad not in text, f"mcpserver imports the TUI ({bad})"
