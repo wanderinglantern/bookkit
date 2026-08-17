@@ -102,18 +102,67 @@ def test_every_binding_bearing_widget_is_enumerated_or_excluded():
     from bookkit.tui.widgets.settings import SettingsModal
 
     widget_sources = set(_widget_sources())
-    # every one of these is a ModalScreen (or, for CellEditor, a transient
-    # editor) entered from an action that is already a ledger key — its own
-    # internal escape/save/cancel bindings are not a second parity surface.
+    # Each reason names the ACTUAL call site(s), checked by grepping every
+    # `ClassName(` construction in tui/, not assumed from the class's own
+    # docstring — two of these were wrong in fix round 2 ("already ledgered"
+    # for widgets that were never reachable from any AccountScreen action at
+    # all) and that is worse than an admission of no coverage, because it
+    # stops the next reader from checking (fix round 3, 2026-08-17).
     excluded_widgets: dict[type, str] = {
-        FormModal: "modal entered from add_here/edit_here/etc — already ledgered",
-        LinkReview: "modal entered from an import flow — already ledgered",
-        PasteImportModal: "modal entered from import_here — already ledgered",
-        ImportChooser: "modal entered from import_here — already ledgered",
-        QuickCapture: "modal entered from a quick-capture binding elsewhere",
-        ConfirmTask: "confirmation modal entered from an already-ledgered action",
+        # pushed from many actions across many screens — accurate only for
+        # the account screen, where every opener (add_here, edit_here,
+        # assign_team, scaffold_tower, add_layer, edit_layer, new_submission,
+        # ...) is already a ledger key. onboarding, team, markets, today,
+        # pipeline, book and navigator push it independently of this ledger.
+        FormModal: (
+            "modal opened by many account actions, already ledgered on this "
+            "screen — also pushed independently by onboarding/team/markets/"
+            "today/pipeline/book/navigator, outside this ledger's scope"
+        ),
+        # NOT account-scoped: the only call site is TodayScreen, not
+        # AccountScreen — verified by grep, no `LinkReview(` in account.py.
+        LinkReview: (
+            "not account-scoped — pushed only from "
+            "TodayScreen.action_sync_programs, which is not an AccountScreen "
+            "action and has no ledger key"
+        ),
+        # pushed from account.py (import_here) AND independently by markets
+        # and team (their own signature-paste flows) — verified by grep.
+        PasteImportModal: (
+            "modal entered from import_here, already ledgered on this screen "
+            "— markets and team also push it independently (their own "
+            "signature pastes), outside this ledger's scope"
+        ),
+        # the only call site in the whole tree is account.py:1751, inside
+        # action_import_here — verified by grep, so this one is fully
+        # accurate as stated.
+        ImportChooser: "only ever pushed from import_here — already ledgered",
+        # the only call site is App.action_quick_capture (an app-level `n`
+        # binding), never from AccountScreen — verified by grep.
+        QuickCapture: (
+            "not account-scoped — pushed only by the App-level `n` binding "
+            "(action_quick_capture), not by any account action"
+        ),
+        # NOT account-scoped: entered from QuickCapture, itself pushed by the
+        # app-level binding above, not by any account action — verified by
+        # grep, no `ConfirmTask(` in account.py.
+        ConfirmTask: (
+            "not account-scoped — entered from QuickCapture, itself pushed "
+            "by the App-level `n` binding rather than by any account action"
+        ),
+        # pushed from app.py, today.py, navigator.py — never from account.py
+        # — verified by grep.
         SettingsModal: "modal entered from a settings binding, not account-scoped",
-        Picker: "generic option-list modal entered from an already-ledgered action",
+        # pushed from account.py (edit_layer's layer picker, assign_team's
+        # market-to-layer picker) AND independently by markets and team —
+        # verified by grep.
+        Picker: (
+            "modal entered from already-ledgered account actions (edit_layer, "
+            "assign_team) — markets and team also push it independently, "
+            "outside this ledger's scope"
+        ),
+        # the only call site is InlineTable itself (inline_edit.py:99), the
+        # cell editor that opens under `i` — verified by grep.
         CellEditor: (
             "transient one-line editor that floats over a cell opened by "
             "inline_edit — already ledgered, not a second surface"
