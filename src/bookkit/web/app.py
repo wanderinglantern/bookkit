@@ -12,9 +12,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
+from . import theme_css as theme_css_mod
 
 HERE = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(HERE / "templates"))
@@ -40,11 +42,19 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
 
     app = FastAPI(title="bookkit", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.conn = conn
-    app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
         return {"ok": True, "db": str(db_path) if db_path else "default"}
+
+    # Registered before the StaticFiles mount below: a mount on the same
+    # prefix ("/static") would otherwise shadow this route, since FastAPI/
+    # Starlette resolves routes in registration order.
+    @app.get("/static/theme.css")
+    def theme_css() -> Response:
+        return Response(content=theme_css_mod.css_variables(), media_type="text/css")
+
+    app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
     from .routes import account
 

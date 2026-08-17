@@ -6,6 +6,7 @@
     {% if header.overdue %}
       <span class="rail-overrun">over</span>
     {% else %}
+      <span class="rail-fill" style="width: {{ '%.1f'|format(header.rail_pct) }}%"></span>
       <span class="rail-marker" style="left: {{ '%.1f'|format(header.rail_pct) }}%"></span>
     {% endif %}
     <span class="rail-tick" style="left: 25%"></span>

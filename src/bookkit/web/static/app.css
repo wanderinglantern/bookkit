@@ -1,3 +1,564 @@
-/* Stylesheet lands in Task 14 — see docs/superpowers/specs/2026-08-17-web-visual-direction.md
-   for the binding palette, type, and layout direction (light, document-shaped,
-   towerkit brand colours; no dark terminal palette). */
+/* bookkit web — visual direction implementation.
+   Binding spec: docs/superpowers/specs/2026-08-17-web-visual-direction.md
+
+   No literal colour lives in this file. Every colour is a `--` custom
+   property served by GET /static/theme.css (generated from
+   bookkit.palette.WEB_* — see src/bookkit/web/theme_css.py), so this
+   stylesheet and the palette module can never disagree about what a colour
+   means. `@import` runs before anything below needs the variables. */
+@import url("/static/theme.css");
+
+/* --- type -------------------------------------------------------------- */
+
+:root {
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+  --serif: "Iowan Old Style", Charter, Georgia, "Noto Serif", serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  --label-size: 0.5625rem;   /* table/section labels, uppercase, tracked */
+  --hint-size: 0.6875rem;
+  --body-size: 0.8125rem;    /* table and log body */
+  --prose-size: 0.9375rem;
+  --name-size: 1.6rem;       /* account name, serif */
+  --count-size: 2.75rem;     /* the day count, mono, tabular */
+
+  --row-height: 32px;
+}
+
+/* --- ground -------------------------------------------------------------
+   Single theme by choice: one user, one machine, a document that wants to
+   look like paper. body paints background/color explicitly rather than
+   inheriting the viewer's theme. */
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  /* the page body never scrolls sideways — wide content scrolls inside its
+     own overflow-x: auto container instead (tables, the rail on narrow
+     windows) */
+  overflow-x: hidden;
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--body-size);
+  line-height: 1.5;
+}
+
+a {
+  color: inherit;
+}
+
+#main {
+  max-width: 78rem;
+  margin: 0 auto;
+  padding: 0 1.5rem 3rem;
+}
+
+/* --- masthead ------------------------------------------------------------
+   Account name in serif Regular, status as a small outlined pill, the
+   renewal rail beneath. Closed by the tab bar's 2px ink rule. */
+
+.account-header {
+  padding: 1.5rem 0 1rem;
+  border-bottom: 2px solid var(--ink);
+}
+
+.account-header h1 {
+  margin: 0;
+  display: inline-block;
+  font-family: var(--serif);
+  font-weight: 400; /* Marsh Serif has no bold — regular weight only */
+  font-size: var(--name-size);
+  color: var(--ink);
+}
+
+.status-pill {
+  display: inline-block;
+  margin-left: 0.75rem;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--rule-firm);
+  border-radius: 2px;
+  font-family: var(--mono);
+  font-size: var(--hint-size);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  vertical-align: middle;
+}
+
+/* --- the renewal rail — the signature element -----------------------------
+   RenewalItem.renewal_on and RenewalItem.days_remaining, printed from the
+   same object, are the only source for both the date and the count. Overdue
+   is decided by days_remaining < 0 (the .is-overdue class the server sets),
+   never by rail-marker position — an overdue rail never renders a marker or
+   a fill, only .rail-overrun. */
+
+.rail {
+  margin-top: 1rem;
+  max-width: 40rem;
+}
+
+.rail-track {
+  position: relative;
+  height: 6px;
+  background: var(--rule);
+  border-radius: 2px;
+  overflow: visible;
+}
+
+.rail-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--sky);
+  border-radius: 2px;
+}
+
+.rail-marker {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  transform: translateY(-50%) rotate(45deg);
+  background: var(--accent);
+}
+
+.rail-tick {
+  position: absolute;
+  top: -3px;
+  width: 1px;
+  height: 12px;
+  background: var(--rule-firm);
+}
+
+.rail-overrun {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--over);
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: var(--hint-size);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-radius: 2px;
+}
+
+.rail-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.35rem;
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.rail-date {
+  margin: 0.75rem 0 0;
+  font-family: var(--sans);
+  font-size: var(--prose-size);
+  color: var(--ink);
+}
+
+.rail-date time {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-count {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.rail-days {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--count-size);
+  line-height: 1;
+  color: var(--ink);
+}
+
+.rail-unit {
+  font-family: var(--sans);
+  font-size: var(--hint-size);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.rail-lines {
+  margin: 0.35rem 0 0;
+  font-family: var(--mono);
+  font-size: var(--body-size);
+  color: var(--muted);
+}
+
+/* Overdue: colour plus the word "over" (rendered by .rail-overrun and
+   .rail-unit's "days over" text) — colour never carries meaning alone. */
+.rail.is-overdue .rail-days,
+.account-header.is-overdue .status-pill {
+  color: var(--over);
+}
+
+.account-header.is-overdue .status-pill {
+  border-color: var(--over);
+}
+
+/* --- tabs -----------------------------------------------------------------
+   Mono, uppercase, letter-spaced, sitting on the masthead's ink rule; the
+   current tab takes --ink with a 3px --accent underline. A document
+   masthead, not an app navbar. */
+
+nav.tabs {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: -2px; /* sit on the .account-header rule, not below it */
+}
+
+nav.tabs a {
+  display: inline-block;
+  padding: 0.6rem 0.1rem 0.5rem;
+  font-family: var(--mono);
+  font-size: var(--hint-size);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+}
+
+nav.tabs a.is-current {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+.tab-panel {
+  padding-top: 1.5rem;
+}
+
+/* --- overview: five ruled sections -----------------------------------
+   Sections of one document, not floating cards: no shadows, no gradients. */
+
+.card {
+  background: var(--paper);
+  border-top: 1px solid var(--rule);
+  padding: 1rem 0 1.5rem;
+}
+
+.card:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.card h2 {
+  margin: 0 0 0.6rem;
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.card ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card li {
+  min-height: var(--row-height);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--body-size);
+}
+
+.card li:last-child {
+  border-bottom: none;
+}
+
+.card li time {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.empty {
+  margin: 0;
+  padding: 0.4rem 0;
+  color: var(--muted);
+  font-style: normal;
+}
+
+/* --- schedule tables (contacts, requests, items, open items) --------------
+   --band headers, hairline rows, mono for every value that aligns, cells
+   editable in place. Rows sit at roughly 32px — density is a feature. */
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+table.rows {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--body-size);
+}
+
+table.rows th {
+  background: var(--band);
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  font-weight: 400;
+  border-bottom: 1px solid var(--rule-firm);
+}
+
+table.rows td {
+  height: var(--row-height);
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: middle;
+}
+
+table.rows td.num,
+table.rows td.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- inline cell editing (macros/cell.html) --------------------------- */
+
+.cell {
+  cursor: pointer;
+}
+
+.cell:hover {
+  background: var(--band);
+}
+
+.cell.cell-editing {
+  padding: 0.2rem 0.4rem;
+  background: var(--paper);
+}
+
+.cell.cell-error {
+  outline: 1px solid var(--over);
+  outline-offset: -1px;
+}
+
+.cell-editor {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.cell-editor input,
+.cell-editor select {
+  font: inherit;
+  font-family: var(--mono);
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--rule-firm);
+  border-radius: 2px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.cell-error-msg {
+  font-family: var(--sans);
+  font-size: var(--hint-size);
+  color: var(--over);
+}
+
+/* --- interactions ledger --------------------------------------------------
+   A continuous hairline down the left margin, dates hanging in that margin
+   in mono, the type as a small accent label, and the note body in prose
+   sans indented past the rule — always shown, never truncated. */
+
+.ledger {
+  position: relative;
+  padding-left: 5.5rem;
+  border-left: 1px solid var(--rule);
+  margin-left: 5rem;
+}
+
+.ledger-entry {
+  position: relative;
+  padding: 0.6rem 0 0.9rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.ledger-entry:last-child {
+  border-bottom: none;
+}
+
+.ledger-date {
+  position: absolute;
+  left: -5.5rem;
+  width: 5rem;
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--body-size);
+  color: var(--muted);
+}
+
+.ledger-type {
+  display: inline-block;
+  margin-bottom: 0.2rem;
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+}
+
+.ledger-body {
+  font-family: var(--sans);
+  font-size: var(--prose-size);
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+/* --- forms (macros/form.html) ------------------------------------------
+   On --paper, with a 2px --ink top rule so they read as a slip laid on the
+   page. Labels above inputs in the uppercase mono label style. Radius 2px
+   on controls, 0 elsewhere. No shadows, no gradients. */
+
+.entity-form {
+  background: var(--paper);
+  border-top: 2px solid var(--ink);
+  padding: 1.25rem 1.5rem 1.5rem;
+}
+
+.form-title {
+  margin: 0 0 1rem;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: var(--name-size);
+  color: var(--ink);
+}
+
+.form-error {
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--over);
+  border-radius: 2px;
+  background: var(--paper);
+  color: var(--over);
+  font-size: var(--body-size);
+}
+
+.entity-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.9rem;
+}
+
+.entity-form .field label {
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.entity-form .field .req {
+  color: var(--over);
+}
+
+.entity-form input,
+.entity-form select,
+.entity-form textarea {
+  font: inherit;
+  font-family: var(--sans);
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--rule-firm);
+  border-radius: 2px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.form-actions {
+  margin-top: 1.25rem;
+}
+
+.form-actions button {
+  font: inherit;
+  font-family: var(--sans);
+  padding: 0.45rem 1rem;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  background: var(--ink);
+  color: var(--paper);
+  cursor: pointer;
+}
+
+/* --- status colours: signal, never decoration alone --------------------
+   Every coloured state also carries a word or glyph in the markup itself
+   (e.g. "over", "bound") — these classes only ever supply the colour. */
+
+.is-bound { color: var(--bound-tx); }
+.is-due-soon { color: var(--warn); }
+.is-overdue, .is-error { color: var(--over); }
+
+/* --- focus ------------------------------------------------------------- */
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- narrow window -------------------------------------------------------
+   The rail collapses to date plus count; tables already scroll inside their
+   own .table-scroll container; the page body never scrolls sideways. */
+
+@media (max-width: 36rem) {
+  .rail-track,
+  .rail-scale {
+    display: none;
+  }
+
+  .rail-date {
+    margin-top: 0;
+  }
+}
+
+/* --- motion -------------------------------------------------------------- */
+
+.tab-panel {
+  animation: settle 120ms ease-out;
+}
+
+@keyframes settle {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-panel {
+    animation: none;
+  }
+}

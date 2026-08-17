@@ -14,18 +14,13 @@ from textual.theme import Theme
 
 from ..dates import days_until
 from ..money import format_cents_compact
+from ..palette import AMBER, BG, BLUE, DIM, FG, GOLD, GREEN, PANEL, RED, RULE, SURFACE
 
-BG = "#15171c"  # screen
-SURFACE = "#1a1d23"  # panes
-PANEL = "#232733"  # bars, cards, modals
-RULE = "#3a4150"  # borders, separators
-FG = "#d5d2c9"  # primary text
-DIM = "#8a8577"  # secondary text
-GOLD = "#d6b35a"  # focus, selection, accent
-RED = "#d57367"  # overdue, error
-AMBER = "#d9a441"  # due soon, warning
-GREEN = "#84a98c"  # bound, done, success
-BLUE = "#7f9cc4"  # in flight (submitted, quoted, out)
+__all__ = [
+    "AMBER", "BG", "BLUE", "DIM", "FG", "GOLD", "GREEN", "PANEL", "RED", "RULE",
+    "SURFACE", "BOOKKIT_THEME", "STATUS_STYLES", "status_text", "days_text",
+    "date_text", "money_text", "dash", "lines_text", "right",
+]
 
 BOOKKIT_THEME = Theme(
     name="bookkit",

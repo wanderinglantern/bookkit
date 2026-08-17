@@ -42,6 +42,40 @@ def test_static_htmx_is_served(client):
     assert "htmx" in response.text[:2000].lower()
 
 
+def test_theme_css_is_served_not_shadowed_by_the_static_mount(client):
+    """/static/theme.css is a route registered before app.mount("/static", ...);
+    a StaticFiles mount on the same prefix would otherwise shadow it and this
+    would 404 (or serve a stale file) instead of the generated stylesheet."""
+    response = client.get("/static/theme.css")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/css")
+    assert "--ink" in response.text
+    assert ":root" in response.text
+
+
+def test_theme_css_comes_from_the_one_palette(client):
+    """Colour is signal. A second palette in a stylesheet is how two surfaces
+    come to disagree about what red means."""
+    from bookkit import palette
+
+    response = client.get("/static/theme.css")
+    assert response.status_code == 200
+    for name in palette.WEB_TOKENS:
+        assert getattr(palette, name) in response.text, f"{name} missing from theme.css"
+
+
+def test_the_stylesheet_has_no_literal_colours():
+    """Every colour comes from theme.css, generated from the palette module."""
+    import re
+    from pathlib import Path
+
+    import bookkit
+
+    css = (Path(bookkit.__file__).parent / "web" / "static" / "app.css").read_text()
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b", css), "literal hex in app.css"
+    assert not re.search(r"\b(rgb|hsl)a?\(", css), "literal rgb/hsl in app.css"
+
+
 def test_cli_registers_the_web_command():
     from bookkit.cli import build_parser
 
