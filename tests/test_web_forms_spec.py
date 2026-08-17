@@ -118,11 +118,30 @@ def test_mcp_has_no_second_cleaner_map():
     assert "_FIELD_CLEANERS" not in source, "the duplicate cleaner map is back"
 
 
-def test_mcp_stores_multi_line_notes_verbatim():
-    """The old map marked `notes` verbatim; CLEANERS is keyed by KIND, so the
-    name misses and falls through to clean_text, which collapses newlines. A
-    note typed over three lines came back as one until this test existed."""
+@pytest.mark.parametrize("field", ["notes", "description", "detail", "response"])
+def test_mcp_stores_multi_line_prose_verbatim(field: str):
+    """These are all `textarea` fields in the form builders and all reachable
+    through edit_field. CLEANERS is keyed by KIND and the call site passes a
+    NAME, so each one fell through to clean_text and had its newlines collapsed.
+    Only `notes` was ever protected, and only by the map that was deleted."""
     from bookkit import mcpserver
 
-    note = "called Dana\n\n- loss runs promised Friday\n- wants EL quoted separately"
-    assert mcpserver._clean_field_value("notes", note) == note
+    prose = "called Dana\n\n- loss runs promised Friday\n- wants EL quoted separately"
+    assert mcpserver._clean_field_value(field, prose) == prose
+
+
+@pytest.mark.parametrize(
+    "field,kind", [("mobile", "phone"), ("website", "url")]
+)
+def test_mcp_normalises_fields_whose_name_differs_from_their_kind(
+    field: str, kind: str
+):
+    """mobile is a phone and website is a url. The old name-keyed map knew that;
+    a kind-keyed lookup does not unless the bridge tells it."""
+    from bookkit import mcpserver
+    from bookkit.forms.spec import Field, parse_value
+
+    raw = " 312.555.0142 " if kind == "phone" else "company.com"
+    assert mcpserver._clean_field_value(field, raw) == parse_value(
+        Field(kind, kind, kind), raw
+    )

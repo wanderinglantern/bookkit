@@ -957,23 +957,30 @@ def _client_create(
             "batch": batch.ref}
 
 
-# Field NAMES that are stored verbatim. `notes` is the forms' `textarea` kind
-# wearing its field name: CLEANERS is keyed by KIND and this call site passes a
-# NAME, and that mismatch silently flattened multi-line MCP-entered notes to one
-# line. One entry, and it is a name→kind bridge — not a second cleaner map.
-_VERBATIM_FIELDS = frozenset({"notes"})
+# Field NAME -> the form field KIND it corresponds to.
+#
+# CLEANERS is keyed by KIND and these call sites pass NAMES. Where the two
+# coincide (email, phone, url, domain, linkedin, naics) the lookup happens to
+# work; where they differ the value silently took clean_text — flattening
+# multi-line prose and skipping normalisation entirely. Only `notes` was ever
+# protected, and by a hand-maintained map that has since been deleted.
+_FIELD_KINDS = {
+    "mobile": "phone",
+    "website": "url",
+    # textarea fields hold multi-line prose; collapsing their whitespace
+    # destroys the formatting the user typed
+    "notes": "textarea",
+    "description": "textarea",
+    "detail": "textarea",
+    "response": "textarea",
+}
 
 
 def _clean_field_value(field: str, value: str) -> str:
-    """One cleaner map, shared with the forms (bookkit.forms.spec.CLEANERS),
-    so an MCP-entered email is identical to one typed on either surface.
-    Unknown fields fall through to clean_text, matching parse_value."""
     from .forms.spec import CLEANERS
     from .normalize import clean_text
 
-    if field in _VERBATIM_FIELDS:
-        return CLEANERS["textarea"](value)
-    cleaner = CLEANERS.get(field, clean_text)
+    cleaner = CLEANERS.get(_FIELD_KINDS.get(field, field), clean_text)
     return cleaner(value)
 
 
