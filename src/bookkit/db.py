@@ -75,7 +75,7 @@ _tx_depth: ContextVar[int] = ContextVar("bookkit_tx_depth", default=0)
 issues BEGIN/COMMIT; see transaction() for why nesting joins."""
 
 _tx_lock = threading.RLock()
-"""Serializes the OUTERMOST transaction across threads.
+"""Serializes the OUTERMOST transaction across threads, within THIS process.
 
 _tx_depth is a ContextVar, so a second thread on the same connection sees
 depth 0 and issues its own BEGIN IMMEDIATE — "cannot start a transaction
@@ -83,7 +83,21 @@ within a transaction". Unreachable while the TUI, CLI and MCP server were
 each single-threaded on their connection; reachable the moment the web layer
 runs handlers in uvicorn's threadpool. SQLite serializes writers at the file
 level anyway, so waiting here costs nothing a writer was not already going to
-wait for."""
+wait for.
+
+Process-local: the TUI runs as a separate OS process with its own Python
+interpreter and therefore its own module-level `_tx_lock` instance, so this
+gives it no cross-process exclusion and creates no cross-process cycle —
+SQLite's own file-level locking (BEGIN IMMEDIATE, busy_timeout) is what
+serializes writers across processes; this lock only serializes threads
+inside one.
+
+An RLock is a defensive margin, not a requirement, as of the join logic in
+services.batches.open_batch: that code reads prior events with plain SELECTs
+before ever calling transaction(), so it never re-enters this lock while
+holding it, and a plain Lock would behave identically today. Keep it an RLock
+anyway — the cost of reentrancy is nothing, and it is what stops a future
+nested acquire from becoming a same-thread deadlock instead of a bug report."""
 
 
 def current_batch() -> BatchState | None:
@@ -163,21 +177,23 @@ def transaction(
             _tx_depth.reset(token)
         return
 
-    batch_token = _current_batch.set(batch)
-    depth_token = _tx_depth.set(1)
     _tx_lock.acquire()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        batch_token = _current_batch.set(batch)
+        depth_token = _tx_depth.set(1)
         try:
-            yield
-        except BaseException:
-            conn.execute("ROLLBACK")
-            raise
-        conn.execute("COMMIT")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        finally:
+            _tx_depth.reset(depth_token)
+            _current_batch.reset(batch_token)
     finally:
         _tx_lock.release()
-        _tx_depth.reset(depth_token)
-        _current_batch.reset(batch_token)
 
 
 def connect(
