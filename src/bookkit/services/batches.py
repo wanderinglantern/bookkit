@@ -12,6 +12,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 
 from ..models import EventBatch
 from ..repo import base
@@ -22,6 +23,52 @@ from ..repo import events as events_repo
 # ('created' is not skipped here: the planner handles it as its own kind).
 SKIP_FIELDS = frozenset(events_repo.NON_MUTATION_FIELDS) - {"created"}
 
+JOIN_WINDOW_SECONDS = 60
+"""How long a burst of edits to the SAME entity, from the SAME (source, tool,
+org_id), keeps joining the same undo unit before a fresh edit starts a new
+one. Grant's call, 2026-08-17: correcting four cells on a contact should
+revert as one thing, not four."""
+
+
+def _within_join_window(candidate: EventBatch, now: str) -> bool:
+    """Strictly less-than, not <=: JOIN_WINDOW_SECONDS = 0 must disable
+    joining outright, including two calls issued in the same wall-clock
+    second (created_at has only second precision)."""
+    created = datetime.fromisoformat(candidate.created_at)
+    current = datetime.fromisoformat(now)
+    return (current - created).total_seconds() < JOIN_WINDOW_SECONDS
+
+
+def _targets_only(conn: sqlite3.Connection, batch_id: str, entity_id: str) -> bool:
+    """True when every event already in this batch names this entity — the
+    reason joining is keyed on entity_id and not just (source, tool, org_id):
+    editing contact A then contact B inside the window are two different
+    actions, and merging them would let one revert touch a record the user
+    never edited."""
+    touched = {event.entity_id for event in batches_repo.events_for(conn, batch_id)}
+    return touched <= {entity_id}
+
+
+def _joinable(
+    conn: sqlite3.Connection,
+    candidate: EventBatch | None,
+    *,
+    source: str,
+    tool: str,
+    org_id: str | None,
+    entity_id: str,
+    now: str,
+) -> bool:
+    if candidate is None:
+        return False
+    if candidate.source != source or candidate.tool != tool or candidate.org_id != org_id:
+        return False
+    if candidate.reverted_at is not None:
+        return False
+    if not _within_join_window(candidate, now):
+        return False
+    return _targets_only(conn, candidate.id, entity_id)
+
 
 @contextmanager
 def open_batch(
@@ -31,6 +78,7 @@ def open_batch(
     tool: str,
     summary: str,
     org_id: str | None = None,
+    entity_id: str | None = None,
 ) -> Iterator[EventBatch]:
     """One writer action, one undo unit: opens the transaction AND the batch,
     so every event written inside is grouped, revertible together, and counted
@@ -40,8 +88,36 @@ def open_batch(
     both callers are not identical. This lives in services/ rather than in
     either caller because the MCP server had it first and the TUI grew a
     second, subtly different copy; one home is what keeps `R` able to revert
-    both."""
+    both.
+
+    `entity_id`, when given, lets a burst of edits to the SAME record join
+    the most recent batch instead of opening a new one — inline cell editing
+    otherwise turns four corrected fields into four undo units. It joins only
+    when the most recent batch, period, matches on source/tool/org_id, is not
+    reverted, was created within JOIN_WINDOW_SECONDS, and every event already
+    in it targets this same entity_id. Any mismatch — a different tool, a
+    different record, a reverted or stale batch — opens a fresh batch instead.
+    Omitting entity_id (the default) is today's behaviour, unchanged: every
+    existing caller gets a new batch every time.
+
+    The join decision reads prior events with plain SELECTs, before this call
+    opens its own transaction — never inside one — so it neither contends for
+    db._tx_lock (which only the outermost transaction() call takes) nor risks
+    silently joining an already-open outer transaction the way a nested
+    `db.transaction()` call would."""
     from .. import db
+
+    if entity_id is not None:
+        candidate = batches_repo.most_recent(conn)
+        now = db.utc_now()
+        if _joinable(
+            conn, candidate, source=source, tool=tool, org_id=org_id,
+            entity_id=entity_id, now=now,
+        ):
+            assert candidate is not None  # narrows for mypy; _joinable checked it
+            with db.transaction(conn, batch=db.BatchState(batch_id=candidate.id)):
+                yield candidate
+            return
 
     batch_id = batches_repo.new_batch_id()
     with db.transaction(conn, batch=db.BatchState(batch_id=batch_id)):

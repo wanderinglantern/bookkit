@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from bookkit import db
-from bookkit.repo import base, orgs
+from bookkit.repo import base, contacts, orgs
 from bookkit.repo import batches as batches_repo
 from bookkit.services import batches as batches_svc
 
@@ -299,3 +299,148 @@ def test_force_does_not_apply_or_double_report_a_conflicted_delete(conn):
     ).fetchone()[0]
     assert spurious == 0
     assert orgs.get(conn, other.id).website == "x"  # the clean change reverted
+
+
+# --- Task 15a: joining consecutive edits to one record into one undo unit ---
+
+
+def _freeze_clock(monkeypatch: pytest.MonkeyPatch, start: str):
+    """Pins db.utc_now() to `start` and returns a setter to move it forward.
+
+    Both repo.batches.create() (the created_at stamp) and open_batch's join
+    window read db.utc_now() via the module attribute rather than an imported
+    name, so patching it here — once — controls both."""
+    current = {"t": start}
+    monkeypatch.setattr(db, "utc_now", lambda: current["t"])
+
+    def _set(t: str) -> None:
+        current["t"] = t
+
+    return _set
+
+
+def _contact(conn, org_id, role="CFO", title="Finance"):
+    return contacts.create(
+        conn, org_id=org_id, first_name="Ann", last_name="Lee", role=role, title=title
+    )
+
+
+def test_consecutive_edits_to_one_record_join_a_single_batch(conn):
+    """Correcting four cells on a contact is one edit run, and should revert as
+    one thing rather than four."""
+    org = orgs.create(conn, kind="client", name="Acme")
+    person = _contact(conn, org.id)
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=person.id,
+    ) as first:
+        base.update(conn, "contact", person.id, {"role": "COO"})
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=person.id,
+    ) as second:
+        base.update(conn, "contact", person.id, {"title": "Ops"})
+
+    assert first.id == second.id
+
+    result = batches_svc.revert(conn, second.ref, now=NOW)
+    assert result.applied
+    restored = contacts.get(conn, person.id)
+    assert restored.role == "CFO"
+    assert restored.title == "Finance"
+
+
+def test_edits_to_different_records_do_not_join(conn):
+    """Same tool, same account, different contact — two actions, two batches.
+    Merging them would let one revert undo work on a record the user never
+    touched."""
+    org = orgs.create(conn, kind="client", name="Acme")
+    ann = _contact(conn, org.id, role="CFO")
+    bo = contacts.create(conn, org_id=org.id, first_name="Bo", last_name="Diaz", role="COO")
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=ann.id,
+    ) as first:
+        base.update(conn, "contact", ann.id, {"role": "CEO"})
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=bo.id,
+    ) as second:
+        base.update(conn, "contact", bo.id, {"role": "CFO"})
+
+    assert first.id != second.id
+
+    result = batches_svc.revert(conn, first.ref, now=NOW)
+    assert result.applied
+    assert contacts.get(conn, ann.id).role == "CFO"
+    assert contacts.get(conn, bo.id).role == "CFO"  # bo's own edit untouched
+
+
+def test_a_batch_older_than_the_window_does_not_join(conn, monkeypatch):
+    """Come back after lunch and finish the row: that is a new action."""
+    org = orgs.create(conn, kind="client", name="Acme")
+    person = _contact(conn, org.id)
+    set_now = _freeze_clock(monkeypatch, "2026-08-14T09:00:00+00:00")
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=person.id,
+    ) as first:
+        base.update(conn, "contact", person.id, {"role": "COO"})
+
+    set_now("2026-08-14T09:01:01+00:00")  # 61s later, past JOIN_WINDOW_SECONDS
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=person.id,
+    ) as second:
+        base.update(conn, "contact", person.id, {"title": "Ops"})
+
+    assert first.id != second.id
+
+
+def test_a_reverted_batch_is_never_joined(conn):
+    """Joining a reverted batch would resurrect it."""
+    org = orgs.create(conn, kind="client", name="Acme")
+    person = _contact(conn, org.id)
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=person.id,
+    ) as first:
+        base.update(conn, "contact", person.id, {"role": "COO"})
+
+    batches_svc.revert(conn, first.ref, now=NOW)
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=person.id,
+    ) as second:
+        base.update(conn, "contact", person.id, {"title": "Ops"})
+
+    assert first.id != second.id
+    assert batches_repo.get(conn, first.id).reverted_at is not None
+
+
+def test_omitting_entity_id_keeps_todays_behaviour(conn):
+    """Every existing caller passes no entity_id and must be unaffected."""
+    org = orgs.create(conn, kind="client", name="Acme")
+    person = _contact(conn, org.id)
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id,
+    ) as first:
+        base.update(conn, "contact", person.id, {"role": "COO"})
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id,
+    ) as second:
+        base.update(conn, "contact", person.id, {"title": "Ops"})
+
+    assert first.id != second.id
