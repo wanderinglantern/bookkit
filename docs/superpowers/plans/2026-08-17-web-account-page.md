@@ -1923,48 +1923,34 @@ def test_a_refused_save_keeps_every_value_and_writes_nothing(app_and_org):
     # and nothing was written
     assert len(contacts_repo.for_org(conn, org.id)) == before_count
     assert len(batches_repo.recent(conn, limit=50)) == before_batches
-
-
-def test_a_bare_number_is_refused_as_a_date_on_the_web_too(app_and_org):
-    """dateparser reads '5' as a MONTH and future-biases it. The refusal lives
-    in parse_human_date, and the web reaches it through the same parser the
-    TUI uses — not a second validator."""
-    client, org = app_and_org
-    conn = client.app.state.conn
-    from bookkit.repo import interactions as interactions_repo
-
-    interaction = interactions_repo.for_org(conn, org.id, limit=1)[0]
-    response = client.post(
-        f"/accounts/{org.ref}/interactions/{interaction.id}/edit",
-        data={"occurred_on": "5", "type": interaction.type,
-              "subject": interaction.subject, "body": interaction.body or ""},
-    )
-    assert response.status_code == 200
-    assert "cannot read a date" in response.text
-    assert interactions_repo.get(conn, interaction.id).occurred_on == interaction.occurred_on
 ```
 
-- [ ] **Step 2: Run the first test only and confirm behaviour**
+The date-refusal test belongs to Task 10, not here: it exercises the interactions
+route, which does not exist yet, and committing it now would leave the suite red
+against this plan's own gating constraint.
+
+- [ ] **Step 2: Run the test and confirm behaviour**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q -k "refused" > "$GATE/out.txt" 2>&1; tail -15 "$GATE/out.txt"
+uv run --no-sync python -m pytest tests/test_web_writes.py -q > "$GATE/out.txt" 2>&1; tail -15 "$GATE/out.txt"
 ```
 
-Expected: `test_a_refused_save_keeps_every_value_and_writes_nothing` passes if Task 8's `_save` is correct. If it fails on a missing value, the renderer is not receiving `raw` as `submitted` — fix `_save`, not the test. The second test fails with 404 until Task 10.
+Expected: all four tests pass — three from Task 8 plus this one — if Task 8's `_save` is correct. If it fails on a missing value, the renderer is not receiving `raw` as `submitted`; fix `_save`, not the test.
 
 - [ ] **Step 3: Verify the "nothing was written" assertion can fail**
 
 Temporarily make `_save` swallow the `FieldError` and write anyway. Confirm the test fails on the count assertions. Restore.
 
-- [ ] **Step 4: Commit the passing half**
+- [ ] **Step 4: Full gates and commit**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q -k "refused" > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add tests/test_web_writes.py
 git commit -m "web: assert the refusal contract — input intact, nothing written
 
-Also stages the date-refusal test, which stays red until the interactions
-routes land in the next task."
+A refused save re-renders the form with every value the user typed and rolls
+the transaction back, so neither a row nor a batch survives it."
 ```
 
 ---
@@ -1985,6 +1971,25 @@ routes land in the next task."
 Append to `tests/test_web_writes.py`:
 
 ```python
+def test_a_bare_number_is_refused_as_a_date_on_the_web_too(app_and_org):
+    """dateparser reads '5' as a MONTH and future-biases it. The refusal lives
+    in parse_human_date, and the web reaches it through the same parser the
+    TUI uses — not a second validator."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import interactions as interactions_repo
+
+    interaction = interactions_repo.for_org(conn, org.id, limit=1)[0]
+    response = client.post(
+        f"/accounts/{org.ref}/interactions/{interaction.id}/edit",
+        data={"occurred_on": "5", "type": interaction.type,
+              "subject": interaction.subject, "body": interaction.body or ""},
+    )
+    assert response.status_code == 200
+    assert "cannot read a date" in response.text
+    assert interactions_repo.get(conn, interaction.id).occurred_on == interaction.occurred_on
+
+
 def test_interactions_tab_shows_the_note_body(app_and_org):
     """The body was stored and never shown anywhere before review F33 — the
     log is the index, the note is the point."""
@@ -2216,19 +2221,12 @@ def test_theme_css_comes_from_the_one_palette(client):
     assert response.status_code == 200
     for name in ("BG", "SURFACE", "RULE", "FG", "GOLD", "RED", "AMBER", "GREEN", "BLUE"):
         assert getattr(palette, name) in response.text, f"{name} missing from theme.css"
-
-
-def test_the_web_layer_does_not_import_the_tui():
-    """Belt and braces alongside test_conventions — this is the import the
-    palette move exists to avoid."""
-    from pathlib import Path
-
-    import bookkit
-
-    web = Path(bookkit.__file__).parent / "web"
-    for path in web.rglob("*.py"):
-        assert "tui" not in path.read_text(), f"{path.name} reaches into the TUI"
 ```
+
+The boundary itself is already guarded by `test_web_and_tui_never_import_each_other`
+in `tests/test_conventions.py` (Task 4), which was confirmed capable of failing. Do
+not add a second, looser substring check here — a bare `"tui" not in source` fires on
+any word containing those letters.
 
 - [ ] **Step 2: Run and confirm it fails**
 
