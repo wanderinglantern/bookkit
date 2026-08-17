@@ -116,3 +116,13 @@ def test_mcp_has_no_second_cleaner_map():
 
     source = (Path(bookkit.__file__).parent / "mcpserver.py").read_text()
     assert "_FIELD_CLEANERS" not in source, "the duplicate cleaner map is back"
+
+
+def test_mcp_stores_multi_line_notes_verbatim():
+    """The old map marked `notes` verbatim; CLEANERS is keyed by KIND, so the
+    name misses and falls through to clean_text, which collapses newlines. A
+    note typed over three lines came back as one until this test existed."""
+    from bookkit import mcpserver
+
+    note = "called Dana\n\n- loss runs promised Friday\n- wants EL quoted separately"
+    assert mcpserver._clean_field_value("notes", note) == note
