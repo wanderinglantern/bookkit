@@ -85,8 +85,11 @@ Single theme by choice.
 Both of the previous version's typographic rules were wrong.
 
 - It banned webfonts as impossible. **They ship**: `towerkit/src/towerkit/fonts/`
-  holds NotoSans and NotoSerif under OFL. Self-host them; nothing is fetched from
-  a CDN, so the work machine is unaffected.
+  holds NotoSans and NotoSerif under OFL. They are to be self-hosted; nothing is
+  fetched from a CDN, so the work machine is unaffected. **Copying the files into
+  web package data is Task 16's packaging work** — until then the stacks below
+  fall back to Georgia and system-ui, which is a known temporary state, not the
+  target.
 - It insisted on serif at Regular weight only, citing "Marsh Serif has no bold".
   That rule is about *Marsh Serif*. The Noto Serif fallback **does** ship Bold.
 
