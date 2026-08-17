@@ -1106,7 +1106,7 @@ def test_edit_field_edits_rfi_item_response(server_db):
 # -- edit_field/enrich_field: kind is per-(entity, field), never per-name ----
 #
 # `description` means two different things: task.description is a one-line
-# summary (entity_forms.py:185); project.description is the textarea
+# summary (forms/entities.py:185); project.description is the textarea
 # (:490). A field NAME is not globally 1:1 with a kind, so these go through
 # the real edit_field/enrich_field entry points on a seeded connection —
 # never by poking a cleaner helper with a bare field name, which is exactly
@@ -1114,7 +1114,7 @@ def test_edit_field_edits_rfi_item_response(server_db):
 
 
 def test_task_description_is_a_one_line_summary_and_is_collapsed(server_db):
-    """task.description is plain text (entity_forms.py:185, 'one-line summary');
+    """task.description is plain text (forms/entities.py:185, 'one-line summary');
     project.description is a textarea (:490). The same NAME, two kinds — which is
     why the kind is declared per entity and never looked up by name alone."""
     rw, org = _rw(server_db)
@@ -1128,7 +1128,7 @@ def test_task_description_is_a_one_line_summary_and_is_collapsed(server_db):
 
 
 def test_project_description_is_stored_verbatim(server_db):
-    """project.description is entity_forms.py's textarea (:490) — the
+    """project.description is forms/entities.py's textarea (:490) — the
     opposite of task.description above, on the same field name."""
     rw, org = _rw(server_db)
     project = projects.create_project(rw, org.id, "HQ Build")
@@ -1167,7 +1167,7 @@ def test_rfi_item_response_is_stored_verbatim(server_db):
 
 
 def test_enrich_field_normalises_mobile_as_a_phone(server_db):
-    """mobile is a phone (entity_forms.py:145); the bare field name is not."""
+    """mobile is a phone (forms/entities.py:145); the bare field name is not."""
     rw, org = _rw(server_db)
     ann = contacts.create(rw, org.id, first_name="Ann", last_name="Lee")
     out = mcpserver._enrich_field(
@@ -1178,7 +1178,7 @@ def test_enrich_field_normalises_mobile_as_a_phone(server_db):
 
 
 def test_enrich_field_normalises_website_as_a_url(server_db):
-    """website is a url (entity_forms.py:86); the bare field name is not."""
+    """website is a url (forms/entities.py:86); the bare field name is not."""
     rw, org = _rw(server_db)
     out = mcpserver._enrich_field(rw, "Acme", "website", "company.com")
     assert out["value"] == "https://company.com"

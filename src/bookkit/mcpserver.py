@@ -78,7 +78,7 @@ from .services.renewals import RenewalItem
 # for genuinely distinct short names.
 _DUP_CUTOFF = 87
 
-# Field NAME -> its real KIND, exactly as entity_forms.py declares it for the
+# Field NAME -> its real KIND, exactly as forms/entities.py declares it for the
 # same field. This is per-field, not a name-wide lookup: a name is not
 # globally 1:1 with a kind (task.description is a one-line "text"; project's
 # is a "textarea") so the kind has to live where the field is declared, not
@@ -1590,7 +1590,7 @@ def _request_item_waive(conn: sqlite3.Connection, item_ref: str) -> dict[str, An
 
 
 # edit_field's allowlists: (kind → field → value type). Each string value
-# is the field's real KIND, exactly as entity_forms.py declares it for that
+# is the field's real KIND, exactly as forms/entities.py declares it for that
 # field on that entity — not a name-wide default. A field name is not
 # globally 1:1 with a kind: task.description is a one-line "text" (the
 # textarea is `detail`) while project.description IS the textarea; using the
@@ -1599,7 +1599,7 @@ def _request_item_waive(conn: sqlite3.Connection, item_ref: str) -> dict[str, An
 # enrich_field; "textarea" is stored verbatim; "money" parses to integer
 # cents; "date" through parse_human_date; "int" plain; a tuple is a closed
 # vocabulary and refusals list it. `notes` is "textarea" everywhere it
-# appears — every entity_forms.py declaration of it agrees, with no
+# appears — every forms/entities.py declaration of it agrees, with no
 # exceptions. Deliberate absences are the contract: opportunity
 # stage/outcome/closed_at belong to opportunity_stage, and
 # project_need.status belongs to the queued needs→pipeline reconciler.
@@ -1630,7 +1630,7 @@ def _editable() -> dict[str, dict[str, Any]]:
             "premium_indication_cents": "money", "notes": "textarea",
         },
         "task": {
-            # description is a one-line summary (entity_forms.py:185); detail
+            # description is a one-line summary (forms/entities.py:185); detail
             # is the textarea (:201). Same-named field, different entity,
             # different kind — the whole reason this is per-(entity, field).
             "title": "text", "description": "text", "detail": "textarea",
