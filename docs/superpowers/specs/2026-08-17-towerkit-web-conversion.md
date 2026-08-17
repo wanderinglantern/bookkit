@@ -131,15 +131,34 @@ against the code rather than assumed:
 
 - **Text wrapping.** `mpl_program.py`'s `_fit_text` wraps candidate strings
   with `textwrap.wrap` *before* measuring them
-  (`mpl_program.py:288-292, 317-320`) because SVG/matplotlib `<text>` does
-  not wrap on its own — every line has to be pre-computed server-side and
-  laid out as separate `<tspan>`s. HTML text wraps for free, natively, at
-  word boundaries — which is exactly the design's own rule, "never cut
-  mid-word." Reimplementing `_fit_text`'s wrap-and-measure loop against a
-  headless SVG target (no browser, no matplotlib canvas in the request
-  path) would mean either shipping a font-metrics table by hand or paying
-  matplotlib's `Agg` backend cost on every interactive render — for a
-  panel that is edited far more often than it is exported.
+  (`mpl_program.py:288-292, 317-320`) because `<text>` does not wrap on its
+  own. This is not a matplotlib quirk to work around — it is a property of
+  the SVG format itself: no SVG writer, hand-rolled or matplotlib's, gets
+  automatic word-wrap, because SVG has no text-layout box, only positioned
+  glyph runs. Any SVG-based interactive renderer, whoever writes it, would
+  have to pre-compute line breaks server-side and lay them out as separate
+  `<tspan>`s — the same wrap-and-measure problem `_fit_text` already solves
+  for export, reimplemented a second time for a target with no browser, no
+  matplotlib canvas, and no font-metrics access in the request path. HTML
+  text wraps for free, natively, at word boundaries — which is exactly the
+  design's own rule, "never cut mid-word" — because HTML text runs inside a
+  real layout box; SVG text does not.
+- **Type weight for the docked panel is app chrome, not client output —
+  and the mockup gets this specific value wrong.** The visual-direction
+  spec resolved (after this spec was drafted) that Noto Serif ships only
+  400 and 700, that a synthesised 600 renders smeared, and that the split
+  is: app chrome uses 700, anything the app renders *for a client* (export
+  headers, the PDF/SVG render, any shareable read-only program view) stays
+  400 — explicitly named as "load-bearing for the towerkit conversion,
+  where both live in one codebase"
+  (`2026-08-17-web-visual-direction.md:102-114`). The docked tower panel is
+  broker-only working chrome, never handed to a client, so it takes **700**,
+  matching every other screen title/section name in the app. The mockup
+  itself hardcodes `font-weight:600` on the tower panel's insured-name
+  header (`BookKit Web.dc.html:149`) — a weight the visual-direction spec
+  now bans outright. Building slice 1 straight off the mockup's CSS ships a
+  browser-synthesised weight on day one; the panel's insured-name header
+  must be built at 700, not copied verbatim from the prototype.
 - **Interactivity.** The panel needs per-block click targets (`pickLayer`,
   `data-layer="{{ b.id }}"`, `BookKit Web.dc.html:171`), a chip toggle for
   `applies_to` (`toggleLine`, line 228), and eventually a drag handle on a
@@ -179,11 +198,55 @@ twin. The server computes every percentage; the browser only paints what
 it's given and (later) posts drag deltas back for the server to
 re-resolve. See D4 for the one JS "island" this still leaves.
 
+**Explicit decision: label *fit* is not guaranteed to match between the
+two renderers, and this spec accepts that as a scoped, known limitation
+rather than closing it in slice 1.** Geometry parity between the two paths
+is real and load-bearing — both consume the identical `TowerLayout`, so a
+block's boundaries and coordinates cannot diverge. Label *fit* is a
+separate property `layout.py`'s geometry says nothing about, and the two
+renderers solve it by genuinely different means. `mpl_program.py`'s
+`_fit_text` (`mpl_program.py:332-370`) measures each candidate string's
+real rendered width and height against the target rectangle before
+committing to it. `render/web.py`'s `label_visibility` (D4) does not — it
+gates a label on the block's *height* alone (the 30/13/11px thresholds)
+and says nothing about whether the shown text fits the block's *width* at
+its rendered font. The prototype's own CSS for the label
+(`overflow:hidden;text-overflow:ellipsis`, `BookKit Web.dc.html:779`) does
+not actually protect against this: `text-overflow:ellipsis` only takes
+effect on a `white-space:nowrap` element, which this one is not, so a long
+carrier or program name wraps (correctly, per the word-boundary point
+above) and then simply gets clipped by `overflow:hidden` at whatever pixel
+row the box ends on — no ellipsis, no guarantee the cut lands between
+words, the exact "never cut mid-word" failure this document argues HTML
+avoids relative to raw SVG. So a long name can legitimately render
+differently — wrapped-and-clipped in the interactive panel, correctly
+shrunk-or-abbreviated in the export — on the one axis shared geometry does
+not protect.
+
+Two ways to close it: give `render/web.py` a cheap monospace-width
+estimate (`len(text) * avg_char_px` against the block's rendered width,
+enough to pick a shorter candidate the way `_fit_text` does, without a
+real text-measurement backend) and drop to a shorter label the same way
+the export path does; or accept CSS-level clipping as a known
+interactive-only limitation and fix the panel's CSS so a clip is at least
+a clean line clip (`overflow-wrap: break-word` off, wrap at word
+boundaries, `overflow: hidden` on the whole-lines box) rather than the
+mockup's currently-broken ellipsis-that-never-fires. **Decision: the
+second, for slice 1.** A monospace-width estimate is one more constant to
+keep in sync with whatever font actually ships (`JetBrains Mono` per the
+handoff, not yet vendored — visual-direction spec's own flagged
+deviation), and it buys accuracy the docked panel's own audience (the
+broker, working, not a client) doesn't obviously need on day one. Fix the
+CSS so a clip is at least clean, ship it, and revisit with a real
+width-estimate only if a genuinely garbled label shows up in practice —
+consistent with this spec's general posture of not building infrastructure
+ahead of evidence (see "recommend against," below).
+
 ### D3 — The compressed vertical scale: no y-axis, ever
 
 `scale.py`'s docstring is explicit about what it buys: "$52M sits at the
 same height in every column" (`scale.py:6-8`) via a single global,
-gamma-compressed map (`DEFAULT_GAMMA = 0.35`, `scale.py:24`). `layout.py`
+gamma-compressed map (`DEFAULT_GAMMA = 0.35`, `scale.py:22`). `layout.py`
 already exposes exactly what a linear-axis-free renderer needs:
 `TowerLayout.ref_lines: tuple[tuple[int, float], ...]` — `(dollars, y)` at
 every real breakpoint (`layout.py:128, 238`).
@@ -197,7 +260,7 @@ reimplementation: `TowerLayout.ymap.max_dollars` for "top of tower,"
 `ymap.y(dollars)` for anywhere else the panel needs a height. The mockup's
 own gutter column (`BookKit Web.dc.html:159-163`, a 54px `<div>` of
 `ref.gutterStyle` labels) and caveat line
-(`BookKit Web.dc.html:196`, `{{ tower.caveat }}`) are the target: "not to
+(`BookKit Web.dc.html:198`, `{{ tower.caveat }}`) are the target: "not to
 scale — compressed vertical scale (γ = 0.35); reference lines at real
 attachment points," always visible, never a toggle, whenever
 `ymap.gamma != 1.0` — matching `ascii.py`'s own rule at
@@ -215,6 +278,15 @@ tension between two of Grant's own stated rules and it resolves cleanly
 because the two surfaces have always been different: `render_ascii` is a
 working preview, `render_program` is print output, and the web tower panel
 is unambiguously the former.
+
+Note for whoever implements this: `mpl_program.py`'s own module docstring
+claims "a visible not-to-scale caveat instead of a lying axis"
+(`mpl_program.py:6-9`), which is **stale** — Grant deliberately removed
+the caveat and the provenance footer from the export chart
+(`towerkit/CLAUDE.md:38-39`), and the code above is correct about what the
+module actually does. Don't "fix" the code to match its own docstring;
+the docstring is the thing that's wrong, and it's out of scope for this
+sub-project to correct it.
 
 ### D4 — The label-drop rule and where it lives
 
@@ -271,11 +343,38 @@ def label_visibility(tower: TowerLayout, chart_height_px: float) -> WebLabels:
 `chart_height_px` is a parameter, not a constant, because the docked
 Navigator panel and any later full-page tower view are different heights;
 one function serves both without duplicating the 30/13/11/12 constants a
-second time. In slice 1 the docked panel is a **fixed CSS height** (the
-mockup: `height:340px;min-height:340px`, `BookKit Web.dc.html:145`), so
-the pixel math is exact, not a guess about an unknown viewport — this
-spec deliberately does not attempt a resizable/fluid tower canvas (see
-Scope).
+second time.
+
+**`chart_height_px` is the chart-*drawing* area, not the panel's outer CSS
+box — this is a distinct number and passing the wrong one silently
+under-fires every threshold.** The prototype derives its px height from
+the block's own height *percentage*, not the panel box: `hPx = heightPct *
+2.4` (`BookKit Web.dc.html:770`), which is only correct if the drawing
+area the percentages are relative to is **~240px** tall. The panel's outer
+box is `height:340px;min-height:340px` (`BookKit Web.dc.html:146`), but
+that 340px also contains the header row, the left-gutter padding, the
+retention band below the zero line, and the caveat line under all of
+it — none of which are part of the 100%-tall region a `LayerBlock`'s
+`bottomPct`/`heightPct` are computed against. Passing 340 into
+`label_visibility` instead of ~240 makes every block's computed `hPx`
+look ~42% taller than it actually renders, which **under-fires** the
+30/13/11px thresholds (drops fewer labels than the mockup shows, not
+more) and would only be caught by eyes-on comparison against the mockup,
+not by any geometry test that only checks the thresholds are *applied*
+consistently (see Testing). The implementer must derive
+`chart_height_px` from the actual CSS height of the element the tower's
+`[0,1]` coordinate space is drawn into — the flex child at
+`BookKit Web.dc.html:158` (`min-height:130px`, inside the `flex:1
+min-height:186px` region above the retention/label rows), not the 340px
+outer box at line 146 — and should not re-derive this number from the
+panel's outer CSS by guessing later; it belongs measured or hardcoded
+from the actual chart region, with a comment pointing at exactly this
+paragraph.
+
+In slice 1 the docked panel is a **fixed CSS layout** (not resizable), so
+this pixel math is exact once derived from the right box, not a guess
+about an unknown viewport — this spec deliberately does not attempt a
+resizable/fluid tower canvas (see Scope).
 
 ### D5 — Writes: load → mutate → validate → dump → re-project, guarded
 
@@ -370,12 +469,14 @@ does not:
 (`2026-08-17-web-frontend-design.md:147`). Program writes route through
 `_program_write` with `source="web"`, `tool="program_layer_edit"` etc.
 (same `tool` names the MCP tools already use — `mcpserver.py:1191,
-1214, 1237`), so the parity ledger's per-batch labelling stays uniform
+1214, 1235`), so the parity ledger's per-batch labelling stays uniform
 across MCP and web. **Reverting a program-file batch never goes through
-`services.batches.revert`** — `plan_revert`/`revert`
-(`services/batches.py:299-319`) explicitly refuse any batch whose
-`tool.startswith("program_")`, because "file contents are not event_log
-rows" (`services/program_files.py:1-9`). The right-rail `Revert` link
+`services.batches.revert`** — `revert()` itself
+(`services/batches.py:313-319`) explicitly refuses any batch whose
+`tool.startswith("program_")`, before `plan_revert` (`services/batches.py:193-284`,
+which computes the batch's net effect generically) is ever consulted,
+because "file contents are not event_log rows"
+(`services/program_files.py:1-9`). The right-rail `Revert` link
 (visual-direction spec, "RECENT CHANGES," `2026-08-17-web-visual-direction.md:170-172`)
 needs a dispatcher on program-tool batches identical to
 `mcpserver._program_revert_file` (`mcpserver.py:1267-1300`) — this too
@@ -487,16 +588,21 @@ conflict) is front-loaded rather than saved for last.
 4. **`applies_to` chip toggle, restack, and the resize-drag island.** The
    one JS "island" the parent spec anticipated
    (`2026-08-17-web-frontend-design.md:37-40`). Drag the top edge of a
-   layer, drop, POST, server calls `session.restack()`-equivalent
-   (`sync.py` needs a `restack_program`-shaped write-through wrapping
-   `towerkit.edit.restack`, which doesn't exist yet either) and
-   re-renders — see the "recommend against" section for why this slice
-   does *not* attempt live drag-preview geometry.
+   layer, drop, POST, server calls `restack()`-equivalent and re-renders —
+   see the "recommend against" section for why this slice does *not*
+   attempt live drag-preview geometry. `towerkit.edit.restack`
+   (`edit.py:212-220`) already exists and is already live in the TUI
+   (`EditSession.restack`, `session.py:172-177`, calling
+   `self.mutate(edit.restack)`; bound at `editor.py:1974-1975`,
+   `action_restack`) — the only new code this slice needs is a `sync.py`
+   write-through wrapper around the existing `towerkit.edit.restack`
+   (the same five-line shape as `sync.py:785-821`), **not** a
+   reimplementation of restacking itself.
 5. **Export SVG/PDF, Towers browser page, Compare screen.**
    `render/mpl_program.py` wired to a `/accounts/{ref}/program/export`
-   download route (unblocking the parent spec's deferred "needs a
-   file-download response" note,
-   `2026-08-17-web-frontend-design.md:63-67`); a `/towers` page listing
+   download route (unblocking the same file-download-response gap the
+   parent spec's `export_open_items` ledger entry already names,
+   `web/parity.py:63-69`); a `/towers` page listing
    `programs/*.json` with the validation badge already computed by
    `validate_file` (`browser.py:100-106`); `compare_programs`
    (`compare.py:86`) rendered as the delta table the mockup shows
@@ -535,26 +641,44 @@ conflict) is front-loaded rather than saved for last.
 
 ## What is hardest, and what could go wrong
 
-**1. Two independent file-staleness trackers, updated at different times,
-on one plain JSON file — worse than the DB's WAL safety net.** The parent
-spec already flags "TUI and web open simultaneously is WAL-safe for
-writes... an open web page will not know the TUI changed something"
-(`2026-08-17-web-frontend-design.md:308-310`) as a known rough edge for
-the **database**. Program files are worse, because there isn't one shared
-staleness authority the way SQLite's WAL is: bookkit's DB records
-`placement.source_sha256` at projection time (`sync.py:20-22`), and
-towerkit's own `EditSession` independently tracks `self._disk_sha`
-(`session.py:154`, set at `open()` and after every save). If a broker
-opens a program in towerkit's TUI, then edits the same layer's premium on
-the web, then saves in the TUI — the TUI's own staleness check
-(`session.py:134`) compares against the hash it captured **when it opened
-the file**, not against bookkit's now-updated DB record, so it may not
-even notice the web's change happened, and will happily overwrite it with
-whatever `force=True` semantics the user picks in `StaleFileModal`,
-because from the TUI's point of view nothing looks stale — it never
-re-reads the file except on save. This is a real hole neither this spec
-nor the parent spec closes; it's called out explicitly in Open Questions
-rather than quietly assumed away.
+**1. ~~Two independent file-staleness trackers~~ — checked against the
+code, and this hole is already closed on both sides; the risk here is
+smaller than it first looks, not absent.** It's tempting to assume
+`EditSession`'s `self._disk_sha` (`session.py:154`) is a cached value
+captured once at `open()` that a later web write could sneak past — it
+isn't. `EditSession.save` re-reads the file's *current* hash at save
+time, live, via `_file_sha(target)` compared inline
+(`session.py:134`), and `bookkit.sync.write_through` does the identical
+thing on the write side — `file_sha256(path)` is called live, at write
+time, against the placement's recorded `source_sha256`
+(`sync.py:1026-1029`). Neither side is comparing against a stale
+snapshot from whenever it happened to open the file; both re-read disk
+at the moment they're about to write. So the actual sequence — broker
+opens a program in towerkit's TUI, edits the same layer's premium on the
+web, then saves in the TUI — **does** get caught: the TUI's save re-reads
+the file's hash at that moment, sees the web's write is not the hash it
+last saw, and raises `StaleFileError`
+(`session.py:135-138`), which the editor screen turns into
+`StaleFileModal`'s three-way choice
+(`editor.py:1763-1776`) exactly as D5 describes for the web's own
+conflict handling. The reverse order (TUI writes, then the web writes)
+is caught the same way by `write_through`'s own hash check. There is no
+second, independent staleness cache anywhere in this path for the two
+surfaces to disagree about.
+
+What genuinely isn't covered — and is a much narrower gap than "two
+trackers can silently diverge" — is a **live, in-editor notification**
+that the file changed while a session is *still open and unsaved*: the
+towerkit TUI (like the web's own inline-cell fields) only notices a
+conflict at the moment it tries to write, not continuously while the
+broker is mid-edit. That's the same "which surface wins a race, discovered
+only at commit time" shape D5's own conflict handling already exists to
+answer, applied a second time across processes rather than within one —
+not an open hole, just the same mechanism operating at a coarser grain.
+Given that, this document's recommendation stands unchanged: rely on the
+conflict check that already exists on both sides rather than building any
+new cross-process coordination — there was never a hole here needing one
+built.
 
 **2. The label-drop constants are a *design* judgment wearing pixel
 clothes**, not a derived quantity. 30/13/11/12px came out of one
@@ -682,12 +806,14 @@ additions:
   (e.g. `"$1,234.56"`); assert `cents_to_dollars`'s refusal
   (`money.py:74-79`) surfaces as the field's error text, not a silent
   rounding, and that the file is untouched.
-- **The label-drop constants applied consistently**: at the fixed 340px
-  panel height, assert a layer block whose computed height crosses the
-  30px/13px/11px lines flips its `show_name`/`show_money` flags exactly
-  at the boundary — this cannot assert the thresholds are *visually*
-  correct (see "what could go wrong" #2), only that the same numbers the
-  design specified are the ones actually wired in.
+- **The label-drop constants applied consistently**: at the fixed
+  chart-drawing-area height derived per D4 (not the 340px panel box —
+  see D4's correction), assert a layer block whose computed height
+  crosses the 30px/13px/11px lines flips its `show_name`/`show_money`
+  flags exactly at the boundary — this cannot assert the thresholds are
+  *visually* correct (see "what could go wrong" #2), only that the same
+  numbers the design specified are the ones actually wired in, against
+  the right base height.
 - **Full round-trip determinism, unchanged**: `render/mpl_program.py`'s
   existing byte-identical-output tests are untouched by this sub-project
   and should stay green with zero modification — a strong, cheap check
@@ -729,18 +855,17 @@ part of this one.
 
 ## Open questions
 
-- **The two-staleness-tracker hole (item 1 under "what could go wrong")
-  has no closed answer in this document.** A file-level lock, a "this
-  program is open in towerkit" indicator surfaced on the web (would need
-  towerkit's TUI to announce something bookkit can read — new towerkit
-  surface, contradicting D1's "towerkit gains no web module"), or simply
-  documenting the risk and relying on the conflict check to catch the
-  *next* write even if not the concurrent one, are the options I can see.
-  My recommendation: document and rely on the conflict check for now —
-  the same posture the parent spec already took for the DB case — and
-  revisit only if it actually bites someone, rather than building
-  cross-process coordination infrastructure for a single-user local app
-  on spec.
+- ~~The two-staleness-tracker hole~~ **— not actually open.** Earlier
+  drafting of this document diagnosed this as an unclosed gap; checked
+  against the code, it isn't one (see the rewritten item 1 under "what
+  could go wrong"). Both `EditSession.save` and `sync.write_through`
+  re-read the file's hash live, at write time, so a web write followed by
+  a TUI save (or the reverse) is caught by the existing `StaleFileError`/
+  `WriteConflict` machinery on whichever side writes second. No file-level
+  lock or cross-process "who has this open" indicator is needed, and none
+  is proposed. Left here, struck through rather than deleted, so a future
+  reader who remembers this being called out doesn't have to re-derive
+  that it was resolved rather than dropped.
 - **How "Compare renewal" resolves its pair.** The mockup shows the
   button; nothing in the design package specifies whether it auto-detects
   the adjacent program (by org + period adjacency, mirroring
