@@ -482,9 +482,9 @@ established at `account.py:266`, `279`, `282`.
 deleted** — `markets.py:311–316` · Effort **M**
 
 `MarketDetailScreen.BINDINGS` has `a` (appetite), `w` (underwriter) and `i` (paste) — no
-`e`, no `d`. `appetite_form(existing=…)` exists (`entity_forms.py:427`) and is never called
-with an existing record. `repo/orgs.py` has `add_appetite` (line 120) and
-`appetite_for_market` (126) but no update or delete. The `#md-appetite`, `#md-contacts` and
+`e`, no `d`. `appetite_form(existing=…)` exists (`forms/entities.py:458`) and is never called
+with an existing record. `repo/orgs.py` has `add_appetite` (line 127) and
+`appetite_for_market` (155) but no update or delete. The `#md-appetite`, `#md-contacts` and
 `#md-subs` tables are also built without row keys (`markets.py:447`, `457`, `464`), so
 `enter` does nothing on them either.
 
