@@ -76,6 +76,44 @@ def test_the_stylesheet_has_no_literal_colours():
     assert not re.search(r"\b(rgb|hsl)a?\(", css), "literal rgb/hsl in app.css"
 
 
+def test_every_css_variable_the_stylesheet_uses_is_defined():
+    """A `var(--name)` nobody defines does not fall back — it kills the whole
+    declaration it sits in.
+
+    `border-left: 1px solid var(--rule)` with `--rule` undefined computes the
+    SHORTHAND to unset, so `border-left-style` becomes `none` and the rule
+    simply is not drawn. Nothing warns: no console error, no visual artifact,
+    and the markup still reads exactly as intended. That is what shipped —
+    `--rule` is the TUI palette's name for borders (tui/theme.py), the web
+    palette calls them `--hairline` / `--hairline-2` / `--border`, and the
+    account page's program-scope bracket was invisible on the page while its
+    commit message called it load-bearing.
+
+    Every colour already has to come from the palette (the test above); this
+    says every variable REFERENCE has to resolve, against theme.css plus
+    app.css's own `:root` (which defines the non-colour tokens — fonts,
+    sizes)."""
+    import re
+    from pathlib import Path
+
+    import bookkit
+    from bookkit.web import theme_css
+
+    raw = (Path(bookkit.__file__).parent / "web" / "static" / "app.css").read_text()
+    # comments out first: this file explains its own bugs, so `var(--rule)`
+    # appears in prose right above the line that used to contain it
+    css = re.sub(r"/\*.*?\*/", "", raw, flags=re.DOTALL)
+    defined = set(re.findall(r"(--[A-Za-z0-9_-]+)\s*:", theme_css.css_variables()))
+    defined |= set(re.findall(r"^\s*(--[A-Za-z0-9_-]+)\s*:", css, re.MULTILINE))
+    used = set(re.findall(r"var\(\s*(--[A-Za-z0-9_-]+)", css))
+    assert used, "no custom properties found in app.css — the scan is broken"
+    undefined = sorted(used - defined)
+    assert not undefined, (
+        f"app.css references undefined custom properties {undefined} — an "
+        "invalid var() voids its whole declaration silently"
+    )
+
+
 def test_cli_registers_the_web_command():
     from bookkit.cli import build_parser
 

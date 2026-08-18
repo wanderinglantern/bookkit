@@ -341,13 +341,59 @@ def _unplaced_value(layers: list[dict[str, Any]]) -> str:
     # "20.0%") and a part-percent share still shows its fraction
     share = 100 - widest["signed_pct"]
     text = f"{share:g}% on {widest['name']}"
-    return text if len(open_layers) == 1 else f"{text} +{len(open_layers) - 1}"
+    # "+1 more", not "+1": beside a percentage a bare "+1" scans as "+1%"
+    # (review round 1, item E).
+    return text if len(open_layers) == 1 else f"{text} +{len(open_layers) - 1} more"
+
+
+# No figure to print. NOT "$0": a zero is a claim about the money, and both
+# places this appears are places where there is no claim to make (review round
+# 1, item B). One treatment for both, because they are the same defect — the
+# omit guard tested for "no program", not for "no data".
+NO_FIGURE = "—"
+
+
+def _program_premium(scope: str, layers: list[dict[str, Any]]) -> tuple[str, str]:
+    """(value, title) for the `program premium` row.
+
+    Three cases, and the two that are not "every layer priced" are why this is
+    a function. Every layer's premium unset sums to 0 and would print
+    `$0` — a program worth nothing rather than a program whose premium is not
+    recorded. SOME unset silently understates a MONEY figure, which is exactly
+    what the money-columns-say-whose-money rule is about: it prints with a `~`
+    and the title names how many layers are missing. `~` rather than dropping
+    the row, because a partial total is still the best figure available and
+    hiding it helps nobody; rather than a footnote, because the rail is 296px
+    and the mark has to travel with the number."""
+    priced = [layer for layer in layers if layer["premium_cents"] is not None]
+    missing = len(layers) - len(priced)
+    if not priced:
+        return NO_FIGURE, f"{scope} · no layer carries a premium"
+    total = money.format_cents_compact(sum(layer["premium_cents"] for layer in priced))
+    if not missing:
+        return total, scope
+    return f"~{total}", f"{scope} · {missing} of {len(layers)} layers carry no premium"
+
+
+def _top_of_tower(scope: str, layers: list[dict[str, Any]]) -> tuple[str, str]:
+    """(value, title) for the `top of tower` row.
+
+    towerkit's `Layer.statutory` is "no dollar limit (WC Part A); limit MUST be
+    0", so a statutory-only program (WC-only — rare, but real) gives
+    max(attach + limit) == 0 and would print `$0`: a tower with no height
+    rather than a tower with no ceiling. Same treatment as an unpriced
+    program — there is no figure, so no figure is printed."""
+    top = max(layer["attach_cents"] + layer["limit_cents"] for layer in layers)
+    if top <= 0:
+        return NO_FIGURE, f"{scope} · no dollar limit (statutory cover)"
+    return money.format_cents_compact(top), scope
 
 
 def _tower_rows(
     placement: Placement | None, layers: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """The three rows that describe ONE program, under a caption naming it.
+) -> dict[str, Any] | None:
+    """The three rows that describe ONE program, wrapped in a group captioned
+    with its name.
 
     THE SCOPE IS THE WHOLE RISK HERE. `bound premium`, one row above, is
     summed over every bound placement on the account; these three are one
@@ -358,30 +404,38 @@ def _tower_rows(
     `program premium` cannot be read as an account total when the line above
     it says "Casualty Program · PLC-0006".
 
-    Empty when the placement has no linked program file (layer_details returns
+    The caption and its rows are returned as ONE nested group, not as a flat
+    run under a sentinel row. Positional membership was the weakness the
+    caption could not cover: an account-scoped row inserted between two of
+    these rendered under the program caption and inside the rule, and every
+    test passed (review round 1, item C). Nesting makes membership structural.
+
+    None when the placement has no linked program file (layer_details returns
     [] then). A zero would be a lie — "$0 program premium" reads as a program
     worth nothing rather than as no program at all."""
     if not layers or placement is None:
-        return []
+        return None
     scope = f"{placement.program_name} · {placement.ref}"
-    premium = sum(
-        layer["premium_cents"] for layer in layers if layer["premium_cents"] is not None
-    )
-    top = max(layer["attach_cents"] + layer["limit_cents"] for layer in layers)
+    premium_value, premium_title = _program_premium(scope, layers)
+    top_value, top_title = _top_of_tower(scope, layers)
     unplaced = _unplaced_value(layers)
-    rows: list[dict[str, Any]] = [{"label": scope, "scope": True}]
-    for label, value, warn in (
-        ("program premium", money.format_cents_compact(premium), False),
-        ("top of tower", money.format_cents_compact(top), False),
+    rows = [
+        ("program premium", premium_value, premium_title, False),
+        ("top of tower", top_value, top_title, False),
         # warn, never colour alone: the share and the layer name both read
         # without it
-        ("unplaced", unplaced, unplaced != "none"),
-    ):
-        rows.append({
-            "label": label, "value": value, "overdue": False, "muted": False,
-            "warn": warn, "scoped": True, "title": scope,
-        })
-    return rows
+        ("unplaced", unplaced, scope, unplaced != "none"),
+    ]
+    return {
+        "scope": scope,
+        "rows": [
+            {
+                "label": label, "value": value, "overdue": False, "muted": False,
+                "warn": warn, "scoped": True, "title": title,
+            }
+            for label, value, title, warn in rows
+        ],
+    }
 
 
 def _snapshot(
@@ -412,7 +466,9 @@ def _snapshot(
         "overdue": False,
         "muted": False,
     })
-    rows.extend(_tower_rows(header["renewal_placement"], layers))
+    tower = _tower_rows(header["renewal_placement"], layers)
+    if tower is not None:
+        rows.append(tower)
     rows.append({
         "label": "open work",
         "value": str(open_work),
