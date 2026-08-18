@@ -1,0 +1,70 @@
+{# One request's items. prompt/category/due_on/response are inline-editable
+   cells (bookkit.forms.inline.RFI_ITEM_FIELDS); kind, status and received_on
+   are NOT — status is deliberately excluded from RFI_ITEM_FIELDS because
+   apply_rfi_item owns the status/received_on pair, and a bare cell write
+   would let them disagree. `Mark received` is the only door to that pair
+   from this table; the item's own form (Add item, or the TUI's edit) is the
+   other.
+
+   "Needed by" shows the item's OWN due_on cell (the thing that's actually
+   editable) — when it's blank and the request itself has one, a muted note
+   names the request's date underneath, so effective_due's fallback stays
+   visible without pretending the item carries a date it doesn't.
+
+   #items-panel is this partial's own root — same OOB reasoning as
+   #tasks-panel/#requests-panel. #}
+<div id="items-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="people-head">
+    <h2 class="people-label">Items</h2>
+    <span class="people-count">{{ item_rows | length }}</span>
+    <span class="people-head-spacer"></span>
+    <button type="button" class="people-add"
+            hx-get="/accounts/{{ header.org.ref }}/requests/{{ rfi_request.id }}/items/new"
+            hx-target="#items-panel .form-host" hx-swap="innerHTML">+ Add item</button>
+  </div>
+  <div class="form-host"></div>
+  {% if item_rows %}
+    <div class="table-scroll">
+      <table class="rows">
+        <thead>
+          <tr><th>Item</th><th>Type</th><th>Group</th><th>Needed by</th>
+              <th>Status</th><th>Response</th><th></th></tr>
+        </thead>
+        <tbody>
+          {# Each *_cell value is ALREADY a full <td> (render_cell_display,
+             macros/cell.html) — never wrap it in another one. A <td> nested
+             inside a <td> is invalid HTML; the parser silently closes the
+             outer one empty and opens a real column for the inner one, so
+             every column after the first wrapped cell drifts out from under
+             its header with no visible error (found 2026-08-18). The
+             "num" class and the "req: <date>" fallback note are baked into
+             due_cell itself via render_cell_display's extra_class/suffix. #}
+          {% for row in item_rows %}
+            <tr class="is-{{ row.status }}">
+              {{ row.prompt_cell | safe }}
+              <td>{{ row.kind }}</td>
+              {{ row.category_cell | safe }}
+              {{ row.due_cell | safe }}
+              <td class="num">
+                <span class="status-{{ row.status }}">{{ row.status }}</span>
+                {% if row.received_on %}{{ row.received_on }}{% endif %}
+              </td>
+              {{ row.response_cell | safe }}
+              <td>
+                {% if row.status == "outstanding" %}
+                  <button type="button" class="row-action-btn"
+                          hx-post="/accounts/{{ header.org.ref }}/requests/{{ rfi_request.id }}/items/{{ row.id }}/received"
+                          hx-target="#items-panel" hx-swap="outerHTML">Mark received</button>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="panel-empty">
+      <p>empty — add the first row</p>
+    </div>
+  {% endif %}
+</div>

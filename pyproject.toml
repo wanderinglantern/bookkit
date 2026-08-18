@@ -18,6 +18,10 @@ dependencies = [
     "humanize>=4.9",
     "textual-autocomplete>=4.0",
     "mcp>=2.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "jinja2>=3.1",
 ]
 
 [project.scripts]
@@ -41,6 +45,7 @@ dev = [
     # pytest 9 / syrupy 5, which is why a fresh worktree went red while the
     # install.sh venv (built by pip, which took 1.1) stayed green.
     "pytest-textual-snapshot>=1.1",
+    "httpx>=0.27",
 ]
 
 [build-system]

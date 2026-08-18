@@ -9,7 +9,7 @@ import sqlite3
 from datetime import date
 from typing import Any
 
-from ...models import (
+from ..models import (
     CONTACT_ROLES,
     NEED_STATUSES,
     PROJECT_STATUSES,
@@ -32,7 +32,7 @@ from ...models import (
     TeamAssignment,
     TeamMember,
 )
-from ...repo import (
+from ..repo import (
     contacts,
     interactions,
     opportunities,
@@ -42,10 +42,10 @@ from ...repo import (
     team,
     vocab,
 )
-from ...repo import projects as projects_repo
-from ...repo import rfi as rfi_repo
-from ...repo import tasks as tasks_repo
-from .forms import Field, FormSpec, dropped
+from ..repo import projects as projects_repo
+from ..repo import rfi as rfi_repo
+from ..repo import tasks as tasks_repo
+from .spec import Field, FormSpec, dropped
 
 _STATUS = tuple((s, s) for s in ("prospect", "active", "dormant", "lost", "declined"))
 _KINDS = tuple((k, k) for k in ("client", "market", "other"))

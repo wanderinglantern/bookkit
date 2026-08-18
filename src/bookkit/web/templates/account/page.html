@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}{{ header.org.name }} — bookkit{% endblock %}
+{% block content %}
+  {# Top bar — Task 18 extracted this into partials/topbar.html so /book (the
+     app's front door) shares it rather than forking a copy. "Book" is now a
+     real link (GET /book exists); the rest of the nav still has nowhere to
+     go, so they stay inert placeholders. #}
+  {% include "partials/topbar.html" %}
+
+  <header class="account-header">
+    <p class="breadcrumb">Book <span class="crumb-sep">/</span> {{ header.org.name }}</p>
+    <div class="header-baseline">
+      <h1>{{ header.org.name }}</h1>
+      <span class="account-ref">{{ header.org.ref }}</span>
+      <span class="badge-status">{{ header.org.status }}</span>
+      {% if header.overdue %}
+        {# Same header dict as the snapshot's "next renewal" row — one
+           RenewalItem, never placement.period_to. #}
+        <span class="badge-overdue">◆ renewal {{ -header.days_remaining }}d overdue</span>
+      {% endif %}
+      <span class="header-spacer"></span>
+      <div class="header-actions">
+        {# Inert this task: none of these write yet (log interaction, add
+           task, renew, the overflow menu all land in later tasks).
+           aria-disabled + title on each — a pending treatment, not a live
+           one, per Grant's bar: a control that looks live and is dead is
+           worse than one that looks pending. #}
+        <span class="btn-pill btn-pill-primary" aria-disabled="true" title="Not wired yet — logging an interaction is a later task">+ Log interaction</span>
+        <span class="btn-pill" aria-disabled="true" title="Not wired yet — adding a task is a later task">+ Task</span>
+        <span class="btn-pill" aria-disabled="true" title="Not wired yet — renewing is a later task">Renew</span>
+        <span class="btn-pill btn-pill-icon" aria-disabled="true" title="Not wired yet — the overflow menu is a later task">···</span>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    {% for t in tabs %}
+      <a href="/accounts/{{ header.org.ref }}/{{ t.id }}" class="tab{% if t.id == tab %} is-current{% endif %}">{{ t.label }} <span class="tab-badge">{{ t.count }}</span></a>
+    {% endfor %}
+  </nav>
+
+  {# The one toast on the surface, rendered from the outcome token the
+     revert's HX-Redirect put in the query string (routes/changes.py owns
+     the text; an unknown or absent token renders nothing). It does NOT
+     auto-dismiss: a message saying a write was refused must not vanish
+     while it is being read. Dismiss is a delegated click handler in
+     inline-cell.js, never an inline onclick — same rule as the forms'
+     Cancel button. #}
+  {% if toast %}
+    <div class="toast" role="status">
+      {# .toast-lines, not two bare spans: .toast is a flex ROW, so a remedy
+         written as its sibling rendered BESIDE the message rather than under
+         it. The column wrapper is what makes "a second line" true. #}
+      <div class="toast-lines">
+        <span class="toast-text">{{ toast.text }}</span>
+        {% if toast.remedy %}<span class="toast-remedy">{{ toast.remedy }}</span>{% endif %}
+      </div>
+      <button type="button" class="toast-close" data-toast-close aria-label="Dismiss">✕</button>
+    </div>
+  {% endif %}
+
+  <div class="layout">
+    <div class="tab-panel">{% block panel %}{% endblock %}</div>
+
+    <aside class="right-rail">
+      <section class="rail-section">
+        <h2 class="rail-label">Snapshot</h2>
+        {% for row in snapshot %}
+          <div class="snapshot-row{% if row.overdue %} is-overdue{% endif %}">
+            <span class="snapshot-label">{{ row.label }}</span>
+            <span class="snapshot-value{% if row.muted %} is-muted{% endif %}">{{ row.value }}</span>
+          </div>
+        {% endfor %}
+      </section>
+
+      <section class="rail-section">
+        <div class="rail-section-head">
+          <h2 class="rail-label">Team</h2>
+          {# Not wired yet — a pending treatment, same as the header pills. #}
+          <span class="rail-action" aria-disabled="true" title="Not wired yet — assigning team members is a later task">Assign</span>
+        </div>
+        {% if team %}
+          {% for a in team %}
+            <div class="team-row">
+              <span class="team-who">{{ a['member_name'] }}</span>
+              {% set detail = [a['role'], a['lines']] | select | join(' · ') %}
+              {% if detail %}<span class="team-detail">{{ detail }}</span>{% endif %}
+            </div>
+          {% endfor %}
+        {% else %}
+          {# TEAM is an addable list (the Assign link above adds to it) — the
+             spec's addable-list empty state, not an invented phrase. #}
+          <p class="empty">empty — add the first row</p>
+        {% endif %}
+      </section>
+
+      <section class="rail-section">
+        <h2 class="rail-label">Documents</h2>
+        <div class="documents-empty">
+          <p>No documents yet</p>
+          <p>Drop a binder, loss run or SOV here — BookKit records the path, not the file.</p>
+        </div>
+      </section>
+
+      <section class="rail-section">
+        <h2 class="rail-label">Recent changes</h2>
+        {% if changes %}
+          {% for c in changes %}
+            <div class="change-row">
+              <div class="change-top">
+                <span class="change-time">{{ c.time }}</span>
+                <span class="change-what">{{ c.what }}</span>
+              </div>
+              <div class="change-bottom">
+                <span class="change-who">{{ c.who }}</span>
+                {% if not c.reverted %}
+                  {# hx-swap="none": the route answers 204 + HX-Redirect, so
+                     htmx navigates instead of swapping. A revert can move a
+                     panel, the header badge, the tab counts and this rail at
+                     once — swapping any one of them would leave the rest
+                     reading the pre-revert book.
+
+                     hx-confirm: a revert rewrites the last write and CANNOT
+                     itself be reverted (services/batches.revert's own writes
+                     carry no batch_id), while this button sits one stray
+                     click away in a scrolling list. The TUI puts the same
+                     call behind ConfirmRevertBatch; this is the one-attribute
+                     version of that bar, and it names WHAT goes back rather
+                     than asking "are you sure?". Task 10's _confirm.html can
+                     replace it with the real fragment (review round 1, F4). #}
+                  <button type="button" class="revert-link"
+                          hx-post="/accounts/{{ header.org.ref }}/changes/{{ c.ref }}/revert?tab={{ tab }}"
+                          hx-confirm="Put back: {{ c.what }}? This cannot be undone."
+                          hx-swap="none">Revert</button>
+                {% else %}
+                  <span class="change-reverted">reverted</span>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        {% else %}
+          {# No activity yet is not a problem — the spec's attention-list
+             empty state fits better than inventing new copy. #}
+          <p class="empty">nothing here — that's good</p>
+        {% endif %}
+      </section>
+    </aside>
+  </div>
+{% endblock %}

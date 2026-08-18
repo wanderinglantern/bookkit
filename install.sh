@@ -24,13 +24,13 @@
 set -eu
 cd "$(dirname "$0")"
 
-WHEELHOUSE_URL="https://github.com/wanderinglantern/bookkit/releases/download/v0.1.0/bookkit-wheelhouse-macos.zip"
+WHEELHOUSE_URL="https://github.com/wanderinglantern/bookkit/releases/download/wheelhouse-2026-08-18/bookkit-wheelhouse-macos.zip"
 PY="${PYTHON:-python3}"
 # Bump this in the SAME commit that re-uploads the release asset, and take the
 # hash from the *uploaded* file, not the local copy. towerkit's went stale when
 # mcp>=2.0 landed and the fallback then aborted with "altered in transit" — a
 # tamper warning about a file nobody tampered with.
-WHEELHOUSE_SHA256="9c7fdbf1262c9261216295990a29242729de4b75d073fb1e48b80b4a15a8c5e0"
+WHEELHOUSE_SHA256="35d410daee62a6a2807611a0a411ace548cd975ba0eed2027f9098ff98126e6b"
 TOWERKIT="../towerkit"
 
 if [ ! -f "$TOWERKIT/pyproject.toml" ]; then

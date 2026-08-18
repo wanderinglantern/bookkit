@@ -78,9 +78,20 @@ from .services.renewals import RenewalItem
 # for genuinely distinct short names.
 _DUP_CUTOFF = 87
 
-_ENRICHABLE_ORG = {"owner", "industry", "naics", "hq_city", "hq_country",
-                    "website", "domain", "legal_name", "notes"}
-_ENRICHABLE_CONTACT = {"email", "phone", "mobile", "title", "linkedin", "notes"}
+# Field NAME -> its real KIND, exactly as forms/entities.py declares it for the
+# same field. This is per-field, not a name-wide lookup: a name is not
+# globally 1:1 with a kind (task.description is a one-line "text"; project's
+# is a "textarea") so the kind has to live where the field is declared, not
+# be guessed from the name alone.
+_ENRICHABLE_ORG = {
+    "owner": "text", "industry": "text", "naics": "naics",
+    "hq_city": "text", "hq_country": "text", "website": "url",
+    "domain": "domain", "legal_name": "text", "notes": "textarea",
+}
+_ENRICHABLE_CONTACT = {
+    "email": "email", "phone": "phone", "mobile": "phone",
+    "title": "text", "linkedin": "linkedin", "notes": "textarea",
+}
 
 
 def build_server(db_path: Path | str | None = None) -> MCPServer:
@@ -780,6 +791,7 @@ def _log_activity(
     conn: sqlite3.Connection, client: str, note: str, follow_up: str | None = None
 ) -> dict[str, Any]:
     from .dates import parse_human_date
+    from .forms.spec import date_refusal
     from .repo import interactions
     from .repo import tasks as tasks_repo
 
@@ -788,7 +800,7 @@ def _log_activity(
     if follow_up:
         parsed = parse_human_date(follow_up)
         if parsed is None:
-            raise ValueError(f"cannot read a date from {follow_up!r}")
+            raise ValueError(date_refusal(follow_up))
         due = parsed.isoformat()
     with _open_batch(
         conn, tool="log_activity", org_id=org.id,
@@ -857,6 +869,7 @@ def _task_create(
     category: str | None = None, due: str | None = None,
 ) -> dict[str, Any]:
     from .dates import parse_human_date
+    from .forms.spec import date_refusal
     from .repo import tasks as tasks_repo
 
     fields: dict[str, Any] = {}
@@ -873,7 +886,7 @@ def _task_create(
     if due:
         parsed = parse_human_date(due)
         if parsed is None:
-            raise ValueError(f"cannot read a date from {due!r}")
+            raise ValueError(date_refusal(due))
         fields["due_on"] = parsed.isoformat()
     with _open_batch(
         conn, tool="task_create", org_id=fields.get("org_id"),
@@ -912,6 +925,7 @@ def _client_create(
     from rapidfuzz import fuzz, process
 
     from .dates import parse_human_date
+    from .forms.spec import date_refusal
     from .repo import contacts, interactions, orgs
     from .repo import tasks as tasks_repo
 
@@ -946,7 +960,7 @@ def _client_create(
             if t.get("due"):
                 parsed = parse_human_date(t["due"])
                 if parsed is None:
-                    raise ValueError(f"cannot read a date from {t['due']!r}")
+                    raise ValueError(date_refusal(t["due"]))
                 due = parsed.isoformat()
             task = tasks_repo.create(
                 conn, t["title"], org_id=org.id, due_on=due,
@@ -957,30 +971,16 @@ def _client_create(
             "batch": batch.ref}
 
 
-# Route enrich_field values through the SAME cleaners the forms use
-# (tui/widgets/forms.py `_CLEANERS`) so an MCP-entered email/phone/url/domain
-# ends up identical to one typed through the TUI. `normalize` is imported
-# directly here (never the tui module — mcpserver has no TUI dependency).
-_FIELD_CLEANERS = {
-    "email": "clean_email",
-    "phone": "clean_phone",
-    "mobile": "clean_phone",
-    "website": "clean_url",
-    "domain": "clean_domain",
-    "naics": "clean_naics",
-    "linkedin": "clean_linkedin",
-    "notes": None,  # textarea: stored as-is, same as the forms' passthrough
-}
+def _clean_by_kind(kind: str, value: str) -> str:
+    """The one cleaner map (bookkit.forms.spec.CLEANERS), keyed by KIND. A
+    field NAME is not globally 1:1 with a kind — `description` is a one-line
+    `text` on task and a `textarea` on project — so every caller must resolve
+    its own kind (from `_ENRICHABLE_ORG`/`_ENRICHABLE_CONTACT`, or from
+    `_EDITABLE`'s per-(entity, field) vtype) before reaching here."""
+    from .forms.spec import CLEANERS
+    from .normalize import clean_text
 
-
-def _clean_field_value(field: str, value: str) -> str:
-    from . import normalize
-
-    cleaner_name = _FIELD_CLEANERS.get(field, "clean_text")
-    if cleaner_name is None:
-        return value
-    cleaner = getattr(normalize, cleaner_name)
-    return cleaner(value)  # type: ignore[no-any-return]
+    return CLEANERS.get(kind, clean_text)(value)
 
 
 def _contact_add(
@@ -1001,9 +1001,9 @@ def _contact_add(
         )
     fields: dict[str, Any] = {}
     if email:
-        fields["email"] = _clean_field_value("email", email)
+        fields["email"] = _clean_by_kind("email", email)
     if phone:
-        fields["phone"] = _clean_field_value("phone", phone)
+        fields["phone"] = _clean_by_kind("phone", phone)
     if title:
         fields["title"] = title
     with _open_batch(
@@ -1377,9 +1377,9 @@ def _member_create(
     if specialty:
         fields["specialty"] = specialty
     if email:
-        fields["email"] = _clean_field_value("email", email)
+        fields["email"] = _clean_by_kind("email", email)
     if phone:
-        fields["phone"] = _clean_field_value("phone", phone)
+        fields["phone"] = _clean_by_kind("phone", phone)
     with _open_batch(
         conn, tool="member_create", summary=f"added team member {name}",
     ) as batch:
@@ -1592,56 +1592,72 @@ def _request_item_waive(conn: sqlite3.Connection, item_ref: str) -> dict[str, An
             "request_ref": request.ref, "batch": batch.ref}
 
 
-# edit_field's allowlists: (kind → field → value type). Types: "text" routes
-# through _FIELD_CLEANERS like enrich_field; "money" parses to integer cents;
-# "date" through parse_human_date; "int" plain; a tuple is a closed
-# vocabulary and refusals list it. Deliberate absences are the contract:
-# opportunity stage/outcome/closed_at belong to opportunity_stage, and
+# edit_field's allowlists: (kind → field → value type). Each string value
+# is the field's real KIND, exactly as forms/entities.py declares it for that
+# field on that entity — not a name-wide default. A field name is not
+# globally 1:1 with a kind: task.description is a one-line "text" (the
+# textarea is `detail`) while project.description IS the textarea; using the
+# same vtype for both silently flattened whichever one didn't match. "text"
+# routes through the cleaner map (bookkit.forms.spec.CLEANERS) like
+# enrich_field; "textarea" is stored verbatim; "money" parses to integer
+# cents; "date" through parse_human_date; "int" plain; a tuple is a closed
+# vocabulary and refusals list it. `notes` is "textarea" everywhere it
+# appears — every forms/entities.py declaration of it agrees, with no
+# exceptions. Deliberate absences are the contract: opportunity
+# stage/outcome/closed_at belong to opportunity_stage, and
 # project_need.status belongs to the queued needs→pipeline reconciler.
 def _editable() -> dict[str, dict[str, Any]]:
     from .models import PROJECT_STATUSES, TEAM_ROLES
 
     return {
-        "org": {f: "text" for f in _ENRICHABLE_ORG},
+        "org": dict(_ENRICHABLE_ORG),
         "contact": {
-            **{f: "text" for f in _ENRICHABLE_CONTACT},
+            **_ENRICHABLE_CONTACT,
             "first_name": "text", "last_name": "text",
         },
         "opportunity": {
             "title": "text", "lines": "text", "target_premium": "money",
             "target_effective": "date", "probability_pct": "int",
             "source": "text", "incumbent_broker": "text",
-            "competitor": "text", "notes": "text",
+            "competitor": "text",
+            # no "notes" here: the opportunity table has no notes column and
+            # opportunity_form declares no such field. It was offered by this
+            # dict anyway, so edit_field advertised it as allowed and then
+            # failed at the DB layer on the first call — removed, not backed
+            # by a new column (that would be a feature, not a fix).
         },
         "project": {
-            "name": "text", "description": "text", "site": "text",
+            "name": "text", "description": "textarea", "site": "text",
             "status": PROJECT_STATUSES, "start_on": "date", "end_on": "date",
-            "notes": "text",
+            "notes": "textarea",
         },
         # need STATUS is deliberately absent: the queued needs→pipeline
         # reconciler owns need-status semantics
         "project_need": {
             "line": "text", "needed_by": "date", "limit_cents": "money",
-            "premium_indication_cents": "money", "notes": "text",
+            "premium_indication_cents": "money", "notes": "textarea",
         },
         "task": {
-            "title": "text", "description": "text", "detail": "text",
+            # description is a one-line summary (forms/entities.py:185); detail
+            # is the textarea (:201). Same-named field, different entity,
+            # different kind — the whole reason this is per-(entity, field).
+            "title": "text", "description": "text", "detail": "textarea",
             "category": "text", "due_on": "date",
         },
         "team_member": {
             "name": "text", "title": "text", "specialty": "text",
-            "email": "text", "phone": "text", "notes": "text",
+            "email": "email", "phone": "phone", "notes": "textarea",
         },
         # role reuses team_assign's vocabulary so the two paths cannot drift.
         # org_id / placement_id are deliberately absent: re-scoping moves two
         # columns at once and single-field compare-and-set cannot do it.
         "team_assignment": {
-            "role": TEAM_ROLES, "lines": "text", "notes": "text",
+            "role": TEAM_ROLES, "lines": "text", "notes": "textarea",
         },
-        "rfi_request": {"title": "text", "due_on": "date", "notes": "text"},
+        "rfi_request": {"title": "text", "due_on": "date", "notes": "textarea"},
         "rfi_item": {
             "prompt": "text", "category": "text", "due_on": "date",
-            "response": "text",
+            "response": "textarea",
         },
     }
 
@@ -1671,10 +1687,11 @@ def _clean_typed(vtype: Any, field: str, value: str | None) -> Any:
         return parse_money_cents(value)
     if vtype == "date":
         from .dates import parse_human_date
+        from .forms.spec import date_refusal
 
         parsed = parse_human_date(value)
         if parsed is None:
-            raise ValueError(f"cannot read a date from {value!r}")
+            raise ValueError(date_refusal(value))
         return parsed.isoformat()
     if vtype == "int":
         return int(value)
@@ -1682,7 +1699,7 @@ def _clean_typed(vtype: Any, field: str, value: str | None) -> Any:
         if value not in vtype:
             raise ValueError(f"{field!r} must be one of {list(vtype)}, not {value!r}")
         return value
-    return _clean_field_value(field, value)
+    return _clean_by_kind(vtype, value)
 
 
 def _edit_target(
@@ -1851,7 +1868,7 @@ def _enrich_field(
         raise ValueError(
             f"{org.name}{' / ' + target.name if contact else ''} already has "
             f"{field}={current!r} — fill-blanks-only, edits happen in the TUI")
-    cleaned = _clean_field_value(field, value)
+    cleaned = _clean_by_kind(allowed[field], value)
     with _open_batch(
         conn, tool="enrich_field", org_id=org.id,
         summary=f"set {field} on {org.name}"
@@ -1926,14 +1943,16 @@ def _request_create(
     ONE transaction, so a bad date or an unknown market never leaves a headless
     request behind."""
     from .dates import parse_human_date
-    from .repo import placements
-    from .repo import projects as projects_repo
-    from .repo import rfi as rfi_repo
+    from .forms.spec import date_refusal
 
     # A pasted numbered list must be cleaned identically here and in the TUI's
     # paste box, so this shares that splitter rather than re-deriving the
-    # regex. rfi_paste is pure `re` — importing it pulls in no TUI machinery.
-    from .tui.widgets.rfi_paste import split_items
+    # regex. rfi_paste is pure `re` and lives in imports/ — the MCP server is
+    # headless and must never import from tui/ (test_mcpserver_never_imports_the_tui).
+    from .imports.rfi_paste import split_items
+    from .repo import placements
+    from .repo import projects as projects_repo
+    from .repo import rfi as rfi_repo
 
     if placement_ref and project_ref:
         raise ValueError(
@@ -1945,7 +1964,7 @@ def _request_create(
     if due_on:
         parsed = parse_human_date(due_on)
         if parsed is None:
-            raise ValueError(f"cannot read a date from {due_on!r}")
+            raise ValueError(date_refusal(due_on))
         fields["due_on"] = parsed.isoformat()
     if placement_ref:
         placement = placements.find(conn, placement_ref)

@@ -24,6 +24,7 @@ from textual.widgets import Footer, Static, Tree
 from textual.widgets.tree import TreeNode
 
 from ...dates import days_until
+from ...forms import inline as forms_inline
 from ...money import format_cents_compact
 from ...repo import batches as batches_repo
 from ...repo import contacts, opportunities, orgs, placements
@@ -34,7 +35,6 @@ from ...services import book, renewals, sla
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.entity_actions import batched_write as _batched
-from ..widgets.forms import Field
 from ..widgets.inline_edit import InlineTable
 from ..widgets.tables import (
     ListTable,
@@ -76,19 +76,11 @@ ROW_HINTS = {
 ADDABLE = ("placements", "contacts", "opportunities", "tasks", "projects", "requests")
 
 # columns editable straight in the table (i) — values parse exactly like the
-# modal forms, and each commit is one undoable field write
-CONTACT_INLINE = {
-    2: Field("role", "role"),
-    3: Field("title", "title"),
-    4: Field("email", "email", "email"),
-    5: Field("phone", "phone", "phone"),
-}
-TASK_INLINE = {
-    0: Field("due_on", "due", "date"),
-    1: Field("title", "task", required=True),
-    2: Field("category", "category"),
-    3: Field("description", "description"),
-}
+# modal forms, and each commit is one undoable field write. The Field list
+# itself lives in forms/inline.py: which fields are inline-editable is not a
+# per-surface choice, only the column position is.
+CONTACT_INLINE = dict(zip((2, 3, 4, 5), forms_inline.CONTACT_FIELDS, strict=True))
+TASK_INLINE = dict(zip((0, 1, 2, 3), forms_inline.TASK_FIELDS, strict=True))
 
 
 def _section(label: str, count: int | None = None) -> str:
@@ -862,7 +854,7 @@ class NavigatorScreen(Screen):
         bound = [
             p for p in placements.for_org(conn, org_id) if p.status == "bound"
         ]
-        premium = sum(p.total_premium or 0 for p in bound)
+        premium = book.bound_premium_for_org(conn, org_id)
         n_contacts = len(contacts.for_org(conn, org_id))
         n_tasks = len(tasks_repo.open_tasks(conn, org_id=org_id))
         lines = [
@@ -1031,8 +1023,8 @@ class NavigatorScreen(Screen):
         tree.action_cursor_down() if delta > 0 else tree.action_cursor_up()
 
     def action_add_row(self) -> None:
+        from ...forms import entities as ef
         from ..widgets import entity_actions
-        from ..widgets import entity_forms as ef
 
         kind, payload = self._current
         if kind != "group":
@@ -1075,8 +1067,8 @@ class NavigatorScreen(Screen):
             entity_actions.add_request(self, org_id)
 
     def action_edit_row(self) -> None:
+        from ...forms import entities as ef
         from ..widgets import entity_actions
-        from ..widgets import entity_forms as ef
 
         row = self._selected_row()
         if row is None:
@@ -1171,8 +1163,8 @@ class NavigatorScreen(Screen):
 
     def action_onboard(self) -> None:
         """o — resume onboarding for the selected client, or start a new one."""
+        from ...forms import entities as ef
         from ..screens.onboarding import OnboardingScreen
-        from ..widgets import entity_forms as ef
         from ..widgets.forms import FormModal
 
         conn = self.app.conn

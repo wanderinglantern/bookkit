@@ -199,7 +199,7 @@ async def test_today_new_task(empty_db: Path) -> None:
 
 
 async def test_form_commit_refusal_keeps_form_open(empty_db: Path) -> None:
-    from bookkit.tui.widgets.forms import Field, FormSpec
+    from bookkit.forms.spec import Field, FormSpec
 
     app = BookkitApp(empty_db)
     outcomes: list[str | None] = ["refused: gap under layer", None]
@@ -225,7 +225,7 @@ async def test_form_commit_refusal_keeps_form_open(empty_db: Path) -> None:
 
 
 async def test_form_commit_exception_is_an_error_not_a_crash(empty_db: Path) -> None:
-    from bookkit.tui.widgets.forms import Field, FormSpec
+    from bookkit.forms.spec import Field, FormSpec
 
     app = BookkitApp(empty_db)
 
@@ -244,7 +244,7 @@ async def test_form_commit_exception_is_an_error_not_a_crash(empty_db: Path) -> 
 async def test_form_fields_carry_dropdown_and_ghost_suggestions(seeded_db: Path) -> None:
     from textual_autocomplete import AutoComplete
 
-    from bookkit.tui.widgets.entity_forms import placement_form
+    from bookkit.forms.entities import placement_form
     from bookkit.tui.widgets.forms import FormModal
 
     app = BookkitApp(seeded_db)
@@ -259,8 +259,9 @@ async def test_form_fields_carry_dropdown_and_ghost_suggestions(seeded_db: Path)
 
 
 async def test_form_draft_survives_esc_and_clears_on_save(empty_db: Path) -> None:
+    from bookkit.forms.spec import Field, FormSpec
     from bookkit.repo import drafts
-    from bookkit.tui.widgets.forms import Field, FormModal, FormSpec
+    from bookkit.tui.widgets.forms import FormModal
 
     def spec() -> FormSpec:
         return FormSpec(

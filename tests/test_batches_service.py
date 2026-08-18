@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
 
 from bookkit import db
-from bookkit.repo import base, orgs
+from bookkit.repo import base, contacts, orgs
 from bookkit.repo import batches as batches_repo
 from bookkit.services import batches as batches_svc
 
@@ -299,3 +300,267 @@ def test_force_does_not_apply_or_double_report_a_conflicted_delete(conn):
     ).fetchone()[0]
     assert spurious == 0
     assert orgs.get(conn, other.id).website == "x"  # the clean change reverted
+
+
+# --- Task 15a: joining consecutive edits to one record into one undo unit ---
+
+
+def _freeze_clock(monkeypatch: pytest.MonkeyPatch, start: str):
+    """Pins db.utc_now() to `start` and returns a setter to move it forward.
+
+    Both repo.batches.create() (the created_at stamp) and open_batch's join
+    window read db.utc_now() via the module attribute rather than an imported
+    name, so patching it here — once — controls both."""
+    current = {"t": start}
+    monkeypatch.setattr(db, "utc_now", lambda: current["t"])
+
+    def _set(t: str) -> None:
+        current["t"] = t
+
+    return _set
+
+
+def _contact(conn, org_id, role="CFO", title="Finance"):
+    return contacts.create(
+        conn, org_id=org_id, first_name="Ann", last_name="Lee", role=role, title=title
+    )
+
+
+def test_consecutive_edits_to_one_record_join_a_single_batch(conn):
+    """Correcting four cells on a contact is one edit run, and should revert as
+    one thing rather than four."""
+    org = orgs.create(conn, kind="client", name="Acme")
+    person = _contact(conn, org.id)
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=person.id,
+    ) as first:
+        base.update(conn, "contact", person.id, {"role": "COO"})
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=person.id,
+    ) as second:
+        base.update(conn, "contact", person.id, {"title": "Ops"})
+
+    assert first.id == second.id
+
+    result = batches_svc.revert(conn, second.ref, now=NOW)
+    assert result.applied
+    restored = contacts.get(conn, person.id)
+    assert restored.role == "CFO"
+    assert restored.title == "Finance"
+
+
+def test_edits_to_different_records_do_not_join(conn):
+    """Same tool, same account, different contact — two actions, two batches.
+    Merging them would let one revert undo work on a record the user never
+    touched."""
+    org = orgs.create(conn, kind="client", name="Acme")
+    ann = _contact(conn, org.id, role="CFO")
+    bo = contacts.create(conn, org_id=org.id, first_name="Bo", last_name="Diaz", role="COO")
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=ann.id,
+    ) as first:
+        base.update(conn, "contact", ann.id, {"role": "CEO"})
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=bo.id,
+    ) as second:
+        base.update(conn, "contact", bo.id, {"role": "CFO"})
+
+    assert first.id != second.id
+
+    result = batches_svc.revert(conn, first.ref, now=NOW)
+    assert result.applied
+    assert contacts.get(conn, ann.id).role == "CFO"
+    assert contacts.get(conn, bo.id).role == "CFO"  # bo's own edit untouched
+
+
+def test_a_batch_older_than_the_window_does_not_join(conn, monkeypatch):
+    """Come back after lunch and finish the row: that is a new action."""
+    org = orgs.create(conn, kind="client", name="Acme")
+    person = _contact(conn, org.id)
+    set_now = _freeze_clock(monkeypatch, "2026-08-14T09:00:00+00:00")
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=person.id,
+    ) as first:
+        base.update(conn, "contact", person.id, {"role": "COO"})
+
+    set_now("2026-08-14T09:01:01+00:00")  # 61s later, past JOIN_WINDOW_SECONDS
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=person.id,
+    ) as second:
+        base.update(conn, "contact", person.id, {"title": "Ops"})
+
+    assert first.id != second.id
+
+
+def test_a_reverted_batch_is_never_joined(conn):
+    """Joining a reverted batch would resurrect it."""
+    org = orgs.create(conn, kind="client", name="Acme")
+    person = _contact(conn, org.id)
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=person.id,
+    ) as first:
+        base.update(conn, "contact", person.id, {"role": "COO"})
+
+    batches_svc.revert(conn, first.ref, now=NOW)
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=person.id,
+    ) as second:
+        base.update(conn, "contact", person.id, {"title": "Ops"})
+
+    assert first.id != second.id
+    assert batches_repo.get(conn, first.id).reverted_at is not None
+
+
+def test_omitting_entity_id_keeps_todays_behaviour(conn):
+    """Every existing caller passes no entity_id and must be unaffected."""
+    org = orgs.create(conn, kind="client", name="Acme")
+    person = _contact(conn, org.id)
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id,
+    ) as first:
+        base.update(conn, "contact", person.id, {"role": "COO"})
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id,
+    ) as second:
+        base.update(conn, "contact", person.id, {"title": "Ops"})
+
+    assert first.id != second.id
+
+
+def test_a_hop_to_another_record_and_back_does_not_rejoin(conn):
+    """A -> B -> A within the window is three separate actions, not two joined
+    plus a resumption of the first. most_recent() looks at the single latest
+    batch, period — an earlier batch on A is not reconsidered once it is no
+    longer the most recent row, even though it is still well inside the
+    window and still targets only A."""
+    org = orgs.create(conn, kind="client", name="Acme")
+    ann = _contact(conn, org.id, role="CFO")
+    bo = contacts.create(conn, org_id=org.id, first_name="Bo", last_name="Diaz", role="COO")
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=ann.id,
+    ) as first:
+        base.update(conn, "contact", ann.id, {"role": "CEO"})
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=bo.id,
+    ) as second:
+        base.update(conn, "contact", bo.id, {"role": "CFO"})
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact", summary="edit contact — Acme",
+        org_id=org.id, entity_id=ann.id,
+    ) as third:
+        base.update(conn, "contact", ann.id, {"title": "Ops"})
+
+    assert len({first.id, second.id, third.id}) == 3
+
+
+def test_two_threads_editing_different_records_never_share_a_batch(db_path, monkeypatch):
+    """The join decision is read outside the lock, so two threads can see the
+    same candidate. An empty candidate used to be joinable by either of them —
+    and reverting the shared batch undid an edit the user never made.
+
+    A barrier around repo.batches.events_for (which _targets_only calls to
+    read the candidate's events) forces both threads to make their join
+    decision at the same instant, reproducing the race deterministically
+    instead of hoping the OS scheduler interleaves them.
+
+    EACH THREAD OPENS ITS OWN CONNECTION, on the strict check_same_thread
+    default, because that is now what the web surface does (Task 19,
+    web.app.ThreadConnections). It used to share one, mirroring the app of
+    the day, and failed 1 run in 25 — not as a test artifact but because
+    sharing a sqlite3.Connection across threads corrupts reads: the setup
+    died (an all-NULL EventBatch row out of most_recent, or a row that
+    vanished and stranded a thread at the barrier) while the invariant under
+    test never once broke across 350+ reproductions. Modelling a hazard the
+    app no longer has would keep costing runs and prove nothing.
+
+    THE BARRIER STAYS — it is what makes the TOCTOU window real, and dropping
+    it would leave a test that passes for the wrong reason. This variant ran
+    25/25 clean, and it still has teeth: relaxing `_targets_only` back to the
+    subset test its docstring warns against fails it 8 times out of 8."""
+    connection = db.connect(db_path)
+    try:
+        org = orgs.create(connection, kind="client", name="Acme")
+        ann = contacts.create(
+            connection, org_id=org.id, first_name="Ann", last_name="Lee", role="CFO"
+        )
+        bo = contacts.create(
+            connection, org_id=org.id, first_name="Bo", last_name="Diaz", role="COO"
+        )
+
+        # The precondition the race needs: an EMPTY candidate batch, same
+        # source/tool/org as both threads will use. base.update logs nothing
+        # on a no-op write, so a real open_batch call can leave one behind —
+        # this seeds that directly rather than relying on a coincidence.
+        empty = batches_repo.create(
+            connection, batch_id=batches_repo.new_batch_id(), source="web",
+            tool="edit_contact", summary="edit contact — Acme", org_id=org.id,
+        )
+
+        barrier = threading.Barrier(2)
+        original_events_for = batches_repo.events_for
+
+        def _synced_events_for(conn, batch_id):
+            barrier.wait(timeout=5)
+            return original_events_for(conn, batch_id)
+
+        monkeypatch.setattr(batches_repo, "events_for", _synced_events_for)
+
+        batch_ids: dict[str, str] = {}
+        errors: list[BaseException] = []
+
+        def _edit(entity, new_role, key):
+            # Opened, used and closed inside this thread, so the strict
+            # check_same_thread default holds — the arrangement db.connect's
+            # docstring describes and the one the web surface now keeps.
+            own = db.connect(db_path, migrate=False)
+            try:
+                with batches_svc.open_batch(
+                    own, source="web", tool="edit_contact",
+                    summary="edit contact — Acme", org_id=org.id, entity_id=entity.id,
+                ) as batch:
+                    base.update(own, "contact", entity.id, {"role": new_role})
+                batch_ids[key] = batch.id
+            except BaseException as exc:  # surfaced on the main thread below
+                errors.append(exc)
+            finally:
+                own.close()
+
+        t_x = threading.Thread(target=_edit, args=(ann, "CEO", "x"))
+        t_y = threading.Thread(target=_edit, args=(bo, "CFO", "y"))
+        t_x.start()
+        t_y.start()
+        t_x.join(timeout=5)
+        t_y.join(timeout=5)
+
+        assert not errors, errors
+        assert batch_ids["x"] != batch_ids["y"], (
+            "two different entities landed in the same batch "
+            f"({empty.ref}) — reverting it would undo the other thread's edit too"
+        )
+    finally:
+        connection.close()

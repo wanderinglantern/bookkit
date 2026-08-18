@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from bookkit import db
+from bookkit.forms import entities as ef
 from bookkit.repo import orgs, rfi
-from bookkit.tui.widgets import entity_forms as ef
 
 
 @pytest.fixture

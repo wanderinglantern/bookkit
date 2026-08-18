@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import threading
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -72,6 +73,60 @@ _current_batch: ContextVar[BatchState | None] = ContextVar(
 _tx_depth: ContextVar[int] = ContextVar("bookkit_tx_depth", default=0)
 """How many transaction() blocks deep this context is. Only the outermost
 issues BEGIN/COMMIT; see transaction() for why nesting joins."""
+
+_tx_lock = threading.RLock()
+"""Serializes the OUTERMOST transaction across threads, within THIS process.
+
+_tx_depth is a ContextVar, so a second thread on the same connection sees
+depth 0 and issues its own BEGIN IMMEDIATE — "cannot start a transaction
+within a transaction". Unreachable while the TUI, CLI and MCP server were
+each single-threaded on their connection; reachable the moment the web layer
+runs handlers in uvicorn's threadpool. SQLite serializes writers at the file
+level anyway, so waiting here costs nothing a writer was not already going to
+wait for.
+
+Process-local: the TUI runs as a separate OS process with its own Python
+interpreter and therefore its own module-level `_tx_lock` instance, so this
+gives it no cross-process exclusion and creates no cross-process cycle —
+SQLite's own file-level locking (BEGIN IMMEDIATE, busy_timeout) is what
+serializes writers across processes; this lock only serializes threads
+inside one.
+
+An RLock is a defensive margin, not a requirement, as of the join logic in
+services.batches.open_batch: that code reads prior events with plain SELECTs
+before ever calling transaction(), so it never re-enters this lock while
+holding it, and a plain Lock would behave identically today. Keep it an RLock
+anyway — the cost of reentrancy is nothing, and it is what stops a future
+nested acquire from becoming a same-thread deadlock instead of a bug report.
+
+DO NOT DELETE THIS AS REDUNDANT now that the web layer gives every thread its
+own connection (web.app.ThreadConnections, 2026-08-18). The "transaction
+within a transaction" error above is indeed gone with the shared connection,
+but two BEGIN IMMEDIATEs on two connections now contend at the SQLite FILE
+level instead, where losing means burning the whole BUSY_TIMEOUT_MS wait and
+then raising "database is locked".
+
+Measured both ways, because the obvious form of that claim is false: ordinary
+concurrent web saves do NOT need this lock — 4 writers x 300 POSTs came back
+clean without it, each transaction being microseconds long and busy_timeout
+absorbing the overlap. What needs it is a writer holding the transaction
+LONGER than the timeout, IN THIS PROCESS. The web app has exactly one such
+writer today: the batch revert behind web/routes/changes.py, whose single
+transaction (services.batches.revert) applies up to BLAST_CAP entities of
+undelete/update/soft-delete with an event_log row each. A bulk import or a
+TUI batch is NOT an example, though both are longer — they run in a SEPARATE
+PROCESS with its own instance of this lock, which therefore excludes nothing;
+there the "database is locked" refusal happens exactly as the paragraph above
+warns, and only SQLite's own busy_timeout stands between it and the user.
+With the lock a concurrent save queues and succeeds; without it the save is
+refused after 5s with "database is locked" and the user's edit is lost.
+tests/test_web_concurrency.py asserts that, so deleting this lock fails the
+suite rather than a review.
+
+Known and deliberately not restructured: an `async def` route that waits here
+blocks the WHOLE event loop, because this is a threading.RLock and the write
+routes run on the loop (see web.app.ThreadConnections). Harmless while every
+web write is microseconds long; read this before adding a slow one."""
 
 
 def current_batch() -> BatchState | None:
@@ -137,7 +192,11 @@ def transaction(
     otherwise raise "cannot start a transaction within a transaction". An
     inner call joins the outer one — same lock, same commit, all-or-nothing
     across both — and an inner `batch=` is deliberately IGNORED, because the
-    outermost writer action is what the user thinks of as one undo unit."""
+    outermost writer action is what the user thinks of as one undo unit.
+
+    Only the OUTERMOST call takes `_tx_lock` (see its docstring): a joining
+    call already runs inside the holder's BEGIN IMMEDIATE/COMMIT, so there is
+    nothing left for it to serialize against."""
     depth = _tx_depth.get()
     if depth:
         token = _tx_depth.set(depth + 1)
@@ -147,34 +206,79 @@ def transaction(
             _tx_depth.reset(token)
         return
 
-    batch_token = _current_batch.set(batch)
-    depth_token = _tx_depth.set(1)
+    _tx_lock.acquire()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        batch_token = _current_batch.set(batch)
+        depth_token = _tx_depth.set(1)
         try:
-            yield
-        except BaseException:
-            conn.execute("ROLLBACK")
-            raise
-        conn.execute("COMMIT")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        finally:
+            _tx_depth.reset(depth_token)
+            _current_batch.reset(batch_token)
     finally:
-        _tx_depth.reset(depth_token)
-        _current_batch.reset(batch_token)
+        _tx_lock.release()
 
 
-def connect(path: Path | str | None = None, migrate: bool = True) -> sqlite3.Connection:
-    """Open (creating if needed, mode 0600) and optionally migrate the database."""
+def connect(
+    path: Path | str | None = None,
+    migrate: bool = True,
+    check_same_thread: bool = True,
+) -> sqlite3.Connection:
+    """Open (creating if needed, mode 0600) and optionally migrate the database.
+
+    check_same_thread=False is for the web layer only, and ONLY so that its
+    lifespan can close connections it did not open: a FastAPI app's lifespan
+    runs on the ASGI event loop's own thread (uvicorn, and TestClient's
+    portal), not the thread that called create_app(), so the strict check
+    makes even closing a connection on shutdown raise ProgrammingError.
+
+    It is NOT a licence to share the connection. Route handlers declared
+    `def` rather than `async def` do not run on the event loop's thread at
+    all — Starlette hands them to an anyio worker threadpool, so concurrent
+    requests are concurrent THREADS. This docstring used to say handlers ran
+    on the loop's thread, web/app.py believed it, and one connection served
+    all of them; ~21% of requests at 6 concurrent workers came back wrong and
+    event_log took permanent damage. web.app.ThreadConnections is the
+    arrangement that replaced it: one connection per thread, still
+    check_same_thread=False purely for the shutdown sweep.
+
+    `async def` handlers DO run on the loop's thread, and bookkit's eight web
+    write routes are async (they await request.form()), so they really do all
+    share one connection. That is safe only because asyncio does not preempt
+    and no `await` sits inside a transaction — a rule, enforced by
+    tests/test_conventions.py::test_no_await_inside_a_transaction, not a
+    property of this function.
+
+    The TUI and CLI stay on the strict default: each opens and uses its
+    connection from a single thread, and the check catches a real bug
+    there."""
     db_path = Path(path) if path is not None else default_db_path()
     if str(db_path) != ":memory:":
         db_path.parent.mkdir(parents=True, exist_ok=True)
         if not db_path.exists():
             db_path.touch(mode=0o600)
-    conn = sqlite3.connect(db_path, isolation_level=None)  # autocommit; explicit BEGIN/COMMIT
+    conn = sqlite3.connect(  # autocommit; explicit BEGIN/COMMIT
+        db_path, isolation_level=None, check_same_thread=check_same_thread
+    )
     conn.row_factory = sqlite3.Row
+    # busy_timeout FIRST: it is the only pragma here that changes how the
+    # other three behave when a writer holds the file, and journal_mode=WAL
+    # can need an exclusive lock to convert the journal — with a zero timeout
+    # it gives up instantly instead of waiting. Insurance, not a measured fix:
+    # no defect was found in the old order (WAL readers do not block, ~2ms
+    # under both BEGIN IMMEDIATE and BEGIN EXCLUSIVE). It matters more now
+    # that connections open on the REQUEST path (web.app.ThreadConnections),
+    # not only at startup.
+    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     if migrate:
         apply_migrations(conn)
     return conn

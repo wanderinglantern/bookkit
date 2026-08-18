@@ -11,6 +11,7 @@ import sqlite3
 
 from ... import normalize
 from ...dates import parse_human_date
+from ...forms.spec import date_refusal
 from ...models import OrgStatus, PlacementStatus
 from ...money import MoneyParseError, parse_money_cents, parse_share_bps
 from ...repo import orgs
@@ -178,7 +179,7 @@ def _stage_placement(
             continue
         parsed = parse_human_date(raw)
         if parsed is None:
-            record.error(key, f"cannot read a date from {raw!r}")
+            record.error(key, date_refusal(raw))
         else:
             record.fields[target] = parsed.isoformat()
     period_from = record.fields.get("period_from")

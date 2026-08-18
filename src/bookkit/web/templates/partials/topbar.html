@@ -1,0 +1,41 @@
+{# Shared top bar (56px): wordmark, section nav, search pill, an undo pill
+   when the current context has a `last_undo`, and the avatar circle.
+
+   Extracted from account/page.html by Task 18 (the way in — /book is the
+   app's front door and needed the same top bar without forking a second
+   copy that could drift). "Book" is the one real link — the rest of the
+   nav has nowhere to go yet, so they stay inert placeholders (no other web
+   route exists outside /book and the account page). `last_undo` is
+   org-scoped and only present on the account page; a bare `{% if %}` on an
+   undefined value is falsy, so /book simply never renders the pill. #}
+<div class="topbar">
+  <span class="topbar-wordmark">BookKit</span>
+  <nav class="topbar-nav">
+    {% for label in ("Today", "Navigator", "Book", "Pipeline", "Calendar", "Markets", "Towers") %}
+      {% if label == "Book" %}
+        <a href="/book" class="topbar-nav-item is-current-section">Book</a>
+      {% else %}
+        <span class="topbar-nav-item">{{ label }}</span>
+      {% endif %}
+    {% endfor %}
+  </nav>
+  <span class="topbar-spacer"></span>
+  <div class="search-pill"><span>Search</span></div>
+  {% if last_undo and undo_action %}
+    {# Wired as of Task 15b: the same POST the rail's per-change Revert
+       makes, against the newest unreverted batch on this account
+       (routes/changes.py). `undo_action` is the whole url, assembled in
+       routes/account._context — this partial is shared with /book, which
+       has no `tab` to build one from, so it is handed the finished action
+       or nothing at all rather than two halves to join.
+
+       hx-confirm for the same reason the rail's Revert has one: a revert
+       rewrites the last write and cannot itself be reverted, and this pill
+       lives in the top bar between Search and the avatar, where a misclick
+       is cheap and the consequence is not (review round 1, F4). #}
+    <button type="button" class="undo-pill" hx-post="{{ undo_action }}"
+            hx-confirm="Put back: {{ last_undo.summary }}? This cannot be undone."
+            hx-swap="none">Undo <span class="undo-pill-detail">{{ last_undo.summary }}</span></button>
+  {% endif %}
+  <div class="avatar">GB</div>
+</div>

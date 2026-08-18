@@ -1,0 +1,1428 @@
+/* bookkit web — visual direction implementation.
+   Binding spec: docs/superpowers/specs/2026-08-17-web-visual-direction.md,
+   the account page: .superpowers/sdd/2026-08-17-web-account-page/design/Account View.dc.html
+
+   No literal colour lives in this file. Every colour is a `--` custom
+   property served by GET /static/theme.css (generated from
+   bookkit.palette.WEB_* — see src/bookkit/web/theme_css.py), so this
+   stylesheet and the palette module can never disagree about what a colour
+   means. `@import` runs before anything below needs the variables. */
+@import url("/static/theme.css");
+
+/* --- type -----------------------------------------------------------------
+   Two deliberate deviations from the handoff, both flagged there and in the
+   binding spec: Noto Serif ships Regular/Bold only (no 600) here, so 700 is
+   used rather than a browser-synthesised 600; JetBrains Mono ships in
+   neither repo, so the system mono stack stands in. Neither font is
+   self-hosted this round — family names with system fallbacks only; adding
+   the OFL files is later packaging work. */
+
+:root {
+  --sans: "Noto Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --serif: "Noto Serif", Georgia, serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  --label-size: 0.625rem;    /* 10px section labels, uppercase, tracked */
+  --hint-size: 0.6875rem;    /* 11px */
+  --body-size: 0.8125rem;    /* 13px */
+  --name-size: 1.5625rem;    /* 25px account name, serif */
+
+  --row-height: 30px;        /* compact, never below this */
+}
+
+/* --- ground -----------------------------------------------------------
+   Single theme by choice: one user, one machine, a document that wants to
+   look like paper. body paints background/color explicitly rather than
+   inheriting the viewer's theme. */
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  /* the page body never scrolls sideways — wide content scrolls inside its
+     own overflow-x: auto container instead (tables, on a narrow window) */
+  overflow-x: hidden;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--body-size);
+  line-height: 1.5;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+#main {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* --- top bar (56px) --------------------------------------------------- */
+
+.topbar {
+  height: 56px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0 1.25rem;
+  border-bottom: 1px solid var(--ink);
+}
+
+.topbar-wordmark {
+  flex: none;
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 1.1875rem;
+}
+
+.topbar-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.topbar-nav-item {
+  padding: 0.375rem 0.6875rem;
+  border-radius: 15px;
+  font-size: 0.78125rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.topbar-nav-item.is-current-section {
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 600;
+}
+
+.topbar-spacer {
+  flex: 1;
+}
+
+.search-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.5625rem;
+  height: 34px;
+  padding: 0 0.875rem;
+  background: var(--stone);
+  border-radius: 17px;
+  color: var(--muted);
+  flex: 0 1 240px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.search-pill span {
+  font-size: var(--body-size);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A <button> as of Task 15b (it POSTs the revert route now) — the reset
+   below keeps a button rendering as the design's pill: browsers give buttons
+   their own font, background and border otherwise.
+
+   It is LIVE, so it is styled live: pointer cursor and a hover accent, per
+   the visual direction's top-bar entry (a 1px border, radius 17, HOVER
+   ACCENT). The pending treatment this rule used to carry — muted colour,
+   `cursor: default`, no :hover — was correct while the markup said
+   aria-disabled and became its own inversion of Grant's bar the moment the
+   button started posting: a control that IS live and LOOKS dead (review
+   round 1, F3). The comment describing the pending state is gone with it;
+   two contradictory comments stacked is how the dead one wins. */
+.undo-pill {
+  display: flex;
+  font: inherit;
+  background: none;
+  cursor: pointer;
+  align-items: center;
+  gap: 0.4375rem;
+  height: 34px;
+  padding: 0 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: 17px;
+  flex: none;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+}
+
+.undo-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.undo-pill-detail {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 16px;
+  background: var(--ink);
+  color: var(--paper);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+/* --- header block -------------------------------------------------------
+   Breadcrumb, then a baseline row: name, ref, status badge, and (only when
+   overdue) the danger badge — the header's half of the renewal invariant.
+   No renewal rail: removed in favour of this badge plus the right rail's
+   snapshot row (Grant, 2026-08-17). */
+
+.account-header {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 1rem 1.25rem 0.75rem;
+}
+
+.breadcrumb {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.header-baseline {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  flex-wrap: nowrap;
+}
+
+.header-baseline h1 {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: var(--name-size);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.account-ref {
+  flex: none;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.badge-status,
+.badge-overdue {
+  flex: none;
+  white-space: nowrap;
+  padding: 0.125rem 0.5rem;
+  border-radius: 3px;
+  font-size: var(--hint-size);
+  font-weight: 600;
+}
+
+.badge-status {
+  background: var(--good-badge);
+  color: var(--good);
+}
+
+.badge-overdue {
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+
+.header-spacer {
+  flex: 1;
+}
+
+.header-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex: none;
+}
+
+/* A pill's base look is the LIVE treatment — Task 8 is the first to wire
+   one ("+ Add contact"). Header actions and other pane "+ Add ..." pills
+   still rendered but inert carry aria-disabled="true", which the
+   [aria-disabled="true"] rules below override back to the pending look: no
+   hover affordance, muted colour, default cursor. Same shape/padding/radius
+   either way, so wiring one is a behaviour change, not a layout change —
+   btn-pill-primary's accent fill is the strongest "click me" signal on the
+   page and comes back the moment aria-disabled is dropped (Grant, review
+   round 1, 2026-08-15; Task 8 is the first pill to actually drop it). */
+.btn-pill {
+  display: inline-block;
+  padding: 0.5rem 0.875rem;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: var(--paper);
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.btn-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-pill-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  font-weight: 600;
+  color: var(--paper);
+}
+
+.btn-pill-primary:hover {
+  color: var(--paper);
+  opacity: 0.9;
+}
+
+.btn-pill-icon {
+  padding: 0.5rem 0.75rem;
+}
+
+.btn-pill[aria-disabled="true"] {
+  background: var(--paper);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: default;
+}
+
+.btn-pill[aria-disabled="true"]:hover {
+  border-color: var(--border);
+  color: var(--muted);
+  opacity: 1;
+}
+
+/* --- tabs -----------------------------------------------------------------
+   Four tabs, each with a count badge, on a 1px ink rule. The current tab
+   takes ink at weight 600 with a 2px accent underline. */
+
+.tabs {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: 1.5rem;
+  padding: 0 1.25rem;
+  border-bottom: 1px solid var(--ink);
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+  padding: 0.6875rem 0.125rem;
+  margin-bottom: -1px;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+
+.tab:hover {
+  color: var(--accent);
+}
+
+.tab.is-current {
+  color: var(--ink);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+.tab-badge {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 8px;
+  background: var(--stone);
+  color: var(--muted);
+}
+
+.tab.is-current .tab-badge {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+/* --- layout: tab panel + right rail ------------------------------------- */
+
+.layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.tab-panel {
+  flex: 1;
+  min-width: 0;
+  padding: 1.25rem;
+  overflow: auto;
+  animation: settle 120ms ease-out;
+}
+
+@keyframes settle {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-panel {
+    animation: none;
+  }
+}
+
+.panel-empty {
+  padding: 2.5rem 0;
+  color: var(--muted);
+}
+
+.panel-empty p {
+  margin: 0;
+  font-size: var(--body-size);
+}
+
+.form-host:empty {
+  display: none;
+}
+
+/* --- PEOPLE (contacts, Task 8) — Account View.dc.html's card list, not a
+   table. Fix round 1, 2026-08-17: the first pass used table.rows, flagged
+   as a deviation, corrected here to match the design source. The cell
+   contract underneath is unchanged (macros/cell.html, tag="div") — only
+   the container changed from a table row to a card. ------------------- */
+
+.people-head {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding-bottom: 0.5rem;
+}
+
+.people-label {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.people-count {
+  font-family: var(--mono);
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.people-head-spacer {
+  flex: 1;
+}
+
+/* A plain accent link, not a pill — the design's own "+ Add contact" is
+   text, unlike the header's "+ Log interaction"/"+ Task" pills. */
+.people-add {
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.people-add:hover {
+  text-decoration: underline;
+}
+
+.contact-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.contact-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4375rem;
+  padding: 0.6875rem 0.75rem;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+}
+
+.contact-card:hover {
+  border-color: var(--accent);
+}
+
+/* The design's own primary-card border colour is `--grid` — the same token
+   the calendar's bound block already uses, not a new one. */
+.contact-card.is-primary {
+  border-color: var(--grid);
+}
+
+.contact-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4375rem;
+}
+
+.contact-star {
+  display: inline-block;
+  width: 12px;
+  flex: none;
+  color: var(--warn);
+}
+
+.contact-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--ink);
+  /* Deliberately no dashed underline: first_name/last_name are display-only
+     (CONTACT_FIELDS doesn't declare them) — the affordance must not promise
+     an edit that isn't there. */
+}
+
+/* The title cell (a macros/cell.html div, tag="div") sits beside the name
+   per the design; sized down to the small muted label it renders as there,
+   while keeping the dashed is-editable underline the macro already draws. */
+.contact-head .cell {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  flex: none;
+}
+
+.contact-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding-left: 1.1875rem;
+}
+
+.contact-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.contact-field-label {
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  width: 48px;
+  flex: none;
+}
+
+.contact-field .cell {
+  flex: 1;
+  min-width: 0;
+}
+
+.contact-field .is-editable,
+.contact-head .is-editable {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.contact-actions {
+  display: flex;
+  gap: 0.75rem;
+  padding-left: 1.1875rem;
+  padding-top: 0.125rem;
+}
+
+/* Row actions ("Make primary", "Log interaction"): plain text, muted until
+   hover, per the visual-direction spec. Not wired this task — aria-disabled
+   keeps it in the pending treatment already used for revert-link/
+   rail-action, so it matches without duplicating the rule. */
+.row-action {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  cursor: default;
+}
+
+/* "Primary contact" — the label a card already showing ★ gets instead of
+   "Make primary". Purely descriptive, never a control: no aria-disabled
+   pairing needed because it never claimed to be clickable. */
+.row-action-static {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+/* --- right rail (296px) --------------------------------------------------
+   SNAPSHOT, TEAM, DOCUMENTS, RECENT CHANGES — four stacked sections, each
+   with a mono uppercase tracked label. Own scroll. */
+
+.right-rail {
+  width: 296px;
+  flex: none;
+  border-left: 1px solid var(--hairline);
+  background: var(--wash);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.rail-section {
+  padding: 0.875rem 1rem 0.75rem;
+  border-bottom: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5625rem;
+}
+
+.rail-section:last-child {
+  border-bottom: none;
+}
+
+.rail-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.rail-label {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+/* Not wired yet (aria-disabled="true") — muted, not accent, so it doesn't
+   read as a working link. */
+.rail-action {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--muted);
+  cursor: default;
+}
+
+.empty {
+  margin: 0;
+  padding: 0.25rem 0;
+  color: var(--muted);
+  font-style: normal;
+  font-size: var(--body-size);
+}
+
+/* SNAPSHOT */
+
+.snapshot-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.625rem;
+  min-height: var(--row-height);
+}
+
+.snapshot-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.snapshot-value {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+  color: var(--ink);
+  text-align: right;
+}
+
+.snapshot-row.is-overdue .snapshot-value {
+  font-weight: 700;
+  color: var(--danger);
+}
+
+/* last touch — muted per the design source's own inline style for this
+   row; every other snapshot value takes --ink. */
+.snapshot-value.is-muted {
+  color: var(--muted);
+}
+
+/* TEAM */
+
+.team-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-height: var(--row-height);
+  justify-content: center;
+}
+
+.team-who {
+  font-weight: 500;
+}
+
+.team-detail {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* DOCUMENTS */
+
+.documents-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  align-items: flex-start;
+  padding: 0.875rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.documents-empty p {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.documents-empty p:last-child {
+  font-size: var(--hint-size);
+  line-height: 1.45;
+}
+
+/* RECENT CHANGES */
+
+.change-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--hairline-2);
+}
+
+.change-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.change-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.change-time {
+  flex: none;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.change-what {
+  flex: 1;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.change-bottom {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.change-who {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+/* The rail's per-change Revert — wired as of Task 15b (POST
+   /accounts/{ref}/changes/{batch_ref}/revert, routes/changes.py). A <button>,
+   not a span: it performs an action, and the spec's row-action treatment
+   (plain text, muted until hover, accent on hover) is the same one
+   .row-action-btn already carries — the reset below is that rule applied to a
+   rail row rather than a table row. */
+.revert-link {
+  margin-left: auto;
+  font: inherit;
+  font-size: var(--hint-size);
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.revert-link:hover {
+  color: var(--accent);
+}
+
+.change-reverted {
+  margin-left: auto;
+  font-size: var(--hint-size);
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* --- schedule tables (forward-styled: no table markup renders yet in this
+   task's tab panels — Tasks 8-13 build the rows that use these) -----------
+   --stone headers, hairline rows, mono for every value that aligns, a
+   trailing actions column, CSS grid never table layout per the spec. */
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+table.rows {
+  /* min-width keeps the table at least as wide as .table-scroll (so short
+     tables still fill the panel); width: max-content lets it grow past
+     that when content needs more room. Plain `width: 100%` resolved to the
+     .table-scroll container's width even when content overflowed it, so
+     `th` backgrounds and the header rule stopped short of the `td`s that
+     scrolled past them underneath (2026-08-18). */
+  min-width: 100%;
+  width: max-content;
+  border-collapse: collapse;
+  font-size: var(--body-size);
+}
+
+table.rows th {
+  background: var(--stone);
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  font-weight: 400;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--ink);
+}
+
+table.rows td {
+  height: var(--row-height);
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--hairline-2);
+  vertical-align: middle;
+}
+
+table.rows tr:hover td {
+  background: var(--hover);
+}
+
+table.rows td.num,
+table.rows td.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- inline cell editing (macros/cell.html), forward-styled: no tab panel
+   renders a .cell this task ------------------------------------------- */
+
+.cell {
+  cursor: pointer;
+}
+
+.cell:hover {
+  background: var(--hover);
+}
+
+.cell.cell-editing {
+  padding: 0.2rem 0.4rem;
+  background: var(--paper);
+}
+
+.cell.cell-error {
+  outline: 1px solid var(--danger);
+  outline-offset: -1px;
+}
+
+.cell-editor {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.cell-editor input,
+.cell-editor select {
+  font: inherit;
+  font-family: var(--mono);
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.cell-error-msg {
+  font-family: var(--sans);
+  font-size: var(--hint-size);
+  color: var(--danger);
+}
+
+/* the discoverability affordance for an editable value at rest */
+.is-editable {
+  border-bottom: 1px dashed var(--edit-underline);
+  padding-bottom: 1px;
+}
+
+/* --- Work tab (Tasks 11-13): open tasks, information requests, request
+   items — the first real users of table.rows/.table-scroll. Row actions
+   ("Done", "Mark received", "Edit", "Items") are LIVE controls, unlike the
+   muted/inert .row-action used for not-wired-yet contact actions — plain
+   text, muted until hover per the visual-direction spec. ------------------ */
+
+.row-action-btn {
+  font: inherit;
+  font-size: var(--hint-size);
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.row-action-btn + .row-action-btn {
+  margin-left: 0.625rem;
+}
+
+.row-action-btn:hover {
+  color: var(--accent);
+}
+
+.work-section-gap {
+  height: 1.5rem;
+}
+
+/* an overdue due date carries the word, not just the colour */
+.tag-overdue {
+  margin-left: 0.375rem;
+  font-family: var(--mono);
+  font-size: var(--hint-size);
+  font-weight: 700;
+  color: var(--danger);
+}
+
+/* request/item status words — colour backs the word, never replaces it */
+.status-outstanding { color: var(--warn); }
+.status-received { color: var(--good); }
+.status-waived { color: var(--muted); }
+
+table.rows tr.is-closed td,
+table.rows tr.is-received td,
+table.rows tr.is-waived td {
+  color: var(--muted);
+}
+
+.due-fallback {
+  display: block;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 0.75rem;
+  font-size: var(--body-size);
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.back-link:hover {
+  text-decoration: underline;
+}
+
+.request-summary {
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.request-title {
+  display: inline-block;
+  margin: 0 0.625rem 0 0;
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: var(--ink);
+}
+
+.request-ref {
+  font-family: var(--mono);
+  font-size: var(--hint-size);
+  color: var(--muted);
+  margin-right: 0.625rem;
+}
+
+.request-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  margin-top: 0.5rem;
+  font-size: var(--body-size);
+  color: var(--muted);
+}
+
+.request-meta strong {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.request-notes {
+  margin: 0.5rem 0 0;
+  font-size: var(--body-size);
+  color: var(--ink);
+}
+
+/* --- interactions ledger, forward-styled: the timeline lands in Tasks
+   8-10 -------------------------------------------------------------------
+   A continuous hairline down the left margin, dates hanging in that margin
+   in mono, the type as a small accent label, the note body in prose. */
+
+.ledger {
+  position: relative;
+  padding-left: 5.5rem;
+  border-left: 1px solid var(--hairline);
+  margin-left: 5rem;
+}
+
+.ledger-entry {
+  position: relative;
+  padding: 0.6rem 0 0.9rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.ledger-entry:last-child {
+  border-bottom: none;
+}
+
+.ledger-date {
+  position: absolute;
+  left: -5.5rem;
+  width: 5rem;
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--body-size);
+  color: var(--muted);
+}
+
+.ledger-type {
+  display: inline-block;
+  margin-bottom: 0.2rem;
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+}
+
+.ledger-body {
+  font-family: var(--sans);
+  font-size: var(--body-size);
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+/* --- forms (macros/form.html), forward-styled: no form renders in this
+   task's panels ----------------------------------------------------------- */
+
+.entity-form {
+  background: var(--paper);
+  border-top: 2px solid var(--ink);
+  padding: 1.25rem 1.5rem 1.5rem;
+}
+
+.form-title {
+  margin: 0 0 1rem;
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: var(--name-size);
+  color: var(--ink);
+}
+
+.form-error {
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--danger);
+  font-size: var(--body-size);
+}
+
+.entity-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.9rem;
+}
+
+.entity-form .field label {
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.entity-form .field .req {
+  color: var(--danger);
+}
+
+.entity-form input,
+.entity-form select,
+.entity-form textarea {
+  font: inherit;
+  font-family: var(--sans);
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.form-actions {
+  margin-top: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+/* Save is the filled --ink primary; Cancel (below) is deliberately quieter
+   — bordered, --border, muted text, accent on hover, same colour story as
+   the header's own secondary pills (+ Task / Renew) — so the two are never
+   equally weighty and a form can never be mistaken for having only one way
+   out. [type="submit"] scopes this to Save alone now that Cancel lives in
+   the same .form-actions row. */
+.form-actions button[type="submit"] {
+  font: inherit;
+  font-family: var(--sans);
+  padding: 0.45rem 1rem;
+  border: 1px solid var(--ink);
+  border-radius: 4px;
+  background: var(--ink);
+  color: var(--paper);
+  cursor: pointer;
+}
+
+.btn-cancel {
+  font: inherit;
+  font-family: var(--sans);
+  padding: 0.45rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.btn-cancel:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- the revert toast ----------------------------------------------------
+   Forward-styled in Task 7 and first used in Task 15b: a revert's outcome
+   (reverted / refused / already / gone / a program_* refusal) lands here.
+   Exactly two shadows exist on the whole surface (Geometry, spec): this is
+   one of them, the other is card hover above. */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.625rem;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.625rem 1rem;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 8px;
+  box-shadow: var(--shadow-toast);
+  font-size: var(--body-size);
+  z-index: 50;
+}
+
+/* The message column. `.toast` is a row (text | close button), so the text
+   and the remedy have to stack inside it — they were flex SIBLINGS of the
+   close button and rendered side by side, a "second line" that was never on
+   a second line (review round 1, F7). */
+.toast-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+}
+
+/* The remedy line — a refusal says how to fix it. Muted against the ink
+   ground so it reads as the second sentence it is, never as a second
+   message. */
+.toast-remedy {
+  color: var(--paper);
+  /* Opacity, not a second colour: the palette has no on-ink secondary token
+     and inventing one for a single line is how a palette starts drifting.
+     app.css holds no literal colour by rule (tests/test_web_shell.py). */
+  opacity: 0.75;
+  font-size: var(--hint-size);
+}
+
+/* No auto-dismiss on a timer: a message saying a write was REFUSED must not
+   vanish while it is being read. Dismissing is the reader's call, and it is
+   the only one — hence a real button, handled by the delegated
+   [data-toast-close] listener in inline-cell.js. */
+.toast-close {
+  font: inherit;
+  font-size: var(--hint-size);
+  color: var(--paper);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.card {
+  box-shadow: none;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-card);
+}
+
+/* --- status colours: signal, never decoration alone --------------------
+   Every coloured state also carries a word or glyph in the markup itself
+   ("over", "◆", "bound") — these classes only ever supply the colour. */
+
+.is-bound { color: var(--good); }
+.is-due-soon { color: var(--warn); }
+.is-overdue, .is-error { color: var(--danger); }
+
+/* --- focus ------------------------------------------------------------- */
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- narrow window -------------------------------------------------------
+   Below ~1000px the right rail drops beneath the tab body rather than
+   squeezing beside it. The search pill's own flex basis (flex:0 1 240px;
+   min-width:0) already shrinks it as the top bar narrows — no breakpoint
+   needed for that. Tables always scroll inside .table-scroll rather than
+   dropping columns; the page body itself never scrolls sideways. */
+
+@media (max-width: 62.5rem) {
+  .layout {
+    flex-direction: column;
+  }
+
+  .right-rail {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--hairline);
+  }
+}
+
+/* --- Book screen (Task 18) — the app's front door -------------------------
+   A full-bleed accounts table: CSS grid, never table layout, per the
+   Geometry rule. Every row IS the link to that account — the design's own
+   book sheet has no separate actions column, so this one doesn't invent
+   one. Column widths match the design source's book sheet exactly (ref
+   104px, account 1fr, owner 90px, status 96px, next 126px, due in 104px,
+   premium 104px, last touch 116px). */
+
+.book-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 1rem 1.25rem 0.75rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.book-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.3125rem;
+}
+
+.book-subtitle {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.book-header-spacer {
+  flex: 1;
+}
+
+/* Not wired yet (aria-disabled="true") — a live-looking <input> that
+   silently ignores typing is worse than a pill that says so, so the
+   filter is a span here, never an <input>. Same shape/tone as the top
+   bar's search pill. */
+.book-filter-pill {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 0.75rem;
+  background: var(--stone);
+  border-radius: 16px;
+  color: var(--muted);
+  font-size: var(--hint-size);
+  min-width: 220px;
+  flex: none;
+  cursor: default;
+}
+
+.book-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Tables scroll horizontally rather than dropping columns (Quality floor) —
+   .book-body is the scroll container, and .book-grid's fixed track widths
+   (only "account" is 1fr) mean the grid simply grows past the viewport on
+   a narrow window instead of squeezing every column unreadable. */
+.book-grid {
+  display: grid;
+  grid-template-columns: 104px minmax(160px, 1fr) 90px 96px 126px 104px 104px 116px;
+  align-items: center;
+  min-width: 62.5rem;
+}
+
+.book-table-head {
+  height: 28px;
+  padding: 0 0.875rem;
+  background: var(--wash);
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--hairline);
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.book-table-head span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 0.5rem;
+}
+
+.book-table-head span.right {
+  text-align: right;
+  padding-right: 0.625rem;
+}
+
+.book-row {
+  height: var(--row-height);
+  padding: 0 0.875rem;
+  border-bottom: 1px solid var(--hairline-2);
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.book-row:nth-child(even) {
+  background: var(--wash-2);
+}
+
+.book-row:hover {
+  background: var(--hover);
+}
+
+/* "Selected row" per the visual-direction spec. The row is the only
+   interactive unit on this screen (click opens the account; there is no
+   separate row-selection state), so its own keyboard focus stands in for
+   "selected" — the general `:focus-visible` accent outline still applies
+   underneath this. */
+.book-row:focus-visible {
+  background: var(--accent-wash);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.book-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 0.5rem;
+}
+
+.book-cell.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+}
+
+.book-cell.muted {
+  color: var(--muted);
+}
+
+.book-cell.right {
+  text-align: right;
+  padding-right: 0.625rem;
+}
+
+.book-cell.is-good {
+  color: var(--good);
+}
+
+/* prospect — distinguishable from active/dormant per the design source's
+   own STATUS_INK map (fix round 1, 2026-08-18: /book now lists every
+   client, not just active ones, so prospect needs its own visible ink). */
+.book-cell.is-accent {
+  color: var(--accent);
+}
+
+.book-cell.is-warn {
+  color: var(--warn);
+}
+
+.book-cell.is-danger {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.book-empty {
+  padding: 2.5rem 1.25rem;
+  color: var(--muted);
+}
+
+.book-empty p {
+  margin: 0;
+  font-size: var(--body-size);
+}

@@ -26,8 +26,11 @@ def clean_text(text: str) -> str:
 
 
 def clean_email(text: str) -> str:
-    """' Rosa.Silva@EXAMPLE.COM ' → 'rosa.silva@example.com'. Accepts pasted
-    mailto: links and 'Name <addr>' forms; raises when it isn't an email."""
+    """' Rosa.Silva@EXAMPLE.COM ' → 'Rosa.Silva@example.com'. The DOMAIN
+    lowercases and the local part does not — RFC 5321 makes local parts
+    case-sensitive, and flattening them can address mail to the wrong person.
+    Accepts pasted mailto: links and 'Name <addr>' forms; raises when it isn't
+    an email."""
     cleaned = clean_text(text)
     if cleaned.lower().startswith("mailto:"):
         cleaned = cleaned[7:]

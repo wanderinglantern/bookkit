@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}The book — bookkit{% endblock %}
+{% block content %}
+  {% include "partials/topbar.html" %}
+
+  <div class="book-header">
+    <h1 class="book-title">The book</h1>
+    <span class="book-subtitle">{{ count }} account{{ "s" if count != 1 else "" }} · {{ total_premium }} bound premium</span>
+    <span class="book-header-spacer"></span>
+    {# Rendered per the design (a filter belongs in the header) but not
+       wired this task — a real <input> a user can type into and nothing
+       happens is a worse "looks live, is dead" bug than a static pill that
+       says so up front, so this stays a span, never an <input>. #}
+    <span class="book-filter-pill" aria-disabled="true" title="Filtering is not wired yet — a later task">filter by name / owner / status…</span>
+    <span class="btn-pill btn-pill-primary" aria-disabled="true" title="Not wired yet — creating an account is a later task">New account</span>
+    <span class="btn-pill" aria-disabled="true" title="Not wired yet — the XLSX export needs a file-download response the web spec does not cover yet">Export workbook</span>
+  </div>
+
+  <div class="book-body">
+    <div class="book-table-head book-grid">
+      <span>ref</span>
+      <span>account</span>
+      <span>owner</span>
+      <span>status</span>
+      <span>next renewal</span>
+      <span class="right">due in</span>
+      <span class="right">premium</span>
+      <span>last touch</span>
+    </div>
+    {% for row in rows %}
+      <a href="/accounts/{{ row.ref }}" class="book-row book-grid">
+        <span class="book-cell mono muted">{{ row.ref }}</span>
+        <span class="book-cell">{{ row.name }}</span>
+        <span class="book-cell muted">{{ row.owner }}</span>
+        <span class="book-cell {{ row.status_class }}">{{ row.status }}</span>
+        <span class="book-cell mono {{ row.renewal_class }}">{{ row.renewal_text }}</span>
+        <span class="book-cell mono right {{ row.due_class }}">{{ row.due_text }}</span>
+        <span class="book-cell mono right">{{ row.premium }}</span>
+        <span class="book-cell mono muted">{{ row.last_touch }}</span>
+      </a>
+    {% else %}
+      {# Addable-list empty state per the visual-direction spec's copy
+         rules — "New account" is the add action for this list. #}
+      <div class="book-empty"><p>empty — add the first row</p></div>
+    {% endfor %}
+  </div>
+{% endblock %}

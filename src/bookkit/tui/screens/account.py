@@ -25,6 +25,8 @@ from textual.widgets import Footer, OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
 from ...dates import days_until
+from ...forms import inline as forms_inline
+from ...forms.spec import Field
 from ...money import format_cents_compact
 from ...repo import (
     contacts,
@@ -42,7 +44,6 @@ from ...services import book
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.entity_actions import batched_write as _batched
-from ..widgets.forms import Field
 from ..widgets.inline_edit import InlineTable
 from ..widgets.tables import (
     ListTable,
@@ -122,12 +123,8 @@ TAB_HINTS: dict[str, str] = {
 # the cell editor is one line, which would flatten a multi-line note on save.
 # Showing it at all is the point — it used to be typed into the form and then
 # be invisible everywhere in the TUI, reachable only through the export.
-RFI_ITEM_INLINE = {
-    0: Field("prompt", "item", required=True),
-    3: Field("category", "group"),
-    4: Field("due_on", "needed by", "date"),
-    7: Field("response", "response"),
-}
+# the Field list itself lives in forms/inline.py — see the comment there.
+RFI_ITEM_INLINE = dict(zip((0, 3, 4, 7), forms_inline.RFI_ITEM_FIELDS, strict=True))
 
 # narrower than this and a wrapped detail column is not worth the rows it
 # costs: the note comes out three characters wide, three lines tall, saying
@@ -543,7 +540,7 @@ class AccountScreen(Screen):
                 f"{nxt_item.days_remaining}d[/]"
             )
         bound = [p for p in placements.for_org(conn, org.id) if p.status == "bound"]
-        bound_premium = sum(p.total_premium or 0 for p in bound)
+        bound_premium = book.bound_premium_for_org(conn, org.id)
         status_style = theme.STATUS_STYLES.get(org.status, theme.FG)
         parts = [
             f"[b {theme.GOLD}]{org.name}[/]  [{theme.DIM}]{org.ref}[/]",
@@ -1361,8 +1358,8 @@ class AccountScreen(Screen):
         self.refresh_data()
 
     def _edit_assignment(self, assignment_id: str) -> None:
+        from ...forms import entities as ef
         from ...repo import team as team_repo
-        from ..widgets import entity_forms as ef
 
         conn = self.app.conn
         try:
@@ -1474,7 +1471,7 @@ class AccountScreen(Screen):
         self.app.push_screen(FormModal(spec, commit=commit), done)
 
     def action_add_here(self) -> None:
-        from ..widgets import entity_forms as ef
+        from ...forms import entities as ef
 
         conn = self.app.conn
         org_id = self.current_org_id
@@ -1562,8 +1559,8 @@ class AccountScreen(Screen):
             )
 
     def action_edit_here(self) -> None:
+        from ...forms import entities as ef
         from ...repo import opportunities as opps_repo
-        from ..widgets import entity_forms as ef
 
         conn = self.app.conn
         tab = self._active_tab()
@@ -1681,7 +1678,7 @@ class AccountScreen(Screen):
             self._edit_org()
 
     def _edit_interaction_or_org(self, table_id: str) -> None:
-        from ..widgets import entity_forms as ef
+        from ...forms import entities as ef
 
         conn = self.app.conn
         table = self.query_one(f"#{table_id}", ListTable)
@@ -1700,7 +1697,7 @@ class AccountScreen(Screen):
         )
 
     def _edit_org(self) -> None:
-        from ..widgets import entity_forms as ef
+        from ...forms import entities as ef
 
         conn = self.app.conn
         existing = orgs.get(conn, self.current_org_id)
@@ -1833,7 +1830,8 @@ class AccountScreen(Screen):
         name, period, and indicated premium flow over; build the tower itself
         in towerkit. Nothing is typed twice."""
         from ... import sync
-        from ..widgets.forms import Field, FormModal, FormSpec
+        from ...forms.spec import FormSpec
+        from ..widgets.forms import FormModal
 
         if self._active_tab() != "tab-placements":
             self.notify("t scaffolds a tower file (placements tab)", severity="warning")
@@ -1917,7 +1915,8 @@ class AccountScreen(Screen):
 
     def action_add_layer(self) -> None:
         from ... import sync
-        from ..widgets.forms import Field, FormModal, FormSpec
+        from ...forms.spec import FormSpec
+        from ..widgets.forms import FormModal
 
         placement = self._selected_linked_placement()
         if placement is None:
@@ -2030,8 +2029,9 @@ class AccountScreen(Screen):
     def _offer_bind_to_layer(self, submission_id: str) -> None:
         """A market bound: offer to put them on a layer at their share."""
         from ... import sync
+        from ...forms.spec import FormSpec
         from ...money import MoneyParseError, parse_share_bps
-        from ..widgets.forms import Field, FormModal, FormSpec
+        from ..widgets.forms import FormModal
         from ..widgets.picker import Picker
 
         conn = self.app.conn
@@ -2096,9 +2096,10 @@ class AccountScreen(Screen):
     def action_assign_team(self) -> None:
         """Assign a colleague: to the account, or to the selected placement
         when the placements tab is open."""
+        from ...forms.entities import assignment_form
+        from ...forms.spec import dropped
         from ...repo import team as team_repo
-        from ..widgets.entity_forms import assignment_form
-        from ..widgets.forms import FormModal, dropped
+        from ..widgets.forms import FormModal
 
         conn = self.app.conn
         members = team_repo.list_members(conn)
@@ -2112,7 +2113,7 @@ class AccountScreen(Screen):
         )
         org_id = None if placement_id else self.current_org_id
 
-        from ..widgets.entity_forms import NEW_MEMBER
+        from ...forms.entities import NEW_MEMBER
 
         def commit(values: dict) -> str | None:
             if values["team_member_id"] == NEW_MEMBER:
@@ -2150,9 +2151,10 @@ class AccountScreen(Screen):
         the member and complete the assignment in one transaction, so a
         refused member save keeps that form open with input intact."""
         from ...db import transaction
+        from ...forms import entities as ef
+        from ...forms.spec import dropped
         from ...repo import team as team_repo
-        from ..widgets import entity_forms as ef
-        from ..widgets.forms import FormModal, dropped
+        from ..widgets.forms import FormModal
 
         conn = self.app.conn
 
@@ -2239,8 +2241,8 @@ class AccountScreen(Screen):
         return done
 
     def action_new_submission(self) -> None:
+        from ...forms import entities as ef
         from ...repo import orgs as orgs_repo
-        from ..widgets import entity_forms as ef
 
         conn = self.app.conn
         if not orgs_repo.list_orgs(conn, kind="market"):

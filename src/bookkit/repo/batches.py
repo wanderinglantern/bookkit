@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from ..db import utc_now
+from .. import db
 from ..ids import new_ulid, next_ref
 from ..models import EventBatch, EventLogEntry
 
@@ -22,12 +22,16 @@ def create(
     org_id: str | None,
 ) -> EventBatch:
     """The caller supplies batch_id because events written inside the same
-    transaction must be stamped with it before this row is queried back."""
+    transaction must be stamped with it before this row is queried back.
+
+    Reads `db.utc_now()` by module attribute rather than importing the name,
+    so a test that monkeypatches `db.utc_now` controls this stamp too — the
+    same clock the join-window check in services/batches.py reads."""
     conn.execute(
         "INSERT INTO event_batch (id, ref, source, tool, summary, org_id,"
         " created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (batch_id, next_ref(conn, BATCH_REF), source, tool, summary, org_id,
-         utc_now()),
+         db.utc_now()),
     )
     return get(conn, batch_id)
 
@@ -87,6 +91,16 @@ def external_change_count(
         (entity_type, entity_id, batch_id),
     ).fetchone()
     return int(row[0])
+
+
+def most_recent(conn: sqlite3.Connection) -> EventBatch | None:
+    """The single most recently created batch, across every source — the join
+    candidate for open_batch(entity_id=...). Ordered by rowid, matching the
+    event_log ordering rule (created_at has only second precision)."""
+    row = conn.execute(
+        "SELECT * FROM event_batch ORDER BY rowid DESC LIMIT 1"
+    ).fetchone()
+    return EventBatch.from_row(row) if row else None
 
 
 def last_undoable(conn: sqlite3.Connection, source: str) -> EventBatch | None:

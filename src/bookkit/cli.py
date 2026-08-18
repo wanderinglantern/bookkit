@@ -19,7 +19,7 @@ from .repo import tasks as tasks_repo
 from .services import renewals, sla, staleness
 
 
-def _run(argv: list[str] | None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bookctl", description=__doc__)
     parser.add_argument("--db", type=Path, default=None, help="database path override")
     sub = parser.add_subparsers(dest="command")
@@ -84,6 +84,15 @@ def _run(argv: list[str] | None) -> int:
     export_p.add_argument("--out", type=Path, default=None,
                           help="default: <ref>-open-items-<date>.xlsx")
 
+    web_p = sub.add_parser("web", help="serve the browser interface on localhost")
+    web_p.add_argument("--port", type=int, default=8931)
+    web_p.add_argument("--no-browser", action="store_true")
+
+    return parser
+
+
+def _run(argv: list[str] | None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
 
     guard = _refuse_a_missing_book(args)
@@ -124,6 +133,11 @@ def _run(argv: list[str] | None) -> int:
             print(f"{'✓' if result.ok else '✗'} {result.label:<8}  {result.detail}")
         return 0 if report.ok else 1
 
+    if args.command == "web":
+        from .web.serve import serve
+
+        return serve(args.db, args.port, open_browser=not args.no_browser)
+
     conn = db.connect(args.db)
     try:
         return _dispatch(args, conn)
@@ -136,7 +150,7 @@ def _run(argv: list[str] | None) -> int:
 # a cheerful all-zeros brief and exit 0 — indistinguishable from a quiet book,
 # and it left an empty database behind. Creation belongs to init/migrate/seed.
 READ_ONLY_COMMANDS = frozenset(
-    {"today", "renewals", "search", "export", "open"}
+    {"today", "renewals", "search", "export", "open", "web"}
 )
 
 

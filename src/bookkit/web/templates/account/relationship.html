@@ -1,0 +1,9 @@
+{% extends "account/page.html" %}
+{% block panel %}
+  {# Contacts (Task 8) — interactions (the timeline) join them in Task 10.
+     _contacts_panel.html supplies its own #contacts-panel root (fix round
+     2) — the id has to live on that partial's own wrapper, not here, or
+     an out-of-band-swapped panel response (see contact_create) would carry
+     a SECOND #contacts-panel and match nothing. #}
+  {% include "account/_contacts_panel.html" %}
+{% endblock %}

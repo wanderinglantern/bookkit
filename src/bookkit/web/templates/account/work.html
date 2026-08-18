@@ -1,0 +1,10 @@
+{% extends "account/page.html" %}
+{% block panel %}
+  {# Tasks 11-13: open tasks, information requests, and (per request) their
+     items — the last reached via each request's "Items" link, a separate
+     page under this same tab (request_detail.html). Project needs are a
+     later slice; this panel holds the two sections that are built. #}
+  {% include "account/_tasks_panel.html" %}
+  <div class="work-section-gap"></div>
+  {% include "account/_requests_panel.html" %}
+{% endblock %}

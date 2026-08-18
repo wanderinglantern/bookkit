@@ -1,0 +1,49 @@
+{% macro render_field(f, value, placeholder) %}
+  <div class="field">
+    <label for="f-{{ f.key }}">{{ f.label }}{% if f.required %} <span class="req">*</span>{% endif %}</label>
+    {% if f.kind == "select" %}
+      <select id="f-{{ f.key }}" name="{{ f.key }}"{% if f.required %} required{% endif %}>
+        {% if f.optional_select or not f.required %}<option value=""></option>{% endif %}
+        {% for label, val in f.options %}
+          <option value="{{ val }}"{% if value == val %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    {% elif f.kind == "textarea" %}
+      <textarea id="f-{{ f.key }}" name="{{ f.key }}" rows="5"
+                {% if f.required %}required{% endif %}>{{ value }}</textarea>
+    {% else %}
+      {# text for every remaining kind on purpose: type=number rejects
+         "1,234.56" and type=date bypasses parse_human_date's refusal #}
+      <input type="text" id="f-{{ f.key }}" name="{{ f.key }}"
+             value="{{ value }}" placeholder="{{ placeholder }}"
+             {% if f.suggestions %}list="l-{{ f.key }}"{% endif %}
+             {% if f.required %}required{% endif %}>
+      {% if f.suggestions %}
+        <datalist id="l-{{ f.key }}">
+          {% for s in f.suggestions %}<option value="{{ s }}"></option>{% endfor %}
+        </datalist>
+      {% endif %}
+    {% endif %}
+  </div>
+{% endmacro %}
+
+{% macro form(spec, action, rows, error) %}
+  <form class="entity-form" method="post" action="{{ action }}"
+        hx-post="{{ action }}" hx-target="closest .form-host" hx-swap="innerHTML">
+    <h2 class="form-title">{{ spec.title }}</h2>
+    {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+    {% for row in rows %}{{ render_field(row.field, row.value, row.placeholder) }}{% endfor %}
+    <div class="form-actions">
+      <button type="submit">Save</button>
+      {# Cancel writes nothing — it only clears the .form-host this form
+         was opened into, the same target/swap Save's own hx-target above
+         already uses on success. data-form-cancel is picked up by a
+         delegated click listener in inline-cell.js (not an inline
+         onclick, and not a second script) — the same file already owns
+         Escape-cancels-an-editor for cells, and a whole-form Escape lives
+         there too now, right beside it. Both close the form; neither ever
+         submits or posts. #}
+      <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+    </div>
+  </form>
+{% endmacro %}

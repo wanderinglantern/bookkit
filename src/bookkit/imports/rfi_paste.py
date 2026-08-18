@@ -1,6 +1,8 @@
-"""Turn a pasted litany into items. Underwriter questions arrive as a
-numbered or bulleted block in an email; typing them one form at a time is
-the failure mode that kills the feature, so one line becomes one item."""
+"""Parses pasted RFI item text — a numbered or bulleted litany of underwriter
+questions arrives as one paste in an email; typing them one form at a time is
+the failure mode that kills the feature, so one line becomes one item. Pure
+`re`, no framework dependency, shared by every surface (MCP tool, TUI widget)
+that turns a paste into a batch of items."""
 
 from __future__ import annotations
 

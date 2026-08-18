@@ -60,7 +60,8 @@ def push_form(
     applied, and no longer needs `u` to guess which of the four to put back.
     Pass an explicit BatchSpec when the changes list deserves a better
     sentence than the form title."""
-    from .forms import BatchSpec, FormModal
+    from ...forms.spec import BatchSpec
+    from .forms import FormModal
 
     if batch is None:
         batch = BatchSpec.for_title(spec.title, org_id=org_id)
@@ -81,9 +82,10 @@ def edit_placement(screen: Screen, placement: Placement) -> None:
     """Dual-owner edit for linked placements (name/dates write through the
     towerkit file), plain form for unlinked ones."""
     from ... import sync
+    from ...forms import entities as ef
+    from ...forms.spec import Field, FormSpec
     from ...repo import placements
-    from . import entity_forms as ef
-    from .forms import Field, FormModal, FormSpec
+    from .forms import FormModal
 
     conn = _app(screen).conn
     if not placement.program_path:
@@ -169,8 +171,9 @@ def edit_layer(screen: Screen, placement: Placement, layer_id: str | None = None
     """Edit one layer of a linked placement through write-through. With no
     layer_id: straight to the form when there's one layer, else the picker."""
     from ... import sync
+    from ...forms.spec import Field, FormSpec
     from ...money import format_cents_compact
-    from .forms import Field, FormModal, FormSpec
+    from .forms import FormModal
     from .picker import Picker
 
     conn = _app(screen).conn
@@ -280,7 +283,7 @@ def export_open_items_flow(screen: Screen, org_id: str) -> None:
 
 
 def add_request(screen: Screen, org_id: str) -> None:
-    from . import entity_forms as ef
+    from ...forms import entities as ef
 
     conn = _app(screen).conn
     push_form(
@@ -291,7 +294,7 @@ def add_request(screen: Screen, org_id: str) -> None:
 
 
 def edit_request(screen: Screen, request: RfiRequest) -> None:
-    from . import entity_forms as ef
+    from ...forms import entities as ef
 
     conn = _app(screen).conn
     push_form(
@@ -302,7 +305,7 @@ def edit_request(screen: Screen, request: RfiRequest) -> None:
 
 
 def add_rfi_item(screen: Screen, request_id: str) -> None:
-    from . import entity_forms as ef
+    from ...forms import entities as ef
 
     conn = _app(screen).conn
     push_form(
@@ -313,7 +316,7 @@ def add_rfi_item(screen: Screen, request_id: str) -> None:
 
 
 def edit_rfi_item(screen: Screen, item: RfiItem) -> None:
-    from . import entity_forms as ef
+    from ...forms import entities as ef
 
     conn = _app(screen).conn
     push_form(
@@ -327,9 +330,9 @@ def paste_rfi_items(screen: Screen, request_id: str) -> None:
     """One pasted block → one item per line. Refuses an empty paste in place
     (commit-in-place: the form stays up with the text intact)."""
     from ... import db
+    from ...forms.spec import Field, FormSpec
+    from ...imports.rfi_paste import split_items
     from ...repo import rfi as rfi_repo
-    from .forms import Field, FormSpec
-    from .rfi_paste import split_items
 
     conn = _app(screen).conn
 

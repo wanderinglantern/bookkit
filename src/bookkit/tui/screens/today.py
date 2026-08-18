@@ -234,7 +234,7 @@ class TodayScreen(Screen):
         self.app.push_screen(ImportScreen())
 
     def action_new_task(self) -> None:
-        from ..widgets.entity_forms import apply_task, task_form
+        from ...forms.entities import apply_task, task_form
         from ..widgets.forms import FormModal
 
         def commit(values: dict) -> str | None:
@@ -248,7 +248,7 @@ class TodayScreen(Screen):
         self.app.push_screen(FormModal(task_form(conn=self.app.conn), commit=commit), done)
 
     def action_edit_task(self) -> None:
-        from ..widgets.entity_forms import apply_task, task_form
+        from ...forms.entities import apply_task, task_form
         from ..widgets.forms import FormModal
 
         task_id = self._selected_task_id()

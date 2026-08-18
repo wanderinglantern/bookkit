@@ -19,6 +19,7 @@ from textual.widgets import Footer, Header, Input, Static
 
 from ...repo import interactions, orgs
 from ...repo import placements as placements_repo
+from ...services import book as book_service
 from ...services import renewals
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
@@ -108,8 +109,11 @@ class BookScreen(Screen):
                 p for p in placements_repo.for_org(conn, org.id)
                 if p.status == "bound"
             ]
+            # dash when there are no bound placements at all, not merely when
+            # the sum is zero — a bound placement with no premium entered yet
+            # is still bound, and should read $0, not "—"
             premium_cell: Text = money_text(
-                sum(p.total_premium or 0 for p in bound) if bound else None
+                book_service.bound_premium_for_org(conn, org.id) if bound else None
             )
             if nxt_item is None:
                 renewal_cell: Text = dash()
@@ -157,7 +161,7 @@ class BookScreen(Screen):
         return table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
 
     def action_new_account(self) -> None:
-        from ..widgets.entity_forms import apply_org, org_form
+        from ...forms.entities import apply_org, org_form
         from ..widgets.forms import FormModal
 
         def commit(values: dict) -> str | None:
@@ -174,8 +178,8 @@ class BookScreen(Screen):
         )
 
     def action_edit_account(self) -> None:
+        from ...forms.entities import apply_org, org_form_initial_profile
         from ...repo import orgs
-        from ..widgets.entity_forms import apply_org, org_form_initial_profile
         from ..widgets.forms import FormModal
 
         org_id = self._selected_org_id()

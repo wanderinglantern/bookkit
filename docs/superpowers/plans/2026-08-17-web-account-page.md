@@ -19,9 +19,68 @@
 - **Date inputs are `<input type="text">`.** Never `type="date"` — a native picker bypasses `parse_human_date`, whose job is to *refuse* bare 1–2 digit input.
 - **The renewal date is `RenewalItem.renewal_on`**, never `placement.period_to`. Print the same date you count to. Overdue is `days_remaining < 0`.
 - **Every write goes through `services.batches.open_batch(conn, source="web", tool=…, summary=…, org_id=…)`.** No repo write outside a batch.
-- **Gates before every commit:** `uv run pytest -q`, `uv run mypy src`, `uv run ruff check src tests`. Redirect output to the scratchpad; put the gate on the command itself, never after a pipe — pipes eat exit codes.
+- **Gates before every commit:** `uv run pytest -q`, `uv run mypy src`, `uv run ruff check src tests`. Put the gate on the command itself, never after a pipe — pipes eat exit codes and red suites get committed.
+- **A fourth gate for anything touching `pyproject.toml` or package data: the wheel must build.** `uv build --wheel` — pytest, mypy and ruff never invoke the build backend, so a packaging error passes all three and only surfaces when `make wheelhouse` fails on the way to the work machine. This was learned the hard way in Task 4: a `force-include` block collided with hatchling's default VCS-based inclusion and made the wheel unbuildable while every other gate stayed green.
+- **Gate output goes to `$GATE`, never `/tmp`.** Concurrent pytest runs interleave in `/tmp`. Set it once per shell session to this session's scratchpad directory before running any gate:
+  ```bash
+  export GATE=<this session's scratchpad directory>
+  ```
+  Every gate command below writes to `"$GATE/out.txt"`, `"$GATE/mypy.txt"`, or `"$GATE/ruff.txt"`.
+- **Baseline for this branch: 757 passed, 38 snapshots, exit 0.** Any task that ends with a different passing count has changed behaviour — find out why before committing.
+- **`uvicorn` and `starlette` are already installed transitively via `mcp`.** Task 4 still declares them explicitly (a transitive dependency is not a contract), but expect `uv sync` to report a smaller delta than the four new names suggest.
 - **Line length 100** (ruff config), target `py311`.
+- **Appearance and interaction are governed by `docs/superpowers/specs/2026-08-17-web-visual-direction.md`.** Read it before writing any template or stylesheet. Where it and a task's inline HTML disagree, it wins on appearance and interaction; the task wins on structure and routes. It was revised on 2026-08-17: the palette is towerkit's authoritative brand set on a light document ground — **not** `tui/theme.py`'s dark terminal palette, which was tried and rejected. Load-bearing rules: serif for names only and Regular weight only, sans for language, mono for anything that aligns; white text never on gold, Blue 500, Green 750 or Sky; every coloured state also carries a word or glyph; `:focus-visible` is a 2px accent outline everywhere; radius 2px on controls and 0 elsewhere; no shadows or gradients.
+- **Editing is inline first (Grant, 2026-08-17).** A row's editable cells are edited where they sit — no Edit button, no modal round trip. Forms are for *creating* a record and for the things the TUI deliberately keeps in a form. Which fields are inline-editable is not a per-surface choice: reuse the TUI's declarations. One field edit is one writer action and therefore one batch. The record's id travels in the URL, never its row position — `tui/widgets/inline_edit.py` captures `row_key` when the editor opens precisely because a refresh can reorder rows mid-edit.
 - Work in the worktree `.claude/worktrees/web-account` on branch `web-account`. A fresh worktree needs `uv sync --group dev`, and gates run as `uv run --no-sync python -m pytest`.
+
+---
+
+## Design handoff amendment (2026-08-17, after Task 7)
+
+A Design package landed mid-build: the Claude Design project *BookKit and TowerKit
+design*, `Account View.dc.html` plus a README. `docs/superpowers/specs/2026-08-17-web-visual-direction.md`
+has been rewritten from it and is binding. Grant's three calls on it:
+
+1. **Stack stays server-rendered.** The handoff recommends React + Vite on the
+   premise that the repos have no web stack; that is stale. Tasks 1–6 stand.
+2. **The account page becomes four tabs plus a right rail**, replacing the nine
+   TUI tabs *and* our five. Note the handoff's own README §5 still describes the
+   nine — the `.dc.html` is the later artefact and wins.
+3. **The renewal rail is dropped**, replaced by a header badge and a snapshot row.
+
+### How the remaining tasks re-map
+
+| Tab | Holds | Built by |
+|---|---|---|
+| **Program** | placements, tower, carriers | later slice (towerkit writes) |
+| **Relationship** | contacts, interactions | Tasks 8, 9, 10 |
+| **Work** | tasks, project needs, RFI requests | Tasks 11, 12, 13 |
+| **Pipeline** | opportunities, submissions | later slice |
+
+The tasks keep their substance — same repos, same forms, same batching, same
+tests. What changes is which tab their panel is mounted in, and that they render
+per the handoff's tokens. **There is no Overview tab**; the right rail's SNAPSHOT
+replaces it, so Task 7's five overview cards are removed rather than restyled.
+
+### New work the handoff introduces
+
+- **The undo surface** — toast, top-bar `Undo <last change>` pill, and
+  `RECENT CHANGES` in the right rail with a per-row `Revert`. The batch machinery
+  exists (Tasks 1–5); this gives it a face and flips `undo` in the parity ledger.
+  Folded into Task 15, which already owns batch grouping.
+- **The dashed editable underline** (`1px dashed #cfd6e8`) and **blur cancels**.
+  Both belong to the cell macros from Task 6; folded into Task 8, the first task
+  that renders real cells.
+- **Self-hosted fonts** — NotoSans/NotoSerif ship in `towerkit/src/towerkit/fonts/`
+  under OFL. Folded into Task 16 with the wheelhouse work, since both touch
+  packaging.
+
+### Two deviations from the handoff, recorded deliberately
+
+- It asks for **Noto Serif 600**; only Regular and Bold ship. Use **700**, because
+  a synthesised weight looks smeared.
+- It specifies **JetBrains Mono**; it is in neither repo. Use the system mono
+  stack until the OFL files are added — a one-token change later.
 
 ---
 
@@ -175,7 +234,7 @@ def test_batch_spec_derives_tool_from_title_without_the_record_name():
 - [ ] **Step 2: Run the test and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_forms_spec.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_forms_spec.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: collection error, `ModuleNotFoundError: No module named 'bookkit.forms'`.
@@ -355,7 +414,7 @@ def dropped(values: dict[str, Any]) -> dict[str, Any]:
 - [ ] **Step 4: Run the new test and confirm it passes**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_forms_spec.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_forms_spec.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: 12 passed.
@@ -410,7 +469,7 @@ from ...forms.spec import (
 - [ ] **Step 6: Run the whole suite — the existing tests are the gate on this move**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
 ```
 
 Expected: PASS, same count as before the change. `tests/test_tui_forms.py` and `tests/test_form_entry.py` are the ones that would catch a behaviour change; if either fails, the move changed semantics — fix the move, do not adjust the test.
@@ -418,8 +477,8 @@ Expected: PASS, same count as before the change. `tests/test_tui_forms.py` and `
 - [ ] **Step 7: Run mypy and ruff**
 
 ```bash
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -5 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -5 /tmp/ruff.txt
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -5 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -5 "$GATE/ruff.txt"
 ```
 
 Expected: both clean.
@@ -484,7 +543,7 @@ def test_mcp_has_no_second_cleaner_map():
 - [ ] **Step 2: Run it and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_forms_spec.py -q -k mcp > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_forms_spec.py -q -k mcp > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 Expected: `test_mcp_has_no_second_cleaner_map` FAILS on the assert. The equivalence test may already pass — that is fine and expected; it is the regression guard, not the driver.
@@ -508,7 +567,7 @@ def _clean_field_value(field: str, value: str) -> str:
 - [ ] **Step 4: Run the tests and confirm they pass**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_forms_spec.py tests/test_mcpserver.py -q > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_forms_spec.py tests/test_mcpserver.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 Expected: PASS. If `test_mcpserver.py` fails on a `notes` field, note that the old map mapped `"notes"` to `None` (verbatim) while `CLEANERS` keys on *kind* not field name — check whether the failing call passes a field named `notes` and, if so, keep behaviour by leaving `notes` out of the enrich path rather than re-adding a map.
@@ -516,9 +575,9 @@ Expected: PASS. If `test_mcpserver.py` fails on a `notes` field, note that the o
 - [ ] **Step 5: Full gates and commit**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add src/bookkit/mcpserver.py tests/test_web_forms_spec.py
 git commit -m "mcp: delete the duplicated field-cleaner map
 
@@ -544,7 +603,7 @@ A pure move. The existing suite is the gate — every screen already exercises t
 - [ ] **Step 1: Find every importer**
 
 ```bash
-grep -rn "entity_forms" src tests | tee /tmp/importers.txt
+grep -rn "entity_forms" src tests | tee "$GATE/importers.txt"
 ```
 
 Record the list — every one gets rewritten in Step 3.
@@ -559,12 +618,12 @@ Then in `src/bookkit/forms/entities.py` fix the now-wrong relative imports: `fro
 
 - [ ] **Step 3: Rewrite the call sites**
 
-For each path in `/tmp/importers.txt`, replace the import with `from bookkit.forms import entities as entity_forms` (absolute) or the matching relative form — e.g. in `src/bookkit/tui/screens/account.py`, `from ..widgets import entity_forms` becomes `from ...forms import entities as entity_forms`. Keeping the local alias `entity_forms` means the ~100 usage sites in the screens need no edit.
+For each path in `"$GATE/importers.txt"`, replace the import with `from bookkit.forms import entities as entity_forms` (absolute) or the matching relative form — e.g. in `src/bookkit/tui/screens/account.py`, `from ..widgets import entity_forms` becomes `from ...forms import entities as entity_forms`. Keeping the local alias `entity_forms` means the ~100 usage sites in the screens need no edit.
 
 - [ ] **Step 4: Run the whole suite**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
 ```
 
 Expected: PASS with the same count as Task 2. A failure here is a missed import, not a behaviour change.
@@ -580,8 +639,8 @@ Expected: no output.
 - [ ] **Step 6: Gates and commit**
 
 ```bash
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add -A
 git commit -m "forms: move entity_forms into bookkit.forms.entities
 
@@ -705,7 +764,7 @@ def test_serve_binds_loopback_only():
 - [ ] **Step 4: Run it and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_shell.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_shell.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: `ModuleNotFoundError: No module named 'bookkit.web'`.
@@ -835,7 +894,7 @@ Add `"web"` to `READ_ONLY_COMMANDS` so a typo'd `--db` refuses instead of conjur
 - [ ] **Step 7: Run the test and confirm it passes**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_shell.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_shell.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: 4 passed.
@@ -868,7 +927,7 @@ They are negative assertions — the class that passes for the wrong reason. Pro
 
 ```bash
 echo "# bookkit.tui" >> src/bookkit/web/app.py
-uv run --no-sync python -m pytest tests/test_conventions.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_conventions.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: `test_web_and_tui_never_import_each_other` FAILS. Now revert:
@@ -882,9 +941,9 @@ Repeat for the SQL rule by appending `# .execute(` to a web module, confirming `
 - [ ] **Step 10: Full gates and commit**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add -A
 git commit -m "web: FastAPI shell, bookctl web, and the boundary conventions
 
@@ -988,7 +1047,7 @@ def test_an_action_is_not_both_implemented_and_pending():
 - [ ] **Step 3: Run it to get the real action list**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_parity.py -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_parity.py -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
 ```
 
 Expected: `test_every_account_action_is_implemented_or_explicitly_pending` FAILS, and the assertion message prints the complete sorted list of action names.
@@ -1012,7 +1071,7 @@ Do not invent names. Every key must come from the test's output.
 - [ ] **Step 5: Run it and confirm it passes**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_parity.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_parity.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: 3 passed.
@@ -1028,7 +1087,7 @@ first = re.search(r'^\s+"(\w+)": ', text, re.M).group(1)
 p.write_text(text.replace(f'"{first}": ', '"__removed__": ', 1))
 print("removed", first)
 PY
-uv run --no-sync python -m pytest tests/test_web_parity.py -q > /tmp/out.txt 2>&1; tail -8 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_parity.py -q > "$GATE/out.txt" 2>&1; tail -8 "$GATE/out.txt"
 git checkout src/bookkit/web/parity.py
 ```
 
@@ -1037,7 +1096,7 @@ Expected: two failures — the missing action, and the now-stale `__removed__` e
 - [ ] **Step 7: Commit**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
 git add src/bookkit/web/parity.py tests/test_web_parity.py
 git commit -m "web: parity ledger for the account screen
 
@@ -1048,7 +1107,83 @@ so the remaining distance to 1:1 stays a number rather than a memory."
 
 ---
 
-### Task 6: The form macro, and the test that every `FormSpec` renders completely
+### Task 6: Rendering a `Field` — the form macro, the inline cell, and better refusal copy
+
+A `Field` gets rendered two ways: stacked in a form (for creating records) and in place as a table cell (for editing them). Both come from the same dataclass, and the inline-editable field sets come from the TUI's existing declarations rather than a second list.
+
+**Additional files for the inline half:**
+- Create: `src/bookkit/forms/inline.py`, `src/bookkit/web/templates/macros/cell.html`
+- Modify: `src/bookkit/tui/screens/navigator.py` (lines 80–91), `src/bookkit/tui/screens/account.py` (line 125), `src/bookkit/forms/spec.py`
+- Test: `tests/test_web_form_render.py` (the same file)
+
+**Additional interfaces produced:**
+- `bookkit.forms.inline.{CONTACT_FIELDS, TASK_FIELDS, RFI_ITEM_FIELDS}` — each a `tuple[Field, ...]`
+- `bookkit.web.forms_render.render_cell(request, field, value, action) -> str`
+
+**Three extra pieces of work, alongside the form macro the rest of this task describes:**
+
+1. **Extract the inline field sets.** `CONTACT_INLINE` and `TASK_INLINE` (`tui/screens/navigator.py:80-91`) and `RFI_ITEM_INLINE` (`tui/screens/account.py:125`) are `dict[column_index, Field]` — the column index is a TUI presentation detail, the `Field` list is not. Move the field lists to `src/bookkit/forms/inline.py` as ordered tuples, and have the three screens build their column-index dicts from those tuples. Same fields, same order, no behaviour change; the existing TUI tests are the gate. Adding an inline-editable field must now appear on both surfaces.
+
+2. **Add `render_cell`** and `macros/cell.html`: one editable cell, rendered either as its display value (a control that activates the editor) or as a single pre-filled input with the field's placeholder and, on refusal, the message beside it. It uses the same `Field` and the same `initial_text`/`parse_value` as the form macro.
+
+3. **Rewrite the date refusal copy in `src/bookkit/forms/spec.py`.** `parse_value` currently raises `f"cannot read a date from {text!r}"` — the parser naming its objection without naming the remedy. Change it to state the fix:
+
+   ```python
+   raise ValueError(
+       "enter a date like 2026-10-15, friday, or +2w — a bare number is ambiguous")
+   ```
+
+   The refusal itself is unchanged: a bare 1–2 digit number is still refused, never guessed. Only the sentence improves, and it improves on **both** surfaces because there is one home for it. Update any test asserting the old wording — `grep -rn "cannot read a date" src tests` — and check the same phrasing in `mcpserver.py`, which raises its own copy of it for date-typed tool arguments; make the two consistent.
+
+**Tests for the extra work:**
+
+```python
+def test_inline_field_sets_are_shared_not_duplicated():
+    """Which fields are editable in place is not a per-surface choice. The TUI
+    screens build their column maps from these tuples; the web renders the same
+    ones as cells."""
+    from bookkit.forms import inline
+    from bookkit.tui.screens.navigator import CONTACT_INLINE, TASK_INLINE
+
+    assert tuple(CONTACT_INLINE.values()) == inline.CONTACT_FIELDS
+    assert tuple(TASK_INLINE.values()) == inline.TASK_FIELDS
+
+
+@pytest.mark.parametrize("field", [
+    Field("role", "role"),
+    Field("due_on", "due", "date"),
+    Field("email", "email", "email"),
+])
+def test_render_cell_produces_one_named_input(field):
+    html = render_cell(None, field, value="", action="/probe")
+    assert f'name="{field.key}"' in html
+    assert 'type="number"' not in html and 'type="date"' not in html
+
+
+def test_render_cell_shows_a_refusal_beside_the_value_it_kept():
+    field = Field("due_on", "due", "date")
+    html = render_cell(None, field, value="5", action="/probe",
+                       error="enter a date like 2026-10-15, friday, or +2w — a bare number is ambiguous")
+    assert "a bare number is ambiguous" in html
+    assert 'value="5"' in html
+
+
+def test_the_date_refusal_says_how_to_fix_it():
+    """'cannot read a date from 5' names the objection, not the remedy."""
+    import pytest as _pytest
+
+    from bookkit.forms.spec import Field as F
+    from bookkit.forms.spec import parse_value as pv
+
+    with _pytest.raises(ValueError) as caught:
+        pv(F("due_on", "due", "date"), "5")
+    assert "2026-10-15" in str(caught.value)
+    assert "ambiguous" in str(caught.value)
+```
+
+The rest of this task — the form macro itself — follows below unchanged.
+
+#### The form macro, and the test that every `FormSpec` renders completely
 
 Without this test an unhandled `Field.kind` renders nothing, and the form saves while silently dropping a field.
 
@@ -1139,7 +1274,7 @@ def test_the_error_message_is_rendered():
 - [ ] **Step 2: Run it and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_form_render.py -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_form_render.py -q > "$GATE/out.txt" 2>&1; tail -5 "$GATE/out.txt"
 ```
 
 Expected: `ModuleNotFoundError: No module named 'bookkit.web.forms_render'`.
@@ -1246,7 +1381,7 @@ def render_form(
 - [ ] **Step 5: Run the test and confirm it passes**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_form_render.py -q > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_form_render.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 Expected: all pass. If a `kind` fails, add a branch to the macro — do not weaken the test.
@@ -1258,9 +1393,9 @@ Temporarily change the macro's final `{% else %}` branch to render nothing, run 
 - [ ] **Step 7: Gates and commit**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add -A
 git commit -m "web: one macro renders any FormSpec, asserted over every builder
 
@@ -1367,7 +1502,7 @@ def test_overview_shows_the_five_sections(app_and_org):
 - [ ] **Step 2: Run it and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_account.py -q > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_account.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 Expected: every test fails with 404, because no routes exist yet.
@@ -1416,14 +1551,22 @@ def _header(conn: sqlite3.Connection, org: Org) -> dict[str, Any]:
     that made a future date render as '70d over' on four surfaces."""
     item = renewals.next_for_org(conn, org.id)
     if item is None:
+        # No rail at all when there is no live renewal — an empty rail would
+        # imply a clock that is not running.
         return {"org": org, "renewal_on": None, "days_remaining": None,
-                "overdue": False, "lines": ""}
+                "overdue": False, "lines": "", "bucket": None, "rail_pct": None}
+    overdue = item.days_remaining < 0
     return {
         "org": org,
         "renewal_on": item.renewal_on,
         "days_remaining": item.days_remaining,
-        "overdue": item.days_remaining < 0,
+        "overdue": overdue,
         "lines": item.lines,
+        "bucket": item.bucket,
+        # Position along the 120-day rail. Overdue pins to the left overrun and
+        # is never expressed as a position — overdue is decided by
+        # days_remaining < 0, never by where a marker lands.
+        "rail_pct": None if overdue else min(100.0, max(0.0, item.days_remaining / 120 * 100)),
     }
 
 
@@ -1463,22 +1606,8 @@ Create `src/bookkit/web/templates/account/page.html`:
 {% block content %}
   <header class="account-header{% if header.overdue %} is-overdue{% endif %}">
     <h1>{{ header.org.name }}</h1>
-    <dl class="header-facts">
-      <div><dt>status</dt><dd>{{ header.org.status }}</dd></div>
-      {% if header.renewal_on %}
-        <div>
-          <dt>renews</dt>
-          <dd>
-            {{ header.renewal_on }}
-            <span class="countdown">
-              {% if header.overdue %}{{ -header.days_remaining }}d over
-              {% else %}{{ header.days_remaining }}d{% endif %}
-            </span>
-            {% if header.lines %}<span class="lines">{{ header.lines }}</span>{% endif %}
-          </dd>
-        </div>
-      {% endif %}
-    </dl>
+    <span class="status-pill">{{ header.org.status }}</span>
+    {% if header.renewal_on %}{% include "account/_renewal_rail.html" %}{% endif %}
   </header>
   <nav class="tabs">
     <a href="/accounts/{{ header.org.ref }}/overview"
@@ -1490,6 +1619,35 @@ Create `src/bookkit/web/templates/account/page.html`:
   </nav>
   <div class="tab-panel">{% block panel %}{% endblock %}</div>
 {% endblock %}
+```
+
+Create `src/bookkit/web/templates/account/_renewal_rail.html` — the signature element from the visual direction. The date is printed **at the marker**, sourced from the same object as the count beside it, which is what makes the four-surface bug hard to draw:
+
+```html
+<div class="rail{% if header.overdue %} is-overdue{% endif %}">
+  <div class="rail-track" role="img"
+       aria-label="renews {{ header.renewal_on }},
+         {% if header.overdue %}{{ -header.days_remaining }} days overdue
+         {% else %}in {{ header.days_remaining }} days{% endif %}">
+    {% if header.overdue %}
+      <span class="rail-overrun">over</span>
+    {% else %}
+      <span class="rail-marker" style="left: {{ '%.1f'|format(header.rail_pct) }}%"></span>
+    {% endif %}
+    <span class="rail-tick" style="left: 25%"></span>
+    <span class="rail-tick" style="left: 50%"></span>
+    <span class="rail-tick" style="left: 75%"></span>
+  </div>
+  <div class="rail-scale">
+    <span>overdue</span><span>0–30</span><span>31–60</span><span>61–90</span><span>91–120</span>
+  </div>
+  <p class="rail-date">renews <time datetime="{{ header.renewal_on }}">{{ header.renewal_on }}</time></p>
+  <div class="rail-count">
+    <span class="rail-days">{% if header.overdue %}{{ -header.days_remaining }}{% else %}{{ header.days_remaining }}{% endif %}</span>
+    <span class="rail-unit">{% if header.overdue %}days over{% else %}days{% endif %}</span>
+  </div>
+  {% if header.lines %}<p class="rail-lines">{{ header.lines }}</p>{% endif %}
+</div>
 ```
 
 Create `src/bookkit/web/templates/account/overview.html`:
@@ -1527,7 +1685,7 @@ Create `src/bookkit/web/templates/account/overview.html`:
 - [ ] **Step 5: Run the test and confirm it passes**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_account.py -q > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_account.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 Expected: all pass, with at most the two renewal tests skipped if the seeded account has no live renewal. **If they skip, pick an account that does have one** — a skipped renewal test protects nothing. Find one with:
@@ -1535,7 +1693,7 @@ Expected: all pass, with at most the two renewal tests skipped if the seeded acc
 ```bash
 uv run --no-sync python -c "
 from bookkit import db, seed, sync
-" ; uv run --no-sync python -m pytest tests/test_web_account.py -q -rs > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+" ; uv run --no-sync python -m pytest tests/test_web_account.py -q -rs > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 If skipped, change the fixture to select the first org for which `renewals.next_for_org` is not None, and assert that at least one exists.
@@ -1547,9 +1705,9 @@ In `_header`, temporarily return `item.placement.period_to` as `renewal_on`. Run
 - [ ] **Step 7: Gates and commit**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add -A
 git commit -m "web: account header and Overview
 
@@ -1560,7 +1718,109 @@ that pairing wrong on four surfaces."
 
 ---
 
-### Task 8: Contacts — read, add, and edit through the shared apply, in one batch
+### Task 8: Contacts — read, add, and edit **in place**, in one batch
+
+> **Amended 2026-08-17 (Grant): editing is inline, not behind an Edit button.**
+> The `new` half of this task is unchanged — creating a contact is still a form.
+> The `edit` half is replaced: instead of `GET/POST …/contacts/{id}/edit`
+> rendering the whole `contact_form`, each editable cell edits itself.
+>
+> **Replace the two edit routes with these:**
+>
+> ```python
+> from ...forms.inline import CONTACT_FIELDS
+> from ..forms_render import render_cell
+>
+> _CONTACT_CELLS = {f.key: f for f in CONTACT_FIELDS}
+>
+>
+> def _cell_action(ref: str, contact_id: str, key: str) -> str:
+>     return f"/accounts/{ref}/contacts/{contact_id}/cell/{key}"
+>
+>
+> # Three representations, settled in Task 6 so Escape has somewhere to go:
+> #   GET  .../cell/{key}        -> the display cell
+> #   GET  .../cell/{key}/edit   -> the editor cell
+> #   POST .../cell/{key}        -> save; display cell, or editor + error + typed
+> # Both macros render a whole <td> and swap outerHTML, so activating a cell
+> # REPLACES the display element and its htmx listener. Swapping innerHTML left
+> # the listener in place, and clicks inside the editor bubbled back to it and
+> # re-fetched the cell, discarding the edit.
+>
+>
+> def _contact_cell(request: Request, ref: str, contact_id: str, key: str,
+>                   error: str | None = None, typed: str | None = None) -> HTMLResponse:
+>     field = _CONTACT_CELLS.get(key)
+>     if field is None:
+>         raise HTTPException(status_code=404, detail=f"{key!r} is not editable here")
+>     existing = contacts_repo.get(_conn(request), contact_id)
+>     value = typed if typed is not None else initial_text(field, getattr(existing, key, None))
+>     return HTMLResponse(render_cell(
+>         request, field, value, _cell_action(ref, contact_id, key), error=error))
+>
+>
+> @router.get("/accounts/{ref}/contacts/{contact_id}/cell/{key}", response_class=HTMLResponse)
+> def contact_cell_edit(request: Request, ref: str, contact_id: str, key: str) -> HTMLResponse:
+>     _org(request, ref)
+>     return _contact_cell(request, ref, contact_id, key)
+>
+>
+> @router.post("/accounts/{ref}/contacts/{contact_id}/cell/{key}", response_class=HTMLResponse)
+> async def contact_cell_save(request: Request, ref: str, contact_id: str,
+>                             key: str) -> HTMLResponse:
+>     """One field, one writer action, one batch. The contact id is in the URL —
+>     never the row position, because a refresh can reorder rows mid-edit."""
+>     org = _org(request, ref)
+>     conn = _conn(request)
+>     field = _CONTACT_CELLS.get(key)
+>     if field is None:
+>         raise HTTPException(status_code=404, detail=f"{key!r} is not editable here")
+>     raw = str((await request.form()).get(key, ""))
+>     try:
+>         value = parse_value(field, raw)
+>     except ValueError as exc:
+>         return _contact_cell(request, ref, contact_id, key, error=str(exc), typed=raw)
+>     if field.required and value in (None, ""):
+>         return _contact_cell(request, ref, contact_id, key,
+>                              error=f"{field.label} is required", typed=raw)
+>     existing = contacts_repo.get(conn, contact_id)
+>     try:
+>         with batches_svc.open_batch(
+>             conn, source="web", tool="edit_contact",
+>             summary=f"set {field.label} on {existing.first_name} {existing.last_name}",
+>             org_id=org.id,
+>         ):
+>             contacts_repo.update(conn, contact_id, **{key: value})
+>     except Exception as exc:
+>         return _contact_cell(request, ref, contact_id, key, error=str(exc), typed=raw)
+>     return _contact_cell(request, ref, contact_id, key)
+> ```
+>
+> Import `initial_text` and `parse_value` from `...forms.spec` alongside the
+> existing imports.
+>
+> **The panel template changes** — each editable cell becomes a control that
+> swaps itself for the editor, rather than a row-level Edit button:
+>
+> ```html
+> <td hx-get="/accounts/{{ header.org.ref }}/contacts/{{ c.id }}/cell/email"
+>     hx-trigger="click" hx-swap="innerHTML" tabindex="0" class="cell">{{ c.email or "—" }}</td>
+> ```
+>
+> Do that for every key in `CONTACT_FIELDS` (`role`, `title`, `email`, `phone`);
+> `first_name` / `last_name` stay display-only here because the TUI's
+> `CONTACT_INLINE` does not declare them.
+>
+> **Test changes:** `test_editing_a_contact_writes_one_web_batch` and
+> `test_the_web_batch_reverts` below POST the whole form. Rewrite both to POST a
+> single cell (`…/cell/title` with `data={"title": "Head of Risk"}`) and assert
+> the same things — a batch exists, `source='web'`, and `revert()` restores the
+> prior value. The assertions that matter are unchanged; only the route moves.
+> Add one test that a non-editable key (`first_name`) returns 404 rather than
+> writing, so the editable set is enforced server-side and not just in the
+> template.
+
+
 
 **Files:**
 - Create: `src/bookkit/web/templates/account/contacts.html`, `src/bookkit/web/templates/account/_contacts_panel.html`
@@ -1694,7 +1954,7 @@ Expected: `def recent(` at roughly line 53 — verified as of this plan. Check i
 - [ ] **Step 3: Run the test and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q > /tmp/out.txt 2>&1; tail -10 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_writes.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
 ```
 
 Expected: 404s — the routes do not exist.
@@ -1844,7 +2104,7 @@ Create `src/bookkit/web/templates/account/contacts.html`:
 - [ ] **Step 6: Run the test and confirm it passes**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q > /tmp/out.txt 2>&1; tail -15 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_writes.py -q > "$GATE/out.txt" 2>&1; tail -15 "$GATE/out.txt"
 ```
 
 Expected: 3 passed.
@@ -1860,9 +2120,9 @@ In `src/bookkit/web/parity.py`, move the contact-related actions from `PENDING` 
 - [ ] **Step 9: Gates and commit**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add -A
 git commit -m "web: contacts read, add, and edit through the shared apply
 
@@ -1916,48 +2176,34 @@ def test_a_refused_save_keeps_every_value_and_writes_nothing(app_and_org):
     # and nothing was written
     assert len(contacts_repo.for_org(conn, org.id)) == before_count
     assert len(batches_repo.recent(conn, limit=50)) == before_batches
-
-
-def test_a_bare_number_is_refused_as_a_date_on_the_web_too(app_and_org):
-    """dateparser reads '5' as a MONTH and future-biases it. The refusal lives
-    in parse_human_date, and the web reaches it through the same parser the
-    TUI uses — not a second validator."""
-    client, org = app_and_org
-    conn = client.app.state.conn
-    from bookkit.repo import interactions as interactions_repo
-
-    interaction = interactions_repo.for_org(conn, org.id, limit=1)[0]
-    response = client.post(
-        f"/accounts/{org.ref}/interactions/{interaction.id}/edit",
-        data={"occurred_on": "5", "type": interaction.type,
-              "subject": interaction.subject, "body": interaction.body or ""},
-    )
-    assert response.status_code == 200
-    assert "cannot read a date" in response.text
-    assert interactions_repo.get(conn, interaction.id).occurred_on == interaction.occurred_on
 ```
 
-- [ ] **Step 2: Run the first test only and confirm behaviour**
+The date-refusal test belongs to Task 10, not here: it exercises the interactions
+route, which does not exist yet, and committing it now would leave the suite red
+against this plan's own gating constraint.
+
+- [ ] **Step 2: Run the test and confirm behaviour**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q -k "refused" > /tmp/out.txt 2>&1; tail -15 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_writes.py -q > "$GATE/out.txt" 2>&1; tail -15 "$GATE/out.txt"
 ```
 
-Expected: `test_a_refused_save_keeps_every_value_and_writes_nothing` passes if Task 8's `_save` is correct. If it fails on a missing value, the renderer is not receiving `raw` as `submitted` — fix `_save`, not the test. The second test fails with 404 until Task 10.
+Expected: all four tests pass — three from Task 8 plus this one — if Task 8's `_save` is correct. If it fails on a missing value, the renderer is not receiving `raw` as `submitted`; fix `_save`, not the test.
 
 - [ ] **Step 3: Verify the "nothing was written" assertion can fail**
 
 Temporarily make `_save` swallow the `FieldError` and write anyway. Confirm the test fails on the count assertions. Restore.
 
-- [ ] **Step 4: Commit the passing half**
+- [ ] **Step 4: Full gates and commit**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q -k "refused" > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add tests/test_web_writes.py
 git commit -m "web: assert the refusal contract — input intact, nothing written
 
-Also stages the date-refusal test, which stays red until the interactions
-routes land in the next task."
+A refused save re-renders the form with every value the user typed and rolls
+the transaction back, so neither a row nor a batch survives it."
 ```
 
 ---
@@ -1978,6 +2224,25 @@ routes land in the next task."
 Append to `tests/test_web_writes.py`:
 
 ```python
+def test_a_bare_number_is_refused_as_a_date_on_the_web_too(app_and_org):
+    """dateparser reads '5' as a MONTH and future-biases it. The refusal lives
+    in parse_human_date, and the web reaches it through the same parser the
+    TUI uses — not a second validator."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import interactions as interactions_repo
+
+    interaction = interactions_repo.for_org(conn, org.id, limit=1)[0]
+    response = client.post(
+        f"/accounts/{org.ref}/interactions/{interaction.id}/edit",
+        data={"occurred_on": "5", "type": interaction.type,
+              "subject": interaction.subject, "body": interaction.body or ""},
+    )
+    assert response.status_code == 200
+    assert "cannot read a date" in response.text
+    assert interactions_repo.get(conn, interaction.id).occurred_on == interaction.occurred_on
+
+
 def test_interactions_tab_shows_the_note_body(app_and_org):
     """The body was stored and never shown anywhere before review F33 — the
     log is the index, the note is the point."""
@@ -2016,7 +2281,7 @@ def test_deleting_an_interaction_is_confirmed_then_batched(app_and_org):
 - [ ] **Step 2: Run and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q > /tmp/out.txt 2>&1; tail -15 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_writes.py -q > "$GATE/out.txt" 2>&1; tail -15 "$GATE/out.txt"
 ```
 
 Expected: the three interaction tests fail with 404.
@@ -2156,7 +2421,7 @@ Create `src/bookkit/web/templates/account/interactions.html`:
 - [ ] **Step 5: Run the whole write suite**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_writes.py -q > /tmp/out.txt 2>&1; tail -15 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_writes.py -q > "$GATE/out.txt" 2>&1; tail -15 "$GATE/out.txt"
 ```
 
 Expected: all pass, including `test_a_bare_number_is_refused_as_a_date_on_the_web_too` from Task 9.
@@ -2170,9 +2435,9 @@ Temporarily make the `GET .../delete` route perform the delete. Confirm `test_de
 Move the interaction actions from `PENDING` to `IMPLEMENTED` in `src/bookkit/web/parity.py`.
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 git add -A
 git commit -m "web: interactions read, edit, and delete behind a server confirm
 
@@ -2182,7 +2447,1107 @@ rendered confirm step, inside a batch, so R can put it back."
 
 ---
 
-### Task 11: One palette, and the wheelhouse
+### Task 11: Requests — the chase list, create, and edit
+
+Fast-tracked into slice 1 at Grant's request (2026-08-17). A request is an ask you are waiting on an answer to; the tab is master/detail over `RfiRequest` → `RfiItem`. This task builds the request level only.
+
+**Files:**
+- Create: `src/bookkit/web/templates/account/requests.html`, `src/bookkit/web/templates/account/_requests_panel.html`
+- Modify: `src/bookkit/web/routes/account.py`, `src/bookkit/web/parity.py`, `src/bookkit/web/templates/account/page.html` (add the tab link)
+- Test: `tests/test_web_requests.py`
+
+**Interfaces:**
+- Consumes: `bookkit.forms.entities.{request_form, apply_request}`, `bookkit.repo.rfi.{requests_for_org, get_request}`, `bookkit.services.rfi.{is_open, scope_label, asker_name}`, the `_save` helper from Task 8
+- Produces: routes `GET /accounts/{ref}/requests`, `GET/POST /accounts/{ref}/requests/new`, `GET/POST /accounts/{ref}/requests/{request_id}/edit`
+
+**Exact signatures — these differ from the contact/interaction pattern, do not guess:**
+
+```python
+request_form(existing: RfiRequest | None = None, *, conn=None, org_id=None) -> FormSpec
+apply_request(conn, values: dict, org_id: str, existing: RfiRequest | None = None) -> RfiRequest
+rfi_repo.requests_for_org(conn, org_id) -> list[RfiRequest]
+rfi_svc.is_open(conn, request_id) -> bool
+rfi_svc.scope_label(conn, request) -> str
+rfi_svc.asker_name(conn, request) -> str
+```
+
+**`request_form` must always be called with both `conn=` and `org_id=`.** Without them the market, placement, and project select options come back empty, and the form's own dead-FK guard then blanks a live scope rather than a dead one. Read the comment at `request_form` before wiring it.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_web_requests.py`:
+
+```python
+"""Requests — what you are waiting on, and who owes it."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from bookkit.web.app import create_app
+
+
+@pytest.fixture
+def app_and_org(snapshot_db: Path):
+    app = create_app(snapshot_db)
+    from bookkit.repo import orgs, rfi as rfi_repo
+
+    org = next(
+        (o for o in orgs.list_orgs(app.state.conn, kind="client")
+         if rfi_repo.requests_for_org(app.state.conn, o.id)),
+        None,
+    )
+    assert org is not None, "seed has no client with information requests"
+    with TestClient(app) as client:
+        yield client, org
+
+
+def _latest_batch(conn):
+    from bookkit.repo import batches as batches_repo
+
+    found = batches_repo.recent(conn, limit=1)
+    return found[0] if found else None
+
+
+def test_requests_tab_lists_the_asks(app_and_org):
+    client, org = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+
+    requests = rfi_repo.requests_for_org(client.app.state.conn, org.id)
+    response = client.get(f"/accounts/{org.ref}/requests")
+    assert response.status_code == 200
+    assert requests[0].title in response.text
+
+
+def test_requests_tab_says_who_was_asked_and_what_it_is_about(app_and_org):
+    """A request with no asker and no scope is an ask you cannot chase."""
+    client, org = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+    from bookkit.services import rfi as rfi_svc
+
+    conn = client.app.state.conn
+    request = rfi_repo.requests_for_org(conn, org.id)[0]
+    response = client.get(f"/accounts/{org.ref}/requests")
+    assert rfi_svc.scope_label(conn, request) in response.text
+    assert rfi_svc.asker_name(conn, request) in response.text
+
+
+def test_editing_a_request_writes_one_web_batch(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import rfi as rfi_repo
+
+    request = rfi_repo.requests_for_org(conn, org.id)[0]
+    response = client.post(
+        f"/accounts/{org.ref}/requests/{request.id}/edit",
+        data={"title": "Sompo — property questions",
+              "requested_on": request.requested_on,
+              "due_on": request.due_on or "", "market_org_id": request.market_org_id or "",
+              "placement_id": request.placement_id or "",
+              "project_id": request.project_id or "",
+              "cancelled_at": request.cancelled_at or "",
+              "notes": request.notes or ""},
+    )
+    assert response.status_code == 200
+    assert rfi_repo.get_request(conn, request.id).title == "Sompo — property questions"
+
+    batch = _latest_batch(conn)
+    assert batch is not None, "the edit wrote outside any batch — `R` cannot reach it"
+    assert batch.source == "web"
+
+
+def test_creating_a_request_writes_one_web_batch(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import rfi as rfi_repo
+
+    before = len(rfi_repo.requests_for_org(conn, org.id))
+    response = client.post(
+        f"/accounts/{org.ref}/requests/new",
+        data={"title": "Loss run refresh", "requested_on": "2026-08-14",
+              "due_on": "", "market_org_id": "", "placement_id": "",
+              "project_id": "", "cancelled_at": "", "notes": ""},
+    )
+    assert response.status_code == 200
+    assert len(rfi_repo.requests_for_org(conn, org.id)) == before + 1
+
+    batch = _latest_batch(conn)
+    assert batch is not None and batch.source == "web"
+
+
+def test_a_request_with_a_bad_date_is_refused_intact(app_and_org):
+    """A bare number is not a date, on every surface."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import rfi as rfi_repo
+
+    before = len(rfi_repo.requests_for_org(conn, org.id))
+    response = client.post(
+        f"/accounts/{org.ref}/requests/new",
+        data={"title": "Loss run refresh", "requested_on": "5",
+              "due_on": "", "market_org_id": "", "placement_id": "",
+              "project_id": "", "cancelled_at": "", "notes": "chase Friday"},
+    )
+    assert response.status_code == 200
+    assert "cannot read a date" in response.text
+    assert "Loss run refresh" in response.text
+    assert "chase Friday" in response.text
+    assert len(rfi_repo.requests_for_org(conn, org.id)) == before
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+```bash
+uv run --no-sync python -m pytest tests/test_web_requests.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
+```
+
+Expected: 404s on every test.
+
+- [ ] **Step 3: Add the routes**
+
+Add to `src/bookkit/web/routes/account.py`:
+
+```python
+from ...forms.entities import apply_request, request_form
+from ...repo import rfi as rfi_repo
+from ...services import rfi as rfi_svc
+
+
+def _request_rows(conn: sqlite3.Connection, org: Org) -> list[dict[str, Any]]:
+    """One row per ask: what it is, who owes it, what it is about, and whether
+    it is still open. A request with no items reads open by convention — it is
+    an ask you have not written down yet, not a finished one."""
+    rows = []
+    for request in rfi_repo.requests_for_org(conn, org.id):
+        rows.append({
+            "request": request,
+            "asker": rfi_svc.asker_name(conn, request),
+            "scope": rfi_svc.scope_label(conn, request),
+            "open": rfi_svc.is_open(conn, request.id),
+            "open_count": rfi_repo.open_item_count(conn, request.id),
+            "total_count": rfi_repo.item_count(conn, request.id),
+        })
+    return rows
+
+
+@router.get("/accounts/{ref}/requests", response_class=HTMLResponse)
+def requests_tab(request: Request, ref: str) -> HTMLResponse:
+    conn = _conn(request)
+    org = _org(request, ref)
+    return TEMPLATES.TemplateResponse(
+        request, "account/requests.html",
+        {"header": _header(conn, org), "tab": "requests",
+         "rows": _request_rows(conn, org)},
+    )
+
+
+def _requests_panel(request: Request, org: Org) -> HTMLResponse:
+    return TEMPLATES.TemplateResponse(
+        request, "account/_requests_panel.html",
+        {"header": {"org": org}, "rows": _request_rows(_conn(request), org)},
+    )
+
+
+@router.get("/accounts/{ref}/requests/new", response_class=HTMLResponse)
+def request_new_form(request: Request, ref: str) -> HTMLResponse:
+    org = _org(request, ref)
+    spec = request_form(conn=_conn(request), org_id=org.id)
+    return HTMLResponse(render_form(request, spec, f"/accounts/{ref}/requests/new"))
+
+
+@router.post("/accounts/{ref}/requests/new", response_class=HTMLResponse)
+async def request_create(request: Request, ref: str) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    spec = request_form(conn=conn, org_id=org.id)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = f"/accounts/{ref}/requests/new"
+    refused = _save(
+        request, org, spec, action, raw,
+        lambda values: apply_request(conn, values, org.id),
+    )
+    return refused or _requests_panel(request, org)
+
+
+@router.get("/accounts/{ref}/requests/{request_id}/edit", response_class=HTMLResponse)
+def request_edit_form(request: Request, ref: str, request_id: str) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    existing = rfi_repo.get_request(conn, request_id)
+    spec = request_form(existing, conn=conn, org_id=org.id)
+    action = f"/accounts/{ref}/requests/{request_id}/edit"
+    return HTMLResponse(render_form(request, spec, action))
+
+
+@router.post("/accounts/{ref}/requests/{request_id}/edit", response_class=HTMLResponse)
+async def request_update(request: Request, ref: str, request_id: str) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    existing = rfi_repo.get_request(conn, request_id)
+    spec = request_form(existing, conn=conn, org_id=org.id)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = f"/accounts/{ref}/requests/{request_id}/edit"
+    refused = _save(
+        request, org, spec, action, raw,
+        lambda values: apply_request(conn, values, org.id, existing),
+    )
+    return refused or _requests_panel(request, org)
+```
+
+- [ ] **Step 4: Write the templates**
+
+Add a Requests link to `src/bookkit/web/templates/account/page.html`'s `<nav class="tabs">`, following the existing pattern exactly.
+
+Create `src/bookkit/web/templates/account/_requests_panel.html`. Per the visual direction: mono for dates and counts, sans for titles and names, and the open/closed state carries a word, never colour alone.
+
+```html
+<div class="form-host"></div>
+<div class="scroller">
+  <table class="rows">
+    <thead>
+      <tr><th>Request</th><th>Asked by</th><th>About</th><th>Asked</th>
+          <th>Due</th><th>Open</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+        <tr class="{% if not r.open %}is-closed{% endif %}">
+          <td>{{ r.request.title }}</td>
+          <td>{{ r.asker }}</td>
+          <td>{{ r.scope }}</td>
+          <td class="num">{{ r.request.requested_on }}</td>
+          <td class="num">{{ r.request.due_on or "—" }}</td>
+          <td class="num">
+            {% if r.request.cancelled_at %}cancelled
+            {% elif r.open %}{{ r.open_count }} of {{ r.total_count }}
+            {% else %}all in{% endif %}
+          </td>
+          <td>
+            <a href="/accounts/{{ header.org.ref }}/requests/{{ r.request.id }}">Items</a>
+            <button hx-get="/accounts/{{ header.org.ref }}/requests/{{ r.request.id }}/edit"
+                    hx-target="previous .form-host" hx-swap="innerHTML">Edit</button>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="empty">Nothing outstanding. Add a request when you ask for something.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<button hx-get="/accounts/{{ header.org.ref }}/requests/new"
+        hx-target="previous .form-host" hx-swap="innerHTML">Add request</button>
+```
+
+The `Items` link points at the detail route built in Task 12. Until then it 404s; Task 12's tests cover it. Do not build that route here.
+
+Create `src/bookkit/web/templates/account/requests.html` extending `account/page.html` and including the panel, following the shape of `contacts.html` exactly.
+
+- [ ] **Step 5: Run the test and confirm it passes**
+
+```bash
+uv run --no-sync python -m pytest tests/test_web_requests.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
+```
+
+Expected: 5 passed.
+
+- [ ] **Step 6: Verify the batch assertion can fail**
+
+Temporarily move `apply_request` outside the `_save` batch block. Confirm `test_editing_a_request_writes_one_web_batch` fails on the "wrote outside any batch" assert. Restore.
+
+- [ ] **Step 7: Flip the ledger entries, gates, commit**
+
+Move the request actions from `PENDING` to `IMPLEMENTED` in `src/bookkit/web/parity.py`.
+
+```bash
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
+git add -A
+git commit -m "web: information requests — the chase list, create, and edit
+
+A request says who was asked and what it is about, because a request with
+neither is one you cannot chase."
+```
+
+---
+
+### Task 12: Request items — the detail list, add, edit **in place**, and mark received
+
+> **Amended 2026-08-17: editing is inline.** Follow Task 8's cell pattern exactly
+> — same route shape (`…/items/{item_id}/cell/{key}`), same one-field-one-batch
+> rule, same server-side check that the key is in the editable set. The editable
+> fields come from `bookkit.forms.inline.RFI_ITEM_FIELDS` (extracted in Task 6
+> from `RFI_ITEM_INLINE` at `tui/screens/account.py:125`), not from a new list.
+>
+> The `new` form for adding an item is unchanged. `Mark received` stays a POST
+> button rather than a cell, because it writes two fields together
+> (`services.rfi.mark_received` sets `status` and `received_on`) and the pair
+> must move as one — that is a distinct writer action, not a field edit.
+>
+> Note the interaction with `apply_rfi_item`: it owns the status/`received_on`
+> relationship. A cell edit writes one column through `rfi_repo.update_item`, so
+> **`status` must not be inline-editable** unless `RFI_ITEM_FIELDS` declares it —
+> check what the TUI declares and follow it. If `status` is in that set, route
+> its cell save through `apply_rfi_item` rather than a bare column write, so the
+> pairing rule still holds.
+
+
+
+**Files:**
+- Create: `src/bookkit/web/templates/account/request_detail.html`, `src/bookkit/web/templates/account/_items_panel.html`
+- Modify: `src/bookkit/web/routes/account.py`, `src/bookkit/web/parity.py`
+- Test: `tests/test_web_requests.py` (append)
+
+**Interfaces:**
+- Consumes: `bookkit.forms.entities.{rfi_item_form, apply_rfi_item}`, `bookkit.repo.rfi.{items_for_request, get_item, get_request}`, `bookkit.services.rfi.{effective_due, mark_received}`
+- Produces: routes `GET /accounts/{ref}/requests/{request_id}`, `GET/POST …/items/new`, `GET/POST …/items/{item_id}/edit`, `POST …/items/{item_id}/received`
+
+**Exact signatures:**
+
+```python
+rfi_item_form(existing: RfiItem | None = None, *, conn=None) -> FormSpec
+apply_rfi_item(conn, values: dict, request_id: str, existing: RfiItem | None = None) -> RfiItem
+rfi_repo.items_for_request(conn, request_id) -> list[RfiItem]
+rfi_svc.effective_due(item, request) -> str | None
+rfi_svc.mark_received(conn, item_id, on: str) -> RfiItem
+```
+
+Two things the code already handles — inherit them, do not reimplement:
+
+1. **`apply_rfi_item` owns the status/`received_on` pair.** Status not `received` clears the date; the form is the only door to *waiving* an item. Never write `received_on` from a route.
+2. **`mark_received` writes two fields**, so a field-granular undo would revert only the later one and leave a received item with a null date. Web writes go through `open_batch`, which makes both one batch — so `R` restores the pair correctly. This is a property the web gets for free; do not add compensating logic.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_web_requests.py`:
+
+```python
+def _first_request_with_items(conn, org_id):
+    from bookkit.repo import rfi as rfi_repo
+
+    for request in rfi_repo.requests_for_org(conn, org_id):
+        if rfi_repo.items_for_request(conn, request.id):
+            return request
+    return None
+
+
+def test_request_detail_lists_its_items(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    request = _first_request_with_items(conn, org.id)
+    if request is None:
+        pytest.skip("seed has no request with items")
+    from bookkit.repo import rfi as rfi_repo
+
+    items = rfi_repo.items_for_request(conn, request.id)
+    response = client.get(f"/accounts/{org.ref}/requests/{request.id}")
+    assert response.status_code == 200
+    assert items[0].prompt in response.text
+
+
+def test_marking_an_item_received_stamps_the_date_in_one_batch(app_and_org):
+    """status OWNS received_on — the pair can never disagree. Both writes land
+    in one batch, so a revert restores both."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import rfi as rfi_repo
+    from bookkit.services import batches as batches_svc
+
+    request = _first_request_with_items(conn, org.id)
+    if request is None:
+        pytest.skip("seed has no request with items")
+    outstanding = [i for i in rfi_repo.items_for_request(conn, request.id)
+                   if i.status == "outstanding"]
+    if not outstanding:
+        pytest.skip("seed has no outstanding item")
+    item = outstanding[0]
+
+    response = client.post(
+        f"/accounts/{org.ref}/requests/{request.id}/items/{item.id}/received")
+    assert response.status_code == 200
+
+    after = rfi_repo.get_item(conn, item.id)
+    assert after.status == "received"
+    assert after.received_on, "received without a date — the pair disagreed"
+
+    batch = _latest_batch(conn)
+    assert batch is not None and batch.source == "web"
+
+    batches_svc.revert(conn, batch)
+    restored = rfi_repo.get_item(conn, item.id)
+    assert restored.status == "outstanding"
+    assert not restored.received_on, "revert left a stale received date"
+
+
+def test_adding_an_item_writes_one_web_batch(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import rfi as rfi_repo
+
+    request = rfi_repo.requests_for_org(conn, org.id)[0]
+    before = len(rfi_repo.items_for_request(conn, request.id))
+    response = client.post(
+        f"/accounts/{org.ref}/requests/{request.id}/items/new",
+        data={"prompt": "loss runs 2021-2025", "kind": "document",
+              "category": "Financials", "due_on": "", "detail": "",
+              "status": "outstanding", "received_on": "", "response": ""},
+    )
+    assert response.status_code == 200
+    assert len(rfi_repo.items_for_request(conn, request.id)) == before + 1
+
+    batch = _latest_batch(conn)
+    assert batch is not None and batch.source == "web"
+```
+
+- [ ] **Step 2: Run and confirm it fails**
+
+```bash
+uv run --no-sync python -m pytest tests/test_web_requests.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
+```
+
+Expected: the three new tests fail with 404. **If any of them skips**, the seed lacks the fixture data and the test protects nothing — find a request with items using `bookctl` against the demo DB and adjust the fixture rather than accepting the skip.
+
+- [ ] **Step 3: Add the routes**
+
+Add to `src/bookkit/web/routes/account.py`:
+
+```python
+from ...forms.entities import apply_rfi_item, rfi_item_form
+
+
+def _items_context(conn: sqlite3.Connection, org: Org, request_id: str) -> dict[str, Any]:
+    request_row = rfi_repo.get_request(conn, request_id)
+    items = rfi_repo.items_for_request(conn, request_id)
+    return {
+        "header": {"org": org},
+        "request": request_row,
+        "items": [{"item": i, "due": rfi_svc.effective_due(i, request_row)} for i in items],
+    }
+
+
+@router.get("/accounts/{ref}/requests/{request_id}", response_class=HTMLResponse)
+def request_detail(request: Request, ref: str, request_id: str) -> HTMLResponse:
+    conn = _conn(request)
+    org = _org(request, ref)
+    context = _items_context(conn, org, request_id)
+    context["header"] = _header(conn, org)
+    context["tab"] = "requests"
+    return TEMPLATES.TemplateResponse(request, "account/request_detail.html", context)
+
+
+def _items_panel(request: Request, org: Org, request_id: str) -> HTMLResponse:
+    return TEMPLATES.TemplateResponse(
+        request, "account/_items_panel.html",
+        _items_context(_conn(request), org, request_id),
+    )
+
+
+@router.get("/accounts/{ref}/requests/{request_id}/items/new", response_class=HTMLResponse)
+def item_new_form(request: Request, ref: str, request_id: str) -> HTMLResponse:
+    _org(request, ref)
+    spec = rfi_item_form(conn=_conn(request))
+    action = f"/accounts/{ref}/requests/{request_id}/items/new"
+    return HTMLResponse(render_form(request, spec, action))
+
+
+@router.post("/accounts/{ref}/requests/{request_id}/items/new", response_class=HTMLResponse)
+async def item_create(request: Request, ref: str, request_id: str) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    spec = rfi_item_form(conn=conn)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = f"/accounts/{ref}/requests/{request_id}/items/new"
+    refused = _save(
+        request, org, spec, action, raw,
+        lambda values: apply_rfi_item(conn, values, request_id),
+    )
+    return refused or _items_panel(request, org, request_id)
+
+
+@router.get("/accounts/{ref}/requests/{request_id}/items/{item_id}/edit",
+            response_class=HTMLResponse)
+def item_edit_form(request: Request, ref: str, request_id: str, item_id: str) -> HTMLResponse:
+    _org(request, ref)
+    conn = _conn(request)
+    existing = rfi_repo.get_item(conn, item_id)
+    spec = rfi_item_form(existing, conn=conn)
+    action = f"/accounts/{ref}/requests/{request_id}/items/{item_id}/edit"
+    return HTMLResponse(render_form(request, spec, action))
+
+
+@router.post("/accounts/{ref}/requests/{request_id}/items/{item_id}/edit",
+             response_class=HTMLResponse)
+async def item_update(request: Request, ref: str, request_id: str, item_id: str) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    existing = rfi_repo.get_item(conn, item_id)
+    spec = rfi_item_form(existing, conn=conn)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = f"/accounts/{ref}/requests/{request_id}/items/{item_id}/edit"
+    refused = _save(
+        request, org, spec, action, raw,
+        lambda values: apply_rfi_item(conn, values, request_id, existing),
+    )
+    return refused or _items_panel(request, org, request_id)
+
+
+@router.post("/accounts/{ref}/requests/{request_id}/items/{item_id}/received",
+             response_class=HTMLResponse)
+def item_received(request: Request, ref: str, request_id: str, item_id: str) -> HTMLResponse:
+    """Received, dated, in one batch. mark_received writes status AND
+    received_on; the batch is what makes the pair revert together."""
+    from datetime import date
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    existing = rfi_repo.get_item(conn, item_id)
+    with batches_svc.open_batch(
+        conn, source="web", tool="rfi_item_received",
+        summary=f"received {existing.prompt}", org_id=org.id,
+    ):
+        rfi_svc.mark_received(conn, item_id, date.today().isoformat())
+    return _items_panel(request, org, request_id)
+```
+
+- [ ] **Step 4: Write the templates**
+
+Create `src/bookkit/web/templates/account/_items_panel.html`. Status carries a word; `due` comes from `effective_due` (the item's own date, else the request's), never from the item alone:
+
+```html
+<div class="form-host"></div>
+<div class="scroller">
+  <table class="rows">
+    <thead>
+      <tr><th>Item</th><th>Type</th><th>Group</th><th>Needed by</th>
+          <th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for row in items %}
+        <tr class="is-{{ row.item.status }}">
+          <td>
+            {{ row.item.prompt }}
+            {% if row.item.detail %}<span class="item-detail">{{ row.item.detail }}</span>{% endif %}
+          </td>
+          <td>{{ row.item.kind }}</td>
+          <td>{{ row.item.category or "—" }}</td>
+          <td class="num">{{ row.due or "—" }}</td>
+          <td class="num">
+            {{ row.item.status }}{% if row.item.received_on %} {{ row.item.received_on }}{% endif %}
+          </td>
+          <td>
+            {% if row.item.status == "outstanding" %}
+              <button hx-post="/accounts/{{ header.org.ref }}/requests/{{ request.id }}/items/{{ row.item.id }}/received"
+                      hx-target="closest .form-host" hx-swap="innerHTML">Mark received</button>
+            {% endif %}
+            <button hx-get="/accounts/{{ header.org.ref }}/requests/{{ request.id }}/items/{{ row.item.id }}/edit"
+                    hx-target="previous .form-host" hx-swap="innerHTML">Edit</button>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="empty">No items yet. Add what you asked for.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<button hx-get="/accounts/{{ header.org.ref }}/requests/{{ request.id }}/items/new"
+        hx-target="previous .form-host" hx-swap="innerHTML">Add item</button>
+```
+
+Note the `Mark received` button targets `closest .form-host` while `Edit` targets `previous .form-host`. Both must resolve to the panel's own host div — verify in the browser at Task 14 Step 8 and simplify to one pattern if they do not.
+
+Create `src/bookkit/web/templates/account/request_detail.html` extending `account/page.html`, showing the request's title, asker, scope, and dates above the items panel, then including `_items_panel.html`.
+
+- [ ] **Step 5: Run the tests and confirm they pass**
+
+```bash
+uv run --no-sync python -m pytest tests/test_web_requests.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
+```
+
+Expected: 8 passed, 0 skipped.
+
+- [ ] **Step 6: Verify the received/revert assertion can fail**
+
+Temporarily call `rfi_svc.mark_received` outside the `open_batch` block. Confirm `test_marking_an_item_received_stamps_the_date_in_one_batch` fails at the batch or the revert assertion. Restore.
+
+- [ ] **Step 7: Flip the ledger, gates, commit**
+
+```bash
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
+git add -A
+git commit -m "web: request items — add, edit, and mark received
+
+Marking received writes status and received_on together inside one batch, so a
+revert restores the pair instead of leaving a received item with no date."
+```
+
+---
+
+### Task 13: Open items — the account's task list, edited in place
+
+> **Amended 2026-08-17: editing is inline.** Follow Task 8's cell pattern exactly,
+> with editable fields from `bookkit.forms.inline.TASK_FIELDS` (extracted in
+> Task 6 from `TASK_INLINE` at `tui/screens/navigator.py:86-91`): `due_on`,
+> `title`, `category`, `description`. Note `title` is `required=True` — a cell
+> save that blanks it must be refused with the value intact, not written.
+>
+> `Add task` stays a form and `Mark done` stays a POST button — completing a task
+> is a distinct writer action, not a field edit.
+
+
+
+**Files:**
+- Create: `src/bookkit/web/templates/account/open_items.html`, `src/bookkit/web/templates/account/_open_items_panel.html`
+- Modify: `src/bookkit/web/routes/account.py`, `src/bookkit/web/parity.py`, `src/bookkit/web/templates/account/page.html`
+- Test: `tests/test_web_open_items.py`
+
+**Interfaces:**
+- Consumes: `bookkit.forms.entities.{task_form, apply_task}`, `bookkit.repo.tasks.{open_tasks_for_client, get, complete}`
+- Produces: routes `GET /accounts/{ref}/open-items`, `GET/POST …/tasks/new`, `GET/POST …/tasks/{task_id}/edit`, `POST …/tasks/{task_id}/done`
+
+**Scope note:** this is the task list only. The TUI's `x` export (an XLSX workbook via `services/export_open_items.py`) is **deferred** — a file-download response is a mechanism the spec does not cover. It stays in `PENDING` with that reason.
+
+Confirm `task_form`'s and `apply_task`'s real signatures before wiring, the same way Task 11 pinned the request ones:
+
+```bash
+grep -n -A 12 "^def task_form\|^def apply_task" src/bookkit/forms/entities.py
+```
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_web_open_items.py`:
+
+```python
+"""Open items — what is still to do on this account."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from bookkit.web.app import create_app
+
+
+@pytest.fixture
+def app_and_org(snapshot_db: Path):
+    app = create_app(snapshot_db)
+    from bookkit.repo import orgs, tasks as tasks_repo
+
+    org = next(
+        (o for o in orgs.list_orgs(app.state.conn, kind="client")
+         if tasks_repo.open_tasks_for_client(app.state.conn, o.id)),
+        None,
+    )
+    assert org is not None, "seed has no client with open tasks"
+    with TestClient(app) as client:
+        yield client, org
+
+
+def _latest_batch(conn):
+    from bookkit.repo import batches as batches_repo
+
+    found = batches_repo.recent(conn, limit=1)
+    return found[0] if found else None
+
+
+def test_open_items_lists_the_tasks(app_and_org):
+    client, org = app_and_org
+    from bookkit.repo import tasks as tasks_repo
+
+    tasks = tasks_repo.open_tasks_for_client(client.app.state.conn, org.id)
+    response = client.get(f"/accounts/{org.ref}/open-items")
+    assert response.status_code == 200
+    assert tasks[0].title in response.text
+
+
+def test_completing_a_task_is_one_web_batch_and_reverts(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.services import batches as batches_svc
+
+    task = tasks_repo.open_tasks_for_client(conn, org.id)[0]
+    response = client.post(f"/accounts/{org.ref}/tasks/{task.id}/done")
+    assert response.status_code == 200
+    assert tasks_repo.get(conn, task.id).status != task.status
+
+    batch = _latest_batch(conn)
+    assert batch is not None, "completion wrote outside any batch"
+    assert batch.source == "web"
+
+    batches_svc.revert(conn, batch)
+    assert tasks_repo.get(conn, task.id).status == task.status
+
+
+def test_adding_a_task_writes_one_web_batch(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import tasks as tasks_repo
+
+    before = len(tasks_repo.open_tasks_for_client(conn, org.id))
+    response = client.post(
+        f"/accounts/{org.ref}/tasks/new",
+        data={"title": "Chase the loss runs", "due_on": "2026-09-01",
+              "description": "", "detail": "", "priority": "2"},
+    )
+    assert response.status_code == 200
+    assert len(tasks_repo.open_tasks_for_client(conn, org.id)) == before + 1
+
+    batch = _latest_batch(conn)
+    assert batch is not None and batch.source == "web"
+
+
+def test_a_task_with_a_bare_number_due_date_is_refused(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import tasks as tasks_repo
+
+    before = len(tasks_repo.open_tasks_for_client(conn, org.id))
+    response = client.post(
+        f"/accounts/{org.ref}/tasks/new",
+        data={"title": "Chase the loss runs", "due_on": "5",
+              "description": "", "detail": "", "priority": "2"},
+    )
+    assert "cannot read a date" in response.text
+    assert "Chase the loss runs" in response.text
+    assert len(tasks_repo.open_tasks_for_client(conn, org.id)) == before
+```
+
+The POST bodies above assume `task_form`'s field keys. **Correct them against the real spec** from the grep in the interfaces block before running — a test posting keys the form does not declare passes for the wrong reason, because `parse_values` reads only what the spec names.
+
+- [ ] **Step 2: Run and confirm it fails**
+
+```bash
+uv run --no-sync python -m pytest tests/test_web_open_items.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
+```
+
+Expected: 404s.
+
+- [ ] **Step 3: Add the routes**
+
+Follow the exact shape of Task 8's contacts routes: a `GET` tab route rendering `open_items.html`, a `_open_items_panel` helper, `new`/`edit` form routes using `_save`, and a `done` POST wrapping `tasks_repo.complete` in `open_batch(source="web", tool="task_done", summary=f"completed {task.title}", org_id=org.id)`.
+
+Add an Open items link to `page.html`'s tab nav.
+
+- [ ] **Step 4: Write the templates**
+
+`_open_items_panel.html` is a ruled table per the visual direction: title in sans, due date in mono, an overdue due date carrying the word "over" as well as `--bk-red`. A `Mark done` button per row and an `Add task` button beneath. Empty state: "Nothing open."
+
+`open_items.html` extends `account/page.html` and includes the panel.
+
+- [ ] **Step 5: Run, verify the batch assertion can fail, flip the ledger, gates, commit**
+
+```bash
+uv run --no-sync python -m pytest tests/test_web_open_items.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
+```
+
+Then temporarily move `tasks_repo.complete` outside its batch and confirm `test_completing_a_task_is_one_web_batch_and_reverts` fails. Restore. Flip the task actions in `parity.py` to `IMPLEMENTED`, leaving `export_open_items` in `PENDING` with its deferral reason. Full gates, then:
+
+```bash
+git add -A
+git commit -m "web: open items — the account's task list, add, edit, complete
+
+The XLSX export stays deferred in the parity ledger: a file-download response
+is a mechanism the spec does not cover yet."
+```
+
+---
+
+### Task 14: Two pre-existing defects, fixed in this branch
+
+Both were found during Tasks 2–3 review and logged as out-of-scope. **Grant ruled 2026-08-17 that they get fixed here rather than on a later branch.** Neither is caused by this work.
+
+**Files:**
+- Modify: `src/bookkit/mcpserver.py`, `src/bookkit/tui/widgets/entity_actions.py`, `tests/test_conventions.py`, `tests/test_rfi_paste.py`
+- Create: `src/bookkit/imports/rfi_paste.py`
+- Test: `tests/test_mcpserver.py` (append)
+
+**Defect A — `_EDITABLE["opportunity"]["notes"]` is offered but cannot work.** The `opportunity` table has no `notes` column (`migrations/001_initial.sql:145-166`: id, ref, org_id, title, lines, stage, target_premium, target_effective, probability_pct, source, incumbent_broker, competitor, closed_at, outcome, loss_reason, created_at) and `opportunity_form` declares no such field. `edit_field(kind="opportunity", field="notes", …)` fails at the DB layer, and the tool advertises it in its refusal message as an allowed field.
+
+Remove the entry. Do **not** add a column — that is a feature, not a fix.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_mcpserver.py`:
+
+```python
+def test_editable_fields_all_exist_on_their_table(server_db):
+    """A field offered by edit_field that has no column fails at the DB layer,
+    after the tool has already told the caller it was allowed. `opportunity.notes`
+    was advertised that way; the table never had the column."""
+    from bookkit import mcpserver
+
+    conn = server_db
+    for kind, fields in mcpserver._EDITABLE.items():
+        table = mcpserver._TABLE_FOR_KIND.get(kind, kind)
+        columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        missing = set(fields) - columns
+        assert not missing, f"{kind}: {sorted(missing)} offered but not on {table}"
+```
+
+`_TABLE_FOR_KIND` may not exist — check how `_edit_target` resolves a kind to its table and reuse that mapping rather than inventing one. If the mapping is implicit, derive it there and say so in your report. This test is allowed raw SQL because it is a schema assertion in a test, not a query in `web/` or `services/`.
+
+- [ ] **Step 2: Run it, confirm it fails naming `opportunity: ['notes']`, then delete the entry and confirm it passes.**
+
+**Defect B — `mcpserver.py` imports from `bookkit.tui`.** Line ~1944: `from .tui.widgets.rfi_paste import split_items`. `split_items` is a pure text splitter with no Textual dependency, sitting in a widgets module because that is where it was first needed. Nothing tests the boundary, which is why it went unnoticed.
+
+- [ ] **Step 3: Move `split_items`**
+
+`git mv` is wrong here — `tui/widgets/rfi_paste.py` holds widget code too. Move only the `split_items` function (and any module-level constant it uses) into a new `src/bookkit/imports/rfi_paste.py`, sibling to `readers.py`, with a docstring saying it parses pasted RFI item text and is shared by every surface. Re-point all three importers: `mcpserver.py:1944`, `tui/widgets/entity_actions.py:335`, and `tests/test_rfi_paste.py:3`. Leave `tui/widgets/rfi_paste.py`'s widget code where it is, importing `split_items` from the new home.
+
+- [ ] **Step 4: Add the convention test that would have caught it**
+
+Append to `tests/test_conventions.py`:
+
+```python
+def test_mcpserver_never_imports_the_tui():
+    """The MCP server is headless. It imported split_items from tui/widgets for
+    a long time because nothing asserted otherwise."""
+    text = (SRC / "mcpserver.py").read_text()
+    for bad in ("from .tui", "from bookkit.tui", "import bookkit.tui"):
+        assert bad not in text, f"mcpserver imports the TUI ({bad})"
+```
+
+- [ ] **Step 5: Prove it can fail.** Append `# from .tui import x` to `mcpserver.py`, watch the test fail, revert. It is a negative assertion; this codebase has a documented history of those passing trivially.
+
+- [ ] **Step 6: Gates and commit**
+
+```bash
+uv run --no-sync python -m pytest tests/test_mcpserver.py tests/test_conventions.py tests/test_rfi_paste.py -q > "$GATE/out.txt" 2>&1; tail -10 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
+git add -- src/bookkit tests
+git commit -m "fix: two pre-existing defects found during the web build
+
+opportunity.notes was offered by edit_field but has no column, so calling it
+failed at the DB layer after the tool said it was allowed. And mcpserver
+imported split_items from tui/widgets — it is a plain text splitter and now
+lives in imports/, with a convention test so the boundary stops drifting."
+```
+
+---
+
+### Task 15: One edit run is one undo unit
+
+**Grant's call 2026-08-17.** Inline editing makes every field its own batch, so correcting four cells on a contact leaves four entries in the changes list and needs four reverts. He wants a burst of edits to the same record to revert as one thing.
+
+**This applies to both surfaces, not just the web.** The TUI already writes one batch per inline cell edit (`entity_actions.batched_write` wraps each `CellEdited` commit; `inline_edit.py`'s docstring says "every commit is a single field write in the event log — u undoes it"). Building this web-only would make the surfaces diverge, and parity is the destination. It goes in `services/batches.py` where both callers inherit it.
+
+**Files:**
+- Modify: `src/bookkit/services/batches.py`, `src/bookkit/repo/batches.py` (read helper only if needed)
+- Test: `tests/test_batches_service.py` (append)
+
+**Design — join, do not invent a session.**
+
+`open_batch` gains an optional `entity_id: str | None = None`. When it is given, before creating a new batch the service looks at the most recent batch and reuses it when **all** of these hold:
+
+- same `source`, same `tool`, same `org_id`
+- not already reverted
+- created within `JOIN_WINDOW_SECONDS` (start at 60)
+- every event already in it targets that same `entity_id`
+
+Otherwise it creates a new batch exactly as today. `entity_id` omitted means today's behaviour, unchanged — so every existing caller is unaffected until it opts in.
+
+Keying on `entity_id` and not just `(source, tool, org_id)` is load-bearing: editing contact A then contact B within the window are two different actions, and merging them would make one revert undo work on a record the user never touched.
+
+**No schema change.** Do not add a column for `entity_id` — read the existing batch's events via `batches_repo.events_for` and compare their entity ids. Migrations here are additive-only and a nullable column is not worth a migration for something derivable.
+
+**Watch the blast cap.** `db.BLAST_CAP` is 250 entities per batch and is enforced under `log_event`. A joined batch accumulates toward it. Since joining is keyed to one entity this should never bind in practice, but if the cap is hit the failure must be legible — check what `log_event` raises and make sure a user mid-edit gets a sentence, not a traceback. Report what you find.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+def test_consecutive_edits_to_one_record_join_a_single_batch(conn):
+    """Correcting four cells on a contact is one edit run, and should revert as
+    one thing rather than four."""
+
+
+def test_edits_to_different_records_do_not_join(conn):
+    """Same tool, same account, different contact — two actions, two batches.
+    Merging them would let one revert undo work on a record the user never
+    touched."""
+
+
+def test_a_batch_older_than_the_window_does_not_join(conn):
+    """Come back after lunch and finish the row: that is a new action."""
+
+
+def test_a_reverted_batch_is_never_joined(conn):
+    """Joining a reverted batch would resurrect it."""
+
+
+def test_omitting_entity_id_keeps_todays_behaviour(conn):
+    """Every existing caller passes no entity_id and must be unaffected."""
+```
+
+Write each body against the real `open_batch` and `services.batches.revert`, using the `conn` fixture and `db.utc_now` monkeypatched for the window test — `tests/conftest.py`'s `frozen_clock` shows the pattern. Assert on batch identity and on what `revert` restores, never on event counts alone.
+
+- [ ] **Step 2: Run them, confirm each fails for the stated reason, then implement.**
+
+- [ ] **Step 3: Opt the inline writers in.** Pass `entity_id=` from the TUI's inline-cell write path in `tui/widgets/entity_actions.py` and from the web's cell-save routes. Do not opt forms in — a form save is already one action and one batch.
+
+- [ ] **Step 4: Prove the join can fail to happen.** Set `JOIN_WINDOW_SECONDS = 0`, confirm `test_consecutive_edits_to_one_record_join_a_single_batch` fails, restore.
+
+- [ ] **Step 5: Full gates and commit.**
+
+```bash
+git add -- src/bookkit tests
+git commit -m "batches: consecutive edits to one record join one undo unit
+
+Inline editing makes every field its own batch, so fixing four cells left four
+entries in the changes list. Consecutive writes with the same source, tool,
+account and entity, inside a 60s window, now join the open batch. Keyed on the
+entity as well as the tool: editing two different contacts is two actions, and
+merging them would let one revert touch a record the user never edited.
+
+Lives in services/batches.py so the TUI's inline editor inherits it too — the
+surfaces must not diverge on what an undo unit is."
+```
+
+---
+
+### Task 18: The way in — index and the Book screen
+
+**Not in the original plan, and the single biggest blocker to the app being
+usable.** Verified 2026-08-17: `GET /` returns 404 and so does `/accounts`. Every
+account tab works, but nothing links to them — you can only reach the app by
+already knowing a ref and typing `/accounts/ACC-0001/relationship`. This task is
+sequenced **first** in the overnight run for that reason.
+
+**Files:** create `src/bookkit/web/routes/book.py`, `templates/book.html`;
+modify `web/app.py` (register the router), `templates/account/page.html` (make the
+top-bar `Book` nav item a real link and drop its `aria-disabled`); test
+`tests/test_web_book.py`.
+
+**The screen**, from the design (`BookKit Web Screens.dc.html`, Book) — a
+full-bleed accounts table:
+
+`ref · account · owner · status · next renewal · due in · premium · last touch`
+
+with a filter field in the header and `New account` / `Export workbook` actions.
+Row height 30px, `#F2F6FF` hover, selected row `#E9F1FF` with `inset 3px 0 0
+#0B4BFF`. Clicking a row opens that account.
+
+**`GET /` redirects to `/book`.** That is the whole point of the task.
+
+**The money column — read this before writing it.** Do **not** use
+`orgs.clients_with_recency`'s `premium` field. That query returns the single
+bound placement with the latest `period_to`, which is fine for the staleness
+service it was written for and wrong here. `CLAUDE.md` records that the book's
+per-account column was once exactly that and "showed revenue that did not exist".
+Use `services.book.bound_premium_for_org(conn, org_id)` — the summed figure
+extracted in Task 7 and already used by all four other call sites.
+
+**The renewal columns** are `RenewalItem.renewal_on` and its own
+`days_remaining`, from `renewals.next_for_org`. Print the date you count to;
+overdue is `days_remaining < 0`, never grid position. Same rule, fifth surface.
+
+- [ ] **Step 1: write the failing tests**
+
+```python
+def test_the_root_path_lands_somewhere_useful():
+    """GET / was a 404. You could not reach the app without knowing a ref."""
+
+def test_the_book_lists_active_clients_with_their_next_renewal(): ...
+
+def test_the_premium_column_is_the_account_total_not_one_placement():
+    """clients_with_recency.premium is the LAST-renewing bound placement. The
+    book's column is bound premium summed over the account — it was once the
+    former, and showed revenue that did not exist."""
+
+def test_a_row_links_to_that_account(): ...
+```
+
+For the premium test, seed an account with **two** bound placements of different
+premiums so the sum and the single-placement figure differ — otherwise the
+assertion passes either way. Assert the exact summed value.
+
+- [ ] **Step 2: run them, confirm each fails for its stated reason.**
+- [ ] **Step 3: implement.** No raw SQL in `web/`; reads go through `repo/` and `services/`.
+- [ ] **Step 4: prove the premium assertion can fail.** Point the column at
+  `clients_with_recency`'s `premium`; confirm the test fails. Restore.
+- [ ] **Step 5:** flip the relevant parity-ledger entries, gates, commit.
+
+---
+
+### Task 17: The tower rows in the SNAPSHOT
+
+**Grant's call, 2026-08-17 (against my recommendation to defer).** The design's
+SNAPSHOT shows `program premium`, `top of tower` and `unplaced`; Task 7 omitted
+them rather than invent figures. They are cheap to add — the read already exists.
+
+**Files:** modify `src/bookkit/web/routes/account.py`, `templates/account/page.html`;
+test `tests/test_web_account.py`.
+
+**The read.** `sync.layer_details(conn, placement_id)` returns each layer with
+`attach_cents`, `limit_cents`, `premium_cents` and `signed_pct`. It loads the
+program JSON and returns `[]` when there is no linked file or the load fails, so
+absence is already handled. From it:
+
+- `program premium` = sum of `premium_cents` (skip `None`)
+- `top of tower` = max of `attach_cents + limit_cents`
+- `unplaced` = the layers whose `signed_pct < 100`, rendered as the design does
+  (`20% on 3rd Excess`) — layer name and the open share, in `warn` colour
+
+**The scope question, which is the whole risk here.** `bound premium` is summed
+over *every* bound placement on the account. These three describe *one program*.
+Mixing scopes in one panel is exactly the hazard `CLAUDE.md` records: money
+columns must say whose money, and the book's per-account figure was once wrong in
+a way that showed revenue that did not exist.
+
+Use the program behind the `next renewal` row — `renewals.next_for_org(...)`
+returns a `RenewalItem` carrying `.placement`. That makes the panel coherent: it
+describes the renewal you are looking at. **Label it so the scope is unambiguous**
+and say in the row label or a title which program it is, so `program premium` can
+never be read as an account total.
+
+Omit all three rows when `layer_details` returns `[]` — no linked program means
+no figures, and a zero would be a lie.
+
+- [ ] **Step 1: write the failing tests**
+
+```python
+def test_snapshot_tower_rows_come_from_the_renewal_placement():
+    """program premium / top of tower / unplaced describe ONE program — the one
+    behind the next renewal — while bound premium is the account total. Mixing
+    the two scopes silently is how the book once showed revenue that did not
+    exist."""
+
+def test_snapshot_omits_tower_rows_when_no_program_is_linked():
+    """layer_details returns [] with no linked file. A zero would be a lie."""
+
+def test_unplaced_names_the_layer_and_the_open_share():
+    """'20% on 3rd Excess' — a bare percentage does not say where the hole is."""
+```
+
+- [ ] **Step 2: run them, confirm each fails for its stated reason, implement.**
+
+- [ ] **Step 3: prove the scope assertion can fail.** Point `program premium` at
+  the account-wide bound sum instead of the renewal placement's program; confirm
+  `test_snapshot_tower_rows_come_from_the_renewal_placement` fails. Restore.
+
+- [ ] **Step 4: gates and commit.** Note `layer_details` does file I/O per call —
+  call it **once** in `_context` and share, the way `_open_work_count` was
+  de-duplicated in Task 7.
+
+---
+
+### Task 16: One palette, the fonts, and the wheelhouse
+
+> **Amended 2026-08-17 (Grant):** self-host **JetBrains Mono** as well as Noto.
+> It ships in neither repo, so fetch the OFL release, vendor the weights actually
+> used (400/500/700), and add them to web package data beside the Noto files.
+> Wire `--mono` to it and drop the system-stack fallback to a fallback only.
+> The no-literal-hex test has a sibling here: assert every `@font-face` `src`
+> resolves to a file that exists in package data, so a missing weight fails the
+> build rather than silently falling back.
+
+
 
 **Files:**
 - Create: `src/bookkit/web/theme_css.py`
@@ -2209,24 +3574,17 @@ def test_theme_css_comes_from_the_one_palette(client):
     assert response.status_code == 200
     for name in ("BG", "SURFACE", "RULE", "FG", "GOLD", "RED", "AMBER", "GREEN", "BLUE"):
         assert getattr(palette, name) in response.text, f"{name} missing from theme.css"
-
-
-def test_the_web_layer_does_not_import_the_tui():
-    """Belt and braces alongside test_conventions — this is the import the
-    palette move exists to avoid."""
-    from pathlib import Path
-
-    import bookkit
-
-    web = Path(bookkit.__file__).parent / "web"
-    for path in web.rglob("*.py"):
-        assert "tui" not in path.read_text(), f"{path.name} reaches into the TUI"
 ```
+
+The boundary itself is already guarded by `test_web_and_tui_never_import_each_other`
+in `tests/test_conventions.py` (Task 4), which was confirmed capable of failing. Do
+not add a second, looser substring check here — a bare `"tui" not in source` fires on
+any word containing those letters.
 
 - [ ] **Step 2: Run and confirm it fails**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_shell.py -q > /tmp/out.txt 2>&1; tail -8 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_shell.py -q > "$GATE/out.txt" 2>&1; tail -8 "$GATE/out.txt"
 ```
 
 Expected: `ModuleNotFoundError: No module named 'bookkit.palette'`.
@@ -2296,12 +3654,47 @@ Add to `base.html`, before `app.css`:
 
 - [ ] **Step 5: Write the stylesheet**
 
-Replace `src/bookkit/web/static/app.css` with a stylesheet that uses only the `--bk-*` variables — no literal hex values. Cover: `body`, `.account-header`, `.header-facts`, `.countdown`, `.is-overdue` (which must use `--bk-red` **and** carry the word "over", already in the template), `.tabs a.is-current`, `.card`, `table.rows`, `.entity-form .field`, `.form-error`, `.confirm .danger`, `.empty`, and `:focus-visible`. Keep every colour behind a variable so a palette change moves both surfaces.
+Replace `src/bookkit/web/static/app.css`, following `docs/superpowers/specs/2026-08-17-web-visual-direction.md` exactly. **Read that document before writing a line of this file.** Every colour comes from a `--bk-*` variable; no literal hex appears anywhere in the stylesheet.
+
+Add the two type tokens and the scale to the top of the file (the palette variables arrive from `/static/theme.css`):
+
+```css
+:root {
+  --bk-sans: ui-sans-serif, system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+  --bk-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+}
+```
+
+Cover, at minimum: `body` (explicit `background` and `color` — the page is
+single-theme by choice and must not inherit), `.account-header`, `.status-pill`,
+the rail (`.rail`, `.rail-track`, `.rail-marker`, `.rail-overrun`, `.rail-tick`,
+`.rail-scale`, `.rail-date`, `.rail-count`, `.rail-days`, `.rail-unit`,
+`.rail-lines`), `.tabs a` and `.tabs a.is-current`, `.card`, `table.rows`,
+the ledger (`.log`, `.log-head`, `.log-type`, `.log-subject`, `.log-body`,
+`.log-actions`), `.entity-form .field`, `.form-error`, `.confirm .danger`,
+`.empty`, and `:focus-visible`.
+
+Load-bearing details from the visual direction, restated so they are not missed:
+
+- `.rail-days` is `2.75rem`, `--bk-mono`, `font-variant-numeric: tabular-nums`.
+- `.rail-date` and every date, money value, count, and ref use `--bk-mono`.
+  Names, titles, subjects, and note bodies use `--bk-sans`.
+- `.is-overdue` uses `--bk-red` **and** the template already prints the word
+  "over" — colour never carries the meaning alone.
+- `.log` draws one continuous `1px solid var(--bk-rule)` down its left edge, with
+  `.log-head time` hanging in that margin in mono and `.log-body` indented past it.
+- `:focus-visible` is `2px solid var(--bk-gold)` at `2px` offset, on every
+  interactive element.
+- Rows sit at roughly 32px. Radius is `2px` on controls, `0` elsewhere. No
+  shadows, no gradients.
+- Narrow window: `table.rows` lives in an `overflow-x: auto` container and the
+  rail collapses to date plus count. The body never scrolls sideways.
+- `@media (prefers-reduced-motion: reduce)` disables the panel settle transition.
 
 - [ ] **Step 6: Run the tests and confirm they pass**
 
 ```bash
-uv run --no-sync python -m pytest tests/test_web_shell.py tests/test_conventions.py -q > /tmp/out.txt 2>&1; tail -8 /tmp/out.txt
+uv run --no-sync python -m pytest tests/test_web_shell.py tests/test_conventions.py -q > "$GATE/out.txt" 2>&1; tail -8 "$GATE/out.txt"
 ```
 
 Expected: all pass, including the convention rule that `web/` never imports the TUI.
@@ -2309,9 +3702,9 @@ Expected: all pass, including the convention rule that `web/` never imports the 
 - [ ] **Step 7: Full gates**
 
 ```bash
-uv run --no-sync python -m pytest -q > /tmp/out.txt 2>&1; tail -20 /tmp/out.txt
-uv run --no-sync python -m mypy src > /tmp/mypy.txt 2>&1; tail -3 /tmp/mypy.txt
-uv run --no-sync python -m ruff check src tests > /tmp/ruff.txt 2>&1; tail -3 /tmp/ruff.txt
+uv run --no-sync python -m pytest -q > "$GATE/out.txt" 2>&1; tail -20 "$GATE/out.txt"
+uv run --no-sync python -m mypy src > "$GATE/mypy.txt" 2>&1; tail -3 "$GATE/mypy.txt"
+uv run --no-sync python -m ruff check src tests > "$GATE/ruff.txt" 2>&1; tail -3 "$GATE/ruff.txt"
 ```
 
 All three must be clean.

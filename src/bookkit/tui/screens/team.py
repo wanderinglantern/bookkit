@@ -47,9 +47,10 @@ class TeamScreen(Screen):
     def action_assign_selected(self) -> None:
         """Assign the selected colleague to a client account — the mirror of
         `w` on an account, starting from the member instead."""
+        from ...forms.entities import assignment_form
+        from ...forms.spec import dropped
         from ...repo import orgs
-        from ..widgets.entity_forms import assignment_form
-        from ..widgets.forms import FormModal, dropped
+        from ..widgets.forms import FormModal
         from ..widgets.picker import Picker
 
         member_id = self._selected_member_id()
@@ -200,8 +201,9 @@ class TeamScreen(Screen):
         self.app.push_screen(Picker(f"{member.name} — assignments", options), picked)
 
     def action_new_member(self) -> None:
-        from ..widgets.entity_forms import member_form
-        from ..widgets.forms import FormModal, dropped
+        from ...forms.entities import member_form
+        from ...forms.spec import dropped
+        from ..widgets.forms import FormModal
 
         def commit(values: dict) -> str | None:
             member = team.create_member(self.app.conn, **dropped(values))
@@ -217,8 +219,9 @@ class TeamScreen(Screen):
         )
 
     def action_edit_member(self) -> None:
-        from ..widgets.entity_forms import member_form
-        from ..widgets.forms import FormModal, dropped
+        from ...forms.entities import member_form
+        from ...forms.spec import dropped
+        from ..widgets.forms import FormModal
 
         member_id = self._selected_member_id()
         if member_id is None:

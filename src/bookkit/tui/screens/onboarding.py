@@ -102,8 +102,8 @@ class OnboardingScreen(Screen):
         self.dismiss(None)
 
     def action_do_step(self) -> None:
+        from ...forms import entities as ef
         from ...repo import orgs
-        from ..widgets import entity_forms as ef
         from ..widgets.forms import FormModal
 
         conn = self.app.conn
@@ -159,9 +159,9 @@ class OnboardingScreen(Screen):
         never leaves the wizard showing the step as untouched, and re-
         entering the step routes to adding a need on the project that
         already exists instead of spawning a duplicate."""
+        from ...forms import entities as ef
         from ...models import Project
         from ...repo import projects as projects_repo
-        from ..widgets import entity_forms as ef
         from ..widgets.forms import FormModal
 
         conn = self.app.conn
