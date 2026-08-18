@@ -285,6 +285,73 @@ def test_build_server_registers_open_items_and_pipeline_status(server_db):
     assert {"open_items", "pipeline_status"} <= names
 
 
+# -- opportunities are nameable from a read -----------------------------------
+
+
+def _two_client_opps(server_db):
+    """Two clients, one open deal each, plus a closed one — the shape that
+    tells a scoped list from a book-wide one."""
+    from bookkit.repo import base, opportunities
+
+    conn = db.connect(server_db)
+    acme = orgs.create(conn, name="Acme Manufacturing", kind="client")
+    other = orgs.create(conn, name="Borealis Foods", kind="client")
+    opportunities.create(conn, acme.id, "Acme cyber renewal", lines="cyber",
+                         target_premium=150_000_00)
+    opportunities.create(conn, other.id, "Borealis property")
+    dead = opportunities.create(conn, acme.id, "Acme drone program")
+    base.update(conn, "opportunity", dead.id, {"stage": "lost"})
+    conn.close()
+    return db.connect_readonly(server_db)
+
+
+def test_opportunities_names_a_deal_the_assistant_did_not_create(server_db):
+    """The whole point: one call from "the Acme cyber deal" to an OPP- ref
+    that opportunity_stage will take. Before this tool the only OPP- ref in
+    any return value came from opportunity_create/opportunity_stage, so a
+    fresh session could not name a single existing deal."""
+    ro = _two_client_opps(server_db)
+
+    out = mcpserver._opportunities(ro)
+
+    row = next(r for r in out if r["title"] == "Acme cyber renewal")
+    assert row["opportunity_ref"].startswith("OPP-")
+    assert row["account"] == "Acme Manufacturing"   # names its account
+    assert row["stage"] == "identified"
+    assert row["target_premium"].startswith("$")    # cents never leave raw
+
+
+def test_opportunities_excludes_closed_deals_unless_asked(server_db):
+    ro = _two_client_opps(server_db)
+
+    titles = {r["title"] for r in mcpserver._opportunities(ro)}
+    assert "Acme drone program" not in titles
+
+    with_closed = {r["title"] for r in mcpserver._opportunities(ro, include_closed=True)}
+    assert "Acme drone program" in with_closed
+
+
+def test_opportunities_scopes_to_one_client(server_db):
+    ro = _two_client_opps(server_db)
+
+    titles = {r["title"] for r in
+              mcpserver._opportunities(ro, client="Acme Manufacturing")}
+    assert titles == {"Acme cyber renewal"}
+
+
+def test_opportunities_unknown_client_names_the_nearest(server_db):
+    """Same refusal every client-scoped tool gives — never a bare KeyError."""
+    ro = _two_client_opps(server_db)
+    with pytest.raises(ValueError, match="no client matching"):
+        mcpserver._opportunities(ro, client="Acmee")
+
+
+def test_opportunities_is_registered_as_a_read_tool(server_db):
+    server = build_server(server_db)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    assert "opportunities" in names
+
+
 def test_resolve_client_unknown_name_suggests_nearest(server_db):
     conn = db.connect(server_db)
     orgs.create(conn, name="Acme Corp", kind="client")

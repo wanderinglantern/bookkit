@@ -222,8 +222,25 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         """Opportunity pipeline health: count, total and probability-weighted
         premium, and average days-in-stage per stage (identified through
         won/lost); win rate and per-gate advance rates; count of submissions
-        past SLA. Money is formatted dollars."""
+        past SLA. Money is formatted dollars. Aggregates only — no deal is
+        named here; call `opportunities` for the individual deals and their
+        refs."""
         return _pipeline_status(ro)
+
+    @server.tool()
+    async def opportunities(
+        client: str | None = None, include_closed: bool = False
+    ) -> list[dict[str, Any]]:
+        """Open deals WITH the `opportunity_ref` that opportunity_stage and
+        edit_field(kind="opportunity") take. Use this to FIND a deal you need
+        to move or correct: pipeline_status returns per-stage aggregates only
+        and `search` returns no ids at all, so nothing else on this surface
+        can name a deal the assistant did not create itself. Omit `client` for
+        every open deal on the book (each row names its account, so "the Acme
+        cyber deal" is findable in one call); pass `client` (exact name or
+        ref; on a miss the error lists the nearest candidates) to scope it.
+        `include_closed` adds won/lost deals, which are excluded by default."""
+        return _opportunities(ro, client=client, include_closed=include_closed)
 
     @server.tool()
     async def team_roster() -> dict[str, Any]:
@@ -2298,6 +2315,51 @@ def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict[str
         # far-future included, exactly as the per-client branch lists them
         "information_requests": _book_information_requests(conn),
     }
+
+
+def _opportunities(
+    conn: sqlite3.Connection, client: str | None = None,
+    include_closed: bool = False,
+) -> list[dict[str, Any]]:
+    """Deals, WITH refs — the same hole _recent_activity was added to close
+    for interactions, still open one entity over. pipeline_status returns
+    per-stage aggregates and _search returns no ids by design, so before this
+    the only OPP- ref a model could ever hold was one returned by
+    opportunity_create or opportunity_stage in the same session: every deal
+    on the book was unreachable to opportunity_stage and to
+    edit_field(kind="opportunity"). Book-wide by default and each row names
+    its account, so one call turns a remembered description into a ref."""
+    from .money import format_cents
+    from .repo import opportunities as opportunities_repo
+    from .repo import orgs
+
+    closed = ("won", "lost")
+    if client is not None:
+        org = _resolve_client(conn, client)
+        opps = opportunities_repo.for_org(
+            conn, org.id, open_only=not include_closed)
+        names = {org.id: org.name}
+    else:
+        opps = [
+            o for o in opportunities_repo.by_stage(conn)
+            if include_closed or str(o.stage) not in closed
+        ]
+        names = {o.id: o.name for o in orgs.list_orgs(conn)}
+    return [
+        {
+            "opportunity_ref": o.ref,
+            "account": names.get(o.org_id, "(deleted account)"),
+            "title": o.title,
+            "stage": str(o.stage),
+            "lines": o.lines,
+            "target_premium": format_cents(o.target_premium)
+            if o.target_premium else None,
+            "target_effective": o.target_effective,
+            "probability_pct": o.probability_pct,
+            "source": o.source,
+        }
+        for o in opps
+    ]
 
 
 def _pipeline_status(conn: sqlite3.Connection) -> dict[str, Any]:
