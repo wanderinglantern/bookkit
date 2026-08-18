@@ -390,6 +390,130 @@ def test_compose_categories_bucket_case_insensitively(conn):
     assert len(renewal_sections[0].rows) == 2
 
 
+# --- C7: overdue leads ------------------------------------------------------
+#
+# Alphabetical is the one ordering that serves nobody. Sections sort by their
+# most-overdue member and rows sort inside their section; nothing is
+# regrouped, so no item can appear twice.
+
+
+TODAY = date(2026, 8, 18)
+
+
+def test_the_overdue_section_leads_the_one_that_sorts_first_alphabetically(conn):
+    """The reviewer's own copy: their only overdue item, 12 days late, sat
+    below a certificate not due for three days, because C came before R."""
+    org = orgs.create(conn, name="Order Co", kind="client")
+    tasks.create(conn, "issue COI", org_id=org.id, category="Certificates",
+                 due_on="2026-08-21")            # due in 3 days
+    tasks.create(conn, "renewal submission", org_id=org.id, category="Renewal",
+                 due_on="2026-08-06")            # 12 days overdue
+
+    labels = [s.label for s in compose(conn, org.id, TODAY)]
+    assert labels == ["Renewal — Order Co", "Certificates — Order Co"]
+
+
+def test_the_most_overdue_section_leads_the_overdue_ones(conn):
+    org = orgs.create(conn, name="Deep Co", kind="client")
+    tasks.create(conn, "a", org_id=org.id, category="Audit", due_on="2026-08-15")
+    tasks.create(conn, "b", org_id=org.id, category="Binder", due_on="2026-05-01")
+    tasks.create(conn, "c", org_id=org.id, category="Claims", due_on="2026-07-01")
+
+    labels = [s.label for s in compose(conn, org.id, TODAY)]
+    assert labels == ["Binder — Deep Co", "Claims — Deep Co", "Audit — Deep Co"]
+
+
+def test_overdue_rows_lead_inside_their_own_section(conn):
+    """The same defect at smaller scale: a section that opens on a row due
+    next month while holding one two weeks late."""
+    org = orgs.create(conn, name="Inside Co", kind="client")
+    tasks.create(conn, "later", org_id=org.id, category="Renewal", due_on="2026-09-30")
+    tasks.create(conn, "undated", org_id=org.id, category="Renewal")
+    tasks.create(conn, "late", org_id=org.id, category="Renewal", due_on="2026-08-04")
+    tasks.create(conn, "latest", org_id=org.id, category="Renewal", due_on="2026-07-04")
+
+    section = compose(conn, org.id, TODAY)[0]
+    assert [r.item for r in section.rows] == ["latest", "late", "later", "undated"]
+
+
+def test_a_placement_section_outranks_a_category_section_when_it_is_overdue(conn):
+    """Sheet 1 carries TWO kinds of section. Both sort in one ordering, so an
+    overdue placement item leads a merely-upcoming category item and vice
+    versa — a rule applied to only one kind would leave the other alphabetical."""
+    org = orgs.create(conn, name="Both Co", kind="client")
+    p = placements.create(conn, org.id, "Both Co Property 25-26",
+                          "2025-10-01", "2026-10-01")
+    tasks.create(conn, "chase subjectivities", placement_id=p.id, due_on="2026-08-01")
+    tasks.create(conn, "issue COI", org_id=org.id, category="Certificates",
+                 due_on="2026-08-21")
+
+    labels = [s.label for s in compose(conn, org.id, TODAY)]
+    assert labels == ["Both Co Property 25-26", "Certificates — Both Co"]
+
+
+def test_an_overdue_project_need_leads_although_its_status_is_not_overdue(conn):
+    """`_overdue_on` reads the DUE date, not the status word. Only task rows
+    ever say "Overdue"; a project need carries its own vocabulary status and
+    reaches sheet 1 through a different branch entirely."""
+    org = orgs.create(conn, name="Need Co", kind="client")
+    project = projects_repo.create_project(conn, org.id, "Warehouse")
+    projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-06-01")
+    tasks.create(conn, "issue COI", org_id=org.id, category="Certificates",
+                 due_on="2026-08-21")
+
+    sections = compose(conn, org.id, TODAY)
+    assert [s.label for s in sections] == [
+        "Project — Warehouse", "Certificates — Need Co"]
+    assert sections[0].rows[0].status == "Identified"  # not the word "Overdue"
+
+
+def test_nothing_appears_twice_when_overdue_leads(conn):
+    """Reordering, never regrouping: every ref still appears exactly once
+    across the whole sheet, and the row count is unchanged."""
+    org = orgs.create(conn, name="Once Co", kind="client")
+    p = placements.create(conn, org.id, "Once Co Package", "2025-10-01", "2026-10-01")
+    project = projects_repo.create_project(conn, org.id, "Fitout")
+    tasks.create(conn, "late cat", org_id=org.id, category="Renewal",
+                 due_on="2026-07-01")
+    tasks.create(conn, "soon cat", org_id=org.id, category="Certificates",
+                 due_on="2026-09-01")
+    tasks.create(conn, "loose", org_id=org.id)
+    tasks.create(conn, "late placement", placement_id=p.id, due_on="2026-06-01")
+    projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-05-01")
+
+    refs = [r.ref for s in compose(conn, org.id, TODAY) for r in s.rows]
+    assert len(refs) == len(set(refs)) == 5
+
+
+def test_with_nothing_overdue_the_composition_order_survives(conn):
+    """The stable-sort tiebreak, pinned: categories alphabetical, then
+    General, then placements, then projects — unchanged from before C7."""
+    org = orgs.create(conn, name="Calm Co", kind="client")
+    p = placements.create(conn, org.id, "Calm Co Package", "2025-10-01", "2026-10-01")
+    project = projects_repo.create_project(conn, org.id, "Fitout")
+    tasks.create(conn, "renew", org_id=org.id, category="Renewal", due_on="2026-09-05")
+    tasks.create(conn, "cert", org_id=org.id, category="Certificates")
+    tasks.create(conn, "loose", org_id=org.id)
+    tasks.create(conn, "bind", placement_id=p.id, due_on="2026-09-09")
+    projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-12-01")
+
+    assert [s.label for s in compose(conn, org.id, TODAY)] == [
+        "Certificates — Calm Co", "Renewal — Calm Co", "General — Calm Co",
+        "Calm Co Package", "Project — Fitout",
+    ]
+
+
+def test_a_task_due_today_is_not_overdue(conn):
+    """The same boundary C3 draws: today is not late."""
+    org = orgs.create(conn, name="Edge Co", kind="client")
+    tasks.create(conn, "due today", org_id=org.id, category="Zeta",
+                 due_on=TODAY.isoformat())
+    tasks.create(conn, "no date", org_id=org.id, category="Alpha")
+
+    assert [s.label for s in compose(conn, org.id, TODAY)] == [
+        "Alpha — Edge Co", "Zeta — Edge Co"]
+
+
 # --- the Internal category: never leaves the building ------------------------
 #
 # The filter sits on the task list in compose(), before the split into

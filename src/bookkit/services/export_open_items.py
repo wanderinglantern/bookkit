@@ -3,11 +3,16 @@ Requests · Projects · Schedule of Insurance — composed PURELY, with
 rendering left to towerkit (write() in this module glues to
 towerkit.render.table_xlsx / render.soi_xlsx; bookkit has no xlsx
 dependency). Sheet 1 (Open Items): org-level tasks split by category
-(SOV-style, alphabetical — except the Internal category, which is withheld from
-the client entirely: see compose's include_internal) plus a trailing
-General for uncategorized tasks and loose submissions, one section per
-placement (its tasks + outstanding submissions), one per project (unmet
-needs) — always present, even when empty. Sheet 2 (Information Requests):
+(SOV-style — except the Internal category, which is withheld from the
+client entirely: see compose's include_internal) plus a trailing General
+for uncategorized tasks and loose submissions, one section per placement
+(its tasks + outstanding submissions), one per project (unmet needs) —
+always present, even when empty. OVERDUE LEADS, at both levels: sections
+carrying a past-due item sort first, most overdue first, and within every
+section past-due rows lead. Everything with nothing overdue keeps the
+composition order (categories alphabetical, then General, then placements,
+then projects) — the sort is stable, so that ordering is the tiebreak, not
+a second rule. Sheet 2 (Information Requests):
 what the client still owes us, composed by services/export_rfi.py —
 omitted (not blank) when nothing is outstanding. Sheet 3 (Projects): every
 need on every live project, omitted (not blank) when the org has none.
@@ -106,10 +111,59 @@ def _task_row(task: Task, today: date) -> ExportRow:
     )
 
 
+def _overdue_on(row: ExportRow, today: date) -> str | None:
+    """The due date of a row that is PAST due, else None. Read off `due`, not
+    off `status`: only task rows carry the "Overdue" status word, while a
+    project need past its needed-by date is every bit as late and reaches
+    sheet 1 through a different branch."""
+    return row.due if row.due and row.due < today.isoformat() else None
+
+
+def _overdue_first(
+    sections: list[ExportSection], today: date
+) -> list[ExportSection]:
+    """Grant's C7 answer — overdue leads — expressed as a REORDERING, never a
+    regrouping. Alphabetical is the one ordering that serves nobody: the
+    reviewer's only 12-days-overdue item sat below a certificate not due for
+    three days.
+
+    Overdue rows are NOT lifted into a leading section of their own. Sheet 1
+    carries two kinds of section — by category and by placement — and a task
+    that moved into an "Overdue" section would either lose the only context
+    saying which program it belongs to, or appear twice. Sections sort by
+    their most-overdue member instead, so nothing crosses a section boundary
+    and duplication is impossible by construction; within a section, past-due
+    rows lead in the same order, because a section that opens on a row due
+    next month while holding one two weeks late has the same defect at
+    smaller scale.
+
+    Both sort keys put non-overdue after overdue with an EQUAL tail, so
+    Python's stable sort leaves composition order intact underneath."""
+    ranked = [
+        ExportSection(
+            section.label,
+            tuple(sorted(
+                section.rows,
+                key=lambda r: ((0, due) if (due := _overdue_on(r, today)) else (1, "")),
+            )),
+        )
+        for section in sections
+    ]
+    return sorted(
+        ranked,
+        key=lambda s: (
+            (0, overdue[0]) if (overdue := sorted(
+                d for r in s.rows if (d := _overdue_on(r, today))
+            )) else (1, "")
+        ),
+    )
+
+
 def compose(
     conn: sqlite3.Connection, org_id: str, today: date, *, include_internal: bool = False
 ) -> list[ExportSection]:
-    """Sheet 1, as data. Tasks filed under the Internal category are withheld
+    """Sheet 1, as data, OVERDUE FIRST (see _overdue_first). Tasks filed
+    under the Internal category are withheld
     unless `include_internal` — the default is the client-safe one, so a
     future caller composing something client-facing inherits it without
     knowing this feature exists. A caller that wanted the internal rows and
@@ -210,7 +264,7 @@ def compose(
                     for n in needs
                 ),
             ))
-    return sections
+    return _overdue_first(sections, today)
 
 
 def withheld_internal(conn: sqlite3.Connection, org_id: str) -> list[Task]:
