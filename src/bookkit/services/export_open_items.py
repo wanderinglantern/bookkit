@@ -3,17 +3,25 @@ Requests · Projects · Schedule of Insurance — composed PURELY, with
 rendering left to towerkit (write() in this module glues to
 towerkit.render.table_xlsx / render.soi_xlsx; bookkit has no xlsx
 dependency). Sheet 1 (Open Items): org-level tasks split by category
-(SOV-style, alphabetical — except the Internal category, which is withheld from
-the client entirely: see compose's include_internal) plus a trailing
-General for uncategorized tasks and loose submissions, one section per
-placement (its tasks + outstanding submissions), one per project (unmet
-needs) — always present, even when empty. Sheet 2 (Information Requests):
+(SOV-style — except the Internal category, which is withheld from the
+client entirely: see compose's include_internal) plus a trailing General
+for uncategorized tasks and loose submissions, one section per placement
+(its tasks + outstanding submissions), one per project (unmet needs) —
+always present, even when empty. OVERDUE LEADS, at both levels: sections
+carrying a past-due item sort first, most overdue first, and within every
+section past-due rows lead. Everything with nothing overdue keeps the
+composition order (categories alphabetical, then General, then placements,
+then projects) — the sort is stable, so that ordering is the tiebreak, not
+a second rule. Sheet 2 (Information Requests):
 what the client still owes us, composed by services/export_rfi.py —
 omitted (not blank) when nothing is outstanding. Sheet 3 (Projects): every
 need on every live project, omitted (not blank) when the org has none.
 Sheet 4 (Schedule of Insurance): towerkit's SOI machinery per linked
-placement with a book-data fallback, present whenever any placement
-exists. Determinism: `today` is a parameter, never the wall clock."""
+placement with a book-data fallback, covering only placements whose cover
+is still in force on the export date — omitted (not blank) when none is.
+Sheet 1 opens on SCOPE_NOTE, the standing statement of what the report
+covers and what it withholds — invariant text, identical on every export.
+Determinism: `today` is a parameter, never the wall clock."""
 
 from __future__ import annotations
 
@@ -105,10 +113,59 @@ def _task_row(task: Task, today: date) -> ExportRow:
     )
 
 
+def _overdue_on(row: ExportRow, today: date) -> str | None:
+    """The due date of a row that is PAST due, else None. Read off `due`, not
+    off `status`: only task rows carry the "Overdue" status word, while a
+    project need past its needed-by date is every bit as late and reaches
+    sheet 1 through a different branch."""
+    return row.due if row.due and row.due < today.isoformat() else None
+
+
+def _overdue_first(
+    sections: list[ExportSection], today: date
+) -> list[ExportSection]:
+    """Grant's C7 answer — overdue leads — expressed as a REORDERING, never a
+    regrouping. Alphabetical is the one ordering that serves nobody: the
+    reviewer's only 12-days-overdue item sat below a certificate not due for
+    three days.
+
+    Overdue rows are NOT lifted into a leading section of their own. Sheet 1
+    carries two kinds of section — by category and by placement — and a task
+    that moved into an "Overdue" section would either lose the only context
+    saying which program it belongs to, or appear twice. Sections sort by
+    their most-overdue member instead, so nothing crosses a section boundary
+    and duplication is impossible by construction; within a section, past-due
+    rows lead in the same order, because a section that opens on a row due
+    next month while holding one two weeks late has the same defect at
+    smaller scale.
+
+    Both sort keys put non-overdue after overdue with an EQUAL tail, so
+    Python's stable sort leaves composition order intact underneath."""
+    ranked = [
+        ExportSection(
+            section.label,
+            tuple(sorted(
+                section.rows,
+                key=lambda r: ((0, due) if (due := _overdue_on(r, today)) else (1, "")),
+            )),
+        )
+        for section in sections
+    ]
+    return sorted(
+        ranked,
+        key=lambda s: (
+            (0, overdue[0]) if (overdue := sorted(
+                d for r in s.rows if (d := _overdue_on(r, today))
+            )) else (1, "")
+        ),
+    )
+
+
 def compose(
     conn: sqlite3.Connection, org_id: str, today: date, *, include_internal: bool = False
 ) -> list[ExportSection]:
-    """Sheet 1, as data. Tasks filed under the Internal category are withheld
+    """Sheet 1, as data, OVERDUE FIRST (see _overdue_first). Tasks filed
+    under the Internal category are withheld
     unless `include_internal` — the default is the client-safe one, so a
     future caller composing something client-facing inherits it without
     knowing this feature exists. A caller that wanted the internal rows and
@@ -209,7 +266,7 @@ def compose(
                     for n in needs
                 ),
             ))
-    return sections
+    return _overdue_first(sections, today)
 
 
 def withheld_internal(conn: sqlite3.Connection, org_id: str) -> list[Task]:
@@ -335,6 +392,27 @@ def compose_projects(conn: sqlite3.Connection, org_id: str) -> list[SheetSection
 _UNLINKED_CARRIER = "See policy documents"
 
 
+def _expired(placement: Placement, today: date) -> bool:
+    """Is this policy year OVER as of `today`? Decided on the placement's own
+    `period_to` — the very date the SOI prints in its Expiration column, so
+    the sheet cannot contradict its own rule.
+
+    NOT `RenewalItem.renewal_on`. CLAUDE.md's rule ("the renewal date is
+    renewal_on, never period_to") governs a different question: renewal_on is
+    the EARLIEST line end, because attention must open the moment the first
+    layer runs out. Exclusion asks the opposite question — has ALL cover
+    ended — and the earliest line end answers it wrong in the dangerous
+    direction: a program whose IM layer lapsed in March while GL runs to
+    October would vanish from the client's Schedule of Insurance with their
+    General Liability policy still in force. A wrong INCLUSION here is loud
+    (a dated row the reader can see is historic); a wrong exclusion is
+    silent, and takes live cover off the schedule.
+
+    Expiring TODAY is still in force: cover runs to the end of its last day,
+    so the comparison is strictly `<`, never `<=`."""
+    return placement.period_to < today.isoformat()
+
+
 def _premium_dollars(cents: int | None) -> int | None:
     """Placement premium cents → the SOI's whole-dollar premium column.
     Delegates to the guarded money boundary first; on its sub-dollar refusal
@@ -369,14 +447,26 @@ def _book_data_section(org_name: str, placement: Placement) -> SoiSection:
     )
 
 
-def compose_soi(conn: sqlite3.Connection, org_id: str) -> list[SoiSection]:
-    """build_soi sections for every LINKED placement, each under a
-    program-name label (prefixing flattens the per-program nesting); minimal
-    book-data sections for UNLINKED, unreadable, or layerless ones. Non-empty
-    exactly when the org has any placement — the sheet-inclusion rule."""
+def compose_soi(conn: sqlite3.Connection, org_id: str, today: date) -> list[SoiSection]:
+    """build_soi sections for every LINKED placement still in force, each
+    under a program-name label (prefixing flattens the per-program nesting);
+    minimal book-data sections for UNLINKED, unreadable, or layerless ones.
+
+    EXPIRED POLICY YEARS ARE EXCLUDED (see `_expired`). A Schedule of
+    Insurance is a statement of cover in force; a prior year rendered
+    identically beside current cover reads as current cover, and "(Bound)"
+    is true in the past tense. Non-empty exactly when the org has a placement
+    that has not expired — the sheet-inclusion rule. An account whose cover
+    has ALL expired therefore gets no SOI sheet rather than a sheet with
+    headers and no policies: the same omitted-not-blank rule sheets 2 and 3
+    already follow, and the honest one, because there is no schedule to
+    print. It is never an empty sheet — write()'s `if soi_sections` guard is
+    what makes that true, and a test pins it."""
     org = orgs.get(conn, org_id)
     out: list[SoiSection] = []
     for placement in placements.for_org(conn, org_id):
+        if _expired(placement, today):
+            continue
         sections: list[SoiSection] = []
         if placement.program_path:
             try:
@@ -415,6 +505,34 @@ _RFI_COLUMNS: tuple[tuple[str, float], ...] = (
 
 _RFI_HEADER_LABEL = "Items we need from you"
 
+SCOPE_NOTE = (
+    "This report lists items owned by you or by us on your account. "
+    "Internal administrative items are not included."
+)
+"""C8, Grant 2026-08-18 — the withholding rule, stated once, in the workbook.
+
+PER-EXPORT INVARIANT TEXT. It carries nothing about this account: no count,
+no names, no date, no branch on whether anything was actually withheld. A
+sentence that changed shape when something was held back would BE the count
+it replaces — the reviewer's objection to printing one was that it "converts
+a non-event into a standing question on every export". Same words every time
+means the omission is a known boundary rather than a discovery.
+
+It is NOT `withheld_note()`. That line is ours: it names a NEAR MISS — a task
+categorised e.g. "Internal Review" that WAS exported — to the operator on the
+CLI and the TUI toast at the moment the file is written. It never enters the
+workbook and the client never sees it.
+
+It rides sheet 1 as a leading label-only section, the same mechanism
+_RFI_HEADER_LABEL uses. Sheet 1 is the ONLY unconditionally present sheet, so
+one line there is exactly once per export; repeating it on sheets 2-4 would
+make it conditional and redundant, and none of those sheets carries tasks
+anyway. It also survives C5 (towerkit's per-sheet header block) landing
+later: this is sheet BODY, not chrome, so a header block rendered above it
+pushes it down without duplicating it — a generic header block carries the
+account, the report name and the date, which is precisely what this sentence
+deliberately does not."""
+
 
 def _wrapped_line_count(text: str, width: float) -> int:
     """How many wrapped lines `text` needs at `width` characters — an
@@ -443,9 +561,11 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
     """The client deliverable — Open Items · Information Requests · Projects
     · Schedule of Insurance — rendered via towerkit so every sheet carries
     SOI formatting exactly (the money.parse_share pattern: formatting
-    authority in one place). Information Requests appears only when the
+    authority in one place). Sheet 1 opens on SCOPE_NOTE, the same words on
+    every export. Information Requests appears only when the
     client has outstanding items; Projects only when live projects exist;
-    the SOI sheet whenever any placement exists; finalize runs ONCE."""
+    the SOI sheet only when some placement is still in force; finalize runs
+    ONCE."""
     from towerkit.render.soi_xlsx import render_soi_sheet
     from towerkit.render.table_xlsx import (
         TableColumn,
@@ -463,9 +583,11 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
     theme = load_theme(None)
     wb = new_workbook()
 
-    # Sheet 1 — Open Items: content identical to the single-sheet era.
+    # Sheet 1 — Open Items, under the standing scope line (SCOPE_NOTE): the
+    # rule is stated whether or not this account had anything withheld, and
+    # ahead of the body, so it is read before the contents it describes.
     columns = [TableColumn(h, w) for h, w in _COLUMNS]
-    sections = [
+    body = [
         TableSection(
             s.label,
             tuple((r.item, r.description, r.detail, r.kind, r.due, r.status)
@@ -474,6 +596,7 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
         for s in compose(conn, org_id, today)
     ] or [TableSection(None, ((f"No open items as of {today.isoformat()}",
                                "", "", "", "", ""),))]
+    sections = [TableSection(SCOPE_NOTE, ())] + body
     ws = wb.active
     assert ws is not None
     ws.title = sanitize_sheet_title(f"Open Items — {org.name}"[:31])
@@ -519,10 +642,10 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
             row_height=lambda values: 18.0 * max(2, str(values[1]).count("\n") + 1),
         )
 
-    # Sheet 4 — Schedule of Insurance: whenever any placement exists
-    # (compose_soi is non-empty exactly then). The client's own program:
-    # show_premiums=True.
-    soi_sections = compose_soi(conn, org_id)
+    # Sheet 4 — Schedule of Insurance: whenever some placement is still in
+    # force (compose_soi is non-empty exactly then). The client's own
+    # program: show_premiums=True.
+    soi_sections = compose_soi(conn, org_id, today)
     if soi_sections:
         ws_soi = wb.create_sheet(sanitize_sheet_title("Schedule of Insurance"))
         render_soi_sheet(ws_soi, soi_sections, theme=theme, show_premiums=True)

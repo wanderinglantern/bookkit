@@ -9,7 +9,7 @@ from bookkit import seed
 from bookkit.repo import contacts, events, opportunities, orgs, placements, rfi, submissions, tasks
 from bookkit.repo import projects as projects_repo
 from bookkit.services import book, capture, hit_rate, pipeline, renewals, sla, staleness, undo
-from bookkit.services.export_open_items import compose
+from bookkit.services.export_open_items import SCOPE_NOTE, compose
 
 TODAY = date(2026, 8, 11)
 
@@ -390,6 +390,172 @@ def test_compose_categories_bucket_case_insensitively(conn):
     assert len(renewal_sections[0].rows) == 2
 
 
+# --- C7: overdue leads ------------------------------------------------------
+#
+# Alphabetical is the one ordering that serves nobody. Sections sort by their
+# most-overdue member and rows sort inside their section; nothing is
+# regrouped, so no item can appear twice.
+
+
+TODAY = date(2026, 8, 18)
+
+
+def test_the_overdue_section_leads_the_one_that_sorts_first_alphabetically(conn):
+    """The reviewer's own copy: their only overdue item, 12 days late, sat
+    below a certificate not due for three days, because C came before R."""
+    org = orgs.create(conn, name="Order Co", kind="client")
+    tasks.create(conn, "issue COI", org_id=org.id, category="Certificates",
+                 due_on="2026-08-21")            # due in 3 days
+    tasks.create(conn, "renewal submission", org_id=org.id, category="Renewal",
+                 due_on="2026-08-06")            # 12 days overdue
+
+    labels = [s.label for s in compose(conn, org.id, TODAY)]
+    assert labels == ["Renewal — Order Co", "Certificates — Order Co"]
+
+
+def test_the_most_overdue_section_leads_the_overdue_ones(conn):
+    org = orgs.create(conn, name="Deep Co", kind="client")
+    tasks.create(conn, "a", org_id=org.id, category="Audit", due_on="2026-08-15")
+    tasks.create(conn, "b", org_id=org.id, category="Binder", due_on="2026-05-01")
+    tasks.create(conn, "c", org_id=org.id, category="Claims", due_on="2026-07-01")
+
+    labels = [s.label for s in compose(conn, org.id, TODAY)]
+    assert labels == ["Binder — Deep Co", "Claims — Deep Co", "Audit — Deep Co"]
+
+
+def test_overdue_rows_lead_inside_their_own_section(conn):
+    """The same defect at smaller scale: a section that opens on a row due
+    next month while holding one two weeks late.
+
+    End-to-end this currently passes with or without the row-level sort,
+    because repo/tasks.open_tasks_for_client and repo/projects.needs_for_project
+    both already ORDER BY the due date and submissions (undated) are appended
+    last. That redundancy is the point of the two direct _overdue_first tests
+    below: they are what actually holds the row rule, so a repo ORDER BY
+    changing cannot reintroduce the defect unnoticed."""
+    org = orgs.create(conn, name="Inside Co", kind="client")
+    tasks.create(conn, "later", org_id=org.id, category="Renewal", due_on="2026-09-30")
+    tasks.create(conn, "undated", org_id=org.id, category="Renewal")
+    tasks.create(conn, "late", org_id=org.id, category="Renewal", due_on="2026-08-04")
+    tasks.create(conn, "latest", org_id=org.id, category="Renewal", due_on="2026-07-04")
+
+    section = compose(conn, org.id, TODAY)[0]
+    assert [r.item for r in section.rows] == ["latest", "late", "later", "undated"]
+
+
+def test_a_placement_section_outranks_a_category_section_when_it_is_overdue(conn):
+    """Sheet 1 carries TWO kinds of section. Both sort in one ordering, so an
+    overdue placement item leads a merely-upcoming category item and vice
+    versa — a rule applied to only one kind would leave the other alphabetical."""
+    org = orgs.create(conn, name="Both Co", kind="client")
+    p = placements.create(conn, org.id, "Both Co Property 25-26",
+                          "2025-10-01", "2026-10-01")
+    tasks.create(conn, "chase subjectivities", placement_id=p.id, due_on="2026-08-01")
+    tasks.create(conn, "issue COI", org_id=org.id, category="Certificates",
+                 due_on="2026-08-21")
+
+    labels = [s.label for s in compose(conn, org.id, TODAY)]
+    assert labels == ["Both Co Property 25-26", "Certificates — Both Co"]
+
+
+def test_an_overdue_project_need_leads_although_its_status_is_not_overdue(conn):
+    """`_overdue_on` reads the DUE date, not the status word. Only task rows
+    ever say "Overdue"; a project need carries its own vocabulary status and
+    reaches sheet 1 through a different branch entirely."""
+    org = orgs.create(conn, name="Need Co", kind="client")
+    project = projects_repo.create_project(conn, org.id, "Warehouse")
+    projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-06-01")
+    tasks.create(conn, "issue COI", org_id=org.id, category="Certificates",
+                 due_on="2026-08-21")
+
+    sections = compose(conn, org.id, TODAY)
+    assert [s.label for s in sections] == [
+        "Project — Warehouse", "Certificates — Need Co"]
+    assert sections[0].rows[0].status == "Identified"  # not the word "Overdue"
+
+
+def test_nothing_appears_twice_when_overdue_leads(conn):
+    """Reordering, never regrouping: every ref still appears exactly once
+    across the whole sheet, and the row count is unchanged."""
+    org = orgs.create(conn, name="Once Co", kind="client")
+    p = placements.create(conn, org.id, "Once Co Package", "2025-10-01", "2026-10-01")
+    project = projects_repo.create_project(conn, org.id, "Fitout")
+    tasks.create(conn, "late cat", org_id=org.id, category="Renewal",
+                 due_on="2026-07-01")
+    tasks.create(conn, "soon cat", org_id=org.id, category="Certificates",
+                 due_on="2026-09-01")
+    tasks.create(conn, "loose", org_id=org.id)
+    tasks.create(conn, "late placement", placement_id=p.id, due_on="2026-06-01")
+    projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-05-01")
+
+    refs = [r.ref for s in compose(conn, org.id, TODAY) for r in s.rows]
+    assert len(refs) == len(set(refs)) == 5
+
+
+def test_with_nothing_overdue_the_composition_order_survives(conn):
+    """The stable-sort tiebreak, pinned: categories alphabetical, then
+    General, then placements, then projects — unchanged from before C7."""
+    org = orgs.create(conn, name="Calm Co", kind="client")
+    p = placements.create(conn, org.id, "Calm Co Package", "2025-10-01", "2026-10-01")
+    project = projects_repo.create_project(conn, org.id, "Fitout")
+    tasks.create(conn, "renew", org_id=org.id, category="Renewal", due_on="2026-09-05")
+    tasks.create(conn, "cert", org_id=org.id, category="Certificates")
+    tasks.create(conn, "loose", org_id=org.id)
+    tasks.create(conn, "bind", placement_id=p.id, due_on="2026-09-09")
+    projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-12-01")
+
+    assert [s.label for s in compose(conn, org.id, TODAY)] == [
+        "Certificates — Calm Co", "Renewal — Calm Co", "General — Calm Co",
+        "Calm Co Package", "Project — Fitout",
+    ]
+
+
+def _row(item: str, due: str) -> object:
+    from bookkit.services.export_open_items import ExportRow
+
+    return ExportRow(item=item, description="", detail="", kind="Task",
+                     due=due, status="", ref=item)
+
+
+def test_overdue_first_sorts_rows_inside_a_section_directly():
+    """Directly on the ordering function, with rows handed to it out of
+    order — the compose path cannot currently produce that (see above), so
+    this is the test that makes the row-level sort load-bearing."""
+    from bookkit.services.export_open_items import ExportSection, _overdue_first
+
+    section = ExportSection("S", (
+        _row("soon", "2026-09-30"), _row("undated", ""),
+        _row("late", "2026-08-04"), _row("latest", "2026-07-04"),
+    ))
+    out = _overdue_first([section], TODAY)
+    assert [r.item for r in out[0].rows] == ["latest", "late", "soon", "undated"]
+
+
+def test_a_section_is_ranked_by_its_most_overdue_member_not_its_least():
+    """"Most overdue" is the EARLIEST past-due date in the section. Ranking on
+    the latest one instead buries a section holding something six months late
+    behind one holding a single item two days late."""
+    from bookkit.services.export_open_items import ExportSection, _overdue_first
+
+    deep = ExportSection("Deep", (
+        _row("barely", "2026-08-16"), _row("ancient", "2026-01-01")))
+    middling = ExportSection("Middling", (_row("mid", "2026-06-01"),))
+
+    assert [s.label for s in _overdue_first([middling, deep], TODAY)] == [
+        "Deep", "Middling"]
+
+
+def test_a_task_due_today_is_not_overdue(conn):
+    """The same boundary C3 draws: today is not late."""
+    org = orgs.create(conn, name="Edge Co", kind="client")
+    tasks.create(conn, "due today", org_id=org.id, category="Zeta",
+                 due_on=TODAY.isoformat())
+    tasks.create(conn, "no date", org_id=org.id, category="Alpha")
+
+    assert [s.label for s in compose(conn, org.id, TODAY)] == [
+        "Alpha — Edge Co", "Zeta — Edge Co"]
+
+
 # --- the Internal category: never leaves the building ------------------------
 #
 # The filter sits on the task list in compose(), before the split into
@@ -466,7 +632,9 @@ def test_all_internal_account_exports_the_no_open_items_sheet(conn, tmp_path):
     assert compose(conn, org.id, date(2026, 8, 12)) == []
     path = write(conn, org.id, tmp_path / "q.xlsx", date(2026, 8, 12))
     from openpyxl import load_workbook
-    assert load_workbook(path).active["A2"].value == "No open items as of 2026-08-12"
+    ws = load_workbook(path).active
+    assert ws["A2"].value == SCOPE_NOTE  # the standing line, then the body
+    assert ws["A3"].value == "No open items as of 2026-08-12"
 
 
 def test_compose_can_be_asked_for_the_internal_rows(conn):
@@ -510,10 +678,11 @@ def test_export_rows_flag_internal_but_the_workbook_cannot_print_it(conn, tmp_pa
         "a bool reached a workbook cell — ExportRow.internal is in write()'s "
         "column tuple"
     )
-    # header, the "Renewal — Flag Co" section label (column A only), the one
-    # surviving row. A wrong column tuple puts a False here.
+    # header, the scope line (column A only), the "Renewal — Flag Co" section
+    # label (column A only), the one surviving row. A wrong column tuple puts
+    # a False here.
     status_column = [row[5].value for row in sheet.iter_rows()]
-    assert status_column == ["Status", None, "Open"], status_column
+    assert status_column == ["Status", None, None, "Open"], status_column
 
 
 def test_withheld_internal_lists_what_the_client_did_not_get(conn):
@@ -613,6 +782,109 @@ def test_is_internal_category_predicate():
     assert not is_internal_category(None)
 
 
+# --- C8: the withholding rule, stated once, in fixed wording ----------------
+
+
+def test_the_scope_line_opens_sheet_one(conn, tmp_path):
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Scope Co", kind="client")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    path = write(conn, org.id, tmp_path / "s.xlsx", date(2026, 8, 18))
+    ws = load_workbook(path).active
+    assert ws["A2"].value == (
+        "This report lists items owned by you or by us on your account. "
+        "Internal administrative items are not included."
+    )
+    assert ws["A3"].value == "Renewal — Scope Co"  # then the body, unchanged
+
+
+def test_the_scope_line_is_the_same_words_whether_or_not_anything_was_withheld(
+    conn, tmp_path
+):
+    """The whole point of C8. A sentence that changed shape when something was
+    held back would BE the count it was chosen instead of — it converts a
+    non-event into a standing question on every export."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import withheld_note, write
+
+    clean = orgs.create(conn, name="Clean Co", kind="client")
+    tasks.create(conn, "renew GL", org_id=clean.id, category="Renewal")
+
+    held = orgs.create(conn, name="Held Co", kind="client")
+    tasks.create(conn, "renew GL", org_id=held.id, category="Renewal")
+    tasks.create(conn, "our own file note", org_id=held.id, category="Internal")
+    tasks.create(conn, "our own reserve note", org_id=held.id, category="internal")
+
+    assert withheld_note(conn, held.id)  # something WAS withheld on this one
+    assert withheld_note(conn, clean.id) == ""
+
+    a = load_workbook(write(conn, clean.id, tmp_path / "a.xlsx", date(2026, 8, 18)))
+    b = load_workbook(write(conn, held.id, tmp_path / "b.xlsx", date(2026, 8, 18)))
+    assert a.active["A2"].value == b.active["A2"].value == SCOPE_NOTE
+
+    # and no count of what was withheld reaches the file by any other route
+    held_values = [str(c.value) for row in b.active.iter_rows() for c in row]
+    assert not any("withheld" in v for v in held_values)
+    assert not any("our own file note" in v for v in held_values)
+
+
+def test_the_scope_line_appears_exactly_once_across_the_whole_workbook(
+    conn, tmp_path
+):
+    """Once per export, not once per sheet. Sheet 1 is the only sheet always
+    present, so a line there is a line on every export — and the only sheet
+    carrying tasks, which is what the sentence is about."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    client = orgs.create(conn, kind="client", name="Four Co", status="active")
+    tasks.create(conn, "renew GL", org_id=client.id, category="Renewal")
+    placements.create(conn, client.id, "Four Program", "2026-01-01", "2027-01-01",
+                      status="bound", total_premium=100_000_00)
+    project = projects_repo.create_project(conn, client.id, "Fitout")
+    projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-12-01")
+    req = rfi.create_request(conn, client.id, "onboarding docs", "2026-09-05")
+    rfi.add_item(conn, req.id, "audited financials")
+
+    wb = load_workbook(write(conn, client.id, tmp_path / "f.xlsx", date(2026, 8, 18)))
+    assert len(wb.sheetnames) == 4, wb.sheetnames
+    hits = [
+        (name, c.coordinate)
+        for name in wb.sheetnames
+        for row in wb[name].iter_rows()
+        for c in row
+        if c.value == SCOPE_NOTE
+    ]
+    assert hits == [("Open Items — Four Co", "A2")], hits
+
+
+def test_the_scope_line_does_not_replace_the_operators_near_miss_line(
+    conn, tmp_path
+):
+    """Two different lines for two different readers. withheld_note names a
+    NEAR MISS to us at write time; it is not a count of withheld items and it
+    must never enter the client's file."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import withheld_note, write
+
+    org = orgs.create(conn, name="Near Miss Co", kind="client")
+    tasks.create(conn, "audit support", org_id=org.id, category="Internal Review")
+    note = withheld_note(conn, org.id)
+    assert "WAS exported" in note  # still ours, unchanged by C8
+
+    wb = load_workbook(write(conn, org.id, tmp_path / "n.xlsx", date(2026, 8, 18)))
+    values = [str(c.value) for row in wb.active.iter_rows() for c in row]
+    assert SCOPE_NOTE in values
+    assert not any("only the exact category" in v for v in values)
+    assert SCOPE_NOTE not in note
+
+
 def test_write_open_items_deterministic_and_styled(conn, tmp_path):
     from bookkit.services.export_open_items import write
 
@@ -654,7 +926,7 @@ def test_write_empty_book_says_so(conn, tmp_path):
     org = orgs.create(conn, name="Empty Co", kind="client")
     path = write(conn, org.id, tmp_path / "e.xlsx", date(2026, 8, 12))
     from openpyxl import load_workbook
-    assert load_workbook(path).active["A2"].value == "No open items as of 2026-08-12"
+    assert load_workbook(path).active["A3"].value == "No open items as of 2026-08-12"
 
 
 def test_write_three_tab_order_and_headers(conn, tmp_path):
@@ -842,7 +1114,7 @@ def test_compose_soi_linked_placement_uses_towerkit_soi(conn, tmp_path):
     dump_program(program, path)
     placements.update(conn, p.id, program_path=str(path))
 
-    sections = compose_soi(conn, org.id)
+    sections = compose_soi(conn, org.id, date(2026, 1, 1))
     assert len(sections) == 1
     section = sections[0]
     # build_soi's unlabeled section takes the program name as its label
@@ -863,7 +1135,7 @@ def test_compose_soi_unlinked_placement_gets_book_data_section(conn):
         conn, org.id, "Legacy Property", "2025-01-01", "2026-01-01",
         status="bound", total_premium=12_345_00,
     )
-    sections = compose_soi(conn, org.id)
+    sections = compose_soi(conn, org.id, date(2025, 6, 1))
     assert len(sections) == 1
     assert sections[0].label == "Legacy Property (Bound)"
     row = sections[0].rows[0]
@@ -885,7 +1157,7 @@ def test_compose_soi_unreadable_file_falls_back_to_book_data(conn, tmp_path):
         conn, org.id, "Moved Program", "2025-01-01", "2026-01-01",
         program_path=str(tmp_path / "gone.json"),  # linked, but the file moved
     )
-    sections = compose_soi(conn, org.id)
+    sections = compose_soi(conn, org.id, date(2025, 6, 1))
     assert len(sections) == 1  # the policy list is never silently partial
     assert sections[0].rows[0].carrier == "See policy documents"
 
@@ -894,7 +1166,125 @@ def test_compose_soi_empty_when_no_placements(conn):
     from bookkit.services.export_open_items import compose_soi
 
     org = orgs.create(conn, name="Bare Co", kind="client")
-    assert compose_soi(conn, org.id) == []
+    assert compose_soi(conn, org.id, date(2026, 8, 18)) == []
+
+
+# --- C3: expired policy years are not a current Schedule of Insurance --------
+
+
+def test_compose_soi_excludes_an_expired_policy_year(conn):
+    """A prior year renders IDENTICALLY to current cover — same columns, same
+    styling, "(Bound)" true in the past tense. Exclusion is decided on
+    period_to, the same date the Expiration column prints."""
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Two Years Co", kind="client")
+    placements.create(conn, org.id, "2024 Casualty Program",
+                      "2024-09-07", "2025-09-07", status="bound")
+    placements.create(conn, org.id, "2025 Casualty Program",
+                      "2025-09-07", "2026-09-07", status="bound")
+
+    labels = [s.label for s in compose_soi(conn, org.id, date(2026, 8, 18))]
+    assert labels == ["2025 Casualty Program (Bound)"]
+
+
+def test_compose_soi_keeps_cover_expiring_today(conn):
+    """Cover runs to the END of its last day: the comparison is strictly `<`.
+    A `<=` here drops a client's live policy from their schedule on its final
+    day, which is the day they are most likely to be reading it."""
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Last Day Co", kind="client")
+    placements.create(conn, org.id, "Expiring Today", "2025-08-18", "2026-08-18",
+                      status="bound")
+
+    today = date(2026, 8, 18)
+    assert [s.label for s in compose_soi(conn, org.id, today)] == [
+        "Expiring Today (Bound)"]
+    # and gone the next morning
+    assert compose_soi(conn, org.id, date(2026, 8, 19)) == []
+
+
+def test_compose_soi_keeps_a_program_whose_earliest_line_has_already_lapsed(
+    conn, tmp_path
+):
+    """THE renewal_on TRAP. renewal_on is the EARLIEST line end, because
+    attention must open when the first layer runs out. Exclusion asks the
+    opposite question. This program's IM layer ended in March; its GL runs to
+    October. Deciding exclusion on the earliest line end would take a live
+    General Liability policy off the client's Schedule of Insurance."""
+    from towerkit.model import Layer, Line, Participant, Period, Program, dump_program
+    from towerkit.model import Placement as TkPlacement
+
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Staggered Co", kind="client", status="active")
+    p = placements.create(
+        conn, org.id, "2026 Package", "2025-10-01", "2026-10-01", status="bound"
+    )
+    program = Program(
+        insured="Staggered Co", program="Package", placement=TkPlacement.BOUND,
+        period=Period(start=date(2025, 10, 1), end=date(2026, 10, 1)),
+        lines=[
+            Line(id="gl", name="General Liability", abbr="GL"),
+            Line(id="im", name="Inland Marine", abbr="IM"),
+        ],
+        layers=[
+            Layer(
+                id="gl1", name="Primary GL", applies_to=["gl"],
+                attach=0, limit=1_000_000, premium=52_000,
+                participants=[Participant(carrier="Zurich", share_bps=10_000)],
+            ),
+            Layer(
+                id="im1", name="IM", applies_to=["im"],
+                period=Period(start=date(2025, 10, 1), end=date(2026, 3, 1)),
+                attach=0, limit=250_000, premium=4_000,
+                participants=[Participant(carrier="Chubb", share_bps=10_000)],
+            ),
+        ],
+    )
+    path = tmp_path / "package.json"
+    dump_program(program, path)
+    placements.update(conn, p.id, program_path=str(path))
+
+    from bookkit import sync
+    # the trap is real: renewal_on for this placement IS the lapsed IM date
+    assert sync.line_ends(str(path))[0][1] == date(2026, 3, 1)
+
+    sections = compose_soi(conn, org.id, date(2026, 6, 1))
+    coverages = [r.coverage for s in sections for r in s.rows]
+    assert "General Liability" in coverages, (
+        "live GL cover fell off the schedule — exclusion used the earliest "
+        "line end instead of the program period"
+    )
+
+
+def test_all_expired_account_gets_no_soi_sheet_rather_than_an_empty_one(
+    conn, tmp_path
+):
+    """The sheet-inclusion rule under C3: every placement historic ⇒ the tab
+    is omitted, exactly as Information Requests and Projects are when empty.
+    What must NEVER happen is a Schedule of Insurance sheet carrying column
+    headers and no policies."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Lapsed Co", kind="client")
+    placements.create(conn, org.id, "2024 Program", "2024-01-01", "2025-01-01",
+                      status="bound")
+    tasks.create(conn, "renew the whole account", org_id=org.id, category="Renewal")
+
+    path = write(conn, org.id, tmp_path / "l.xlsx", date(2026, 8, 18))
+    wb = load_workbook(path)
+    assert "Schedule of Insurance" not in wb.sheetnames
+
+    # and the same account, exported while that year was still running, does
+    # get the sheet — so the absence above is C3 and not a broken writer
+    path2 = write(conn, org.id, tmp_path / "l2.xlsx", date(2024, 6, 1))
+    wb2 = load_workbook(path2)
+    assert "Schedule of Insurance" in wb2.sheetnames
+    assert wb2["Schedule of Insurance"]["A2"].value == "2024 Program (Bound)"
 
 
 def test_premium_dollars_delegates_then_floors_for_display():
@@ -1005,8 +1395,9 @@ def test_open_items_long_unbroken_description_gets_three_line_height(conn, tmp_p
     path = write(conn, org.id, tmp_path / "w.xlsx", date(2026, 8, 13))
     from openpyxl import load_workbook
     ws = load_workbook(path).active
-    # row 1 header, row 2 the "General — Long Co" section label, row 3 the task
-    assert ws.row_dimensions[3].height >= 54.0
+    # row 1 header, row 2 the scope line, row 3 the "General — Long Co"
+    # section label, row 4 the task
+    assert ws.row_dimensions[4].height >= 54.0
 
 
 def test_open_items_short_row_keeps_two_line_floor(conn, tmp_path):
@@ -1017,8 +1408,9 @@ def test_open_items_short_row_keeps_two_line_floor(conn, tmp_path):
     path = write(conn, org.id, tmp_path / "w.xlsx", date(2026, 8, 13))
     from openpyxl import load_workbook
     ws = load_workbook(path).active
-    # row 1 header, row 2 the "General — Short Co" section label, row 3 the task
-    assert ws.row_dimensions[3].height == 36.0
+    # row 1 header, row 2 the scope line, row 3 the "General — Short Co"
+    # section label, row 4 the task
+    assert ws.row_dimensions[4].height == 36.0
 
 
 def test_information_requests_detail_column_matches_open_items_width(conn, tmp_path):
