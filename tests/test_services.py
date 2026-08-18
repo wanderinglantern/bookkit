@@ -9,7 +9,7 @@ from bookkit import seed
 from bookkit.repo import contacts, events, opportunities, orgs, placements, rfi, submissions, tasks
 from bookkit.repo import projects as projects_repo
 from bookkit.services import book, capture, hit_rate, pipeline, renewals, sla, staleness, undo
-from bookkit.services.export_open_items import compose
+from bookkit.services.export_open_items import SCOPE_NOTE, compose
 
 TODAY = date(2026, 8, 11)
 
@@ -632,7 +632,9 @@ def test_all_internal_account_exports_the_no_open_items_sheet(conn, tmp_path):
     assert compose(conn, org.id, date(2026, 8, 12)) == []
     path = write(conn, org.id, tmp_path / "q.xlsx", date(2026, 8, 12))
     from openpyxl import load_workbook
-    assert load_workbook(path).active["A2"].value == "No open items as of 2026-08-12"
+    ws = load_workbook(path).active
+    assert ws["A2"].value == SCOPE_NOTE  # the standing line, then the body
+    assert ws["A3"].value == "No open items as of 2026-08-12"
 
 
 def test_compose_can_be_asked_for_the_internal_rows(conn):
@@ -676,10 +678,11 @@ def test_export_rows_flag_internal_but_the_workbook_cannot_print_it(conn, tmp_pa
         "a bool reached a workbook cell — ExportRow.internal is in write()'s "
         "column tuple"
     )
-    # header, the "Renewal — Flag Co" section label (column A only), the one
-    # surviving row. A wrong column tuple puts a False here.
+    # header, the scope line (column A only), the "Renewal — Flag Co" section
+    # label (column A only), the one surviving row. A wrong column tuple puts
+    # a False here.
     status_column = [row[5].value for row in sheet.iter_rows()]
-    assert status_column == ["Status", None, "Open"], status_column
+    assert status_column == ["Status", None, None, "Open"], status_column
 
 
 def test_withheld_internal_lists_what_the_client_did_not_get(conn):
@@ -779,6 +782,109 @@ def test_is_internal_category_predicate():
     assert not is_internal_category(None)
 
 
+# --- C8: the withholding rule, stated once, in fixed wording ----------------
+
+
+def test_the_scope_line_opens_sheet_one(conn, tmp_path):
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Scope Co", kind="client")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    path = write(conn, org.id, tmp_path / "s.xlsx", date(2026, 8, 18))
+    ws = load_workbook(path).active
+    assert ws["A2"].value == (
+        "This report lists items owned by you or by us on your account. "
+        "Internal administrative items are not included."
+    )
+    assert ws["A3"].value == "Renewal — Scope Co"  # then the body, unchanged
+
+
+def test_the_scope_line_is_the_same_words_whether_or_not_anything_was_withheld(
+    conn, tmp_path
+):
+    """The whole point of C8. A sentence that changed shape when something was
+    held back would BE the count it was chosen instead of — it converts a
+    non-event into a standing question on every export."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import withheld_note, write
+
+    clean = orgs.create(conn, name="Clean Co", kind="client")
+    tasks.create(conn, "renew GL", org_id=clean.id, category="Renewal")
+
+    held = orgs.create(conn, name="Held Co", kind="client")
+    tasks.create(conn, "renew GL", org_id=held.id, category="Renewal")
+    tasks.create(conn, "our own file note", org_id=held.id, category="Internal")
+    tasks.create(conn, "our own reserve note", org_id=held.id, category="internal")
+
+    assert withheld_note(conn, held.id)  # something WAS withheld on this one
+    assert withheld_note(conn, clean.id) == ""
+
+    a = load_workbook(write(conn, clean.id, tmp_path / "a.xlsx", date(2026, 8, 18)))
+    b = load_workbook(write(conn, held.id, tmp_path / "b.xlsx", date(2026, 8, 18)))
+    assert a.active["A2"].value == b.active["A2"].value == SCOPE_NOTE
+
+    # and no count of what was withheld reaches the file by any other route
+    held_values = [str(c.value) for row in b.active.iter_rows() for c in row]
+    assert not any("withheld" in v for v in held_values)
+    assert not any("our own file note" in v for v in held_values)
+
+
+def test_the_scope_line_appears_exactly_once_across_the_whole_workbook(
+    conn, tmp_path
+):
+    """Once per export, not once per sheet. Sheet 1 is the only sheet always
+    present, so a line there is a line on every export — and the only sheet
+    carrying tasks, which is what the sentence is about."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    client = orgs.create(conn, kind="client", name="Four Co", status="active")
+    tasks.create(conn, "renew GL", org_id=client.id, category="Renewal")
+    placements.create(conn, client.id, "Four Program", "2026-01-01", "2027-01-01",
+                      status="bound", total_premium=100_000_00)
+    project = projects_repo.create_project(conn, client.id, "Fitout")
+    projects_repo.add_need(conn, project.id, "Builder's Risk", "2026-12-01")
+    req = rfi.create_request(conn, client.id, "onboarding docs", "2026-09-05")
+    rfi.add_item(conn, req.id, "audited financials")
+
+    wb = load_workbook(write(conn, client.id, tmp_path / "f.xlsx", date(2026, 8, 18)))
+    assert len(wb.sheetnames) == 4, wb.sheetnames
+    hits = [
+        (name, c.coordinate)
+        for name in wb.sheetnames
+        for row in wb[name].iter_rows()
+        for c in row
+        if c.value == SCOPE_NOTE
+    ]
+    assert hits == [("Open Items — Four Co", "A2")], hits
+
+
+def test_the_scope_line_does_not_replace_the_operators_near_miss_line(
+    conn, tmp_path
+):
+    """Two different lines for two different readers. withheld_note names a
+    NEAR MISS to us at write time; it is not a count of withheld items and it
+    must never enter the client's file."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import withheld_note, write
+
+    org = orgs.create(conn, name="Near Miss Co", kind="client")
+    tasks.create(conn, "audit support", org_id=org.id, category="Internal Review")
+    note = withheld_note(conn, org.id)
+    assert "WAS exported" in note  # still ours, unchanged by C8
+
+    wb = load_workbook(write(conn, org.id, tmp_path / "n.xlsx", date(2026, 8, 18)))
+    values = [str(c.value) for row in wb.active.iter_rows() for c in row]
+    assert SCOPE_NOTE in values
+    assert not any("only the exact category" in v for v in values)
+    assert SCOPE_NOTE not in note
+
+
 def test_write_open_items_deterministic_and_styled(conn, tmp_path):
     from bookkit.services.export_open_items import write
 
@@ -820,7 +926,7 @@ def test_write_empty_book_says_so(conn, tmp_path):
     org = orgs.create(conn, name="Empty Co", kind="client")
     path = write(conn, org.id, tmp_path / "e.xlsx", date(2026, 8, 12))
     from openpyxl import load_workbook
-    assert load_workbook(path).active["A2"].value == "No open items as of 2026-08-12"
+    assert load_workbook(path).active["A3"].value == "No open items as of 2026-08-12"
 
 
 def test_write_three_tab_order_and_headers(conn, tmp_path):
@@ -1289,8 +1395,9 @@ def test_open_items_long_unbroken_description_gets_three_line_height(conn, tmp_p
     path = write(conn, org.id, tmp_path / "w.xlsx", date(2026, 8, 13))
     from openpyxl import load_workbook
     ws = load_workbook(path).active
-    # row 1 header, row 2 the "General — Long Co" section label, row 3 the task
-    assert ws.row_dimensions[3].height >= 54.0
+    # row 1 header, row 2 the scope line, row 3 the "General — Long Co"
+    # section label, row 4 the task
+    assert ws.row_dimensions[4].height >= 54.0
 
 
 def test_open_items_short_row_keeps_two_line_floor(conn, tmp_path):
@@ -1301,8 +1408,9 @@ def test_open_items_short_row_keeps_two_line_floor(conn, tmp_path):
     path = write(conn, org.id, tmp_path / "w.xlsx", date(2026, 8, 13))
     from openpyxl import load_workbook
     ws = load_workbook(path).active
-    # row 1 header, row 2 the "General — Short Co" section label, row 3 the task
-    assert ws.row_dimensions[3].height == 36.0
+    # row 1 header, row 2 the scope line, row 3 the "General — Short Co"
+    # section label, row 4 the task
+    assert ws.row_dimensions[4].height == 36.0
 
 
 def test_information_requests_detail_column_matches_open_items_width(conn, tmp_path):

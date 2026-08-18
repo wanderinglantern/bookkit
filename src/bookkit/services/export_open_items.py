@@ -19,6 +19,8 @@ need on every live project, omitted (not blank) when the org has none.
 Sheet 4 (Schedule of Insurance): towerkit's SOI machinery per linked
 placement with a book-data fallback, covering only placements whose cover
 is still in force on the export date — omitted (not blank) when none is.
+Sheet 1 opens on SCOPE_NOTE, the standing statement of what the report
+covers and what it withholds — invariant text, identical on every export.
 Determinism: `today` is a parameter, never the wall clock."""
 
 from __future__ import annotations
@@ -503,6 +505,34 @@ _RFI_COLUMNS: tuple[tuple[str, float], ...] = (
 
 _RFI_HEADER_LABEL = "Items we need from you"
 
+SCOPE_NOTE = (
+    "This report lists items owned by you or by us on your account. "
+    "Internal administrative items are not included."
+)
+"""C8, Grant 2026-08-18 — the withholding rule, stated once, in the workbook.
+
+PER-EXPORT INVARIANT TEXT. It carries nothing about this account: no count,
+no names, no date, no branch on whether anything was actually withheld. A
+sentence that changed shape when something was held back would BE the count
+it replaces — the reviewer's objection to printing one was that it "converts
+a non-event into a standing question on every export". Same words every time
+means the omission is a known boundary rather than a discovery.
+
+It is NOT `withheld_note()`. That line is ours: it names a NEAR MISS — a task
+categorised e.g. "Internal Review" that WAS exported — to the operator on the
+CLI and the TUI toast at the moment the file is written. It never enters the
+workbook and the client never sees it.
+
+It rides sheet 1 as a leading label-only section, the same mechanism
+_RFI_HEADER_LABEL uses. Sheet 1 is the ONLY unconditionally present sheet, so
+one line there is exactly once per export; repeating it on sheets 2-4 would
+make it conditional and redundant, and none of those sheets carries tasks
+anyway. It also survives C5 (towerkit's per-sheet header block) landing
+later: this is sheet BODY, not chrome, so a header block rendered above it
+pushes it down without duplicating it — a generic header block carries the
+account, the report name and the date, which is precisely what this sentence
+deliberately does not."""
+
 
 def _wrapped_line_count(text: str, width: float) -> int:
     """How many wrapped lines `text` needs at `width` characters — an
@@ -531,7 +561,8 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
     """The client deliverable — Open Items · Information Requests · Projects
     · Schedule of Insurance — rendered via towerkit so every sheet carries
     SOI formatting exactly (the money.parse_share pattern: formatting
-    authority in one place). Information Requests appears only when the
+    authority in one place). Sheet 1 opens on SCOPE_NOTE, the same words on
+    every export. Information Requests appears only when the
     client has outstanding items; Projects only when live projects exist;
     the SOI sheet only when some placement is still in force; finalize runs
     ONCE."""
@@ -552,9 +583,11 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
     theme = load_theme(None)
     wb = new_workbook()
 
-    # Sheet 1 — Open Items: content identical to the single-sheet era.
+    # Sheet 1 — Open Items, under the standing scope line (SCOPE_NOTE): the
+    # rule is stated whether or not this account had anything withheld, and
+    # ahead of the body, so it is read before the contents it describes.
     columns = [TableColumn(h, w) for h, w in _COLUMNS]
-    sections = [
+    body = [
         TableSection(
             s.label,
             tuple((r.item, r.description, r.detail, r.kind, r.due, r.status)
@@ -563,6 +596,7 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
         for s in compose(conn, org_id, today)
     ] or [TableSection(None, ((f"No open items as of {today.isoformat()}",
                                "", "", "", "", ""),))]
+    sections = [TableSection(SCOPE_NOTE, ())] + body
     ws = wb.active
     assert ws is not None
     ws.title = sanitize_sheet_title(f"Open Items — {org.name}"[:31])
