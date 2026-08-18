@@ -39,5 +39,7 @@ between tracking the work and not showing it.
 **Watch.** The export is composed purely and rendered by towerkit; the filter
 belongs in bookkit's composition, not in towerkit's renderer.
 
-**Open question for Grant.** Should an internal task be excluded from the
-Projects and Information Requests sheets as well, or is this only sheet 1?
+**Scope: sheet 1 only** (Grant, 2026-08-18). Open Items is the sheet that
+carries org-level tasks, so it is the only one the flag applies to. Leave
+Information Requests, Projects and Schedule of Insurance alone — do not
+generalise the filter across sheets on the grounds that it would be tidier.
