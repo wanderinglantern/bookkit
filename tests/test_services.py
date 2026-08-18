@@ -425,7 +425,14 @@ def test_the_most_overdue_section_leads_the_overdue_ones(conn):
 
 def test_overdue_rows_lead_inside_their_own_section(conn):
     """The same defect at smaller scale: a section that opens on a row due
-    next month while holding one two weeks late."""
+    next month while holding one two weeks late.
+
+    End-to-end this currently passes with or without the row-level sort,
+    because repo/tasks.open_tasks_for_client and repo/projects.needs_for_project
+    both already ORDER BY the due date and submissions (undated) are appended
+    last. That redundancy is the point of the two direct _overdue_first tests
+    below: they are what actually holds the row rule, so a repo ORDER BY
+    changing cannot reintroduce the defect unnoticed."""
     org = orgs.create(conn, name="Inside Co", kind="client")
     tasks.create(conn, "later", org_id=org.id, category="Renewal", due_on="2026-09-30")
     tasks.create(conn, "undated", org_id=org.id, category="Renewal")
@@ -501,6 +508,41 @@ def test_with_nothing_overdue_the_composition_order_survives(conn):
         "Certificates — Calm Co", "Renewal — Calm Co", "General — Calm Co",
         "Calm Co Package", "Project — Fitout",
     ]
+
+
+def _row(item: str, due: str) -> object:
+    from bookkit.services.export_open_items import ExportRow
+
+    return ExportRow(item=item, description="", detail="", kind="Task",
+                     due=due, status="", ref=item)
+
+
+def test_overdue_first_sorts_rows_inside_a_section_directly():
+    """Directly on the ordering function, with rows handed to it out of
+    order — the compose path cannot currently produce that (see above), so
+    this is the test that makes the row-level sort load-bearing."""
+    from bookkit.services.export_open_items import ExportSection, _overdue_first
+
+    section = ExportSection("S", (
+        _row("soon", "2026-09-30"), _row("undated", ""),
+        _row("late", "2026-08-04"), _row("latest", "2026-07-04"),
+    ))
+    out = _overdue_first([section], TODAY)
+    assert [r.item for r in out[0].rows] == ["latest", "late", "soon", "undated"]
+
+
+def test_a_section_is_ranked_by_its_most_overdue_member_not_its_least():
+    """"Most overdue" is the EARLIEST past-due date in the section. Ranking on
+    the latest one instead buries a section holding something six months late
+    behind one holding a single item two days late."""
+    from bookkit.services.export_open_items import ExportSection, _overdue_first
+
+    deep = ExportSection("Deep", (
+        _row("barely", "2026-08-16"), _row("ancient", "2026-01-01")))
+    middling = ExportSection("Middling", (_row("mid", "2026-06-01"),))
+
+    assert [s.label for s in _overdue_first([middling, deep], TODAY)] == [
+        "Deep", "Middling"]
 
 
 def test_a_task_due_today_is_not_overdue(conn):
