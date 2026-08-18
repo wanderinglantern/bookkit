@@ -232,3 +232,63 @@ changes rail does with the redirect target first.
 **Touches.** `web/routes/changes.py` only; `tests/test_web_scoping.py` is where
 the assertion belongs (it already owns "an unknown id and someone else's id
 answer the same").
+
+---
+
+## A stale Edit renders as silence, on every cell route (2026-08-18)
+
+**What.** Clicking `Edit` on a row another tab (or the TUI, or MCP) deleted a
+moment ago produces NOTHING at all — no form, no message, no change. The route
+answers 404 (`web/routes/relationship.py:275,:293`, and the same in the
+thirteen pre-existing contact/task/request cell routes), htmx swaps neither 4xx
+nor 5xx, and nothing listens for `htmx:responseError`, so the click lands in
+the floor.
+
+**Why it is a roadmap line and not a fix.** The DESTRUCTIVE control beside it
+already handles this correctly and deliberately: `interaction_delete_confirm`
+and `contact_remove_confirm` check ownership against the RAW row and answer
+staleness with a 200 carrying "already deleted", because the stale click is
+most likely to land on the button that destroys something. Extending that
+treatment to the read/edit half is a BRANCH-WIDE sweep across fourteen routes
+with one shared answer, not a Task 10 fix — doing it for interactions alone
+would leave the timeline behaving differently from the contact cards beside it
+on the same tab.
+
+**Shape when built.** One decision to make first: a stale Edit has no panel of
+its own to refuse into on some routes (a cell editor's target is the cell), so
+either the refusal comes back as the re-rendered CELL saying "gone — refresh",
+or every cell route grows the panel-level OOB error that the remove control
+uses. Pick one and apply it to all fourteen; two shapes is how this drifted.
+
+**Touches.** `web/routes/relationship.py`, `web/routes/work.py`, the cell
+macros in `web/templates/macros/`, and `tests/test_web_concurrency.py` (which
+already owns "a stale click says so" for the remove control).
+
+---
+
+## MCP owns a third vocabulary for deleting an interaction (2026-08-18)
+
+**What.** `services/interactions.py` says in its own docstring that the surfaces
+share this write; two of them do. `mcpserver._activity_delete`
+(`mcpserver.py:855`) still opens its own batch with `tool="activity_delete"`
+and `summary=f"deleted activity: {subject}"`, while the service writes
+`tool="interaction_delete"` and `deleted <subject> from <org>`. So the changes
+rail describes one write two ways depending on who asked, and `R`'s list reads
+as two different features. It also raises `KeyError` from `interactions.get`
+rather than the service's "already deleted" sentence.
+
+**Why it is a roadmap line and not a fix.** It is the odd one out, not the
+pattern — `contacts_svc.remove` IS wired to MCP — but the move is NOT
+mechanical: `_activity_delete` calls `_provenance(conn, "interaction", id)`
+inside its batch and the service does not. Provenance is an MCP-only concern
+(who wrote this row and from what), so either the service grows an optional
+hook or MCP keeps a thin wrapper that opens no batch of its own — and it cannot
+open one, because `db.transaction` nests by JOINING and an outer batch would
+leave a second, permanently empty row in the changes list.
+
+**Watch.** Fix the docstring at the same time; it currently claims three
+surfaces read these rules. And check the MCP tool's return shape — it reports
+`batch.ref` back to the model, which the service currently does not return.
+
+**Touches.** `mcpserver.py` (`_activity_delete`), `services/interactions.py`,
+`tests/test_mcp*.py`.

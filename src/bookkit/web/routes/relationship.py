@@ -219,7 +219,13 @@ def _timeline_context(request: Request, org: Org, type_filter: str | None) -> di
             f"clear the filter to see all {len(entries)}"
         )
     else:
-        empty = "empty — add the first row"
+        # NOT "empty — add the first row": the web has no create control for
+        # interactions (quick capture owns logging one), so that sentence names
+        # a button that is not there. NOT "nothing here — that's good" either —
+        # this is not an attention list, and an account nobody has spoken to is
+        # not good news. Factual, promising nothing, until the header's
+        # "+ Log interaction" pill is wired (Grant's ruling, 2026-08-18).
+        empty = "no interactions logged"
     return {
         "timeline_rows": [_timeline_row(request, org.ref, e, query) for e in shown],
         "timeline_count": len(shown),
@@ -253,7 +259,7 @@ def _interactions_panel(
     looking at: dropping back to All after every edit would re-hide the row
     they just corrected in a list of two hundred."""
     context = {
-        "header": {"org": org}, "oob": oob, "error": error,
+        "oob": oob, "error": error,
         **_timeline_context(request, org, type_filter),
     }
     return TEMPLATES.TemplateResponse(request, "account/_interactions_panel.html", context)

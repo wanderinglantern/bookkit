@@ -905,12 +905,14 @@ def test_deleting_asks_first_then_soft_deletes(timeline):
     the confirm says so, because 'delete' that is really 'take it off the list'
     must not read as destruction."""
     from bookkit.repo import base as base_repo
+    from bookkit.repo import batches as batches_repo
     from bookkit.repo import interactions as interactions_repo
 
     client, org, entry, _attendee = timeline
     conn = client.app.state.conn
     url = f"/accounts/{org.ref}/interactions/{entry.id}/delete"
     before = _latest_batch(conn)
+    before_batches = batches_repo.recent(conn, since="", limit=50)
 
     confirm = client.get(url)
 
@@ -929,25 +931,62 @@ def test_deleting_asks_first_then_soft_deletes(timeline):
     assert row is not None and row["deleted_at"] is not None, (
         "a soft delete keeps the row and stamps deleted_at"
     )
-    batch = _latest_batch(conn)
-    assert batch is not None and batch.source == "web"
+    after = batches_repo.recent(conn, since="", limit=50)
+    assert len(after) == len(before_batches) + 1, (
+        "one writer action is one undo unit — this delete wrote "
+        f"{len(after) - len(before_batches)} batches"
+    )
+    batch = after[0]
+    assert batch.source == "web"
+    # the CONTENT, not just the existence: services.interactions._summary is
+    # shared with the TUI so the two surfaces cannot describe one write
+    # differently, and a summary that says only "deleted an interaction"
+    # leaves `R` and the changes rail naming nothing the user can recognise.
+    assert entry.subject in batch.summary and org.name in batch.summary, (
+        f"the batch summary says neither what was deleted nor from where: {batch.summary!r}"
+    )
 
 
 def test_the_confirm_names_the_consequences_and_a_way_out(timeline):
     """services.interactions.consequences is the confirm's whole content, for
     the reason services.contacts.consequences is the contact confirm's: two
     surfaces that compose their own sentences promise different things about
-    one write. The TUI half of this claim is asserted below."""
+    one write. The TUI half of this claim is asserted below.
+
+    WHAT the sentences say is asserted here too, not just that the render
+    matches whatever they happen to be (fix round 1). `assert notes` passes on
+    one generic line: the entire last-touch branch could be deleted, and the
+    revertibility sentence could be replaced with "gone for good" — a
+    materially false claim about a soft delete — with the suite green.
+    """
     from markupsafe import escape
 
+    from bookkit.repo import interactions as interactions_repo
     from bookkit.services import interactions as interactions_svc
 
     client, org, entry, _attendee = timeline
     conn = client.app.state.conn
-    notes = interactions_svc.consequences(conn, entry.id)
-    assert notes, "the fixture no longer produces a consequence to show"
+    # strictly newer than anything seeded (the seed's newest is 2026-08-13), so
+    # this IS the account's last touch and the fixture's entry is what the rail
+    # falls back to — both halves of the sentence have a real read behind them.
+    newest = interactions_repo.log(
+        conn, org.id, type="call", subject="Zephyr excess layer call",
+        occurred_on="2026-08-17", body="the newest touch on the account",
+    )
+    notes = interactions_svc.consequences(conn, newest.id)
 
-    html = client.get(f"/accounts/{org.ref}/interactions/{entry.id}/delete").text
+    assert any("last touch" in n and entry.occurred_on in n for n in notes), (
+        "no consequence names the date the account's last touch falls back to "
+        f"({entry.occurred_on}): {notes}"
+    )
+    assert all(newest.occurred_on not in n for n in notes), (
+        "the fallback names the date being deleted, not the one it falls back to"
+    )
+    assert any("attendee" in n and ("undo" in n or "revertible" in n) for n in notes), (
+        f"no consequence says the delete is revertible, attendees and all: {notes}"
+    )
+
+    html = client.get(f"/accounts/{org.ref}/interactions/{newest.id}/delete").text
 
     for note in notes:
         # escaped, not raw: the sentences are prose and carry apostrophes,
@@ -1058,6 +1097,69 @@ def test_filtering_the_timeline_by_type(timeline):
     count = re.search(r'class="timeline-count">(\d+)<', response.text)
     assert count is not None, "the timeline header renders no count"
     assert count.group(1) == str(len(calls))
+
+
+def test_the_type_filters_offer_the_account_s_own_types_and_no_others(app_and_org):
+    """The pills are the timeline's ONLY filter affordance, and nothing held
+    them (fix round 1): `present = []` renders the "All" pill alone — no way to
+    filter by type at all — and every other test here survives it, because
+    they hit ?type= directly or are satisfied by "All".
+
+    The account is chosen for leaving part of the vocabulary unused, so "no
+    pill for a type that is not here" is a real assertion rather than a vacuous
+    one — the seeded first client happens to use all six."""
+    from bookkit.models import InteractionType
+    from bookkit.repo import interactions as interactions_repo
+    from bookkit.repo import orgs as orgs_repo
+
+    client, _org = app_and_org
+    conn = client.app.state.conn
+    for candidate in orgs_repo.list_orgs(conn, kind="client"):
+        entries = interactions_repo.for_org(conn, candidate.id, limit=200)
+        present = [t.value for t in InteractionType
+                   if any(str(e.type) == t.value for e in entries)]
+        absent = [t.value for t in InteractionType if t.value not in present]
+        if present and absent:
+            break
+    else:  # pragma: no cover - the seed has never produced this
+        raise AssertionError("no seeded account leaves an interaction type unused")
+
+    response = client.get(f"/accounts/{candidate.ref}/relationship")
+
+    block = re.search(r'class="timeline-filters".*?</div>', response.text, re.S)
+    assert block is not None, "the timeline renders no type filters"
+    labels = re.findall(r">([^<>]+)</a>", block.group(0))
+    assert labels == ["All"] + [t.replace("_", " ") for t in present], (
+        f"the pills are {labels}; this account logs {present} and never {absent}"
+    )
+
+
+def test_a_crafted_type_is_not_reflected_into_the_page(timeline):
+    """_filter_type validates against models.InteractionType rather than
+    passing the raw string through, and its own docstring is the only thing
+    that said so (fix round 1). Without the check a crafted ?type= is echoed
+    into the filtered-empty sentence — Jinja escapes it and the app is loopback
+    single-user, so this is a defence in depth, not a live hole; but an
+    untested defence is one the next edit deletes."""
+    from bookkit.repo import interactions as interactions_repo
+
+    client, org, _entry, _attendee = timeline
+    conn = client.app.state.conn
+    total = len(interactions_repo.for_org(conn, org.id, limit=200))
+
+    response = client.get(
+        f"/accounts/{org.ref}/relationship", params={"type": "zzcrafted"}
+    )
+
+    assert response.status_code == 200
+    assert "zzcrafted" not in response.text, (
+        "an unrecognised type is echoed back into the page"
+    )
+    count = re.search(r'class="timeline-count">(\d+)<', response.text)
+    assert count is not None, "the timeline header renders no count"
+    assert count.group(1) == str(total), (
+        "an unrecognised type filtered the timeline instead of being ignored"
+    )
 
 
 def test_a_filter_link_does_not_resurrect_the_revert_toast(timeline):
