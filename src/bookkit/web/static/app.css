@@ -675,6 +675,32 @@ a {
   color: var(--muted);
 }
 
+/* The program-scoped block: caption plus a left rule down the three rows it
+   covers, so the group closes before `open work` (an account figure) starts
+   again. `bound premium` is the account's, `program premium` is one
+   placement's — mixing the two scopes silently in one panel is the hazard
+   this markup exists to prevent, and the caption carries the program name so
+   the distinction survives without the rule. */
+.snapshot-scope {
+  margin: 0.375rem 0 0.125rem;
+  padding-left: 0.5rem;
+  font-family: var(--mono);
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.snapshot-row.is-scoped {
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--rule);
+}
+
+/* unplaced capacity — warn, not danger: a hole is work to do, not a
+   failure. Never colour alone; the row prints the share and the layer name
+   ("20% on 3rd Excess"), both of which read without it. */
+.snapshot-value.is-warn {
+  color: var(--warn);
+}
+
 /* TEAM */
 
 .team-row {

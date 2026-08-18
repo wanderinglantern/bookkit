@@ -29,9 +29,18 @@ from typing import Any, TypeVar
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from ... import money
+from ... import money, sync
 from ...forms.spec import BatchSpec, FieldError, FormSpec, parse_values
-from ...models import Contact, EventBatch, Interaction, Org, RfiItem, RfiRequest, Task
+from ...models import (
+    Contact,
+    EventBatch,
+    Interaction,
+    Org,
+    Placement,
+    RfiItem,
+    RfiRequest,
+    Task,
+)
 from ...repo import base as base_repo
 from ...repo import batches as batches_repo
 from ...repo import contacts as contacts_repo
@@ -254,12 +263,20 @@ def _header(conn: sqlite3.Connection, org: Org) -> dict[str, Any]:
     days_remaining off this SAME dict, built from one RenewalItem."""
     item = renewals.next_for_org(conn, org.id)
     if item is None:
-        return {"org": org, "renewal_on": None, "days_remaining": None, "overdue": False}
+        return {
+            "org": org, "renewal_on": None, "days_remaining": None,
+            "overdue": False, "renewal_placement": None,
+        }
     return {
         "org": org,
         "renewal_on": item.renewal_on,
         "days_remaining": item.days_remaining,
         "overdue": item.days_remaining < 0,
+        # The PLACEMENT, carried but never printed as a date: the snapshot's
+        # tower rows describe this one program and need its id, its name and
+        # its ref. period_to stays off every surface — the countdown and the
+        # date it counts to are still renewal_on's alone, above.
+        "renewal_placement": item.placement,
     }
 
 
@@ -304,13 +321,80 @@ def _counts(conn: sqlite3.Connection, org: Org, open_work: int) -> dict[str, int
     }
 
 
-def _snapshot(
-    conn: sqlite3.Connection, org: Org, header: dict[str, Any], open_work: int
+def _unplaced_value(layers: list[dict[str, Any]]) -> str:
+    """The open share AND the layer it is open on — "20% on 3rd Excess".
+
+    A bare percentage does not say where the hole is, and a hole on the
+    primary is a different conversation from one at the top of the tower.
+    The widest hole leads because that is the one being worked; a "+N" tail
+    says how many others there are rather than spilling a list into a 296px
+    rail. "none" when every layer is fully signed — that is a real read with
+    a real answer, not an absent one."""
+    open_layers = sorted(
+        (layer for layer in layers if layer["signed_pct"] < 100),
+        key=lambda layer: layer["signed_pct"],
+    )
+    if not open_layers:
+        return "none"
+    widest = open_layers[0]
+    # signed_pct is bps/100, so a whole percent prints whole ("20%", not
+    # "20.0%") and a part-percent share still shows its fraction
+    share = 100 - widest["signed_pct"]
+    text = f"{share:g}% on {widest['name']}"
+    return text if len(open_layers) == 1 else f"{text} +{len(open_layers) - 1}"
+
+
+def _tower_rows(
+    placement: Placement | None, layers: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Only rows with a real read behind them. `program premium`,
-    `top of tower` and `unplaced` are omitted entirely — this task has no
-    towerkit tower read to source them from ("omit a row rather than invent
-    a number")."""
+    """The three rows that describe ONE program, under a caption naming it.
+
+    THE SCOPE IS THE WHOLE RISK HERE. `bound premium`, one row above, is
+    summed over every bound placement on the account; these three are one
+    placement's tower. Money columns say whose money — the book's per-account
+    figure was once whichever placement renewed next, which showed revenue
+    that did not exist. So the group is captioned with the program name and
+    the placement ref, and each row also carries that caption as a `title`:
+    `program premium` cannot be read as an account total when the line above
+    it says "Casualty Program · PLC-0006".
+
+    Empty when the placement has no linked program file (layer_details returns
+    [] then). A zero would be a lie — "$0 program premium" reads as a program
+    worth nothing rather than as no program at all."""
+    if not layers or placement is None:
+        return []
+    scope = f"{placement.program_name} · {placement.ref}"
+    premium = sum(
+        layer["premium_cents"] for layer in layers if layer["premium_cents"] is not None
+    )
+    top = max(layer["attach_cents"] + layer["limit_cents"] for layer in layers)
+    unplaced = _unplaced_value(layers)
+    rows: list[dict[str, Any]] = [{"label": scope, "scope": True}]
+    for label, value, warn in (
+        ("program premium", money.format_cents_compact(premium), False),
+        ("top of tower", money.format_cents_compact(top), False),
+        # warn, never colour alone: the share and the layer name both read
+        # without it
+        ("unplaced", unplaced, unplaced != "none"),
+    ):
+        rows.append({
+            "label": label, "value": value, "overdue": False, "muted": False,
+            "warn": warn, "scoped": True, "title": scope,
+        })
+    return rows
+
+
+def _snapshot(
+    conn: sqlite3.Connection,
+    org: Org,
+    header: dict[str, Any],
+    open_work: int,
+    layers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Only rows with a real read behind them. `layers` is the renewal
+    placement's tower, read once by the caller (it is file I/O) — see
+    `_tower_rows` for why those three rows are captioned and why they are
+    omitted rather than zeroed."""
     rows: list[dict[str, Any]] = []
     if header["renewal_on"]:
         overdue = header["overdue"]
@@ -328,6 +412,7 @@ def _snapshot(
         "overdue": False,
         "muted": False,
     })
+    rows.extend(_tower_rows(header["renewal_placement"], layers))
     rows.append({
         "label": "open work",
         "value": str(open_work),
@@ -384,6 +469,18 @@ def _context(
     open_work = _open_work_count(conn, org.id)
     counts = _counts(conn, org, open_work)
 
+    # ONE layer_details call per render: it opens and parses the towerkit
+    # JSON file, so a second caller is a second disk read of the same bytes —
+    # the same de-duplication `open_work` got in review round 1, 2026-08-17.
+    # Empty list when the renewal placement has no linked file, which is what
+    # makes the tower rows omit themselves rather than print zeros.
+    renewal_placement = header["renewal_placement"]
+    layers = (
+        sync.layer_details(conn, renewal_placement.id)
+        if renewal_placement is not None
+        else []
+    )
+
     # One read of recent batches, scoped to this account, shared by both the
     # RECENT CHANGES list and the top-bar Undo pill (review round 1,
     # 2026-08-17: batches_repo.recent used to be called twice per render).
@@ -417,7 +514,7 @@ def _context(
         "tabs": [
             {"id": tab_id, "label": label, "count": counts[tab_id]} for tab_id, label in TABS
         ],
-        "snapshot": _snapshot(conn, org, header, open_work),
+        "snapshot": _snapshot(conn, org, header, open_work, layers),
         "team": team_repo.for_org(conn, org.id),
         "changes": changes,
         "last_undo": last_undo,
