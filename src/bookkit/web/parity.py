@@ -110,8 +110,10 @@ PENDING: dict[str, str] = {
         "browser-side parser design of its own; the TUI flow does not port"
     ),
     "delete_row": (
-        "PARTLY built. `D` resolves by focused table and covers five kinds of "
-        "row; exactly one of them has a web route: contacts, via GET "
+        "PARTLY built. `D` resolves by focused table: seven tables, FOUR kinds "
+        "of row (contact, interaction, task, team assignment — AccountScreen."
+        "DELETABLE), and request items are not among them on either surface. "
+        "Exactly one kind has a web route: contacts, via GET "
         "/accounts/{ref}/contacts/{contact_id}/remove (the confirm step, "
         "which writes nothing) then POST to the same path (routes/"
         "relationship.py, services.contacts.remove — the same service the TUI "

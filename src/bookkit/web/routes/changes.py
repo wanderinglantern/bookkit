@@ -101,6 +101,11 @@ def revert_change(
         # same thing when a row key goes stale mid-rebuild.
         return _redirect(ref, tab, batch_ref, "gone")
     if batch.org_id != org.id:
+        # The same ownership rule account.py's `_owned` now applies to every
+        # other {ref}-plus-an-id route, kept HERE rather than moved onto it: a
+        # batch is not one of the four entities that guard resolves, and this
+        # route answers an unknown ref with a redirect + toast (above) rather
+        # than the guard's flat 404, because a stale ref is a stale page.
         raise HTTPException(
             status_code=404, detail=f"{batch_ref} is not a change on {ref}"
         )

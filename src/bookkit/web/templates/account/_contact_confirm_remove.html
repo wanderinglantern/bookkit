@@ -9,7 +9,9 @@
    their record without the person on the attendee list. Both sentences come
    from services.contacts.consequences, the same list the TUI's
    ConfirmRemoveContact modal renders, so the surfaces cannot promise
-   different things about one write.
+   different things about one write — asserted string-for-string against both
+   renders in tests/test_contact_remove.py, because deleting the loop below
+   used to leave the suite green.
 
    It renders into the card's own .form-host, so Cancel is the delegated
    [data-form-cancel] listener inline-cell.js already owns (it empties the

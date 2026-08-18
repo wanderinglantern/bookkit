@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from textual.screen import ModalScreen
+from textual.widgets import Static
 
 from bookkit import db, mcpserver
 from bookkit.repo import base
@@ -295,3 +296,137 @@ def test_the_contact_card_offers_the_remove_control(web):
     client, org = web
     response = client.get(f"/accounts/{org.ref}/relationship")
     assert "/remove" in response.text, "the Relationship tab has no way to remove"
+
+
+def test_the_undo_promise_is_qualified_for_a_primary(book):
+    """The consequence list said "undo puts them back" without qualification,
+    and for a primary that over-promises: revert replays only the entities the
+    batch touched, so promoting someone else in between leaves the account with
+    TWO primaries. Proved here, not assumed — and the sentence now says so."""
+    from bookkit.services import contacts as contacts_svc
+
+    conn, org, keeper, wrong, _meeting = book
+    contacts_repo.set_primary(conn, wrong.id)
+
+    notes = contacts_svc.consequences(conn, wrong.id)
+    assert any("TWO primaries" in note for note in notes), (
+        "the undo promise is unqualified on the one path where it over-promises"
+    )
+
+    result = contacts_svc.remove(conn, wrong.id, source="tui")
+    contacts_repo.set_primary(conn, keeper.id)
+    outcome = batches_svc.revert(conn, result.batch, now="2026-08-18T09:00:00+00:00")
+    assert outcome.applied, outcome.refused
+
+    primaries = [c.id for c in contacts_repo.for_org(conn, org.id) if c.is_primary]
+    assert sorted(primaries) == sorted([keeper.id, wrong.id]), (
+        "the sentence warns about two primaries; the code no longer produces them "
+        "— re-read the note before deleting this test"
+    )
+
+
+# --- the confirm contract: one list of consequences, both surfaces ----------
+
+
+def test_the_web_confirm_shows_every_consequence_and_a_way_out(web):
+    """services.contacts.consequences is the confirm's whole content. The
+    template's note loop and its Cancel button were both deletable with the
+    suite still green (fix round 1) — a confirm that shows no plan is an
+    hx-confirm with extra steps, and one with no way out is worse."""
+    from bookkit.services import contacts as contacts_svc
+
+    client, org = web
+    conn = client.app.state.conn
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    contacts_repo.set_primary(conn, contact.id)
+    notes = contacts_svc.consequences(conn, contact.id)
+    assert len(notes) >= 2, "the fixture no longer produces a consequence to show"
+
+    html = client.get(f"/accounts/{org.ref}/contacts/{contact.id}/remove").text
+
+    for note in notes:
+        assert note in html, f"the web confirm does not show: {note}"
+    assert "data-form-cancel" in html and "Cancel" in html, (
+        "the confirm has no way out — Cancel is required of every form here"
+    )
+
+
+async def test_the_tui_confirm_shows_the_same_consequences(snapshot_db: Path) -> None:
+    """The claim three comments make about each other, asserted once. Both
+    surfaces render the SAME strings from the same function, so neither can
+    drift into promising something the other does not."""
+    from bookkit.services import contacts as contacts_svc
+
+    app = BookkitApp(snapshot_db)
+    org = orgs_repo.list_orgs(app.conn, kind="client")[0]
+    contact = contacts_repo.for_org(app.conn, org.id)[0]
+    contacts_repo.set_primary(app.conn, contact.id)
+    notes = contacts_svc.consequences(app.conn, contact.id)
+    assert len(notes) >= 2, "the seeded contact no longer produces a consequence"
+
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("2")
+        await pilot.pause()
+        table = app.screen.query_one("#contacts-table", ListTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(contact.id))
+        await pilot.pause()
+        await pilot.press("D")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ModalScreen), "D removed a contact with no confirm"
+        shown = "\n".join(str(w.render()) for w in app.screen.query(Static))
+        for note in notes:
+            assert note in shown, f"the TUI confirm does not show: {note}"
+
+
+async def test_D_removes_a_contact_from_the_overview_tab_too(snapshot_db: Path) -> None:
+    """ov-contacts is in DELETABLE and had no test: deleting its entry left the
+    suite green. A row that answers `D` on one tab and not another is exactly
+    the drift the hint lines keep getting caught by."""
+    app = BookkitApp(snapshot_db)
+    org = orgs_repo.list_orgs(app.conn, kind="client")[0]
+    doomed = contacts_repo.create(
+        app.conn, org.id, first_name="Overview", last_name="Wholesale"
+    )
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("1")
+        await pilot.pause()
+        table = app.screen.query_one("#ov-contacts", ListTable)
+        table.focus()
+        table.move_cursor(row=table.get_row_index(doomed.id))
+        await pilot.pause()
+
+        await pilot.press("D")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen), "D removed a contact with no confirm"
+
+        await pilot.press("y")
+        await pilot.pause()
+        assert doomed.id not in {c.id for c in contacts_repo.for_org(app.conn, org.id)}
+
+
+def test_a_second_confirm_says_so_where_the_browser_can_see_it(web):
+    """A REFUSAL SAYS SOMETHING — and on the web that means in the DOM. htmx
+    does not swap 4xx by default and nothing listens for htmx:responseError, so
+    the 404 this used to raise for an already-removed contact produced no swap,
+    no message and no change at all: a destructive control that looks broken.
+    The refusal comes back as the panel htmx is already swapping, carrying the
+    service's own sentence (fix round 1)."""
+    client, org = web
+    conn = client.app.state.conn
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    action = f"/accounts/{org.ref}/contacts/{contact.id}/remove"
+    assert client.post(action).status_code == 200
+
+    second = client.post(action)
+
+    assert second.status_code == 200, "a 4xx here renders as nothing at all"
+    assert "already removed" in second.text
+    assert 'id="contacts-panel"' in second.text, (
+        "the refusal is not in the fragment htmx swaps, so nothing shows it"
+    )

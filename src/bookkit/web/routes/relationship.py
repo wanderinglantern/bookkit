@@ -35,7 +35,7 @@ from ...services import batches as batches_svc
 from ...services import contacts as contacts_svc
 from ..app import TEMPLATES
 from ..forms_render import render_cell, render_cell_display, render_form
-from .account import _conn, _context, _org, _save
+from .account import _conn, _context, _org, _owned, _owns_contact_row, _save
 
 router = APIRouter()
 
@@ -100,7 +100,9 @@ def _contacts_context(request: Request, org: Org) -> dict[str, Any]:
     return {"rows": rows, "count": len(rows)}
 
 
-def _contacts_panel(request: Request, org: Org, *, oob: bool = False) -> HTMLResponse:
+def _contacts_panel(
+    request: Request, org: Org, *, oob: bool = False, error: str | None = None
+) -> HTMLResponse:
     """`oob=True` renders the panel as an out-of-band swap (a lone
     `#contacts-panel` element carrying `hx-swap-oob="true"`, nothing else in
     the response) rather than the plain fragment a full tab-page render
@@ -110,8 +112,15 @@ def _contacts_panel(request: Request, org: Org, *, oob: bool = False) -> HTMLRes
     that primary swap's content nested a second copy of it inside itself.
     OOB makes it two independent swaps instead of one nested one: the
     primary swap clears .form-host (closing the form), the OOB swap
-    replaces #contacts-panel."""
-    context = {"header": {"org": org}, "oob": oob, **_contacts_context(request, org)}
+    replaces #contacts-panel.
+
+    `error` is a refused write's own sentence, rendered at the top of the
+    panel. The panel is the swap target of every destructive control here, so
+    it is the one fragment a refusal can reach — see contact_remove."""
+    context = {
+        "header": {"org": org}, "oob": oob, "error": error,
+        **_contacts_context(request, org),
+    }
     return TEMPLATES.TemplateResponse(request, "account/_contacts_panel.html", context)
 
 
@@ -159,13 +168,11 @@ async def contact_create(request: Request, ref: str) -> HTMLResponse:
 def contact_remove_confirm(request: Request, ref: str, contact_id: str) -> HTMLResponse:
     org = _org(request, ref)
     conn = _conn(request)
-    try:
-        contact = contacts_repo.get(conn, contact_id)
-        notes = contacts_svc.consequences(conn, contact_id)
-    except KeyError:
-        raise HTTPException(
-            status_code=404, detail=f"no contact {contact_id!r} on {org.name}"
-        ) from None
+    # The guard is what makes this fragment's OWN two sentences agree: the
+    # header names `org` and the consequences name the contact's account, and
+    # before it those could be two different accounts (fix round 1).
+    contact = _owned(conn, org, "contact", contact_id, contacts_repo.get)
+    notes = contacts_svc.consequences(conn, contact_id)
     return TEMPLATES.TemplateResponse(
         request,
         "account/_contact_confirm_remove.html",
@@ -180,14 +187,24 @@ def contact_remove(request: Request, ref: str, contact_id: str) -> HTMLResponse:
     (tests/test_conventions.py), so this belongs on the threadpool with the
     other sync routes.
 
-    A refusal is a 404 carrying the service's own sentence — including
-    "already removed", which is what a double-submitted confirm produces and
-    is a truer answer than a second, empty batch."""
+    A refusal SAYS SOMETHING, and here it has to say it in the page: htmx does
+    not swap 4xx by default and nothing listens for htmx:responseError, so the
+    404 this used to raise for "already removed" — the case its own docstring
+    anticipated, and what a double-clicked confirm produces — rendered no swap,
+    no message, nothing at all, on a destructive control (fix round 1). The
+    refusal now comes back as the refreshed panel carrying the service's own
+    sentence, the same shape `_save` uses for a refused form: 200, the truth on
+    screen, nothing written.
+
+    Ownership is checked against the RAW row (`_owns_contact_row`) so that
+    "already removed" survives as the answer — the alive-filtered guard would
+    have turned it back into "no contact"."""
     org = _org(request, ref)
+    _owns_contact_row(_conn(request), org, contact_id)
     try:
         contacts_svc.remove(_conn(request), contact_id, source="web")
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
+        return _contacts_panel(request, org, error=str(exc))
     return _contacts_panel(request, org)
 
 
@@ -214,13 +231,15 @@ def _contact_editor_cell(
 
 @router.get("/accounts/{ref}/contacts/{contact_id}/cell/{key}", response_class=HTMLResponse)
 def contact_cell(request: Request, ref: str, contact_id: str, key: str) -> HTMLResponse:
-    _org(request, ref)
+    org = _org(request, ref)
+    _owned(_conn(request), org, "contact", contact_id, contacts_repo.get)
     return _contact_display_cell(request, ref, contact_id, key)
 
 
 @router.get("/accounts/{ref}/contacts/{contact_id}/cell/{key}/edit", response_class=HTMLResponse)
 def contact_cell_edit(request: Request, ref: str, contact_id: str, key: str) -> HTMLResponse:
-    _org(request, ref)
+    org = _org(request, ref)
+    _owned(_conn(request), org, "contact", contact_id, contacts_repo.get)
     return _contact_editor_cell(request, ref, contact_id, key)
 
 
@@ -232,6 +251,7 @@ async def contact_cell_save(request: Request, ref: str, contact_id: str, key: st
     here: the cell action URL is baked in when the row renders)."""
     org = _org(request, ref)
     conn = _conn(request)
+    existing = _owned(conn, org, "contact", contact_id, contacts_repo.get)
     field = _contact_field(key)
     raw = str((await request.form()).get(key, ""))
     try:
@@ -242,7 +262,6 @@ async def contact_cell_save(request: Request, ref: str, contact_id: str, key: st
         return _contact_editor_cell(
             request, ref, contact_id, key, error=f"{field.label} is required", typed=raw
         )
-    existing = contacts_repo.get(conn, contact_id)
     try:
         with batches_svc.open_batch(
             conn, source="web", tool="edit_contact",

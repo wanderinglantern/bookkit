@@ -98,7 +98,12 @@ def consequences(conn: sqlite3.Connection, contact_id: str) -> list[str]:
     _contact_confirm_remove.html) read this rather than composing their own
     sentences, so the two cannot promise different things about the same
     write. A confirm that only asks "are you sure?" is not a confirm: the
-    consequences that matter are invisible from the row itself."""
+    consequences that matter are invisible from the row itself.
+
+    That claim used to be made by three comments about each other and enforced
+    by nothing — every note loop was deletable with the suite still green. It
+    is pinned now: tests/test_contact_remove.py asserts each string in this
+    list appears in BOTH confirms (fix round 1, 2026-08-18)."""
     contact = contacts_repo.get(conn, contact_id)          # KeyError if gone
     org = orgs_repo.get(conn, contact.org_id)
     notes: list[str] = []
@@ -110,7 +115,22 @@ def consequences(conn: sqlite3.Connection, contact_id: str) -> list[str]:
     attended = interactions_repo.attended_count(conn, contact_id)
     if attended:
         notes.append(_kept(attended, "keep"))
-    notes.append("soft and revertible — undo puts them back")
+    # "undo puts them back" is true of THIS write and of nothing done after it.
+    # A revert replays the batch's own field values, and plan_revert only sees
+    # the entities that batch touched (services/batches.py) — so promoting
+    # somebody else in the meantime and THEN undoing hands this contact their
+    # star back beside the new one: two primaries until `p` settles it. The
+    # promise is qualified rather than dropped, because reversibility is the
+    # whole reason this control can be a soft delete; an overstated version is
+    # how a user learns to stop believing the sentence at all (fix round 1).
+    if contact.is_primary:
+        notes.append(
+            "soft and revertible — undo puts them back primary and all; make "
+            "someone else primary first and undo leaves TWO primaries until "
+            "you pick one"
+        )
+    else:
+        notes.append("soft and revertible — undo puts them back")
     return notes
 
 

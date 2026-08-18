@@ -262,7 +262,12 @@ class ConfirmRemoveContact(ModalScreen):
     cannot see from the row vanishing are the ones that matter: the
     interactions they attended keep their record, and if they were the primary
     the account is left with NO primary rather than someone promoted behind
-    the user's back (services/contacts.py owns that rule)."""
+    the user's back (services/contacts.py owns that rule).
+
+    The notes come from services.contacts.consequences and are asserted
+    string-for-string against the web confirm's own render
+    (tests/test_contact_remove.py) — deleting this loop used to leave the suite
+    green."""
 
     app: BookkitApp
     BINDINGS = [
