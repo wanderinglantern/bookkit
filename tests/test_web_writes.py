@@ -171,6 +171,53 @@ def test_a_non_editable_key_is_404_not_a_write(app_and_org):
     assert contacts_repo.get(conn, contact.id).first_name == before
 
 
+def test_a_refused_save_keeps_every_value_and_writes_nothing(app_and_org):
+    """Commit-in-place: the form comes back with the input intact and the
+    error, and the transaction rolled back — a refused save leaves nothing
+    behind and costs nothing retyped.
+
+    BOTH counts are asserted, and the batch one is not redundant. `_save`
+    opens its batch BEFORE calling `write`, so a route that swallowed the
+    refusal would strand an empty EventBatch even where no contact row was
+    ever inserted — a row in RECENT CHANGES for a save that did not happen,
+    with nothing for `Revert` to put back. Both mutations were run: making
+    `_save` swallow the FieldError and write the record anyway fails the row
+    count AND the batch count, while opening the batch BEFORE parsing and
+    returning the refusal from inside it (a normal `with` exit, so the empty
+    batch commits) writes no row at all and fails ONLY the batch count.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import contacts as contacts_repo
+
+    before_count = len(contacts_repo.for_org(conn, org.id))
+    before_batches = len(batches_repo.recent(conn, since="", limit=50))
+
+    response = client.post(
+        f"/accounts/{org.ref}/contacts/new",
+        data={"first_name": "", "last_name": "Okafor", "email": "dana@example.com",
+              "phone": "", "mobile": "", "title": "Head of Risk", "role": "",
+              "linkedin": "", "notes": "call back Tuesday"},
+    )
+
+    assert response.status_code == 200, "htmx drops 4xx — a refusal must be a 200"
+    # the PARSER's own sentence, in the form's error slot — not a bare
+    # `"required" in response.text`, which every rendered form satisfies
+    # through the HTML `required` attribute on its own inputs and so passes
+    # over a route that swallowed the refusal and was rejected by a NOT NULL
+    # constraint instead (verified: that mutation passes the loose check).
+    assert '<p class="form-error" role="alert">first name is required</p>' in response.text
+    # every other value survives the refusal
+    assert "Okafor" in response.text
+    assert "dana@example.com" in response.text
+    assert "Head of Risk" in response.text
+    assert "call back Tuesday" in response.text
+    # and nothing was written
+    assert len(contacts_repo.for_org(conn, org.id)) == before_count
+    assert len(batches_repo.recent(conn, since="", limit=50)) == before_batches
+
+
 # --- reverting a change from the account page --------------------------------
 # The right rail's per-row `Revert` and the top bar's `Undo <last change>`
 # pill both POST this one route. The assertions below are about the whole
@@ -855,6 +902,37 @@ def test_a_bare_number_is_refused_as_a_date_on_the_web_too(timeline):
     assert interactions_repo.get(conn, entry.id).occurred_on == "2026-08-13", (
         "the refused date was written anyway"
     )
+
+
+def test_a_refused_interaction_edit_keeps_every_value_and_writes_nothing(timeline):
+    """The same contract on the form that shipped after Task 8. It routes
+    through the shared `_save`, so this is a seam check, not a second
+    implementation: the assertion is that the interaction edit form actually
+    goes through it — a green suite proves nothing broke, not that the new
+    path is taken."""
+    client, org, entry, _attendee = timeline
+    conn = client.app.state.conn
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import interactions as interactions_repo
+
+    before_batches = len(batches_repo.recent(conn, since="", limit=50))
+
+    response = client.post(
+        _edit_url(org, entry.id),
+        data=_edit_payload(
+            entry, subject="", body="they want the umbrella at 25M"
+        ),
+    )
+
+    assert response.status_code == 200, "htmx drops 4xx — a refusal must be a 200"
+    assert '<p class="form-error" role="alert">subject is required</p>' in response.text
+    # the typed body survives, and so does the date and the type
+    assert "they want the umbrella at 25M" in response.text
+    assert entry.occurred_on in response.text
+    # nothing written: neither the record nor a stranded batch
+    assert interactions_repo.get(conn, entry.id).subject == entry.subject
+    assert interactions_repo.get(conn, entry.id).body == entry.body
+    assert len(batches_repo.recent(conn, since="", limit=50)) == before_batches
 
 
 def test_editing_an_interaction_writes_one_batch(timeline):
