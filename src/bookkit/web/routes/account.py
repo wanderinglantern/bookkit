@@ -71,7 +71,10 @@ _PANEL_TEMPLATE = {
 
 
 def _conn(request: Request) -> sqlite3.Connection:
-    return request.app.state.conn  # type: ignore[no-any-return]
+    """THIS THREAD's connection, never a shared one — every route here is a
+    sync def and FastAPI runs those in an anyio worker threadpool. See
+    web.app.ThreadConnections for what sharing one cost."""
+    return request.app.state.connections.get()  # type: ignore[no-any-return]
 
 
 def _org(request: Request, ref: str) -> Org:

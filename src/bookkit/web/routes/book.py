@@ -39,7 +39,15 @@ router = APIRouter()
 
 
 def _conn(request: Request) -> sqlite3.Connection:
-    return request.app.state.conn  # type: ignore[no-any-return]
+    """THIS THREAD's connection, never a shared one — every route here is a
+    sync def and FastAPI runs those in an anyio worker threadpool. See
+    web.app.ThreadConnections for what sharing one cost.
+
+    A second copy of routes/account.py's `_conn`: /book is the front door and
+    imports none of the account shell. These two are the ONLY places the web
+    layer reaches for a connection — keep it that way, or the next one added
+    is the one that gets the shared object back."""
+    return request.app.state.connections.get()  # type: ignore[no-any-return]
 
 
 def _status_class(status: str) -> str:

@@ -97,7 +97,24 @@ services.batches.open_batch: that code reads prior events with plain SELECTs
 before ever calling transaction(), so it never re-enters this lock while
 holding it, and a plain Lock would behave identically today. Keep it an RLock
 anyway — the cost of reentrancy is nothing, and it is what stops a future
-nested acquire from becoming a same-thread deadlock instead of a bug report."""
+nested acquire from becoming a same-thread deadlock instead of a bug report.
+
+DO NOT DELETE THIS AS REDUNDANT now that the web layer gives every thread its
+own connection (web.app.ThreadConnections, 2026-08-18). The "transaction
+within a transaction" error above is indeed gone with the shared connection,
+but two BEGIN IMMEDIATEs on two connections now contend at the SQLite FILE
+level instead, where losing means burning the whole BUSY_TIMEOUT_MS wait and
+then raising "database is locked".
+
+Measured both ways, because the obvious form of that claim is false: ordinary
+concurrent web saves do NOT need this lock — 4 writers x 300 POSTs came back
+clean without it, each transaction being microseconds long and busy_timeout
+absorbing the overlap. What needs it is a writer holding the transaction
+LONGER than the timeout: a bulk import, a 250-entity batch, a slow towerkit
+round-trip. With the lock a concurrent save queues and succeeds; without it
+the save is refused after 5s with "database is locked" and the user's edit is
+lost. tests/test_web_concurrency.py asserts that, so deleting this lock fails
+the suite rather than a review."""
 
 
 def current_batch() -> BatchState | None:
@@ -203,13 +220,25 @@ def connect(
 ) -> sqlite3.Connection:
     """Open (creating if needed, mode 0600) and optionally migrate the database.
 
-    check_same_thread=False is for the web layer only: a FastAPI app's
-    lifespan and route handlers run on the ASGI event loop's own thread
-    (uvicorn, and TestClient's portal), not the thread that called
-    create_app() — sqlite3's default same-thread check makes even closing
-    that connection on shutdown raise ProgrammingError. The TUI and CLI stay
-    on the strict default: each opens and uses its connection from a single
-    thread, and the check catches a real bug there."""
+    check_same_thread=False is for the web layer only, and ONLY so that its
+    lifespan can close connections it did not open: a FastAPI app's lifespan
+    runs on the ASGI event loop's own thread (uvicorn, and TestClient's
+    portal), not the thread that called create_app(), so the strict check
+    makes even closing a connection on shutdown raise ProgrammingError.
+
+    It is NOT a licence to share the connection. Route handlers declared
+    `def` rather than `async def` do not run on the event loop's thread at
+    all — Starlette hands them to an anyio worker threadpool, so concurrent
+    requests are concurrent THREADS. This docstring used to say handlers ran
+    on the loop's thread, web/app.py believed it, and one connection served
+    all of them; ~21% of requests at 6 concurrent workers came back wrong and
+    event_log took permanent damage. web.app.ThreadConnections is the
+    arrangement that replaced it: one connection per thread, still
+    check_same_thread=False purely for the shutdown sweep.
+
+    The TUI and CLI stay on the strict default: each opens and uses its
+    connection from a single thread, and the check catches a real bug
+    there."""
     db_path = Path(path) if path is not None else default_db_path()
     if str(db_path) != ":memory:":
         db_path.parent.mkdir(parents=True, exist_ok=True)

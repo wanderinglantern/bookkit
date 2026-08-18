@@ -486,8 +486,23 @@ def test_two_threads_editing_different_records_never_share_a_batch(db_path, monk
     A barrier around repo.batches.events_for (which _targets_only calls to
     read the candidate's events) forces both threads to make their join
     decision at the same instant, reproducing the race deterministically
-    instead of hoping the OS scheduler interleaves them."""
-    connection = db.connect(db_path, check_same_thread=False)
+    instead of hoping the OS scheduler interleaves them.
+
+    EACH THREAD OPENS ITS OWN CONNECTION, on the strict check_same_thread
+    default, because that is now what the web surface does (Task 19,
+    web.app.ThreadConnections). It used to share one, mirroring the app of
+    the day, and failed 1 run in 25 — not as a test artifact but because
+    sharing a sqlite3.Connection across threads corrupts reads: the setup
+    died (an all-NULL EventBatch row out of most_recent, or a row that
+    vanished and stranded a thread at the barrier) while the invariant under
+    test never once broke across 350+ reproductions. Modelling a hazard the
+    app no longer has would keep costing runs and prove nothing.
+
+    THE BARRIER STAYS — it is what makes the TOCTOU window real, and dropping
+    it would leave a test that passes for the wrong reason. This variant ran
+    25/25 clean, and it still has teeth: relaxing `_targets_only` back to the
+    subset test its docstring warns against fails it 8 times out of 8."""
+    connection = db.connect(db_path)
     try:
         org = orgs.create(connection, kind="client", name="Acme")
         ann = contacts.create(
@@ -519,15 +534,21 @@ def test_two_threads_editing_different_records_never_share_a_batch(db_path, monk
         errors: list[BaseException] = []
 
         def _edit(entity, new_role, key):
+            # Opened, used and closed inside this thread, so the strict
+            # check_same_thread default holds — the arrangement db.connect's
+            # docstring describes and the one the web surface now keeps.
+            own = db.connect(db_path, migrate=False)
             try:
                 with batches_svc.open_batch(
-                    connection, source="web", tool="edit_contact",
+                    own, source="web", tool="edit_contact",
                     summary="edit contact — Acme", org_id=org.id, entity_id=entity.id,
                 ) as batch:
-                    base.update(connection, "contact", entity.id, {"role": new_role})
+                    base.update(own, "contact", entity.id, {"role": new_role})
                 batch_ids[key] = batch.id
             except BaseException as exc:  # surfaced on the main thread below
                 errors.append(exc)
+            finally:
+                own.close()
 
         t_x = threading.Thread(target=_edit, args=(ann, "CEO", "x"))
         t_y = threading.Thread(target=_edit, args=(bo, "CFO", "y"))
