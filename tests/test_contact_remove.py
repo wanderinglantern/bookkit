@@ -430,3 +430,41 @@ def test_a_second_confirm_says_so_where_the_browser_can_see_it(web):
     assert 'id="contacts-panel"' in second.text, (
         "the refusal is not in the fragment htmx swaps, so nothing shows it"
     )
+
+
+def test_a_stale_remove_button_says_so_instead_of_swapping_nothing(web):
+    """The SAME defect, on the click that actually comes first.
+
+    The scenario this control is built for — two tabs, or a TUI/MCP removal
+    while a card is on screen — hits the confirm GET, not the POST: the user
+    clicks Remove on a card whose contact is already gone. That GET answered
+    404, htmx does not swap 4xx and nothing listens for htmx:responseError, so
+    the page did not move and they never reached the POST fix round 1 fixed
+    (fix round 2).
+
+    The response is the refreshed panel and NOTHING else, out of band, with the
+    sentence inside it. Both halves are load-bearing and both are asserted
+    below: not out of band and the panel nests inside the .form-host it is a
+    parent of (contact_create's trap), and anything OUTSIDE the OOB element
+    lands in that same .form-host AFTER htmx has already replaced the panel it
+    hangs from — detached, invisible, the same nothing again."""
+    client, org = web
+    conn = client.app.state.conn
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    action = f"/accounts/{org.ref}/contacts/{contact.id}/remove"
+    assert client.post(action).status_code == 200
+
+    stale = client.get(action)
+
+    assert stale.status_code == 200, "a 4xx here renders as nothing at all"
+    assert "already removed" in stale.text, "the refusal says nothing"
+    body = stale.text.strip()
+    assert body.startswith('<div id="contacts-panel"'), (
+        "content outside the OOB panel lands in a .form-host the OOB swap has "
+        "already detached — htmx swaps out-of-band content first"
+    )
+    assert "hx-swap-oob" in body, (
+        "as a primary swap this nests a second #contacts-panel inside the first"
+    )
+    assert body.index('class="form-error"') > body.index('id="contacts-panel"')
+    assert action not in body, "the refreshed panel still offers the stale card"

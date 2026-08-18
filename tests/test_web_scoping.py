@@ -1,12 +1,13 @@
 """A web url names an ACCOUNT and a ROW, and both claims are checked.
 
-Fix round 1, 2026-08-18. Thirteen routes under /accounts/{ref}/ also take an
+Fix round 1, 2026-08-18. Nineteen routes under /accounts/{ref}/ also take an
 entity id, and exactly one of them — routes/changes.py's revert — proved the
-entity was this account's. The rest resolved the id alone, so a stale tab or a
-pasted url wrote to whichever account owned the id while the page showed the
-one in the url. The contact remove-confirm rendered the contradiction in a
-single fragment: a header naming one account beside a consequence naming the
-other, in the one artifact whose whole justification is that it shows a plan.
+entity was this account's. The other eighteen — the ones this file drives —
+resolved the id alone, so a stale tab or a pasted url wrote to whichever
+account owned the id while the page showed the one in the url. The contact
+remove-confirm rendered the contradiction in a single fragment: a header naming
+one account beside a consequence naming the other, in the one artifact whose
+whole justification is that it shows a plan.
 
 The guard is one function (routes/account.py `_owned`), so this file asserts it
 per route FAMILY rather than per handler, and asserts the two things the guard
@@ -258,3 +259,33 @@ def test_a_removed_contact_of_this_account_still_gets_the_services_answer(two_ac
 
     assert second.status_code == 200
     assert "already removed" in second.text
+
+
+def test_an_item_whose_request_was_removed_404s_instead_of_500ing(two_accounts):
+    """`_owner_org_ids` is called OUTSIDE `_owned`'s try/except, and its item
+    branch re-enters `rfi_repo.get_request` — which raises KeyError on a
+    removed request. Addressed through a LIVE request of the same account, that
+    KeyError escaped as a 500 and a traceback: the wrong status, and htmx drops
+    5xx exactly as it drops 4xx. An item whose request is gone belongs to no
+    account, so it gets the same 404 every other miss gets (fix round 2)."""
+    client, mine, _theirs = two_accounts
+    ref = mine["org"].ref
+    conn = client.app.state.conn
+    orphan_request = rfi_repo.create_request(
+        conn, mine["org"].id, title="withdrawn ask", requested_on="2026-08-03"
+    )
+    orphan = rfi_repo.add_item(conn, orphan_request.id, prompt="loss runs")
+    rfi_repo.delete_request(conn, orphan_request.id)
+    live = mine["request"]
+
+    received = client.post(
+        f"/accounts/{ref}/requests/{live.id}/items/{orphan.id}/received"
+    )
+    cell = client.post(
+        f"/accounts/{ref}/requests/{live.id}/items/{orphan.id}/cell/prompt",
+        data={"prompt": "hijacked"},
+    )
+
+    assert received.status_code == 404
+    assert cell.status_code == 404
+    assert rfi_repo.get_item(conn, orphan.id).received_on is None

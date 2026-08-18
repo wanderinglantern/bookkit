@@ -101,10 +101,12 @@ def _org(request: Request, ref: str) -> Org:
 # belonging to another account while the page rendered this one's, and the
 # contact remove-confirm rendered a header naming one account beside a
 # consequence naming the other (fix round 1, 2026-08-18). routes/changes.py
-# had the check because it was written for it specifically; twelve other
-# routes did not. So the rule lives HERE, once, the way team name-uniqueness
-# had to live in repo/team.py: a guard in one caller is a guard the other
-# twelve write straight past.
+# had the check because it was written for it specifically; the other eighteen
+# did not. So the rule lives HERE, once, the way team name-uniqueness had to
+# live in repo/team.py: a guard in one caller is a guard the other eighteen
+# write straight past. (Eighteen is the count the code carries — five handlers
+# in relationship.py, thirteen in work.py — and tests/test_web_scoping.py
+# drives every one of them.)
 
 _Owned = TypeVar("_Owned", Contact, Task, RfiRequest, RfiItem)
 
@@ -131,7 +133,16 @@ def _owner_org_ids(
     if isinstance(entity, Contact | RfiRequest):
         return {entity.org_id}
     if isinstance(entity, RfiItem):
-        return _owner_org_ids(conn, rfi_repo.get_request(conn, entity.request_id))
+        try:
+            return _owner_org_ids(conn, rfi_repo.get_request(conn, entity.request_id))
+        except KeyError:
+            # An item whose request was removed belongs to no account any more,
+            # so it is not this one's: 404, the same answer every other miss
+            # gets. This call sits OUTSIDE `_owned`'s try, so letting the
+            # KeyError out was a 500 and a traceback — and htmx drops 5xx
+            # exactly as it drops 4xx (fix round 2). Mirrors the deleted
+            # placement two lines below.
+            return set()
     owners = {entity.org_id} if entity.org_id else set()
     if entity.placement_id:
         try:

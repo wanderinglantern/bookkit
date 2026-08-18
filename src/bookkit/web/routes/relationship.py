@@ -114,9 +114,12 @@ def _contacts_panel(
     primary swap clears .form-host (closing the form), the OOB swap
     replaces #contacts-panel.
 
-    `error` is a refused write's own sentence, rendered at the top of the
-    panel. The panel is the swap target of every destructive control here, so
-    it is the one fragment a refusal can reach — see contact_remove."""
+    `error` is a refusal's own sentence, rendered at the top of the panel. The
+    panel is the one fragment a refusal can reach on either half of the remove
+    control, so both send it here: the POST as the primary swap (its confirm
+    button targets #contacts-panel), the confirm GET as `oob=True` with the
+    error inside — see contact_remove and contact_remove_confirm for why the
+    GET has no other place to put it."""
     context = {
         "header": {"org": org}, "oob": oob, "error": error,
         **_contacts_context(request, org),
@@ -166,12 +169,37 @@ async def contact_create(request: Request, ref: str) -> HTMLResponse:
 
 @router.get("/accounts/{ref}/contacts/{contact_id}/remove", response_class=HTMLResponse)
 def contact_remove_confirm(request: Request, ref: str, contact_id: str) -> HTMLResponse:
+    """The confirm step. Writes nothing, and refuses in the page.
+
+    Ownership is checked against the RAW row, and liveness separately, for the
+    reason the POST does it (fix round 2): the stale tab this whole control
+    anticipates — two tabs open, or a TUI/MCP removal while a card is on screen
+    — hits THIS GET first, and `_owned` answered it with a bare 404. htmx does
+    not swap 4xx and nothing listens for htmx:responseError, so the Remove
+    button produced no swap, no message and no change at all. Unknown and
+    foreign ids keep their 404: those urls were never rendered by this page.
+
+    The refusal is the refreshed panel and NOTHING else, carrying the sentence
+    the POST refuses with. It cannot be the primary swap — the button targets
+    `next .form-host` with innerHTML, so returning the panel there nests a
+    second panel inside the first, the trap `contact_create` solved with
+    `oob=True`. And the sentence cannot ride OUTSIDE the OOB element either:
+    htmx swaps out-of-band content BEFORE the primary swap, so by the time the
+    primary swap lands, `next .form-host` is a child of the panel this response
+    has already replaced — detached, invisible, the same nothing again. One
+    element, out of band, error inside it.
+
+    The ownership guard is also what makes the confirm's OWN two sentences
+    agree: the header names `org` and the consequences name the contact's
+    account, and before it those could be two different accounts (fix round 1).
+    """
     org = _org(request, ref)
     conn = _conn(request)
-    # The guard is what makes this fragment's OWN two sentences agree: the
-    # header names `org` and the consequences name the contact's account, and
-    # before it those could be two different accounts (fix round 1).
-    contact = _owned(conn, org, "contact", contact_id, contacts_repo.get)
+    _owns_contact_row(conn, org, contact_id)
+    gone = contacts_svc.already_removed(conn, contact_id)
+    if gone is not None:
+        return _contacts_panel(request, org, oob=True, error=gone)
+    contact = contacts_repo.get(conn, contact_id)
     notes = contacts_svc.consequences(conn, contact_id)
     return TEMPLATES.TemplateResponse(
         request,

@@ -42,9 +42,14 @@ def alive(alias: str = "") -> str:
 def raw_row(
     conn: sqlite3.Connection, entity_type: str, entity_id: str
 ) -> sqlite3.Row | None:
-    """The row as it IS, dead or alive — the read the batch-revert planner
-    needs, since it must compare against reality rather than the alive()
-    view. Everything else should keep using get()."""
+    """The row as it IS, dead or alive.
+
+    Two sanctioned callers, both of which have to see past the alive() view:
+    the batch-revert planner, which must compare against reality rather than
+    the view, and `web/routes/account._owns_contact_row`, which answers "is
+    this row this account's?" for a contact that may already be removed — so
+    that services.contacts's "already removed" survives as the answer instead
+    of being buried under "no contact". Everything else keeps using get()."""
     table = ENTITY_TABLES[entity_type]
     row: sqlite3.Row | None = conn.execute(
         f"SELECT * FROM {table} WHERE id = ?", (entity_id,)

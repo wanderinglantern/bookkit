@@ -104,3 +104,35 @@ nothing can set the flag.
   and changing it later is a migration.
 - *How does it show?* A retired row must be visibly retired wherever it still
   appears (history, attendee lists), not silently absent.
+
+---
+
+## The revert control tells you which change refs exist book-wide (2026-08-18)
+
+**What.** `POST /accounts/{ref}/changes/{batch_ref}/revert` answers an unknown
+`batch_ref` with a redirect and a "gone" toast, and another account's
+`batch_ref` with a silent 404 (`web/routes/changes.py:100-111`). Two different
+answers to two different misses is exactly the distinction `_owned`'s
+`_not_here` erases everywhere else on purpose: from one account's url you can
+tell whether a change ref exists somewhere else in the book. Refs are
+sequential and guessable (`next_ref(conn, BATCH_REF)`), so the whole space
+enumerates.
+
+**Why it is a roadmap line and not a fix.** Exposure here is zero in practice —
+loopback-only, single-user, and the thing leaked is "a change with this ref
+exists", not its content. It was found while auditing the ownership guard (fix
+round 2, 2026-08-18) and deliberately left alone rather than patched in a fix
+round that was closing an unrelated defect.
+
+**The wrinkle to decide before building.** The two branches answer in different
+SHAPES, and that is the whole difficulty: the unknown-ref branch redirects with
+a toast because a stale ref is a stale page and the user should land somewhere
+useful, while the foreign-ref branch raises a flat 404. Collapsing them means
+choosing which shape both misses get — and the redirect+toast is the better
+user experience for the far more common case (a stale tab), so the answer is
+probably "both redirect with the same toast", not "both 404". Check what the
+changes rail does with the redirect target first.
+
+**Touches.** `web/routes/changes.py` only; `tests/test_web_scoping.py` is where
+the assertion belongs (it already owns "an unknown id and someone else's id
+answer the same").

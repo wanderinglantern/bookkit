@@ -134,6 +134,27 @@ def consequences(conn: sqlite3.Connection, contact_id: str) -> list[str]:
     return notes
 
 
+def already_removed(conn: sqlite3.Connection, contact_id: str) -> str | None:
+    """`remove`'s "already removed" refusal, asked as a READ — or None.
+
+    The web's confirm step is a GET on a url a card rendered while the contact
+    was alive, and a stale tab clicks it after the row is gone: that GET has to
+    SAY so in the page, and it cannot find out by calling `remove()` — a write
+    behind a GET. So the sentence lives here, once, and `remove` raises this
+    exact string; the two surfaces of one refusal cannot drift apart.
+
+    None means there is nothing to say: the row is alive, or there is no row at
+    all — whose refusal is `remove`'s other one, and which the web's ownership
+    guard has already answered with a 404 long before this is reached.
+    """
+    row = base.raw_row(conn, "contact", contact_id)
+    if row is None or row["deleted_at"] is None:
+        return None
+    name = f"{row['first_name']} {row['last_name']}".strip()
+    org = orgs_repo.get(conn, str(row["org_id"]))
+    return f"{name} is already removed from {org.name}"
+
+
 def remove(conn: sqlite3.Connection, contact_id: str, *, source: str) -> Removal:
     """Take one contact off their account, as one revertible batch.
 
@@ -147,17 +168,20 @@ def remove(conn: sqlite3.Connection, contact_id: str, *, source: str) -> Removal
     """
     # raw_row, not contacts_repo.get: a contact removed a minute ago is dead to
     # the alive() view, and "already removed" is a far better answer than "not
-    # found" for the one person most likely to ask twice.
+    # found" for the one person most likely to ask twice. That second refusal
+    # is `already_removed` above, because the web's confirm GET has to give the
+    # same answer without writing anything.
     row = base.raw_row(conn, "contact", contact_id)
     if row is None:
         raise ValueError(
             f"no contact {contact_id!r} — read the account's contacts for exact ids"
         )
-    contact = contacts_repo.get(conn, contact_id) if row["deleted_at"] is None else None
+    gone = already_removed(conn, contact_id)
+    if gone is not None:
+        raise ValueError(gone)
+    contact = contacts_repo.get(conn, contact_id)
     name = f"{row['first_name']} {row['last_name']}".strip()
     org = orgs_repo.get(conn, str(row["org_id"]))
-    if contact is None:
-        raise ValueError(f"{name} is already removed from {org.name}")
 
     was_primary = bool(contact.is_primary)
     attended = interactions_repo.attended_count(conn, contact_id)
