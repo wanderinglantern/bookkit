@@ -651,3 +651,108 @@ forget it; revert refusing all-or-nothing and naming conflicts). The hand-writte
 their refusals. `edit_field`'s compare-and-set with `expecting`, including `expecting=None` meaning
 "assert blank". `_EDIT_REDIRECTS`. **Writes never fuzzy-matching a ref while every resolution
 refusal names candidates** — the single most important safety property here.
+
+---
+
+## CORRECTION to the C4 assignee design (2026-08-18)
+
+**I wrote a false premise into the C4 entry above and an implementer would have built on it.**
+
+The entry says freeform matters because *"underwriters, wholesalers and third parties are exactly
+who the AE chases and none of them are records in the book."* **That is wrong.** Verified:
+`repo/contacts.for_org(conn, org_id)` does **not** filter by org kind, and
+`tui/screens/markets.py:337` binds `w` → `add_underwriter` with `i` → `import_underwriter`
+("paste sig"), and `MarketDetailScreen` lists them. **Underwriters are already records — contacts
+on market orgs.** The suggestion list I specified was missing its single most important source.
+
+### The storage type was also wrong, and the reason is a rule this project already holds
+
+Deriving `You / Us` by string-matching a name means typing `Sam` instead of `Sam Garcia` silently
+flips a **client-facing** column to say our firm owns what the client owes us. That is the
+silent-wrong-direction failure `models.is_internal_category` spends fourteen lines refusing, on a
+column the client reads.
+
+**Revised shape:** `assignee_kind` + `assignee_id` when the picker resolved the person, and a
+freeform `assignee_name` only when it did not. Typing is unchanged — freeform still works — but the
+export reads the **kind**, never a name. **Keep the derive-don't-store call**; that part was right.
+
+Suggestion sources are team members, the account's contacts, **and contacts on market orgs**.
+
+### And the scope was too narrow
+
+Putting an assignee only on `task` leaves the biggest chase list unassigned. The book would then
+hold **three non-interoperating mechanisms** for "who owes me this": `rfi_request.market_org_id`
+(an org, market-only), `team_assignment` (scoped to account/placement), and a freeform string on
+task. **Decide the one question first — "show me everything I am waiting on, and from whom" — and
+build backwards from it.**
+
+---
+
+## The work surfaces, reviewed by a senior AE (2026-08-18)
+
+Full review: https://claude.ai/code/artifact/f4a87608-52e6-41a2-9d08-206a3d376988
+
+**Verdict.** Would run the book on the **terminal app** tomorrow — the navigator was called the
+best renewal-attention surface they had used, and towerkit's renewal comparison "a two-hour
+PowerPoint job done in one keystroke". Would **not** run it on the web, and could not hand the
+**assistant** the half of the job it exists for.
+
+### The blocker is a missing middle, not a missing feature
+
+**The tool tracks work SENT and work BOUND, and nothing in between.** `repo/submissions.outstanding()`
+filters `status='out'`, so **the moment a market answers, the row leaves the past-SLA queue and
+enters no other queue anywhere.** The three weeks of comparing terms, chasing subjectivities and
+getting a client decision are invisible on every surface. There is no "quotes in hand", no
+"presented", and no quote-expiry field at all — `response_form` captures premium, limit and decline
+reason only. **Rated the only gap that loses money rather than time.**
+
+### `submission.underwriter_contact_id` is declared and used by nothing
+
+Verified: it exists at `models.py:366` and `migrations/001_initial.sql:175` and appears **nowhere
+else in the codebase**. Today reports six submissions past SLA and names only "Travelers" — which
+you cannot email. **The column is already there.**
+
+### Unfindable, not missing — a distinction worth keeping separate
+
+- `program_layers`' description promises participants; `sync.layer_details` (`sync.py:879`) returns
+  none.
+- Search never renders a contact's org, so five identical "Chen" rows; `fts_contact` does not index
+  email.
+- **Today's renewals table declares 7 columns and renders 4 at 140 cols, dropping `lines`** — the
+  exact field CLAUDE.md calls mandatory context ("program name alone is not enough").
+- The Overview tab prints "empty — a adds the first row" over five populated tables, because the
+  hint derives from the focused table.
+- **42 measured keystrokes** to change one carrier's share in towerkit; `v`, the fast sheet, carries
+  no participants.
+- Quick capture never writes `interaction_contact` (`quick_capture.py:182`), so the participant
+  column the web timeline renders will be permanently blank in real use.
+
+### Web: the dead nav is the worst of it
+
+Six of seven topbar sections are inert `<span>`s in `templates/partials/topbar.html` **with no
+title**, while every other unwired control on the same page carries `title="Not wired yet — …"`.
+That is CLAUDE.md's own "A REFUSAL SAYS SOMETHING" broken on the most prominent element shipped.
+Either wire them, mark them pending like their neighbours, or record "account-only, deliberately"
+in `parity.py` as a decision rather than an absence.
+
+### Keep exactly as it is
+
+The 120-day attention model and counting to the earliest line end. towerkit's chart and comparison,
+unchanged. Unplaced as a legitimate state — hatched, never an error, never blocking a save. Hit
+rate as quoted÷decided with `n` printed and `None` rather than 0%. The date parser refusing a bare
+number. Every hint line and the `?` screen. **The MCP tool descriptions — long and opinionated;
+resist shortening them.** The follow-up-task *offer*.
+
+### Build next, their ranking
+
+1. The in-flight placement view (closes the verdict gap)
+2. A person on every chaseable thing, asked as **one** question
+3. Post-bind through issued — binder date, `issued` status, policy number. *"This is where E&O
+   comes from."*
+4. A stewardship composition — every input already exists; assembly, not modelling
+5. Finish the web's escalation half, or record the decision
+6. Claims as a first-class entity
+
+Conventions rather than defects, flagged as such by the reviewer: quote expiries and subjectivities,
+marketing a layer to several carriers at indicative shares before binding, chasing issuance for
+months post-bind, stewardship as an annual deliverable.
