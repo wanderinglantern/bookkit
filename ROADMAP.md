@@ -18,23 +18,30 @@ task on the book that the client should not read (chase our own underwriter,
 internal review, a note about the relationship), so the export forces a choice
 between tracking the work and not showing it.
 
-**Shape.**
-- Additive column on `task`: a boolean `internal_only`, defaulting to false —
-  existing tasks stay client-visible, which is the current behaviour.
-  Additive-only migration, no rewrite of existing rows.
-- NOT a `ListDefinition.WellKnown` list: the global rule covers
-  stage/status/type classification fields, and this is a boolean, not a
-  vocabulary. `status` stays what it is.
-- `models.Task` gains the field; `forms/entities.task_form` gains a checkbox —
-  note `forms/spec.py` has no `checkbox` kind today, so either add one (it
-  renders on both surfaces at once, which is the point of that module) or
-  model it as a two-value select.
-- `services/export_open_items.py` filters it out. Check `export_rfi.py` too —
-  the same argument applies to an information request the client should not
-  see, but Grant asked about tasks; do not widen scope without asking.
-- Both surfaces show it: the TUI open-items table and the web Work tab. It must
-  be visible on the row, not only in the form — a task that quietly behaves
-  differently in the export needs to say so where the user reads it.
+**Shape (Grant's call, 2026-08-18 — no schema change).** A task whose
+`category` is "Internal" is simply left out of the export. `Task.category` is
+already a freeform, vocab-completed string (`repo/vocab.py` completes it from
+existing records), so this needs no migration, no new column, no `checkbox`
+kind in `forms/spec.py`, and no new form field on either surface. It is one
+filter in the composition.
+
+Pin when building:
+- **Match rule.** Case-insensitive and trimmed — "internal", "Internal ",
+  "INTERNAL" must all count, or the flag silently fails for the person who
+  typed it in a hurry. Decide whether anything else counts ("Internal note"?)
+  and write the answer down; a prefix match and an equality match behave very
+  differently the first time someone types "Internal Review".
+- **Category is also the section grouping** on sheet 1 (tasks split by
+  category, alphabetical). So the filter removes the whole Internal section,
+  not just its rows — which is the intent, but check the empty-section
+  handling: sections are "always present, even when empty" per the module
+  docstring, and an Internal header with nothing under it would defeat the
+  point.
+- **The vocabulary should offer it.** "Internal" needs to appear in the
+  category suggestions, or nobody discovers the feature exists.
+- **Say so on the row.** Both surfaces should show that an Internal task is
+  export-excluded. A category that quietly changes what leaves the building is
+  exactly the kind of hidden behaviour this project keeps getting bitten by.
 
 **Watch.** The export is composed purely and rendered by towerkit; the filter
 belongs in bookkit's composition, not in towerkit's renderer.
