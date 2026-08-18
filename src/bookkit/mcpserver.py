@@ -806,6 +806,62 @@ def _resolve_client(conn: sqlite3.Connection, ref_or_name: str) -> Any:
     raise ValueError(f"no client matching {ref_or_name!r} — nearest: {hint}")
 
 
+def _resolve_task(conn: sqlite3.Connection, task_ref: str) -> Any:
+    """Exact ref only — a write target is never fuzzy-matched. The refusal
+    names WHERE the right ref comes from, the standard the assignment/
+    opportunity/project resolvers already set: repo.get raises a bare
+    `task TSK-9999 not found`, which tells a model nothing it can act on."""
+    from .repo import tasks as tasks_repo
+
+    try:
+        return tasks_repo.get(conn, task_ref)
+    except KeyError:
+        raise ValueError(
+            f"no task {task_ref!r} — read open_items or today_brief for exact refs"
+        ) from None
+
+
+def _resolve_need(conn: sqlite3.Connection, need_ref: str) -> Any:
+    """Need ids reach a caller through open_items FOR A CLIENT (the per-client
+    branch carries each row's `ref`; the book-wide one does not) or as
+    need_add's return."""
+    from .repo import projects as projects_repo
+
+    try:
+        return projects_repo.get_need(conn, need_ref)
+    except KeyError:
+        raise ValueError(
+            f"no project need {need_ref!r} — read open_items for that client "
+            f"for exact ids"
+        ) from None
+
+
+def _resolve_rfi_item(conn: sqlite3.Connection, item_ref: str) -> RfiItem:
+    from .repo import rfi as rfi_repo
+
+    try:
+        return rfi_repo.get_item(conn, item_ref)
+    except KeyError:
+        raise ValueError(
+            f"no request item {item_ref!r} — read request_items for exact refs"
+        ) from None
+
+
+def _resolve_batch(conn: sqlite3.Connection, ref: str) -> EventBatch:
+    """Resolved here rather than left to the service so the refusal names a
+    recovery path. The extra lookup is deliberate: services.batches.revert
+    resolves again, and one cheap SELECT is the price of not having one
+    refusal style per tool."""
+    from .repo import batches as batches_repo
+
+    try:
+        return batches_repo.get_by_ref(conn, ref)
+    except KeyError:
+        raise ValueError(
+            f"no batch {ref!r} — read list_batches for exact refs"
+        ) from None
+
+
 @contextmanager
 def _open_batch(
     conn: sqlite3.Connection, *, tool: str, summary: str, org_id: str | None = None
@@ -942,7 +998,7 @@ def _task_complete(conn: sqlite3.Connection, task_ref: str) -> dict[str, Any]:
     open_items/today_brief — no fuzzy title matching, by design."""
     from .repo import tasks as tasks_repo
 
-    task = tasks_repo.get(conn, task_ref)  # KeyError on unknown → tool error
+    task = _resolve_task(conn, task_ref)
     with _open_batch(
         conn, tool="task_complete", org_id=task.org_id,
         summary=f"completed task: {task.title}",
@@ -1337,7 +1393,7 @@ def _program_revert_file(conn: sqlite3.Connection, batch_ref: str) -> dict[str, 
     from .repo import batches as batches_repo
     from .services import program_files
 
-    batch = batches_repo.get_by_ref(conn, batch_ref)   # KeyError → tool error
+    batch = _resolve_batch(conn, batch_ref)
     if not batch.tool.startswith("program_"):
         raise ValueError(
             f"{batch_ref} is not a program-file write — use revert_batch"
@@ -1631,7 +1687,7 @@ def _opportunity_stage(
 def _task_reopen(conn: sqlite3.Connection, task_ref: str) -> dict[str, Any]:
     from .repo import tasks as tasks_repo
 
-    task = tasks_repo.get(conn, task_ref)             # KeyError → tool error
+    task = _resolve_task(conn, task_ref)
     with _open_batch(
         conn, tool="task_reopen", org_id=task.org_id,
         summary=f"reopened task: {task.title}",
@@ -1644,7 +1700,7 @@ def _task_reopen(conn: sqlite3.Connection, task_ref: str) -> dict[str, Any]:
 def _request_item_waive(conn: sqlite3.Connection, item_ref: str) -> dict[str, Any]:
     from .repo import rfi as rfi_repo
 
-    item = rfi_repo.get_item(conn, item_ref)          # KeyError → tool error
+    item = _resolve_rfi_item(conn, item_ref)
     request = rfi_repo.get_request(conn, item.request_id)
     with _open_batch(
         conn, tool="request_item_waive", org_id=request.org_id,
@@ -1804,13 +1860,11 @@ def _edit_target(
     if kind == "project_need":
         from .repo import projects as projects_repo
 
-        need = projects_repo.get_need(conn, ref)          # KeyError → tool error
+        need = _resolve_need(conn, ref)
         project = projects_repo.get_project(conn, need.project_id)
         return need.id, project.org_id, need
     if kind == "task":
-        from .repo import tasks as tasks_repo
-
-        task = tasks_repo.get(conn, ref)                  # KeyError → tool error
+        task = _resolve_task(conn, ref)
         return task.id, task.org_id, task
     if kind == "team_member":
         from .repo import team
@@ -1828,7 +1882,7 @@ def _edit_target(
     if kind == "rfi_item":
         from .repo import rfi as rfi_repo
 
-        item = rfi_repo.get_item(conn, ref)               # KeyError → tool error
+        item = _resolve_rfi_item(conn, ref)
         request = rfi_repo.get_request(conn, item.request_id)
         return item.id, request.org_id, item
     if kind == "team_assignment":
@@ -1956,8 +2010,8 @@ def _request_item_received(
     from .repo import rfi as rfi_repo
     from .services import rfi as rfi_svc
 
-    # KeyError on an unknown id → tool error, never a silently-created row
-    found = rfi_repo.get_item(conn, item_ref)
+    # refused, never a silently-created row
+    found = _resolve_rfi_item(conn, item_ref)
     with _open_batch(
         conn, tool="request_item_received",
         org_id=rfi_repo.get_request(conn, found.request_id).org_id,
@@ -2101,6 +2155,7 @@ def _revert_batch(
     since, listing what blocks it — never a partial write unless forced."""
     from .services import batches as batches_svc
 
+    _resolve_batch(conn, ref)          # refuse with a recovery path, not KeyError
     result = batches_svc.revert(conn, ref, now=now, force=force)
     return {
         "ref": result.batch.ref,

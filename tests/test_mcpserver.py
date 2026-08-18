@@ -433,8 +433,11 @@ def test_task_complete_flips_status_with_provenance(server_db):
 
 
 def test_task_complete_requires_exact_ref(server_db):
+    """Exact refs only — and the refusal names where to get one. It used to
+    be a bare repo KeyError ("task TSK-9999 not found"), which named the
+    failure and no recovery."""
     rw = db.connect(server_db)
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="no task 'not-a-real-id' — read open_items"):
         mcpserver._task_complete(rw, "not-a-real-id")
 
 
@@ -706,7 +709,9 @@ def test_request_item_received_flips_status_and_drops_the_open_count(server_db):
 
 def test_request_item_received_requires_exact_ref(server_db):
     rw = db.connect(server_db)
-    with pytest.raises(KeyError):
+    with pytest.raises(
+        ValueError, match="no request item 'not-a-real-id' — read request_items"
+    ):
         mcpserver._request_item_received(rw, "not-a-real-id")
 
 
@@ -1939,3 +1944,60 @@ def test_editable_fields_all_exist_on_their_table(server_db):
         columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
         missing = set(fields) - columns
         assert not missing, f"{kind}: {sorted(missing)} offered but not on {table}"
+
+
+# -- a refusal says something: no bare repo KeyError reaches the model --------
+
+
+def test_unknown_refs_refuse_with_a_recovery_path(server_db):
+    """Six kinds in _edit_target already named where the right id comes from
+    ("read team_roster for exact ids"); task, project need, rfi item and batch
+    fell straight through to repo KeyError — `task TSK-9999 not found` names
+    the failure and no recovery. One function, two standards. A KeyError also
+    is not a ValueError, so these assertions fail on the old behaviour twice
+    over: wrong type, and no pointer."""
+    rw, org = _rw(server_db)
+
+    with pytest.raises(ValueError) as task_err:
+        mcpserver._edit_target(rw, "task", "TSK-9999", None)
+    assert "no task 'TSK-9999'" in str(task_err.value)
+    assert "open_items" in str(task_err.value)
+
+    with pytest.raises(ValueError) as need_err:
+        mcpserver._edit_target(rw, "project_need", "nope", None)
+    assert "no project need 'nope'" in str(need_err.value)
+    assert "open_items" in str(need_err.value)
+
+    with pytest.raises(ValueError) as item_err:
+        mcpserver._edit_target(rw, "rfi_item", "nope", None)
+    assert "no request item 'nope'" in str(item_err.value)
+    assert "request_items" in str(item_err.value)
+
+    with pytest.raises(ValueError) as batch_err:
+        mcpserver._revert_batch(rw, "MCP-9999", now="2026-08-18T09:00:00+00:00")
+    assert "no batch 'MCP-9999'" in str(batch_err.value)
+    assert "list_batches" in str(batch_err.value)
+
+
+def test_every_ref_taking_verb_refuses_the_same_way(server_db):
+    """The resolvers are shared, so the verbs that take the same ref direct
+    from the model refuse identically — task_complete was the message the
+    audit actually quoted."""
+    rw, org = _rw(server_db)
+
+    for call in (
+        lambda: mcpserver._task_complete(rw, "TSK-9999"),
+        lambda: mcpserver._task_reopen(rw, "TSK-9999"),
+    ):
+        with pytest.raises(ValueError, match="no task 'TSK-9999' — read open_items"):
+            call()
+
+    for call in (
+        lambda: mcpserver._request_item_waive(rw, "nope"),
+        lambda: mcpserver._request_item_received(rw, "nope"),
+    ):
+        with pytest.raises(ValueError, match="no request item 'nope' — read request_items"):
+            call()
+
+    with pytest.raises(ValueError, match="no batch 'MCP-9999' — read list_batches"):
+        mcpserver._program_revert_file(rw, "MCP-9999")
