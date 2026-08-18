@@ -67,14 +67,15 @@ delete (`base.soft_delete`), and `for_org(active_only=True)` already hides a
 contact whose `active` flag is 0. Neither is reachable: no MCP tool, no TUI
 binding, no web route calls either. So this is wiring, not new machinery.
 
-**Decide first: delete or deactivate — they are different answers.**
-- *Soft delete* suits this case: the row should never have existed on this
-  account. It stays recoverable via `base.undelete`.
-- *Deactivate* suits a contact who left the company: keep them attached to the
-  history, drop them out of the working list.
-  Both probably want surfacing eventually; do not conflate them behind one
-  control, and do not label a delete "remove" on one surface and "delete" on
-  another.
+**Scope (Grant, 2026-08-18): REMOVE ENTIRELY.** This case is a row that should
+never have existed on the account, so it is the soft delete — recoverable via
+`base.undelete`, not a status change. Deactivation is a real and separate need
+and got its own entry below; do not conflate the two behind one control, and do
+not label the same action "remove" on one surface and "delete" on another.
+
+**In flight 2026-08-18**, moved ahead of Task 10 (the interactions timeline) at
+Grant's direction. His real book is NOT to be edited — the fix ships as a
+feature and he applies it himself.
 
 **Watch — the reason this is not a one-liner.**
 - **Interactions reference contacts** (`interaction_contact`, and
@@ -93,3 +94,37 @@ binding, no web route calls either. So this is wiring, not new machinery.
 first, then call `repo.contacts.delete` directly against the DB. Soft, and
 reversible with `base.undelete`. Ask before running it — it touches the real
 book.
+
+---
+
+## Deactivating a record, generally (2026-08-18)
+
+**What.** A consistent way to retire a record from the working view without
+deleting it — for contacts first, but Grant's point is that it "likely should
+exist for records more broadly".
+
+**Why.** Removal and retirement are different facts. A wholesaler filed as a
+client contact should be *removed* — it was never true. A contact who left the
+company, a lapsed market, a colleague who moved on: those are *retired*. They
+stay attached to their history and drop out of the lists you work from. Today
+only one of the two has any surface at all, and only for team members.
+
+**The precedent already exists and should be copied, not reinvented.**
+`member_deactivate` (see CLAUDE.md): it refuses while assignments are live,
+`cascade=True` removes them all in one revertible batch, and it is deliberately
+NOT a field edit. Whatever this becomes should feel like that.
+
+**Also already present, unexposed:** `contact.active` — `contacts.for_org`
+takes `active_only=True` and defaults to it, so the filtering half is built and
+nothing can set the flag.
+
+**Open, needs a decision before it is specced.**
+- *Which records?* Contacts, markets, projects, placements, opportunities all
+  plausibly want it; each has different downstream references.
+- *One mechanism or several?* A shared `active` convention across tables reads
+  cleanly, but per CLAUDE.md every stage/status/type classification is supposed
+  to be a `ListDefinition.WellKnown` list — so decide early whether "retired" is
+  a status value or a separate boolean, because the answer differs per record
+  and changing it later is a migration.
+- *How does it show?* A retired row must be visibly retired wherever it still
+  appears (history, attendee lists), not silently absent.
