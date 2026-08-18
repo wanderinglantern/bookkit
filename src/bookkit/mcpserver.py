@@ -448,6 +448,18 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
                             phone=phone, title=title, make_primary=make_primary)
 
     @server.tool()
+    async def contact_remove(client: str, contact: str) -> dict[str, Any]:
+        """Take a contact OFF a client — the inverse of contact_add, for a row
+        that should never have been on that account (this tool filed a
+        wholesaler as a client contact once, and nothing could undo it).
+        Soft and revertible: the interactions they attended keep their record,
+        and revert_batch puts the contact back. Removing the primary leaves the
+        account with NO primary rather than promoting someone — say who should
+        be primary and set them yourself. A contact who genuinely left the
+        company is a different thing; this says the row was wrong."""
+        return _contact_remove(rw, client, contact)
+
+    @server.tool()
     async def opportunity_create(
         client: str,
         title: str,
@@ -1018,6 +1030,31 @@ def _contact_add(
         _provenance(conn, "contact", contact.id)
     return {"contact_id": contact.id, "name": contact.name,
             "primary": make_primary, "batch": batch.ref}
+
+
+def _contact_remove(
+    conn: sqlite3.Connection, client: str, contact: str
+) -> dict[str, Any]:
+    """Take a contact off a client account. The rules (clear is_primary first,
+    one batch, promote nobody) belong to services.contacts.remove, which the
+    TUI and the web call too — this resolves the names and reports."""
+    from .repo import contacts as contacts_repo
+    from .services import contacts as contacts_svc
+
+    org = _resolve_client(conn, client)
+    # exact match, never fuzzy: a write target is resolved the same way
+    # _edit_target resolves one, and the refusal names who IS on the account.
+    people = contacts_repo.for_org(conn, org.id, active_only=False)
+    target = next((c for c in people if c.name.lower() == contact.lower()), None)
+    if target is None:
+        raise ValueError(
+            f"no contact {contact!r} at {org.name}; have: {[c.name for c in people]}"
+        )
+    removed = contacts_svc.remove(conn, target.id, source="mcp")
+    return {"contact_id": removed.contact_id, "name": removed.name,
+            "removed": True, "was_primary": removed.was_primary,
+            "interactions": removed.interactions, "detail": removed.message,
+            "undo": "revert_batch puts them back", "batch": removed.batch}
 
 
 def _opportunity_create(

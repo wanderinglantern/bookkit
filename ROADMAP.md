@@ -53,47 +53,23 @@ generalise the filter across sheets on the grounds that it would be tidier.
 
 ---
 
-## Remove a contact from an account (2026-08-18) — LIVE DATA PROBLEM
+## Remove a contact from an account (2026-08-18) — SHIPPED
 
-**What.** A way to remove a contact from an account, on all three surfaces.
+Built on branch `contact-remove`, 2026-08-18. Left here as a pointer because
+the entry below refers to it; the file is otherwise "agreed but not built".
 
-**Why.** Grant, 2026-08-18: the MCP server added a wholesaler as a *client*
-contact, and it cannot be fixed from MCP, the TUI, or the web. There is bad
-data in the real book right now with no path to correct it on any surface.
-This is not a missing convenience — it is a write that has no inverse.
+`services/contacts.py` `remove()` owns the rules — clear `is_primary` FIRST
+(nobody is promoted in their place), then soft-delete, all in ONE batch that
+`revert_batch` / `u` / `R` put back. Nothing cascades: `interactions.attendees`
+is alive-filtered, so the person drops off attendee lists while the
+interactions and the `interaction_contact` rows survive for the undelete.
+All three surfaces call that one service — MCP `contact_remove`, the account
+screen's `D` on the Contacts tab (confirm first), and the Relationship tab's
+per-card Remove → confirm step (`GET`, writes nothing) → `POST`.
 
-**The plumbing already exists.** `repo/contacts.py:67` `delete()` is a soft
-delete (`base.soft_delete`), and `for_org(active_only=True)` already hides a
-contact whose `active` flag is 0. Neither is reachable: no MCP tool, no TUI
-binding, no web route calls either. So this is wiring, not new machinery.
-
-**Scope (Grant, 2026-08-18): REMOVE ENTIRELY.** This case is a row that should
-never have existed on the account, so it is the soft delete — recoverable via
-`base.undelete`, not a status change. Deactivation is a real and separate need
-and got its own entry below; do not conflate the two behind one control, and do
-not label the same action "remove" on one surface and "delete" on another.
-
-**In flight 2026-08-18**, moved ahead of Task 10 (the interactions timeline) at
-Grant's direction. His real book is NOT to be edited — the fix ships as a
-feature and he applies it himself.
-
-**Watch — the reason this is not a one-liner.**
-- **Interactions reference contacts** (`interaction_contact`, and
-  `interactions.attendees`). Decide what a removed contact does to an
-  interaction's attendee list before writing the delete, not after. A soft
-  delete that leaves attendees dangling makes the timeline lie.
-- **`is_primary`.** Removing the primary contact must promote or clear, never
-  leave an account whose primary points at a deleted row.
-- **It must be one revertible batch**, like `member_deactivate` — which is the
-  precedent worth copying: it refuses while assignments are live, and
-  `cascade=True` removes them all in one revertible unit.
-- **The MCP tool needs it most**, since MCP is what created the bad row. A
-  surface that can add but not remove is how this happened.
-
-**Interim, if the real book needs fixing before this ships.** `./bookctl backup`
-first, then call `repo.contacts.delete` directly against the DB. Soft, and
-reversible with `base.undelete`. Ask before running it — it touches the real
-book.
+**Grant's real book is untouched.** Apply it yourself: `./bookctl backup`,
+then ask the MCP server to `contact_remove` the wholesaler off that client, or
+press `D` on the Contacts tab. Both are revertible.
 
 ---
 

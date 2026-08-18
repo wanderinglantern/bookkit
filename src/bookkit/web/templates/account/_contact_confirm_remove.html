@@ -1,0 +1,37 @@
+{# The confirm step for removing a contact (2026-08-18).
+
+   A step, not an hx-confirm. Removing a contact is destructive and sits one
+   click away from a card the user is already editing in place; the browser's
+   own confirm() shows no plan, which is the objection web/parity.py already
+   records against using it for revert. This fragment shows the plan: who is
+   going, and the two consequences invisible from the row disappearing —
+   whether the account is left with NO primary, and how many interactions keep
+   their record without the person on the attendee list. Both sentences come
+   from services.contacts.consequences, the same list the TUI's
+   ConfirmRemoveContact modal renders, so the surfaces cannot promise
+   different things about one write.
+
+   It renders into the card's own .form-host, so Cancel is the delegated
+   [data-form-cancel] listener inline-cell.js already owns (it empties the
+   closest .form-host) — no new script, and Cancel can never post.
+
+   Remove targets #contacts-panel with outerHTML: this fragment lives INSIDE
+   that panel, so returning the panel as the swap content is a straight
+   replace of the whole thing, not the self-nesting the add-contact form had
+   to solve with an OOB swap. #}
+<div class="confirm-remove" role="alertdialog"
+     aria-label="Remove {{ contact.first_name }} {{ contact.last_name }}">
+  <p class="confirm-remove-title">
+    Remove <strong>{{ contact.first_name }} {{ contact.last_name }}</strong>
+    from {{ org.name }}?
+  </p>
+  <ul class="confirm-remove-notes">
+    {% for note in notes %}<li>{{ note }}</li>{% endfor %}
+  </ul>
+  <div class="form-actions">
+    <button type="button" class="btn-danger"
+            hx-post="/accounts/{{ org.ref }}/contacts/{{ contact.id }}/remove"
+            hx-target="#contacts-panel" hx-swap="outerHTML">Remove contact</button>
+    <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+  </div>
+</div>

@@ -84,6 +84,24 @@ def attendees(conn: sqlite3.Connection, interaction_id: str) -> list[Contact]:
     return [Contact.from_row(r) for r in rows]
 
 
+def attended_count(conn: sqlite3.Connection, contact_id: str) -> int:
+    """How many live interactions name this contact as an attendee.
+
+    The inverse of attendees(), and the one number services/contacts.remove
+    reports: removing a contact takes them off these lists (attendees() is
+    alive-filtered) while leaving both the interactions and the
+    interaction_contact rows untouched, so an undelete restores the links."""
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*) FROM interaction_contact ic
+        JOIN interaction i ON i.id = ic.interaction_id
+        WHERE ic.contact_id = ? AND {base.alive('i')}
+        """,
+        (contact_id,),
+    ).fetchone()
+    return int(row[0])
+
+
 def last_for_org(conn: sqlite3.Connection, org_id: str) -> Interaction | None:
     rows = for_org(conn, org_id, limit=1)
     return rows[0] if rows else None

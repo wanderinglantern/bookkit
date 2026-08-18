@@ -1426,3 +1426,51 @@ table.rows tr.is-waived td {
   margin: 0;
   font-size: var(--body-size);
 }
+
+/* --- the contact-removal confirm step (2026-08-18) -----------------------
+   A STEP, not an hx-confirm: the browser's confirm() shows no plan, which is
+   the objection web/parity.py already records against using it. It renders
+   into the contact card's own .form-host, so it reads as part of that card
+   rather than as a dialog over the page — and its Cancel is the same
+   [data-form-cancel] button every form uses.
+
+   --danger is spent on the notes and the button, not on a filled panel: the
+   card underneath still has to be readable while the question is being
+   answered. */
+
+.confirm-remove {
+  border-top: 2px solid var(--danger);
+  background: var(--danger-wash);
+  padding: 0.875rem 1rem 1rem;
+  margin-top: 0.5rem;
+}
+
+.confirm-remove-title {
+  margin: 0 0 0.5rem;
+  font-size: var(--body-size);
+  color: var(--ink);
+}
+
+.confirm-remove-notes {
+  margin: 0 0 0.875rem;
+  padding-left: 1.125rem;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.confirm-remove-notes li + li {
+  margin-top: 0.25rem;
+}
+
+/* the destructive primary: filled --danger, so it is never mistaken for the
+   filled --ink Save that every other form row leads with */
+.btn-danger {
+  font: inherit;
+  font-family: var(--sans);
+  padding: 0.45rem 1rem;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: var(--danger);
+  color: var(--paper);
+  cursor: pointer;
+}

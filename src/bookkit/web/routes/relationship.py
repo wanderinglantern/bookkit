@@ -32,6 +32,7 @@ from ...forms.spec import Field, initial_text, parse_value
 from ...models import Org
 from ...repo import contacts as contacts_repo
 from ...services import batches as batches_svc
+from ...services import contacts as contacts_svc
 from ..app import TEMPLATES
 from ..forms_render import render_cell, render_cell_display, render_form
 from .account import _conn, _context, _org, _save
@@ -145,6 +146,49 @@ async def contact_create(request: Request, ref: str) -> HTMLResponse:
     # (from _save, unmodified), which correctly swaps into .form-host as
     # it always did — only a successful add needs the OOB panel replace.
     return refused or _contacts_panel(request, org, oob=True)
+
+
+# --- removing a contact (2026-08-18) ----------------------------------------
+# GET renders the confirm and writes NOTHING; POST removes. Two routes, not one
+# hx-confirm: this is destructive and one click away from a card the user is
+# already editing in place, and a browser confirm() shows no plan — the same
+# objection the revert control's ledger entry records (web/parity.py).
+
+
+@router.get("/accounts/{ref}/contacts/{contact_id}/remove", response_class=HTMLResponse)
+def contact_remove_confirm(request: Request, ref: str, contact_id: str) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    try:
+        contact = contacts_repo.get(conn, contact_id)
+        notes = contacts_svc.consequences(conn, contact_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"no contact {contact_id!r} on {org.name}"
+        ) from None
+    return TEMPLATES.TemplateResponse(
+        request,
+        "account/_contact_confirm_remove.html",
+        {"org": org, "contact": contact, "notes": notes},
+    )
+
+
+@router.post("/accounts/{ref}/contacts/{contact_id}/remove", response_class=HTMLResponse)
+def contact_remove(request: Request, ref: str, contact_id: str) -> HTMLResponse:
+    """The confirmed removal. `def`, not `async def`: the write runs inside
+    services.contacts.remove's batch and nothing may await in there
+    (tests/test_conventions.py), so this belongs on the threadpool with the
+    other sync routes.
+
+    A refusal is a 404 carrying the service's own sentence — including
+    "already removed", which is what a double-submitted confirm produces and
+    is a truer answer than a second, empty batch."""
+    org = _org(request, ref)
+    try:
+        contacts_svc.remove(_conn(request), contact_id, source="web")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    return _contacts_panel(request, org)
 
 
 def _contact_display_cell(request: Request, ref: str, contact_id: str, key: str) -> HTMLResponse:
