@@ -6,50 +6,55 @@ cold. Dated on the day he raised it.
 
 ---
 
-## Internal-only tasks, excluded from the client export (2026-08-18)
+## Internal-only tasks, excluded from the client export (2026-08-18) — SHIPPED
 
-**What.** A flag on a task marking it internal, so it never appears in the
-client-facing open items `.xlsx` export.
+Built on branch `internal-tasks-export`, 2026-08-18. No schema change, no
+migration, no new form field: a task whose `category` is "Internal" is left out
+of sheet 1 of the client `.xlsx`, and every surface says so.
 
-**Why.** `services/export_open_items.py` is described in its own docstring as
-"the client-facing export" — sheet 1 is org-level tasks by category. Today
-every open task on the account goes to the client. There is no way to keep a
-task on the book that the client should not read (chase our own underwriter,
-internal review, a note about the relationship), so the export forces a choice
-between tracking the work and not showing it.
+`models.is_internal_category` owns the rule — EXACT equality on the trimmed,
+case-folded value, so "internal", "INTERNAL " and "Internal" all count and
+"Internal Review" does not. It lives in models.py because four modules ask the
+question and a fifth needs the constant, and because the export service imports
+towerkit at module scope. `export_open_items.compose(..., include_internal=)`
+is the filter, default off; MCP's `open_items` passes True, since hiding
+Grant's own work from Grant is the silent failure the feature exists to
+prevent, and flags every row `internal:` in both of its branches.
 
-**Shape (Grant's call, 2026-08-18 — no schema change).** A task whose
-`category` is "Internal" is simply left out of the export. `Task.category` is
-already a freeform, vocab-completed string (`repo/vocab.py` completes it from
-existing records), so this needs no migration, no new column, no `checkbox`
-kind in `forms/spec.py`, and no new form field on either surface. It is one
-filter in the composition.
+**The pins, answered.**
+- *Match rule:* equality, not prefix. The two rules fail in opposite
+  directions and only one failure is visible — under equality a mistyped
+  "Internal Review" ships under a section header literally naming it; under a
+  prefix rule "Internal audit support", a real client-facing broking task,
+  vanishes with nothing anywhere saying so. Same call `parse_human_date` makes
+  on a bare number.
+- *Empty sections:* compose() never emits one, so an account whose only open
+  item is Internal composes to nothing and write() falls back to its "No open
+  items as of <date>" placeholder row.
+- *The vocabulary offers it:* `repo/vocab.task_categories` always includes
+  "Internal", so it is suggested before anybody has typed it once — on the
+  add/edit modal AND on the inline cell (`forms.inline.task_fields(conn)`),
+  which is the primary edit path on both surfaces.
+- *Say so on the row:* `theme.category_text` renders "Internal ⊘ not exported"
+  on all four task tables; the web mirrors the wording as a `tag-internal`
+  badge inside the category cell's own `<td>`.
 
-Pin when building:
-- **Match rule.** Case-insensitive and trimmed — "internal", "Internal ",
-  "INTERNAL" must all count, or the flag silently fails for the person who
-  typed it in a hurry. Decide whether anything else counts ("Internal note"?)
-  and write the answer down; a prefix match and an equality match behave very
-  differently the first time someone types "Internal Review".
-- **Category is also the section grouping** on sheet 1 (tasks split by
-  category, alphabetical). So the filter removes the whole Internal section,
-  not just its rows — which is the intent, but check the empty-section
-  handling: sections are "always present, even when empty" per the module
-  docstring, and an Internal header with nothing under it would defeat the
-  point.
-- **The vocabulary should offer it.** "Internal" needs to appear in the
-  category suggestions, or nobody discovers the feature exists.
-- **Say so on the row.** Both surfaces should show that an Internal task is
-  export-excluded. A category that quietly changes what leaves the building is
-  exactly the kind of hidden behaviour this project keeps getting bitten by.
+**And the near miss speaks.** `wrote <path>` on both export surfaces carries
+what was withheld AND what looked withheld and was not: `1 task categorised
+"Internal Review" WAS exported (only the exact category "Internal" is
+withheld)`. That is this entry's own stated worry — "a prefix match and an
+equality match behave very differently the first time someone types 'Internal
+Review'" — answered without weakening the rule. An absence teaches nobody who
+has never seen the presence, and a near-miss row renders byte-identically to
+any other category.
 
-**Watch.** The export is composed purely and rendered by towerkit; the filter
-belongs in bookkit's composition, not in towerkit's renderer.
+**Scope stayed sheet 1.** Information Requests, Projects and Schedule of
+Insurance are untouched, and the filter is in bookkit's composition, never in
+towerkit's renderer.
 
-**Scope: sheet 1 only** (Grant, 2026-08-18). Open Items is the sheet that
-carries org-level tasks, so it is the only one the flag applies to. Leave
-Information Requests, Projects and Schedule of Insurance alone — do not
-generalise the filter across sheets on the grounds that it would be tidier.
+**Grant's real book is untouched.** Apply it yourself: `./bookctl backup`,
+then set a task's category to "Internal" (press `i` on the Open Items tab, or
+click the cell on the web) and export — the line names what it held back.
 
 ---
 

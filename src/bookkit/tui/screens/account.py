@@ -56,7 +56,7 @@ from ..widgets.tables import (
     task_detail_wrapped,
 )
 from ..widgets.tower_preview import TowerPreview
-from .navigator import TASK_INLINE
+from .navigator import task_inline
 
 
 def _pretty(value: str) -> str:
@@ -158,7 +158,10 @@ def _ov_detail_width(tasks: list[Task], total: int) -> int | None:
         10  # due, a date
         + 6  # due in
         + widest(lambda t: t.title)
-        + widest(lambda t: t.category or "—")
+        # the RENDERED label, not the raw value: an Internal task's cell
+        # carries a badge, and measuring t.category alone overflows the row
+        # by its width (theme.category_text)
+        + widest(lambda t: theme.category_text(t.category).plain)
         + widest(lambda t: t.description or "—")
         + 6 * 2  # cell padding, all six columns
         + 2  # the pane's own margin
@@ -678,7 +681,7 @@ class AccountScreen(Screen):
                 due, due_in = dash(), Text("", justify="right")
             table.add_row(
                 due, due_in, t.title,
-                Text(t.category, style=theme.AMBER) if t.category else dash(),
+                theme.category_text(t.category),
                 t.description or dash(),
                 task_detail_wrapped(t) if detail_width else task_detail_cell(t),
                 key=t.id, height=None if detail_width else 1,
@@ -731,7 +734,7 @@ class AccountScreen(Screen):
         table = self.query_one("#open-items-table", InlineTable)
         table.clear(columns=True)
         table.add_columns("due", "task", "category", "description", "detail", "status")
-        table.inline_fields = TASK_INLINE
+        table.inline_fields = task_inline(conn)
         for t in grouped_by_category(tasks_repo.open_tasks_for_client(conn, org_id)):
             due = (
                 date_text(t.due_on, days_until(t.due_on, today))
@@ -739,7 +742,7 @@ class AccountScreen(Screen):
             )
             table.add_row(
                 due, t.title,
-                Text(t.category, style=theme.AMBER) if t.category else dash(),
+                theme.category_text(t.category),
                 t.description or dash(),
                 task_detail_cell(t), status_text(t.status), key=t.id,
             )

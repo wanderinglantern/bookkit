@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from ..app import BookkitApp
 
+import sqlite3
 from collections.abc import Iterator
 from datetime import date, timedelta
 from pathlib import Path
@@ -25,6 +26,7 @@ from textual.widgets.tree import TreeNode
 
 from ...dates import days_until
 from ...forms import inline as forms_inline
+from ...forms.spec import Field
 from ...money import format_cents_compact
 from ...repo import batches as batches_repo
 from ...repo import contacts, opportunities, orgs, placements
@@ -80,7 +82,17 @@ ADDABLE = ("placements", "contacts", "opportunities", "tasks", "projects", "requ
 # itself lives in forms/inline.py: which fields are inline-editable is not a
 # per-surface choice, only the column position is.
 CONTACT_INLINE = dict(zip((2, 3, 4, 5), forms_inline.CONTACT_FIELDS, strict=True))
-TASK_INLINE = dict(zip((0, 1, 2, 3), forms_inline.TASK_FIELDS, strict=True))
+TASK_COLUMNS = (0, 1, 2, 3)
+
+
+def task_inline(conn: sqlite3.Connection) -> dict[int, Field]:
+    """The task column map, with the category cell carrying the book's own
+    category vocabulary. Built per fill, not once at import: the vocabulary is
+    data and the suggestions must include a category typed a minute ago. Both
+    task tables on this screen and the account screen's Open Items tab use it
+    — the inline cell is the primary edit path, so the completion that makes
+    "Internal" discoverable has to be there and not only in the modal."""
+    return dict(zip(TASK_COLUMNS, forms_inline.task_fields(conn), strict=True))
 
 
 def _section(label: str, count: int | None = None) -> str:
@@ -683,7 +695,7 @@ class NavigatorScreen(Screen):
                 )
         elif which == "tasks":
             table.add_columns("due", "task", "category", "description", "detail", "account")
-            table.inline_fields = TASK_INLINE
+            table.inline_fields = task_inline(conn)
             for task in grouped_by_category(self._attention["tasks"]):
                 key = f"task:{task.id}"
                 name = ""
@@ -699,7 +711,7 @@ class NavigatorScreen(Screen):
                 )
                 table.add_row(
                     due, task.title,
-                    Text(task.category, style=theme.AMBER) if task.category else dash(),
+                    theme.category_text(task.category),
                     task.description or dash(),
                     task_detail_cell(task), name, key=key,
                 )
@@ -791,7 +803,7 @@ class NavigatorScreen(Screen):
                 )
         elif group == "tasks":
             table.add_columns("due", "task", "category", "description", "detail", "status")
-            table.inline_fields = TASK_INLINE
+            table.inline_fields = task_inline(conn)
             today = date.today()
             for task in grouped_by_category(tasks_repo.open_tasks(conn, org_id=org_id)):
                 key = f"task:{task.id}"
@@ -802,7 +814,7 @@ class NavigatorScreen(Screen):
                 )
                 table.add_row(
                     due, task.title,
-                    Text(task.category, style=theme.AMBER) if task.category else dash(),
+                    theme.category_text(task.category),
                     task.description or dash(),
                     task_detail_cell(task), status_text(task.status), key=key,
                 )

@@ -17,6 +17,7 @@ from typing import Self
 from textual.binding import Binding
 from textual.coordinate import Coordinate
 from textual.message import Message
+from textual.widget import Widget
 from textual.widgets import Input
 
 from ...forms.spec import PLACEHOLDERS, Field, parse_value
@@ -56,6 +57,9 @@ class InlineTable(ListTable):
         # (row_key, field_key) → raw text to prefill the editor with
         self.inline_initial: Callable[[str, str], str] = lambda _rk, _fk: ""
         self._editor: CellEditor | None = None
+        # mounted beside the editor, removed with it — a dropdown outliving
+        # the cell it completes would float over whatever replaced the row
+        self._dropdown: Widget | None = None
 
     @property
     def editing(self) -> bool:
@@ -106,6 +110,30 @@ class InlineTable(ListTable):
         editor.styles.offset = (max(x, 0), origin.y)
         editor.styles.width = width
         editor.focus()
+        self._mount_autocomplete(editor, field)
+
+    def _mount_autocomplete(self, editor: CellEditor, field: Field) -> None:
+        """The dropdown half of a vocabulary field (the ghost-text half is the
+        editor's own suggester). Same pair the modal form composes — a
+        vocabulary that completes only in the modal is absent from the edit
+        path people actually use.
+
+        prevent_default_enter/tab are OFF here, unlike the modal's: enter
+        commits and tab hops in an inline cell, and those two keys are the
+        whole contract of this editor. Letting the dropdown eat them would
+        make a completed cell need a second enter for reasons nothing on
+        screen explains — so the dropdown offers, and the keys still mean what
+        the hint line says they mean."""
+        if not field.suggestions:
+            return
+        from textual_autocomplete import AutoComplete
+
+        dropdown = AutoComplete(
+            editor, candidates=list(field.suggestions),
+            prevent_default_enter=False, prevent_default_tab=False,
+        )
+        self._dropdown = dropdown
+        self.screen.mount(dropdown)
 
     # -- editor callbacks ------------------------------------------------------
 
@@ -156,6 +184,9 @@ class InlineTable(ListTable):
         return super().clear(columns=columns)
 
     def _close_editor(self) -> None:
+        if self._dropdown is not None:
+            dropdown, self._dropdown = self._dropdown, None
+            dropdown.remove()
         if self._editor is not None:
             editor, self._editor = self._editor, None
             # only pull focus back if the editor still had it — when the user
@@ -203,7 +234,18 @@ class CellEditor(Input):
         initial: str,
         placeholder: str = "",
     ) -> None:
-        super().__init__(value=initial, placeholder=placeholder)
+        from textual.suggester import SuggestFromList
+
+        super().__init__(
+            value=initial, placeholder=placeholder,
+            # ghost text (right arrow accepts) — the same completion pair the
+            # modal form gives a vocabulary field, see forms.spec.Field
+            suggester=(
+                SuggestFromList(field.suggestions, case_sensitive=False)
+                if field.suggestions
+                else None
+            ),
+        )
         self._table = table
         self._row_key = row_key
         self._coordinate = coordinate

@@ -130,6 +130,60 @@ def test_export_open_items_writes_workbook(tmp_path: Path, capsys, monkeypatch) 
     assert rc == 0 and out.exists()
 
 
+def test_export_reports_internal_tasks_withheld(tmp_path: Path, capsys, monkeypatch) -> None:
+    """The `wrote …` line says what did NOT go in the file. Without it a
+    mistyped category ("Internal Review") is indistinguishable from a
+    correctly flagged one at the moment the file leaves the building."""
+    from bookkit.repo import orgs
+    from bookkit.repo import tasks as tasks_repo
+    db_path = tmp_path / "b.db"
+    monkeypatch.setenv("BOOKKIT_DB", str(db_path))
+    conn = db.connect(db_path)
+    org = orgs.create(conn, name="Acme", kind="client")
+    tasks_repo.create(conn, "chase quote", org_id=org.id)
+    tasks_repo.create(conn, "our own file note", org_id=org.id, category="Internal")
+    conn.close()
+    out = tmp_path / "acme.xlsx"
+    assert main(["export", "open-items", "Acme", "--out", str(out)]) == 0
+    printed = capsys.readouterr().out
+    assert "1 internal task withheld" in printed
+
+
+def test_export_names_the_near_miss_that_shipped(tmp_path: Path, capsys, monkeypatch) -> None:
+    """"Internal Review" renders byte-identically to "Renewal" on every
+    surface and IS exported. The only place that can say so is this line, so
+    it says it in words rather than by staying quiet."""
+    from bookkit.repo import orgs
+    from bookkit.repo import tasks as tasks_repo
+    db_path = tmp_path / "b.db"
+    monkeypatch.setenv("BOOKKIT_DB", str(db_path))
+    conn = db.connect(db_path)
+    org = orgs.create(conn, name="Acme", kind="client")
+    tasks_repo.create(conn, "audit support", org_id=org.id, category="Internal Review")
+    conn.close()
+    assert main(["export", "open-items", "Acme", "--out", str(tmp_path / "a.xlsx")]) == 0
+    printed = capsys.readouterr().out
+    assert '1 task categorised "Internal Review" WAS exported' in printed
+    assert '(only the exact category "Internal" is withheld)' in printed
+    assert "internal task withheld" not in printed
+
+
+def test_export_says_nothing_when_there_is_nothing_to_say(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    from bookkit.repo import orgs
+    from bookkit.repo import tasks as tasks_repo
+    db_path = tmp_path / "b.db"
+    monkeypatch.setenv("BOOKKIT_DB", str(db_path))
+    conn = db.connect(db_path)
+    org = orgs.create(conn, name="Acme", kind="client")
+    tasks_repo.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    conn.close()
+    out = tmp_path / "a.xlsx"
+    assert main(["export", "open-items", "Acme", "--out", str(out)]) == 0
+    assert capsys.readouterr().out.strip() == f"wrote {out}"
+
+
 def test_export_unknown_org_suggests(tmp_path: Path, capsys, monkeypatch) -> None:
     from bookkit.repo import orgs
     db_path = tmp_path / "b.db"

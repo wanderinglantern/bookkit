@@ -1206,6 +1206,295 @@ async def test_open_items_tab_inline_cell_edit_regroups(seeded_db: Path) -> None
         assert str(table.get_row_at(table.get_row_index(task.id))[2]) == "Apple"
 
 
+async def test_inline_category_cell_completes_from_the_vocabulary(seeded_db: Path) -> None:
+    """`i` on the Open Items tab is the PRIMARY edit path — the add/edit modal
+    is the secondary one — so the vocabulary that makes "Internal"
+    discoverable has to be in the CELL. Both halves CLAUDE.md names: the
+    textual-autocomplete dropdown and the SuggestFromList ghost text.
+
+    Enter and tab still commit and hop (prevent_default_* are off on this
+    dropdown), which the regrouping test above exercises end to end on this
+    very cell."""
+    from textual_autocomplete import AutoComplete
+
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets.inline_edit import CellEditor, InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    task = tasks_repo.create(app.conn, "audit support", org_id=org.id, category="Renewal")
+    async with app.run_test(size=(150, 44)) as pilot:
+        app.push_screen(AccountScreen(org.id))
+        await pilot.pause()
+        await pilot.press("8")
+        await pilot.pause()
+        table = app.screen.query_one("#open-items-table", InlineTable)
+        table.move_cursor(row=table.get_row_index(task.id))
+        await pilot.pause()
+
+        # title has no vocabulary: no ghost text, no dropdown
+        await pilot.press("i")
+        await pilot.pause()
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app.screen.query_one(CellEditor).suggester is None
+        assert not app.screen.query(AutoComplete)
+
+        await pilot.press("tab")  # title -> category
+        await pilot.pause()
+        editor = app.screen.query_one(CellEditor)
+        assert editor.value == "Renewal"
+        assert editor.suggester is not None, "no ghost text on a vocabulary cell"
+        dropdowns = app.screen.query(AutoComplete)
+        assert len(dropdowns) == 1
+        # type toward it and the dropdown offers the category nobody in this
+        # book has typed yet — repo.vocab.task_categories always carries it
+        editor.value = "Inter"
+        await pilot.pause()
+        options = dropdowns.first().option_list
+        shown = [str(options.get_option_at_index(i).prompt) for i in range(options.option_count)]
+        assert shown == ["Internal"], shown
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not app.screen.query(AutoComplete), (
+            "the dropdown outlived the cell it completes")
+
+
+def test_category_text_marks_internal_and_leaves_everything_else_alone() -> None:
+    """The glyph, the words and the colour are all load-bearing and all were
+    unpinned: dropping the ⊘, or rendering the marked row AMBER like an
+    ordinary one, changed nothing any test could see. The last assertion is
+    the other half — a refactor that adds a marker must not restyle the rows
+    that do not carry it."""
+    from bookkit.tui import theme
+
+    internal = theme.category_text("Internal")
+    assert internal.plain == "Internal ⊘ not exported"
+    assert internal.style == theme.DIM
+
+    # the value the user typed survives verbatim — the marker is a suffix
+    assert theme.category_text("internal").plain == "internal ⊘ not exported"
+
+    plain = theme.category_text("Renewal")
+    assert plain.plain == "Renewal"
+    assert plain.style == theme.AMBER
+    # a near miss is an ORDINARY category (models.is_internal_category) and
+    # must read as one — this is the shape withheld_note exists to announce
+    assert theme.category_text("Internal Review").plain == "Internal Review"
+    assert theme.category_text("Internal Review").style == theme.AMBER
+    assert theme.category_text(None).plain == "—"
+
+
+@pytest.mark.parametrize(
+    "total, expected",
+    [
+        # lead = 10 (due) + 6 (due in) + 1 (title "t") + 23 (the RENDERED
+        # category, "Internal ⊘ not exported") + 1 (description "—")
+        # + 12 (padding) + 2 (margin) = 55. spare = total - 55, floored at
+        # OV_DETAIL_MIN=40 and capped at OV_DETAIL_MAX=60.
+        (94, None),   # spare 39 — below the floor, stand down
+        (95, 40),     # spare 40 — exactly the floor
+        (100, 45),
+        (110, 55),
+        (120, 60),    # spare 65, capped. The ONLY case the cap hides the
+        # measurement in — the four above are what make this test load-bearing
+    ],
+)
+def test_overview_detail_width_measures_the_rendered_category(
+    seeded_db: Path, total: int, expected: int | None
+) -> None:
+    """The overview's five auto-width columns are measured off the data and
+    taken off the pane width first; the detail column wraps into what is left.
+    An Internal task's category cell carries a badge, so measuring the RAW
+    category under-counts the row by the badge's width (23 - 8 = 15 columns)
+    and the detail column overflows. Nothing else in the suite notices — the
+    tables still render, a few characters too wide.
+
+    Absolute, not relative: comparing an Internal row against a "Renewal" row
+    only catches the mutation where BOTH land under the cap, which is one
+    narrow band of widths and not the band that matters."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.screens.account import _ov_detail_width
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    internal = tasks_repo.create(
+        app.conn, "t", org_id=org.id, category="Internal", detail="note")
+    assert _ov_detail_width([internal], total) == expected
+
+
+async def test_open_items_marks_internal_tasks(seeded_db: Path) -> None:
+    """An Internal task reads as export-excluded ON THE ROW. The category is
+    what decides whether a task leaves the building, so it says so where the
+    category is rendered — not only in a legend somewhere else."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    internal = tasks_repo.create(
+        app.conn, "our own file note", org_id=org.id, category="Internal")
+    normal = tasks_repo.create(app.conn, "renew GL", org_id=org.id, category="Renewal")
+    async with app.run_test(size=(150, 44)) as pilot:
+        app.push_screen(AccountScreen(org.id))
+        await pilot.pause()
+        await pilot.press("8")
+        await pilot.pause()
+        table = app.screen.query_one("#open-items-table", InlineTable)
+
+        def cell(t) -> str:
+            return str(table.get_row_at(table.get_row_index(t.id))[2])
+
+        assert "not exported" in cell(internal)
+        assert "Internal" in cell(internal)
+        assert cell(normal) == "Renewal"
+
+
+async def test_account_overview_marks_internal_tasks(seeded_db: Path) -> None:
+    """The account's DEFAULT tab, whose task table is a different call site
+    from the Open Items tab's (account.py's #ov-tasks fill). Reverting it to
+    the old inline expression passed every other test in this file."""
+    from bookkit.repo import tasks as tasks_repo
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    internal = tasks_repo.create(
+        app.conn, "our own file note", org_id=org.id, category="Internal")
+    normal = tasks_repo.create(app.conn, "renew GL", org_id=org.id, category="Renewal")
+    async with app.run_test(size=(150, 44)) as pilot:
+        app.push_screen(AccountScreen(org.id))
+        await pilot.pause()
+        table = app.screen.query_one("#ov-tasks", ListTable)
+
+        def cell(t) -> str:
+            return str(table.get_row_at(table.get_row_index(t.id))[3])
+
+        assert cell(internal) == "Internal ⊘ not exported"
+        assert cell(normal) == "Renewal"
+
+
+async def test_navigator_attention_feed_marks_internal_tasks(seeded_db: Path) -> None:
+    """The attention feed — the screen CLAUDE.md calls home — is a SEPARATE
+    fill from the per-account group below it (_fill_attention_table vs
+    _fill_group_table). Both key their rows "task:<id>", so a test that sets
+    _current to ("group", …) looks like it covers this and does not."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    internal = tasks_repo.create(
+        app.conn, "our own file note", org_id=org.id, category="Internal",
+        due_on=date.today().isoformat(),
+    )
+    normal = tasks_repo.create(
+        app.conn, "renew GL", org_id=org.id, category="Renewal",
+        due_on=date.today().isoformat(),
+    )
+    async with app.run_test(size=(150, 44)) as pilot:
+        nav = app.screen
+        nav.refresh_data()
+        nav._current = ("att", "tasks")
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+
+        def cell(t) -> str:
+            return str(table.get_row_at(table.get_row_index(f"task:{t.id}"))[2])
+
+        assert cell(internal) == "Internal ⊘ not exported"
+        assert cell(normal) == "Renewal"
+
+
+async def test_navigator_account_group_marks_internal_tasks(seeded_db: Path) -> None:
+    """The per-account tasks group under an account node — the fourth call
+    site, and the one the old test actually exercised."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    internal = tasks_repo.create(
+        app.conn, "our own file note", org_id=org.id, category="Internal",
+        due_on=date.today().isoformat(),
+    )
+    async with app.run_test(size=(150, 44)) as pilot:
+        nav = app.screen
+        nav._current = ("group", ("tasks", org.id))
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        row = table.get_row_at(table.get_row_index(f"task:{internal.id}"))
+        assert str(row[2]) == "Internal ⊘ not exported"
+
+
+async def test_export_says_how_many_internal_tasks_were_withheld(
+    seeded_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The signal that catches a mistyped category at the moment it matters:
+    you filed it as "Internal Review", you export, and the toast tells you
+    nothing was withheld."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets import entity_actions
+
+    monkeypatch.chdir(tmp_path)
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    tasks_repo.create(app.conn, "our own file note", org_id=org.id, category="Internal")
+    tasks_repo.create(app.conn, "our own reserve note", org_id=org.id, category="internal")
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        entity_actions.export_open_items_flow(nav, org.id)
+        await pilot.pause()
+        messages = [str(n.message) for n in app._notifications]
+        assert any("2 internal tasks withheld" in m for m in messages), messages
+
+
+async def test_export_toast_names_the_near_miss_that_shipped(
+    seeded_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both surfaces read the same sentence because both call withheld_note —
+    this is the TUI half of it. The near miss is the case with no signal
+    anywhere else: the row renders exactly like "Renewal"."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets import entity_actions
+
+    monkeypatch.chdir(tmp_path)
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    tasks_repo.create(app.conn, "audit support", org_id=org.id, category="Internal Review")
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        entity_actions.export_open_items_flow(nav, org.id)
+        await pilot.pause()
+        messages = [str(n.message) for n in app._notifications]
+        assert any(
+            '1 task categorised "Internal Review" WAS exported '
+            '(only the exact category "Internal" is withheld)' in m
+            for m in messages
+        ), messages
+        assert not any("internal task withheld" in m for m in messages)
+
+
+async def test_export_toast_says_nothing_when_there_is_nothing_to_say(
+    seeded_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets import entity_actions
+
+    monkeypatch.chdir(tmp_path)
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    tasks_repo.create(app.conn, "renew GL", org_id=org.id, category="Renewal")
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        entity_actions.export_open_items_flow(nav, org.id)
+        await pilot.pause()
+        wrote = [str(n.message) for n in app._notifications if "wrote " in str(n.message)]
+        assert wrote and all(m.endswith(".xlsx") for m in wrote), wrote
+
+
 async def test_navigator_rfi_chase_bucket_and_group(seeded_db: Path) -> None:
     """A request with an outstanding item shows in the attention feed as ONE
     row carrying its open count, and under its account as a group."""

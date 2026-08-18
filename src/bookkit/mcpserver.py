@@ -69,7 +69,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from . import db
-from .models import EventBatch, RfiItem, RfiRequest
+from .models import EventBatch, RfiItem, RfiRequest, is_internal_category
 from .services.renewals import RenewalItem
 
 # score_cutoff for the client_create duplicate guard (rapidfuzz WRatio,
@@ -171,15 +171,25 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
     async def open_items(client: str | None = None) -> dict[str, Any]:
         """Open items for ONE client (`client` = exact client name or ref; on
         a miss the error lists the nearest candidates) — the same
-        composition used for the client export deliverable, so this matches
-        what a client would be handed. Omit `client` for the book-wide view:
+        composition used for the client export deliverable, PLUS the tasks
+        that composition withholds: a task filed under the "Internal"
+        category never reaches the client's workbook, and its row here is
+        marked `internal: true`. So this is what a client would be handed
+        plus everything marked internal, deliberately — you are reading
+        Grant's book, not the deliverable. Omit `client` for the book-wide
+        view:
         ALL open tasks (undated and future-due included, not just due-today),
         unmet project needs, submissions past SLA, and incomplete onboarding,
         across the whole book (project needs use the same 120-day attention
-        window as today_brief). Also carries "information_requests": the
-        outstanding questions and documents clients still owe us — ALL of them,
-        regardless of due date (undated and far-future asks included), in both
-        the per-client and the book-wide view. requests_to_chase is the
+        window as today_brief). Book-wide "tasks_due" rows carry `internal`
+        too, on the same rule — so a task no client will ever see is labelled
+        in BOTH branches of this tool, not just the per-client one. The match
+        is exact: a task categorised "Internal Review" is internal: false and
+        DOES reach the client's workbook. Also carries
+        "information_requests": the outstanding questions and documents
+        clients still owe us — ALL of them, regardless of due date (undated
+        and far-future asks included), in both the per-client and the
+        book-wide view. requests_to_chase is the
         narrower 120-day attention view of the same requests."""
         return _open_items(ro, client=client)
 
@@ -2240,7 +2250,12 @@ def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict[str
             "account": org.name,
             "sections": [
                 {"label": s.label, "rows": [asdict(r) for r in s.rows]}
-                for s in export_open_items.compose(conn, org.id, today)
+                # include_internal=True: this is Grant's own assistant
+                # reading his own book. Hiding internal work from him here
+                # would be the silent failure the feature exists to prevent —
+                # the rows come through, flagged.
+                for s in export_open_items.compose(
+                    conn, org.id, today, include_internal=True)
             ],
             "information_requests": _client_information_requests(conn, org.id),
         }
@@ -2257,7 +2272,10 @@ def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict[str
         # puts undated tasks last.
         "tasks_due": [
             {"ref": t.id, "title": t.title, "description": t.description,
-             "category": t.category, "due": t.due_on}
+             "category": t.category, "due": t.due_on,
+             # the same fact the per-client rows carry, so an Internal task
+             # is labelled in BOTH branches of this tool, not just one
+             "internal": is_internal_category(t.category)}
             for t in tasks_repo.open_tasks(conn)
         ],
         "project_needs": [

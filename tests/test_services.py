@@ -390,6 +390,229 @@ def test_compose_categories_bucket_case_insensitively(conn):
     assert len(renewal_sections[0].rows) == 2
 
 
+# --- the Internal category: never leaves the building ------------------------
+#
+# The filter sits on the task list in compose(), before the split into
+# category sections and placement sections, so an Internal task cannot ride
+# out to the client through the placement half (which ignores category
+# entirely). These tests pin both halves, the match rule, and the count the
+# exporter reports back.
+
+
+def test_compose_omits_the_internal_category_section(conn):
+    org = orgs.create(conn, name="Internal Co", kind="client")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    tasks.create(conn, "chase our own file note", org_id=org.id, category="Internal")
+    sections = compose(conn, org.id, date(2026, 8, 12))
+    assert [s.label for s in sections] == ["Renewal — Internal Co"]
+    items = [r.item for s in sections for r in s.rows]
+    assert "chase our own file note" not in items
+
+
+def test_internal_match_ignores_case_and_surrounding_space(conn):
+    org = orgs.create(conn, name="Space Co", kind="client")
+    tasks.create(conn, "a", org_id=org.id, category=" internal ")
+    tasks.create(conn, "b", org_id=org.id, category="INTERNAL")
+    tasks.create(conn, "c", org_id=org.id, category="Internal")
+    tasks.create(conn, "d", org_id=org.id, category="Renewal")
+    sections = compose(conn, org.id, date(2026, 8, 12))
+    assert [s.label for s in sections] == ["Renewal — Space Co"]
+
+
+def test_internal_prefix_is_not_internal(conn):
+    """D1: exact equality, not a prefix. "Internal Review" is a real
+    client-facing broking category; excluding it would drop a task from the
+    deliverable with no signal anywhere. A wrong INCLUSION is loud (the
+    client sees a section header naming it); a wrong exclusion is silent."""
+    org = orgs.create(conn, name="Prefix Co", kind="client")
+    tasks.create(conn, "walk the client through the audit", org_id=org.id,
+                 category="Internal Review")
+    sections = compose(conn, org.id, date(2026, 8, 12))
+    assert [s.label for s in sections] == ["Internal Review — Prefix Co"]
+    assert sections[0].rows[0].item == "walk the client through the audit"
+
+
+def test_internal_task_on_a_placement_is_withheld_too(conn):
+    """Sheet 1 carries a section per PLACEMENT, built from the same task list
+    with category IGNORED. A filter applied inside the category branch leaves
+    that half untouched and the Internal task ships anyway."""
+    org = orgs.create(conn, name="Placement Co", kind="client")
+    p = placements.create(conn, org.id, "Placement Co Property 25-26",
+                          "2025-10-01", "2026-10-01")
+    tasks.create(conn, "Confirm bound terms", placement_id=p.id)
+    tasks.create(conn, "our own reserve note", placement_id=p.id, category="Internal")
+    # also reachable through a category section, so a category-branch-only
+    # filter looks like it works while the placement half leaks
+    tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+
+    sections = compose(conn, org.id, date(2026, 8, 12))
+    items = [r.item for s in sections for r in s.rows]
+    assert "our own reserve note" not in items, "an Internal placement task shipped"
+    assert "our own file note" not in items
+    placement_section = next(
+        s for s in sections if s.label.startswith("Placement Co Property"))
+    assert [r.item for r in placement_section.rows] == ["Confirm bound terms"]
+
+
+def test_all_internal_account_exports_the_no_open_items_sheet(conn, tmp_path):
+    """The pinned empty-section answer: compose() never emits an empty
+    section, so an account whose only open item is Internal composes to
+    nothing and write() falls back to its placeholder row."""
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Quiet Co", kind="client")
+    tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    assert compose(conn, org.id, date(2026, 8, 12)) == []
+    path = write(conn, org.id, tmp_path / "q.xlsx", date(2026, 8, 12))
+    from openpyxl import load_workbook
+    assert load_workbook(path).active["A2"].value == "No open items as of 2026-08-12"
+
+
+def test_compose_can_be_asked_for_the_internal_rows(conn):
+    """The exclusion is a default, not a law: MCP asks for them explicitly."""
+    from bookkit.services.export_open_items import compose as compose_fn
+
+    org = orgs.create(conn, name="Ask Co", kind="client")
+    tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    sections = compose_fn(conn, org.id, date(2026, 8, 12), include_internal=True)
+    rows = [r for s in sections for r in s.rows]
+    assert [r.item for r in rows] == ["our own file note"]
+    assert rows[0].internal is True
+
+
+def test_export_rows_flag_internal_but_the_workbook_cannot_print_it(conn, tmp_path):
+    """ExportRow.internal follows `ref`: carried for MCP, absent from the
+    writer's explicit column tuple, so it can never reach the client."""
+    from bookkit.services.export_open_items import compose as compose_fn
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Flag Co", kind="client")
+    tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    rows = {r.item: r.internal
+            for s in compose_fn(conn, org.id, date(2026, 8, 12), include_internal=True)
+            for r in s.rows}
+    assert rows == {"our own file note": True, "renew GL": False}
+
+    path = write(conn, org.id, tmp_path / "f.xlsx", date(2026, 8, 12))
+    from openpyxl import load_workbook
+    sheet = load_workbook(path).active
+    values = [c.value for row in sheet.iter_rows() for c in row]
+    assert "our own file note" not in values
+
+    # `True not in values` cannot fail here: write() composes with the default,
+    # so every surviving row already has internal=False and no True exists to
+    # find. These two can. A bool in ANY cell is the flag having reached the
+    # workbook, and the Status column is where a wrong column tuple would put
+    # it — so pin what that column actually says.
+    assert not any(isinstance(v, bool) for v in values), (
+        "a bool reached a workbook cell — ExportRow.internal is in write()'s "
+        "column tuple"
+    )
+    # header, the "Renewal — Flag Co" section label (column A only), the one
+    # surviving row. A wrong column tuple puts a False here.
+    status_column = [row[5].value for row in sheet.iter_rows()]
+    assert status_column == ["Status", None, "Open"], status_column
+
+
+def test_withheld_internal_lists_what_the_client_did_not_get(conn):
+    from bookkit.services.export_open_items import withheld_internal
+
+    org = orgs.create(conn, name="Held Co", kind="client")
+    held = tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    tasks.create(conn, "misc", org_id=org.id)
+    assert [t.id for t in withheld_internal(conn, org.id)] == [held.id]
+
+
+def test_near_miss_internal_names_what_the_rule_did_not_catch(conn):
+    """Exact equality is the rule, so "Internal Review" ships. The near-miss
+    list is the positive signal that says so — an absence teaches nobody who
+    has never seen the presence."""
+    from bookkit.services.export_open_items import near_miss_internal
+
+    org = orgs.create(conn, name="Near Co", kind="client")
+    tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    review = tasks.create(conn, "audit support", org_id=org.id, category="Internal Review")
+    lower = tasks.create(conn, "note", org_id=org.id, category=" internal note ")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    tasks.create(conn, "misc", org_id=org.id)
+    assert {t.id for t in near_miss_internal(conn, org.id)} == {review.id, lower.id}
+
+
+def test_withheld_note_says_only_what_was_withheld(conn):
+    from bookkit.services.export_open_items import withheld_note
+
+    org = orgs.create(conn, name="Held Only Co", kind="client")
+    tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    note = withheld_note(conn, org.id)
+    assert note == " — 1 internal task withheld"
+
+    tasks.create(conn, "our own reserve note", org_id=org.id, category="internal")
+    assert withheld_note(conn, org.id) == " — 2 internal tasks withheld"
+
+
+def test_withheld_note_names_the_near_miss_that_was_exported(conn):
+    """The ROADMAP's own stated worry — "a prefix match and an equality match
+    behave very differently the first time someone types 'Internal Review'" —
+    answered where both surfaces already read the same sentence."""
+    from bookkit.services.export_open_items import withheld_note
+
+    org = orgs.create(conn, name="Miss Co", kind="client")
+    tasks.create(conn, "audit support", org_id=org.id, category="Internal Review")
+    assert withheld_note(conn, org.id) == (
+        ' — 1 task categorised "Internal Review" WAS exported '
+        '(only the exact category "Internal" is withheld)'
+    )
+
+    # plural, and the same spelling twice names the category once
+    tasks.create(conn, "more audit support", org_id=org.id, category="Internal Review")
+    tasks.create(conn, "file note", org_id=org.id, category="internal note")
+    assert withheld_note(conn, org.id) == (
+        ' — 3 tasks categorised "internal note", "Internal Review" WERE exported '
+        '(only the exact category "Internal" is withheld)'
+    )
+
+
+def test_withheld_note_says_both_when_both_happened(conn):
+    from bookkit.services.export_open_items import withheld_note
+
+    org = orgs.create(conn, name="Both Co", kind="client")
+    tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    tasks.create(conn, "audit support", org_id=org.id, category="Internal Review")
+    assert withheld_note(conn, org.id) == (
+        ' — 1 internal task withheld; 1 task categorised "Internal Review" '
+        'WAS exported (only the exact category "Internal" is withheld)'
+    )
+
+
+def test_withheld_note_is_empty_when_there_is_nothing_to_say(conn):
+    """Silence is still correct for the ordinary account: nothing internal,
+    nothing that reads internal. It is only silence about a NEAR MISS that
+    taught nobody anything."""
+    from bookkit.services.export_open_items import withheld_note
+
+    org = orgs.create(conn, name="Quiet Co", kind="client")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    tasks.create(conn, "misc", org_id=org.id)
+    assert withheld_note(conn, org.id) == ""
+
+
+def test_is_internal_category_predicate():
+    from bookkit.models import INTERNAL_CATEGORY, is_internal_category
+
+    assert INTERNAL_CATEGORY == "Internal"
+    assert is_internal_category("Internal")
+    assert is_internal_category(" internal ")
+    assert is_internal_category("INTERNAL")
+    assert not is_internal_category("Internal Review")
+    assert not is_internal_category("Renewal")
+    assert not is_internal_category("")
+    assert not is_internal_category(None)
+
+
 def test_write_open_items_deterministic_and_styled(conn, tmp_path):
     from bookkit.services.export_open_items import write
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from ..models import INTERNAL_CATEGORY
 from . import base
 
 
@@ -60,7 +61,14 @@ def lines(conn: sqlite3.Connection) -> list[str]:
 
 
 def task_categories(conn: sqlite3.Connection) -> list[str]:
-    return _dedupe(_column(conn, "task", "category"))
+    """Existing task categories PLUS the well-known Internal category — the
+    one flag that keeps a task out of the client export has to be OFFERED
+    before anyone has typed it once, or nobody discovers it exists. It lives
+    here rather than in the form for the same reason the team-name guard
+    lives in repo/team.py: every surface inherits it. _dedupe folds case and
+    keeps the first spelling, so a book that already says "internal" does not
+    gain a sibling."""
+    return _dedupe([*_column(conn, "task", "category"), INTERNAL_CATEGORY])
 
 
 def rfi_categories(conn: sqlite3.Connection) -> list[str]:

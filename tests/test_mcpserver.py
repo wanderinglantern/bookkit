@@ -217,6 +217,36 @@ def test_open_items_scoped_rows_carry_refs(server_db):
     assert row["ref"] == task.id
 
 
+def test_open_items_scoped_still_shows_internal_tasks_flagged(server_db):
+    """Grant's own assistant reading Grant's own book: per-client open_items
+    passes include_internal=True, so an Internal task is VISIBLE and carries
+    internal: true. Flipping that default is a deliberate act — hiding a task
+    from himself is the silent failure this feature exists to prevent."""
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    internal = tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    normal = tasks.create(conn, "Chase loss runs", org_id=org.id, category="Renewal")
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    out = mcpserver._open_items(ro, client="Acme")
+    rows = {r["ref"]: r for s in out["sections"] for r in s["rows"]}
+    assert internal.id in rows, "the Internal task vanished from the assistant's view"
+    assert rows[internal.id]["internal"] is True
+    assert rows[normal.id]["internal"] is False
+
+
+def test_open_items_bookwide_flags_internal_tasks(server_db):
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    internal = tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    normal = tasks.create(conn, "Chase loss runs", org_id=org.id)
+    conn.close()
+    ro = db.connect_readonly(server_db)
+    rows = {t["ref"]: t for t in mcpserver._open_items(ro, client=None)["tasks_due"]}
+    assert rows[internal.id]["internal"] is True
+    assert rows[normal.id]["internal"] is False
+
+
 def test_task_complete_works_on_ref_harvested_from_scoped_open_items(server_db):
     conn = db.connect(server_db)
     org = orgs.create(conn, name="Acme", kind="client")

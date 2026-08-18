@@ -41,9 +41,9 @@ from ...forms.entities import (
     rfi_item_form,
     task_form,
 )
-from ...forms.inline import RFI_ITEM_FIELDS, TASK_FIELDS
+from ...forms.inline import RFI_ITEM_FIELDS, TASK_FIELDS, task_fields
 from ...forms.spec import Field, initial_text, parse_value
-from ...models import Org, RfiRequest, Task
+from ...models import Org, RfiRequest, Task, is_internal_category
 from ...repo import rfi as rfi_repo
 from ...repo import tasks as tasks_repo
 from ...services import batches as batches_svc
@@ -74,6 +74,17 @@ def _task_field(key: str) -> Field:
     return field
 
 
+def _task_editor_field(request: Request, key: str) -> Field:
+    """The same field, carrying the book's category vocabulary — the cell
+    macro renders it as a <datalist>. Only the EDITOR needs it (a display cell
+    has nothing to complete), so the vocabulary query runs once per opened
+    cell rather than once per cell of every row. Which field gets the
+    vocabulary is forms.inline.task_fields' call, not this route's: the TUI's
+    inline cell reads the identical list."""
+    _task_field(key)  # the editable-set guard, before any query runs
+    return {f.key: f for f in task_fields(_conn(request))}[key]
+
+
 def _task_due_suffix(task: Task) -> str:
     """The overdue badge, rendered INSIDE the due_on cell's own <td> via
     render_cell_display's `suffix` — never as a sibling appended by wrapping
@@ -81,6 +92,16 @@ def _task_due_suffix(task: Task) -> str:
     that nests illegally and silently misaligns every later column)."""
     overdue = task.due_on is not None and task.due_on < date.today().isoformat()
     return '<span class="tag-overdue">over</span>' if overdue else ""
+
+
+def _task_category_suffix(task: Task) -> str:
+    """The export-exclusion badge, rendered INSIDE the category cell's own
+    <td> via render_cell_display's `suffix` — same rule as _task_due_suffix
+    above, and the same wording the TUI uses (theme.category_text). The fact
+    belongs to the task, not to a screen, so it is marked wherever the
+    category is shown."""
+    return ('<span class="tag-internal">not exported</span>'
+            if is_internal_category(task.category) else "")
 
 
 def _task_row(request: Request, ref: str, task: Task) -> dict[str, Any]:
@@ -96,7 +117,7 @@ def _task_row(request: Request, ref: str, task: Task) -> dict[str, Any]:
         "id": task.id,
         "due_cell": cell("due_on", extra_class="num", suffix=_task_due_suffix(task)),
         "title_cell": cell("title"),
-        "category_cell": cell("category"),
+        "category_cell": cell("category", suffix=_task_category_suffix(task)),
         "description_cell": cell("description"),
     }
 
@@ -142,7 +163,11 @@ def _task_display_cell(request: Request, ref: str, task_id: str, key: str) -> HT
     value = initial_text(field, getattr(existing, key, None))
     action = _task_cell_action(ref, task_id, key)
     extra_class = "num" if key == "due_on" else ""
-    suffix = _task_due_suffix(existing) if key == "due_on" else ""
+    # the badge has to come back with the saved cell, or flagging a task
+    # Internal inline leaves the row looking exactly as it did before
+    suffix = {
+        "due_on": _task_due_suffix, "category": _task_category_suffix,
+    }.get(key, lambda _t: "")(existing)
     return HTMLResponse(
         render_cell_display(request, field, value, action, extra_class=extra_class, suffix=suffix)
     )
@@ -152,7 +177,7 @@ def _task_editor_cell(
     request: Request, ref: str, task_id: str, key: str,
     error: str | None = None, typed: str | None = None,
 ) -> HTMLResponse:
-    field = _task_field(key)
+    field = _task_editor_field(request, key)
     existing = tasks_repo.get(_conn(request), task_id)
     value = typed if typed is not None else initial_text(field, getattr(existing, key, None))
     action = _task_cell_action(ref, task_id, key)
