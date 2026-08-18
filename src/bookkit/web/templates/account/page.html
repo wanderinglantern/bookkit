@@ -1,28 +1,11 @@
 {% extends "base.html" %}
 {% block title %}{{ header.org.name }} — bookkit{% endblock %}
 {% block content %}
-  {# Top bar. Nav items and the search pill have nowhere to go yet — no other
-     web route exists outside the account page — so they render as inert
-     placeholders. "Book" is highlighted because that's the section this
-     page lives under. #}
-  <div class="topbar">
-    <span class="topbar-wordmark">BookKit</span>
-    <nav class="topbar-nav">
-      {% for label in ("Today", "Navigator", "Book", "Pipeline", "Calendar", "Markets", "Towers") %}
-        <span class="topbar-nav-item{% if label == 'Book' %} is-current-section{% endif %}">{{ label }}</span>
-      {% endfor %}
-    </nav>
-    <span class="topbar-spacer"></span>
-    <div class="search-pill"><span>Search</span></div>
-    {% if last_undo %}
-      {# Inert on purpose: undo is not wired on the web yet (see
-         bookkit/web/parity.py PENDING["undo"]). This shows the last
-         undoable change; it does not revert it. aria-disabled + title so a
-         hover never promises a click that does nothing. #}
-      <span class="undo-pill" aria-disabled="true" title="Undo is not wired on the web yet">Undo <span class="undo-pill-detail">{{ last_undo.summary }}</span></span>
-    {% endif %}
-    <div class="avatar">GB</div>
-  </div>
+  {# Top bar — Task 18 extracted this into partials/topbar.html so /book (the
+     app's front door) shares it rather than forking a copy. "Book" is now a
+     real link (GET /book exists); the rest of the nav still has nowhere to
+     go, so they stay inert placeholders. #}
+  {% include "partials/topbar.html" %}
 
   <header class="account-header">
     <p class="breadcrumb">Book <span class="crumb-sep">/</span> {{ header.org.name }}</p>

@@ -1048,3 +1048,167 @@ table.rows td.mono {
     border-top: 1px solid var(--hairline);
   }
 }
+
+/* --- Book screen (Task 18) — the app's front door -------------------------
+   A full-bleed accounts table: CSS grid, never table layout, per the
+   Geometry rule. Every row IS the link to that account — the design's own
+   book sheet has no separate actions column, so this one doesn't invent
+   one. Column widths match the design source's book sheet exactly (ref
+   104px, account 1fr, owner 90px, status 96px, next 126px, due in 104px,
+   premium 104px, last touch 116px). */
+
+.book-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 1rem 1.25rem 0.75rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.book-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.3125rem;
+}
+
+.book-subtitle {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.book-header-spacer {
+  flex: 1;
+}
+
+/* Not wired yet (aria-disabled="true") — a live-looking <input> that
+   silently ignores typing is worse than a pill that says so, so the
+   filter is a span here, never an <input>. Same shape/tone as the top
+   bar's search pill. */
+.book-filter-pill {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 0.75rem;
+  background: var(--stone);
+  border-radius: 16px;
+  color: var(--muted);
+  font-size: var(--hint-size);
+  min-width: 220px;
+  flex: none;
+  cursor: default;
+}
+
+.book-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Tables scroll horizontally rather than dropping columns (Quality floor) —
+   .book-body is the scroll container, and .book-grid's fixed track widths
+   (only "account" is 1fr) mean the grid simply grows past the viewport on
+   a narrow window instead of squeezing every column unreadable. */
+.book-grid {
+  display: grid;
+  grid-template-columns: 104px minmax(160px, 1fr) 90px 96px 126px 104px 104px 116px;
+  align-items: center;
+  min-width: 62.5rem;
+}
+
+.book-table-head {
+  height: 28px;
+  padding: 0 0.875rem;
+  background: var(--wash);
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--hairline);
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.book-table-head span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 0.5rem;
+}
+
+.book-table-head span.right {
+  text-align: right;
+  padding-right: 0.625rem;
+}
+
+.book-row {
+  height: var(--row-height);
+  padding: 0 0.875rem;
+  border-bottom: 1px solid var(--hairline-2);
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.book-row:nth-child(even) {
+  background: var(--wash-2);
+}
+
+.book-row:hover {
+  background: var(--hover);
+}
+
+/* "Selected row" per the visual-direction spec. The row is the only
+   interactive unit on this screen (click opens the account; there is no
+   separate row-selection state), so its own keyboard focus stands in for
+   "selected" — the general `:focus-visible` accent outline still applies
+   underneath this. */
+.book-row:focus-visible {
+  background: var(--accent-wash);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.book-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 0.5rem;
+}
+
+.book-cell.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+}
+
+.book-cell.muted {
+  color: var(--muted);
+}
+
+.book-cell.right {
+  text-align: right;
+  padding-right: 0.625rem;
+}
+
+.book-cell.is-good {
+  color: var(--good);
+}
+
+.book-cell.is-warn {
+  color: var(--warn);
+}
+
+.book-cell.is-danger {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.book-empty {
+  padding: 2.5rem 1.25rem;
+  color: var(--muted);
+}
+
+.book-empty p {
+  margin: 0;
+  font-size: var(--body-size);
+}
