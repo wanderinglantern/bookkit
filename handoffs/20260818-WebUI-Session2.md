@@ -4,9 +4,47 @@ Supersedes nothing; **read `handoffs/20260818-WebUI.md` first**, then this. Ever
 below is verified state, not intention. Written mid-flight because the session was
 running into a usage limit.
 
+
+> ## UPDATE — later the same afternoon. Read this before §1; it supersedes it.
+>
+> - **`main` = `dca327b`, pushed. 955 passed, mypy clean, ruff clean, wheel builds
+>   with all 9 font files inside.**
+> - **Task 16b (fonts) is MERGED.** Reviewed, one fix round applied, all four gates
+>   re-run by the controller before the merge. Nothing outstanding on it.
+>   `.claude/worktrees/web-work` / branch `web-fonts` can be reused or removed.
+> - **`web-snapshot` (Tasks 9 + 17) is NOT merged and must not be merged as it stands.**
+>   Its review found a **CRITICAL that is green in the suite and invisible in Chrome**:
+>   `app.css:694` uses `border-left: 1px solid var(--rule)`, and `--rule` is the *TUI*
+>   palette name. The web tokens are `--hairline`/`--hairline-2`/`--border`
+>   (`web/theme_css.py:_VARIABLES`). An invalid `var()` makes the whole shorthand compute
+>   to `unset`, so the scope rule the commit message calls load-bearing **does not render
+>   at all**. It is the only undefined custom property in the stylesheet.
+>   **Task 9 is approved and ships as-is** — every mutation red, the strongest-pinned work
+>   on the branch.
+> - **A fix round for `web-snapshot` was dispatched and was still live when this update was
+>   written.** If its commit is not on the branch, re-dispatch it. The items were:
+>   (A) the `var(--rule)` fix **plus a test that every `var()` in `app.css` resolves** —
+>   that class of silent CSS death is otherwise unguarded, and the rule also renders as
+>   three disconnected segments with the caption outside its own bracket;
+>   (B) two zeros that are lies — `program premium $0` when every layer's premium is
+>   `None`, and `top of tower $0` for a statutory-only program (towerkit forces
+>   `limit == 0` on `Layer.statutory`), because the omit guard tests for *no program*, not
+>   *no data*; (C) the scoped group's membership is unpinned — an ACCOUNT-scoped row can
+>   be smuggled between `program premium` and `top of tower`, render under the program
+>   caption, and the suite stays green; (D) `layer_details` is called once per render but
+>   nothing holds it; (E) minors, including `assert added.ok, added.messages` where
+>   `sync.Diagnostics` has no `.messages`.
+> - **Expect a merge conflict** between `web-snapshot` and merged `web-fonts` in
+>   `tests/test_web_account.py` and `src/bookkit/web/static/app.css` — both touch them, in
+>   different regions. The fonts branch wrapped the overdue badge's `◆` in a
+>   `<span class="badge-glyph">` (so it can take the mono family, which is the only
+>   vendored face that has that glyph), which changed an exact-string assertion around
+>   `test_web_account.py:154`. Keep both sides.
+>
+
 ---
 
-## 1. Where things stand
+## 1. Where things stand (as of the morning; see the UPDATE above)
 
 `main` = **`b169621`**, pushed. Contains, in order:
 - `6bab7f8` — merge of `web-interactions` (the interactions timeline). Gated by the
