@@ -276,7 +276,7 @@ def test_undo_pill_absent_when_nothing_to_undo(app_and_org):
     assert "nothing here — that's good" in response.text
 
 
-def test_undo_pill_and_recent_change_appear_after_a_batch_and_revert_is_inert(app_and_org):
+def test_undo_pill_and_recent_change_appear_after_a_batch_and_revert_is_wired(app_and_org):
     client, org = app_and_org
     from bookkit.services import batches
 
@@ -291,19 +291,33 @@ def test_undo_pill_and_recent_change_appear_after_a_batch_and_revert_is_inert(ap
     assert response.status_code == 200
     assert "undo-pill" in response.text
     assert "premium PLC-0001 → $4.13M" in response.text
-    # Rendered, not wired — Task 15's work. The revert affordance is a bare
-    # span with no click target: no href, no hx-post/hx-get on the
-    # revert-link ITSELF — and it carries aria-disabled so a hover never
-    # promises a click that does nothing. This used to assert no hx-get/
-    # hx-post appeared anywhere on the page at all, back when nothing was
-    # wired yet; Task 8 wires the contacts panel's cell editing and "+ Add
-    # contact" button, so the check narrows to the one tag it was always
-    # actually about.
-    revert_tag = re.search(r'<span class="revert-link"[^>]*>', response.text)
-    assert revert_tag, "no revert-link span found"
-    assert 'aria-disabled="true"' in revert_tag.group(0)
-    assert "hx-post" not in revert_tag.group(0)
-    assert "hx-get" not in revert_tag.group(0)
+    # Wired as of Task 15b, and this assertion is the inverse of the one it
+    # replaces: the revert affordance USED to be a bare span carrying
+    # aria-disabled, and asserting that is now asserting the bug. Both the
+    # per-change Revert and the top-bar Undo pill POST the one revert route
+    # (routes/changes.py), so both must carry hx-post and neither may carry
+    # aria-disabled — that is what the XOR check below enforces generally
+    # and what these two assert by name.
+    from bookkit.repo import batches as batches_repo
+
+    batch = batches_repo.recent(conn, since="", limit=1)[0]
+    # The WHOLE url, not just "/changes/" in it: what the page renders and
+    # what tests/test_web_writes.py POSTs are two independent strings, and a
+    # template that built a subtly different one (no ?tab=, the ids swapped)
+    # would leave both green while every click 404s.
+    action = f'hx-post="/accounts/{org.ref}/changes/{batch.ref}/revert?tab=relationship"'
+
+    revert_tag = re.search(r'<button[^>]*class="revert-link"[^>]*>', response.text)
+    assert revert_tag, "no revert-link button found"
+    assert 'aria-disabled' not in revert_tag.group(0)
+    assert action in revert_tag.group(0)
+
+    # the pill is the same POST against the newest unreverted batch — which,
+    # with exactly one batch on this account, is this one
+    pill_tag = re.search(r'<button[^>]*class="undo-pill"[^>]*>', response.text)
+    assert pill_tag, "no undo-pill button found"
+    assert 'aria-disabled' not in pill_tag.group(0)
+    assert action in pill_tag.group(0)
 
 
 # Every control that isn't wired to anything yet must say so: no href/hx-*

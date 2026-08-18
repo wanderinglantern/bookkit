@@ -31,6 +31,20 @@ IMPLEMENTED: dict[str, str] = {
         "deliberately excluded there since apply_rfi_item owns the "
         "status/received_on pair."
     ),
+    "undo": (
+        "POST /accounts/{ref}/changes/{batch_ref}/revert (routes/changes.py) — "
+        "the top bar's 'Undo <last change>' pill and the right rail's "
+        "per-change 'Revert' are the same POST against different batches, both "
+        "through services.batches.revert, the same call the TUI's `u` and `R` "
+        "make. The response is 204 + HX-Redirect (a revert can move a panel, "
+        "the header badge, the tab counts and the rail at once, so no single "
+        "panel swap is honest) and the outcome comes back as a token the tab "
+        "route renders into a toast. FORCE IS DEFERRED: the TUI offers it "
+        "behind ConfirmRevertBatch, and the web refuses conflicts outright, "
+        "naming the fields that changed and pointing at the TUI's `R` — a "
+        "force path needs a confirmation screen showing the plan, and "
+        "inventing one unspecified is not this slice's call to make."
+    ),
     "task_done": (
         "POST /accounts/{ref}/tasks/{task_id}/done (tasks_repo.complete) and "
         "POST /accounts/{ref}/requests/{request_id}/items/{item_id}/received "
@@ -99,11 +113,6 @@ PENDING: dict[str, str] = {
     "paste_items": (
         "deferred by decision, not yet reached: bulk paste-import needs a "
         "browser-side parser design of its own; the TUI flow does not port"
-    ),
-    "undo": (
-        "undo is not built on the web yet — the top-bar 'Undo <last change>' "
-        "pill on the account page is display-only (reads repo.batches.recent) "
-        "and does not revert anything"
     ),
     # the following two are bound on ListTable/InlineTable, not AccountScreen
     # itself — see _WIDGET_SOURCES in tests/test_web_parity.py, added in fix

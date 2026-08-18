@@ -21,12 +21,14 @@
   </nav>
   <span class="topbar-spacer"></span>
   <div class="search-pill"><span>Search</span></div>
-  {% if last_undo %}
-    {# Inert on purpose: undo is not wired on the web yet (see
-       bookkit/web/parity.py PENDING["undo"]). This shows the last
-       undoable change; it does not revert it. aria-disabled + title so a
-       hover never promises a click that does nothing. #}
-    <span class="undo-pill" aria-disabled="true" title="Undo is not wired on the web yet">Undo <span class="undo-pill-detail">{{ last_undo.summary }}</span></span>
+  {% if last_undo and undo_action %}
+    {# Wired as of Task 15b: the same POST the rail's per-change Revert
+       makes, against the newest unreverted batch on this account
+       (routes/changes.py). `undo_action` is the whole url, assembled in
+       routes/account._context — this partial is shared with /book, which
+       has no `tab` to build one from, so it is handed the finished action
+       or nothing at all rather than two halves to join. #}
+    <button type="button" class="undo-pill" hx-post="{{ undo_action }}" hx-swap="none">Undo <span class="undo-pill-detail">{{ last_undo.summary }}</span></button>
   {% endif %}
   <div class="avatar">GB</div>
 </div>

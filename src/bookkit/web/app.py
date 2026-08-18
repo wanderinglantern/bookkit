@@ -56,7 +56,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
-    from .routes import account, book, pipeline, relationship, work
+    from .routes import account, book, changes, pipeline, relationship, work
 
     # book.router owns GET / and GET /book — the app's front door (Task 18).
     # Neither path overlaps /accounts/..., so registration order relative
@@ -68,6 +68,10 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
     # match the same two-segment path, and Starlette resolves routes in
     # registration order across routers, not by specificity — the router
     # added first wins a request either could serve.
+    # changes.router owns POST /accounts/{ref}/changes/{batch_ref}/revert —
+    # a three-segment path under /accounts that nothing else matches, so its
+    # position here is free.
+    app.include_router(changes.router)
     app.include_router(relationship.router)
     app.include_router(work.router)
     app.include_router(pipeline.router)

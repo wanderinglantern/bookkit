@@ -118,7 +118,7 @@ def _contacts_panel(request: Request, org: Org, *, oob: bool = False) -> HTMLRes
 def relationship_tab(request: Request, ref: str) -> HTMLResponse:
     conn = _conn(request)
     org = _org(request, ref)
-    context = _context(conn, org, "relationship")
+    context = _context(conn, org, "relationship", request)
     context.update(_contacts_context(request, org))
     context["oob"] = False  # a full tab-page render is never an OOB swap
     return TEMPLATES.TemplateResponse(request, "account/relationship.html", context)

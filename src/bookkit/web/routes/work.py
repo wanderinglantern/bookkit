@@ -495,7 +495,7 @@ def item_received(request: Request, ref: str, request_id: str, item_id: str) -> 
 def request_detail(request: Request, ref: str, request_id: str) -> HTMLResponse:
     conn = _conn(request)
     org = _org(request, ref)
-    context = _context(conn, org, "work")
+    context = _context(conn, org, "work", request)
     context.update(_items_context(request, org, request_id))
     return TEMPLATES.TemplateResponse(request, "account/request_detail.html", context)
 
@@ -507,7 +507,7 @@ def request_detail(request: Request, ref: str, request_id: str) -> HTMLResponse:
 def work_tab(request: Request, ref: str) -> HTMLResponse:
     conn = _conn(request)
     org = _org(request, ref)
-    context = _context(conn, org, "work")
+    context = _context(conn, org, "work", request)
     context["task_rows"] = _task_rows(request, org)
     context["request_rows"] = _request_rows(request, org)
     return TEMPLATES.TemplateResponse(request, "account/work.html", context)

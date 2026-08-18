@@ -39,6 +39,21 @@
     {% endfor %}
   </nav>
 
+  {# The one toast on the surface, rendered from the outcome token the
+     revert's HX-Redirect put in the query string (routes/changes.py owns
+     the text; an unknown or absent token renders nothing). It does NOT
+     auto-dismiss: a message saying a write was refused must not vanish
+     while it is being read. Dismiss is a delegated click handler in
+     inline-cell.js, never an inline onclick — same rule as the forms'
+     Cancel button. #}
+  {% if toast %}
+    <div class="toast" role="status">
+      <span class="toast-text">{{ toast.text }}</span>
+      {% if toast.remedy %}<span class="toast-remedy">{{ toast.remedy }}</span>{% endif %}
+      <button type="button" class="toast-close" data-toast-close aria-label="Dismiss">✕</button>
+    </div>
+  {% endif %}
+
   <div class="layout">
     <div class="tab-panel">{% block panel %}{% endblock %}</div>
 
@@ -94,9 +109,14 @@
               <div class="change-bottom">
                 <span class="change-who">{{ c.who }}</span>
                 {% if not c.reverted %}
-                  {# Rendered, not wired — Task 15's work. aria-disabled +
-                     title so hovering never promises a working revert. #}
-                  <span class="revert-link" aria-disabled="true" title="Revert is not wired yet — a later task">Revert</span>
+                  {# hx-swap="none": the route answers 204 + HX-Redirect, so
+                     htmx navigates instead of swapping. A revert can move a
+                     panel, the header badge, the tab counts and this rail at
+                     once — swapping any one of them would leave the rest
+                     reading the pre-revert book. #}
+                  <button type="button" class="revert-link"
+                          hx-post="/accounts/{{ header.org.ref }}/changes/{{ c.ref }}/revert?tab={{ tab }}"
+                          hx-swap="none">Revert</button>
                 {% else %}
                   <span class="change-reverted">reverted</span>
                 {% endif %}

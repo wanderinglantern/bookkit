@@ -175,3 +175,13 @@ def test_every_binding_bearing_widget_is_enumerated_or_excluded():
         "widgets with their own BINDINGS, not enumerated in _widget_sources or "
         f"excluded with a reason: {sorted(c.__qualname__ for c in missing)}"
     )
+
+
+def test_undo_is_implemented_and_names_its_route():
+    """`u`/`R` have a web equivalent now — POST
+    /accounts/{ref}/changes/{batch_ref}/revert, driven by the rail's per-change
+    Revert and the top bar's Undo pill (Task 15b). A PENDING entry left behind
+    after the route exists is a lie about coverage in the direction that is
+    hardest to notice: the ledger only ever fails loudly for MISSING keys."""
+    assert "undo" not in PENDING
+    assert "/changes/" in IMPLEMENTED["undo"] and "revert" in IMPLEMENTED["undo"]

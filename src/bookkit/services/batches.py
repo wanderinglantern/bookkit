@@ -288,6 +288,23 @@ class AlreadyReverted(Exception):
     """This batch has been reverted once already."""
 
 
+def program_file_refusal(ref: str) -> str:
+    """The one sentence a program_* batch is refused with.
+
+    Extracted from `revert` below (2026-08-18) because the web surface has to
+    render that refusal as a toast on a LATER request than the one that hit
+    it — the POST answers with an HX-Redirect carrying only a short outcome
+    token, never the message text, so the page that renders the toast has to
+    derive the sentence again. Re-typing it in the web layer would be two
+    copies of the same refusal free to drift; this is the `date_refusal`
+    pattern (one home per refusal) applied to the one refusal both surfaces
+    show."""
+    return (
+        f"{ref} wrote a towerkit program FILE — use program_revert_file, "
+        f"which restores the file itself and re-projects"
+    )
+
+
 @dataclass(frozen=True)
 class RevertResult:
     batch: EventBatch
@@ -313,10 +330,7 @@ def revert(
     if batch.tool.startswith("program_"):
         # File contents are not event_log rows — reverting the proj_* cache
         # under an untouched file would be a lie. The file-side path exists.
-        raise ValueError(
-            f"{ref} wrote a towerkit program FILE — use program_revert_file, "
-            f"which restores the file itself and re-projects"
-        )
+        raise ValueError(program_file_refusal(ref))
     if batch.reverted_at is not None:
         raise AlreadyReverted(f"{ref} was reverted at {batch.reverted_at}")
 

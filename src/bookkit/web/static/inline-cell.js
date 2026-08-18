@@ -159,6 +159,19 @@
     closeForm(btn);
   });
 
+  // --- toast dismiss (account/page.html) ----------------------------------
+  // The revert toast never auto-dismisses on a timer: a message saying a
+  // write was REFUSED must not vanish while it is being read. That makes its
+  // close button the only way out of it, so it is a real button with a
+  // delegated listener here — the same "no inline onclick, no second script"
+  // rule the form Cancel above follows.
+  document.body.addEventListener("click", function (evt) {
+    var btn = evt.target.closest && evt.target.closest("[data-toast-close]");
+    if (!btn) return;
+    var toast = btn.closest(".toast");
+    if (toast) toast.remove();
+  });
+
   // Matches the cell editor's own Escape-cancels rule (macros/cell.html's
   // hx-trigger="keyup[key=='Escape']") — same key, same "nothing writes by
   // surprise" rule from the visual-direction spec, applied to the whole

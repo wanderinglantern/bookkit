@@ -221,7 +221,11 @@ def _change_time(created_at: str, today: date) -> str:
 
 
 def _change_row(batch: EventBatch, today: date) -> dict[str, Any]:
+    # `ref` is what the rail's Revert button POSTs to (routes/changes.py) —
+    # the batch's own ref, never its position in the list, because the list
+    # is re-read on every render and a reverted row drops out of it.
     return {
+        "ref": batch.ref,
         "time": _change_time(batch.created_at, today),
         "what": batch.summary,
         "who": batch.source,
@@ -229,7 +233,20 @@ def _change_row(batch: EventBatch, today: date) -> dict[str, Any]:
     }
 
 
-def _context(conn: sqlite3.Connection, org: Org, tab: str) -> dict[str, Any]:
+def _revert_action(org_ref: str, batch_ref: str, tab: str) -> str:
+    """One url shape, built in one place: the rail's per-change Revert and the
+    top bar's Undo pill are the same POST against different batches."""
+    return f"/accounts/{org_ref}/changes/{batch_ref}/revert?tab={tab}"
+
+
+def _context(
+    conn: sqlite3.Connection, org: Org, tab: str, request: Request
+) -> dict[str, Any]:
+    """`request` is here for its query string alone: a revert answers with an
+    HX-Redirect carrying an outcome token, and the toast that token renders
+    belongs to whichever tab page the browser lands on. Building it here rather
+    than in each tab route is what stops the next tab from forgetting it — the
+    shell owns the toast the same way it owns the rail."""
     header = _header(conn, org)
     open_work = _open_work_count(conn, org.id)
     counts = _counts(conn, org, open_work)
@@ -246,6 +263,21 @@ def _context(conn: sqlite3.Connection, org: Org, tab: str) -> dict[str, Any]:
     changes = [_change_row(b, today) for b in org_batches[:8]]
     last_undo = next((b for b in org_batches if b.reverted_at is None), None)
 
+    # partials/topbar.html is shared with /book, which has no `tab` in its
+    # context — so the pill's POST url is assembled HERE, whole, rather than
+    # from two variables in the shared partial. The partial then needs nothing
+    # from the account page's tab vocabulary, and /book cannot render a
+    # half-formed action even if it later grows a `last_undo` of its own.
+    undo_action = (
+        _revert_action(org.ref, last_undo.ref, tab) if last_undo is not None else None
+    )
+
+    # Imported inside the function on purpose: routes/changes.py imports this
+    # module's shared helpers (_conn, _org, TABS), so a module-level import
+    # back the other way would be a cycle. The dependency stays one-way at
+    # import time; the message text stays in one file.
+    from .changes import toast_for
+
     return {
         "header": header,
         "tab": tab,
@@ -256,6 +288,8 @@ def _context(conn: sqlite3.Connection, org: Org, tab: str) -> dict[str, Any]:
         "team": team_repo.for_org(conn, org.id),
         "changes": changes,
         "last_undo": last_undo,
+        "undo_action": undo_action,
+        "toast": toast_for(conn, org, request.query_params),
     }
 
 
@@ -271,5 +305,5 @@ def account_tab(request: Request, ref: str, tab: str) -> HTMLResponse:
     conn = _conn(request)
     org = _org(request, ref)
     return TEMPLATES.TemplateResponse(
-        request, _PANEL_TEMPLATE[tab], _context(conn, org, tab)
+        request, _PANEL_TEMPLATE[tab], _context(conn, org, tab, request)
     )

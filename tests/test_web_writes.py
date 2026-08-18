@@ -168,3 +168,193 @@ def test_a_non_editable_key_is_404_not_a_write(app_and_org):
     )
     assert response.status_code == 404
     assert contacts_repo.get(conn, contact.id).first_name == before
+
+
+# --- reverting a change from the account page --------------------------------
+# The right rail's per-row `Revert` and the top bar's `Undo <last change>`
+# pill both POST this one route. The assertions below are about the whole
+# round trip, not just the service call: services/batches.revert already
+# works and has its own suite (tests/test_batches_service.py) — what is new
+# here is authorization, the outcome token that survives the redirect, and
+# the toast the redirect target renders from it.
+
+
+def _revert(client, org_ref: str, batch_ref: str, tab: str = "relationship"):
+    return client.post(f"/accounts/{org_ref}/changes/{batch_ref}/revert?tab={tab}")
+
+
+def _redirect_params(response) -> dict[str, str]:
+    from urllib.parse import parse_qsl, urlsplit
+
+    target = response.headers["HX-Redirect"]
+    return dict(parse_qsl(urlsplit(target).query))
+
+
+def _set_title(client, org, contact_id: str, value: str):
+    return client.post(
+        f"/accounts/{org.ref}/contacts/{contact_id}/cell/title", data={"title": value}
+    )
+
+
+def test_the_revert_link_reverts_the_batch(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import contacts as contacts_repo
+
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    before = contact.title
+
+    _set_title(client, org, contact.id, "Head of Risk")
+    batch = _latest_batch(conn)
+    assert contacts_repo.get(conn, contact.id).title == "Head of Risk"
+
+    response = _revert(client, org.ref, batch.ref)
+    assert response.status_code == 204
+    assert contacts_repo.get(conn, contact.id).title == before
+    # reverted_at is the half a value check alone would miss: a route that
+    # wrote the old value back without marking the batch would let the same
+    # change be "reverted" forever.
+    assert batches_repo.get(conn, batch.id).reverted_at is not None
+
+
+def test_reverting_redirects_with_the_outcome_and_the_count(app_and_org):
+    """HX-Redirect, not a fragment swap: a revert can move any panel, the
+    header badge, the tab counts and the rail at once, and every other web
+    write swaps exactly one panel by id."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import contacts as contacts_repo
+
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    _set_title(client, org, contact.id, "Head of Risk")
+    batch = _latest_batch(conn)
+
+    response = _revert(client, org.ref, batch.ref)
+    assert response.status_code == 204
+    target = response.headers["HX-Redirect"]
+    assert target.startswith(f"/accounts/{org.ref}/relationship?")
+    params = _redirect_params(response)
+    assert params["outcome"] == "reverted"
+    assert params["undo"] == batch.ref
+    assert params["n"] == "1"
+
+    page = client.get(target)
+    assert f"{batch.ref} reverted — 1 change(s)" in page.text
+
+
+def test_a_batch_from_another_account_is_not_revertible(app_and_org):
+    """Authorization, not decoration: without the org check a crafted URL on
+    account A reverts a write that happened on account B."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.repo import orgs
+
+    other = next(o for o in orgs.list_orgs(conn, kind="client") if o.id != org.id)
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    _set_title(client, org, contact.id, "Head of Risk")
+    batch = _latest_batch(conn)
+
+    response = client.post(
+        f"/accounts/{other.ref}/changes/{batch.ref}/revert?tab=relationship"
+    )
+    assert response.status_code == 404
+    assert contacts_repo.get(conn, contact.id).title == "Head of Risk"
+    assert batches_repo.get(conn, batch.id).reverted_at is None
+
+    # ...and the 404 above is about the ORG, not a missing route: the very
+    # same batch reverts under its own account. Without this the test passes
+    # just as well against a route that does not exist at all.
+    assert _revert(client, org.ref, batch.ref).status_code == 204
+    assert batches_repo.get(conn, batch.id).reverted_at is not None
+
+
+def test_a_conflicted_batch_is_refused_and_says_which_field(app_and_org):
+    """A REFUSAL SAYS SOMETHING — the toast names what conflicts, not just a
+    count, and says where force lives.
+
+    The batch deliberately carries TWO fields, only one of which is changed
+    afterwards. A one-field batch cannot tell refuse-only from force: forcing
+    a batch whose every change is conflicted also reverts nothing and also
+    reports `refused` (services/batches.revert's "applied means the book
+    moved" branch), so the same assertions would pass with force=True wired
+    in by mistake — which is exactly what the force mutation proof showed
+    before this test was widened."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.services import batches as batches_svc
+
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    with batches_svc.open_batch(
+        conn, source="web", tool="edit_contact",
+        summary="set title and role on the first contact", org_id=org.id,
+    ):
+        contacts_repo.update(conn, contact.id, title="Head of Risk", role="syndicate lead")
+    batch = _latest_batch(conn)
+
+    # ...and then someone changes ONE of the two, outside that batch
+    _set_title(client, org, contact.id, "Head of Claims")
+
+    response = _revert(client, org.ref, batch.ref)
+    assert response.status_code == 204
+    # nothing moved — not the conflicted field, and not the clean one either:
+    # the revert is refused whole, never half-applied
+    assert contacts_repo.get(conn, contact.id).title == "Head of Claims"
+    assert contacts_repo.get(conn, contact.id).role == "syndicate lead"
+    # and the batch stays revertible (from the TUI, with force)
+    assert batches_repo.get(conn, batch.id).reverted_at is None
+
+    params = _redirect_params(response)
+    assert params["outcome"] == "refused"
+    assert params["n"] == "1"
+
+    page = client.get(response.headers["HX-Redirect"])
+    assert f"{batch.ref} refused — contact title changed since" in page.text
+    assert "revert it from the TUI with R to force past the conflict" in page.text
+
+
+def test_reverting_twice_says_already_reverted(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import contacts as contacts_repo
+
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    _set_title(client, org, contact.id, "Head of Risk")
+    batch = _latest_batch(conn)
+
+    assert _revert(client, org.ref, batch.ref).status_code == 204
+    again = _revert(client, org.ref, batch.ref)
+    assert again.status_code == 204
+    assert _redirect_params(again)["outcome"] == "already"
+    assert "already reverted" in client.get(again.headers["HX-Redirect"]).text
+
+
+def test_a_program_batch_refuses_and_names_program_revert_file(app_and_org):
+    """A program_* batch wrote a towerkit FILE; services/batches refuses with
+    a message naming the tool that can undo it. The toast must carry THAT
+    sentence, not a re-typed copy — so the assertion compares against the
+    exception the service itself raises."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.services import batches as batches_svc
+
+    with batches_svc.open_batch(
+        conn, source="web", tool="program_renew", summary="renewed the program",
+        org_id=org.id,
+    ):
+        pass
+    batch = _latest_batch(conn)
+
+    response = _revert(client, org.ref, batch.ref)
+    assert response.status_code == 204
+    assert _redirect_params(response)["outcome"] == "program"
+
+    with pytest.raises(ValueError) as raised:
+        batches_svc.revert(conn, batch.ref, now=db.utc_now())
+
+    page = client.get(response.headers["HX-Redirect"])
+    assert str(raised.value) in page.text

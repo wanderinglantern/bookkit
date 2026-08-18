@@ -136,8 +136,14 @@ a {
 /* Not wired yet (aria-disabled="true" in the markup) — no hover affordance,
    muted colour, default cursor. A control that looks live and is dead is
    worse than one that looks pending (Grant, review round 1, 2026-08-17). */
+/* A <button> as of Task 15b (it POSTs the revert route now) — the reset
+   below keeps a button rendering as the design's pill: browsers give buttons
+   their own font, background and border otherwise. */
 .undo-pill {
   display: flex;
+  font: inherit;
+  background: none;
+  cursor: pointer;
   align-items: center;
   gap: 0.4375rem;
   height: 34px;
@@ -749,14 +755,25 @@ a {
   color: var(--muted);
 }
 
-/* Rendered, not wired (aria-disabled="true") — reverting a batch from the
-   account page is Task 15's work. This is the affordance, not the action:
-   muted, not the accent blue real links use, and no pointer cursor. */
+/* The rail's per-change Revert — wired as of Task 15b (POST
+   /accounts/{ref}/changes/{batch_ref}/revert, routes/changes.py). A <button>,
+   not a span: it performs an action, and the spec's row-action treatment
+   (plain text, muted until hover, accent on hover) is the same one
+   .row-action-btn already carries — the reset below is that rule applied to a
+   rail row rather than a table row. */
 .revert-link {
   margin-left: auto;
+  font: inherit;
   font-size: var(--hint-size);
   color: var(--muted);
-  cursor: default;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.revert-link:hover {
+  color: var(--accent);
 }
 
 .change-reverted {
@@ -1128,8 +1145,9 @@ table.rows tr.is-waived td {
   color: var(--accent);
 }
 
-/* --- the undo toast, forward-styled: nothing writes on the web yet, so
-   nothing triggers a toast this task --------------------------------------
+/* --- the revert toast ----------------------------------------------------
+   Forward-styled in Task 7 and first used in Task 15b: a revert's outcome
+   (reverted / refused / already / gone / a program_* refusal) lands here.
    Exactly two shadows exist on the whole surface (Geometry, spec): this is
    one of them, the other is card hover above. */
 
@@ -1148,6 +1166,32 @@ table.rows tr.is-waived td {
   box-shadow: var(--shadow-toast);
   font-size: var(--body-size);
   z-index: 50;
+}
+
+/* The remedy line — a refusal says how to fix it. Muted against the ink
+   ground so it reads as the second sentence it is, never as a second
+   message. */
+.toast-remedy {
+  color: var(--paper);
+  /* Opacity, not a second colour: the palette has no on-ink secondary token
+     and inventing one for a single line is how a palette starts drifting.
+     app.css holds no literal colour by rule (tests/test_web_shell.py). */
+  opacity: 0.75;
+  font-size: var(--hint-size);
+}
+
+/* No auto-dismiss on a timer: a message saying a write was REFUSED must not
+   vanish while it is being read. Dismissing is the reader's call, and it is
+   the only one — hence a real button, handled by the delegated
+   [data-toast-close] listener in inline-cell.js. */
+.toast-close {
+  font: inherit;
+  font-size: var(--hint-size);
+  color: var(--paper);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
 }
 
 .card {
