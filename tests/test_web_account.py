@@ -591,10 +591,13 @@ def _stub_layers(monkeypatch, layers):
     )
 
 
-def _layer(name="Primary", attach=0, limit=10_000_000_00, premium=None, signed=100.0):
+def _layer(
+    name="Primary", attach=0, limit=10_000_000_00, premium=None, signed=100.0,
+    statutory=False,
+):
     return {
         "name": name, "attach_cents": attach, "limit_cents": limit,
-        "premium_cents": premium, "signed_pct": signed,
+        "premium_cents": premium, "signed_pct": signed, "statutory": statutory,
     }
 
 
@@ -620,11 +623,15 @@ def test_top_of_tower_says_no_figure_for_statutory_only_cover(
 ):
     """towerkit: statutory cover is "no dollar limit (WC Part A); limit MUST be
     0". A WC-only program therefore has max(attach + limit) == 0, and `$0 top
-    of tower` says the tower has no height when it has no ceiling."""
+    of tower` says the tower has no height when it has no ceiling.
+
+    The flag is READ, not inferred from the arithmetic: before it existed this
+    test passed while never marking the layer statutory at all, which is the
+    same shape of adjacent-reason pass this build keeps finding."""
     client, org, placement, _layers = divergent_tower
     _stub_layers(
         monkeypatch,
-        [_layer("WC Part A", attach=0, limit=0, premium=250_000_00)],
+        [_layer("WC Part A", attach=0, limit=0, premium=250_000_00, statutory=True)],
     )
 
     response = client.get(f"/accounts/{org.ref}/relationship")
@@ -633,6 +640,51 @@ def test_top_of_tower_says_no_figure_for_statutory_only_cover(
     assert (
         f'title="{placement.program_name} · {placement.ref} · no dollar limit '
         f'(statutory cover)"' in response.text
+    )
+
+
+def test_top_of_tower_names_the_statutory_cover_it_cannot_measure(
+    divergent_tower, monkeypatch
+):
+    """Grant, 2026-08-18: "WC if present will be the tallest w/ statutory
+    benefits." It contributes 0 to max(attach + limit), so the printed figure is
+    the tallest DOLLAR layer and is right — but silent about a layer the tower
+    diagram draws above everything else. A rail that never mentions it disagrees
+    with the picture beside it."""
+    client, org, placement, _layers = divergent_tower
+    _stub_layers(
+        monkeypatch,
+        [
+            _layer("WC Part A", attach=0, limit=0, premium=250_000_00, statutory=True),
+            _layer("Primary", attach=0, limit=5_000_000_00),
+            _layer("1st XS", attach=5_000_000_00, limit=20_000_000_00),
+        ],
+    )
+
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    # the tallest DOLLAR layer, not the statutory one and not $0
+    assert _snapshot_value(response.text, "top of tower") == "$25M"
+    assert (
+        f'title="{placement.program_name} · {placement.ref} · tallest dollar '
+        f'layer; also unlimited statutory cover"' in response.text
+    )
+
+
+def test_a_limitless_non_statutory_program_does_not_claim_statutory_cover(
+    divergent_tower, monkeypatch
+):
+    """A program whose layers all carry no limit and are NOT statutory is a gap
+    in the file, not unlimited cover. Inferring statutory from `top <= 0` made
+    that confident domain claim about any all-zero program."""
+    client, org, placement, _layers = divergent_tower
+    _stub_layers(monkeypatch, [_layer("Primary", attach=0, limit=0)])
+
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    assert _snapshot_value(response.text, "top of tower") == "—"
+    assert "statutory" not in response.text
+    assert (
+        f'title="{placement.program_name} · {placement.ref} · no layer carries '
+        f'a limit"' in response.text
     )
 
 

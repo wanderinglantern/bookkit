@@ -378,15 +378,37 @@ def _program_premium(scope: str, layers: list[dict[str, Any]]) -> tuple[str, str
 def _top_of_tower(scope: str, layers: list[dict[str, Any]]) -> tuple[str, str]:
     """(value, title) for the `top of tower` row.
 
-    towerkit's `Layer.statutory` is "no dollar limit (WC Part A); limit MUST be
-    0", so a statutory-only program (WC-only — rare, but real) gives
-    max(attach + limit) == 0 and would print `$0`: a tower with no height
-    rather than a tower with no ceiling. Same treatment as an unpriced
-    program — there is no figure, so no figure is printed."""
-    top = max(layer["attach_cents"] + layer["limit_cents"] for layer in layers)
-    if top <= 0:
+    This row is the tallest DOLLAR column, which is Grant's call (2026-08-18)
+    and standard broker shorthand. His reason for keeping it is also the reason
+    it cannot be computed from arithmetic alone: **WC, if present, is the
+    tallest thing in the program and has no dollar limit at all.** towerkit's
+    `Layer.statutory` is "no dollar limit (WC Part A); limit MUST be 0"
+    (`towerkit/src/towerkit/model.py:98`), so a statutory layer contributes 0 to
+    `max(attach + limit)` — identical, to `max()`, to a layer with no cover.
+    They are opposite facts.
+
+    So the flag is read, never inferred. Inferring it from `top <= 0` (which is
+    what this function did before the flag existed) makes a confident domain
+    claim about any all-zero program, statutory or not, and is silent on the
+    common case: a real tower that ALSO carries unlimited statutory cover, where
+    the printed figure is right and incomplete. The tower diagram draws that
+    layer above everything else (`TowerLayout.chevrons`), so a rail that never
+    mentions it disagrees with the picture beside it."""
+    statutory = [layer for layer in layers if layer["statutory"]]
+    priced = [layer for layer in layers if not layer["statutory"]]
+    if not priced:
+        # Every layer is statutory: a tower with no ceiling, not one with no
+        # height. There is no figure, so no figure is printed.
         return NO_FIGURE, f"{scope} · no dollar limit (statutory cover)"
-    return money.format_cents_compact(top), scope
+    top = max(layer["attach_cents"] + layer["limit_cents"] for layer in priced)
+    if top <= 0:
+        # Not statutory, and still zero — a real gap in the file rather than
+        # unlimited cover. Say that, rather than borrowing statutory's sentence.
+        return NO_FIGURE, f"{scope} · no layer carries a limit"
+    value = money.format_cents_compact(top)
+    if statutory:
+        return value, f"{scope} · tallest dollar layer; also unlimited statutory cover"
+    return value, scope
 
 
 def _tower_rows(

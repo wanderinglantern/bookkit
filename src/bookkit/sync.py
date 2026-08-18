@@ -902,6 +902,12 @@ def layer_details(conn: sqlite3.Connection, placement_id: str) -> list[dict[str,
                 "period_to": layer.period.end.isoformat() if layer.period else None,
                 "signed_pct": layer.signed_bps / 100,
                 "applies_to": list(layer.applies_to),
+                # WC Part A carries statutory benefits and NO dollar limit, so
+                # towerkit forces limit == 0 (model.py:98) and draws it off-scale.
+                # Without this flag a reader of these dicts cannot tell "unlimited
+                # cover" from "a layer whose limit happens to be zero" — the two
+                # are opposite facts that arithmetic alone renders identical.
+                "statutory": layer.statutory,
             }
         )
     return out

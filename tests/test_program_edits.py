@@ -92,6 +92,10 @@ def test_add_layer_pending(linked) -> None:
     assert added.attach == 2_000_000 and added.limit == 10_000_000
     details = sync.layer_details(conn, placement.id)
     assert any(d["id"] == "1st-excess" and d["signed_pct"] == 0 for d in details)
+    # statutory travels with the layer: without it a reader of these dicts
+    # cannot tell unlimited cover from a limit that happens to be zero.
+    assert all("statutory" in d for d in details)
+    assert not any(d["statutory"] for d in details)
 
 
 def test_add_participant_and_oversign_refused(linked) -> None:
