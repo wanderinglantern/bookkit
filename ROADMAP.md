@@ -479,3 +479,66 @@ Two repos, and the split is not the obvious one:
   because the `(Bound)` suffix is a label hack applied only in bookkit's
   `_book_data_section` for UNLINKED placements — which is exactly why the marker appears on
   the placements we know less about. C10, C5, C11 and C12 are all towerkit renderer work.
+
+---
+
+## C9 and C10, answered 2026-08-18 — and C10 is bigger than it was asked as
+
+### C9 — suppress the "Internal…" section labels from the client copy
+
+**Grant: suppress them.** A task categorised exactly `Internal` is already withheld. A task typed
+`Internal Review` still ships — correctly, by the exact-match rule — but ships under a section
+**banner** reading "Internal Review". A heading that says Internal reads as a leak of our private
+list whatever the item beneath it says.
+
+Lives in bookkit's composition (`services/export_open_items.py`), NOT in the renderer.
+
+**Decide before building — the rows do not disappear, only their heading does:**
+- Where do those rows go? Rolled into the uncategorised/General section, given a neutral heading,
+  or kept as a section with no label? `compose()` never emits an empty section and the sheet has
+  guards for that; a headerless section may not be expressible without changing them.
+- Match rule for the SUPPRESSION should be a prefix (case-insensitive, trimmed), not equality —
+  that is the whole point, since equality is already handled by the withholding.
+- The operator still learns about it: `withheld_note()` already names the near miss at export time
+  ("1 task categorised \"Internal Review\" WAS exported"). C9 changes what the CLIENT sees, not
+  what we see. Do not let one swallow the other.
+
+**Sequencing:** blocked behind the in-flight `export-composition` branch (C3/C7/C8), which is
+editing the same module. Do it next, not concurrently.
+
+### C10 — "yes, list the states". towerkit has no state data at all.
+
+**Grant: the limits cell reads `Statutory - State Limits`, AND the states are listed.**
+
+Checked before recording this as a formatting job, and it is not one: **`towerkit.model` carries no
+state information anywhere.** There is no field on `Layer`, `Line` or `Program` for it. So the
+second half of C10 is a data addition, not a rendering change.
+
+Two honest routes, and this is Grant's call:
+
+**(a) Use the existing escape hatch.** `soi.limits_text` (`soi.py:38-40`) returns
+`layer.limits_detail` verbatim when set, so a broker can type
+`Statutory - State Limits: AL, AZ, CA…` today with no code change at all. Cheap, immediate, and
+structureless: it cannot be validated, compared across a renewal, or checked against the
+monopolistic states.
+
+**(b) Model it.** An optional `states` list on a statutory layer. This is the honest shape —
+the CFO's argument for naming states is that *statutory benefits in a state we are not filed in are
+worth nothing*, which makes it a coverage fact rather than a presentation string. It also allows the
+one check that actually matters: ND, OH, WA and WY are monopolistic and cannot be covered by a
+private policy, so a states list containing one of them is an error worth refusing.
+
+**Cost of (b), stated plainly:** it changes the canonical program file format. towerkit's files are
+the source of truth, saves must stay canonical, and a **zero-diff round trip is tested** — so the
+field must be additive and optional, and `model._ordered`'s hand-written key order has to learn
+about it or the round trip breaks. That is a real but bounded change, and it is the kind that is
+much cheaper now than after a hundred files carry prose in `limits_detail` instead.
+
+**Recommendation: (b), minimally** — an optional list, rendered after the phrase, with the
+monopolistic-state check as the only rule attached to it. If Grant would rather move now and model
+later, (a) works and loses nothing except the check — but the two must not both ship, or the same
+fact lives in two places and they will disagree.
+
+**Also still standing from C10's first half** (unchanged by this answer): Part B's three real limits
+instead of one unqualified figure, `Included with Part A` rather than `$0.00`, and the captive
+retention stated once rather than on both WC rows.
