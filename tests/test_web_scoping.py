@@ -29,6 +29,7 @@ from bookkit import db
 from bookkit.repo import base
 from bookkit.repo import batches as batches_repo
 from bookkit.repo import contacts as contacts_repo
+from bookkit.repo import interactions as interactions_repo
 from bookkit.repo import orgs as orgs_repo
 from bookkit.repo import placements as placements_repo
 from bookkit.repo import rfi as rfi_repo
@@ -58,6 +59,11 @@ def two_accounts(tmp_path: Path):
             conn, org.id, title=f"{name} renewal data", requested_on="2026-08-01"
         )
         item = rfi_repo.add_item(conn, request.id, prompt=f"{name} loss runs")
+        interaction = interactions_repo.log(
+            conn, org.id, type="call", subject=f"{name} renewal call",
+            occurred_on="2026-08-10", body=f"{name} wants more limit",
+            contact_ids=[contact.id],
+        )
         placement = placements_repo.create(
             conn, org.id, program_name=f"{name} casualty",
             period_from="2026-01-01", period_to="2026-12-31",
@@ -71,6 +77,7 @@ def two_accounts(tmp_path: Path):
         return {
             "org": org, "contact": contact, "task": task, "request": request,
             "item": item, "placement": placement, "via_placement": via_placement,
+            "interaction": interaction,
         }
 
     mine = furnish("Atomic Test Industries")
@@ -92,6 +99,11 @@ def _cross_account_calls(mine, theirs) -> list[tuple[str, str, str, dict[str, st
     ref = mine["org"].ref
     contact, task = theirs["contact"], theirs["task"]
     request_row, item = theirs["request"], theirs["item"]
+    interaction = theirs["interaction"]
+    edit_payload = {
+        "occurred_on": "2026-08-11", "type": "call",
+        "subject": "hijacked", "body": "hijacked",
+    }
     return [
         # relationship.py — contacts
         ("contact cell", "GET", f"/accounts/{ref}/contacts/{contact.id}/cell/email", {}),
@@ -102,6 +114,17 @@ def _cross_account_calls(mine, theirs) -> list[tuple[str, str, str, dict[str, st
         ("contact remove confirm", "GET",
          f"/accounts/{ref}/contacts/{contact.id}/remove", {}),
         ("contact remove", "POST", f"/accounts/{ref}/contacts/{contact.id}/remove", {}),
+        # relationship.py — interactions (Task 10). New handlers of exactly the
+        # shape this file exists for, added to the loop with them rather than
+        # after a second round of the same bug.
+        ("interaction edit form", "GET",
+         f"/accounts/{ref}/interactions/{interaction.id}/edit", {}),
+        ("interaction update", "POST",
+         f"/accounts/{ref}/interactions/{interaction.id}/edit", edit_payload),
+        ("interaction delete confirm", "GET",
+         f"/accounts/{ref}/interactions/{interaction.id}/delete", {}),
+        ("interaction delete", "POST",
+         f"/accounts/{ref}/interactions/{interaction.id}/delete", {}),
         # work.py — tasks
         ("task cell", "GET", f"/accounts/{ref}/tasks/{task.id}/cell/title", {}),
         ("task cell edit", "GET", f"/accounts/{ref}/tasks/{task.id}/cell/title/edit", {}),
@@ -141,6 +164,7 @@ def _fingerprint(conn, theirs) -> dict[str, object]:
         "task": theirs["task"].id,
         "rfi_request": theirs["request"].id,
         "rfi_item": theirs["item"].id,
+        "interaction": theirs["interaction"].id,
     }
     snapshot: dict[str, object] = {
         kind: dict(base.raw_row(conn, kind, entity_id) or {})
@@ -219,6 +243,9 @@ def test_the_accounts_own_rows_still_answer(two_accounts):
     ).status_code == 200, "a placement-owned task the panel renders was refused"
     assert client.get(
         f"/accounts/{ref}/requests/{mine['request'].id}"
+    ).status_code == 200
+    assert client.get(
+        f"/accounts/{ref}/interactions/{mine['interaction'].id}/edit"
     ).status_code == 200
     assert client.get(
         f"/accounts/{ref}/requests/{mine['request'].id}/items/{mine['item'].id}"

@@ -1,0 +1,38 @@
+{# The confirm step for deleting a logged interaction (Task 10).
+
+   The same shape _contact_confirm_remove.html settled, deliberately copied
+   rather than reinvented: a STEP, not an hx-confirm (the browser's confirm()
+   shows no plan, the objection web/parity.py already records against using it
+   for revert); the GET writes nothing and the POST acts; the consequences come
+   from a SERVICE — services.interactions.consequences — so the TUI's
+   ConfirmDeleteInteraction and this fragment cannot promise different things
+   about one write. Both renders are asserted against that list string for
+   string in tests/test_web_writes.py, because the contact confirm's note loop
+   was deletable with the suite green until the same test existed for it.
+
+   Every form needs a Cancel (R44 — four flows shipped without one and Grant
+   found it by using the app). This is new markup, not the shared
+   macros/form.html, so it carries its own [data-form-cancel] button: the
+   delegated listener in inline-cell.js empties the closest .form-host, and it
+   can never post.
+
+   Delete targets #interactions-panel with outerHTML: this fragment lives
+   INSIDE that panel, so returning the panel is a straight replace of the whole
+   thing rather than the self-nesting the edit form has to route around with an
+   out-of-band swap. #}
+<div class="confirm-remove" role="alertdialog"
+     aria-label="Delete {{ interaction.subject }}">
+  <p class="confirm-remove-title">
+    Delete <strong>{{ interaction.subject }}</strong>
+    ({{ interaction.occurred_on }}) from {{ org.name }}'s timeline?
+  </p>
+  <ul class="confirm-remove-notes">
+    {% for note in notes %}<li>{{ note }}</li>{% endfor %}
+  </ul>
+  <div class="form-actions">
+    <button type="button" class="btn-danger"
+            hx-post="/accounts/{{ org.ref }}/interactions/{{ interaction.id }}/delete{{ timeline_query }}"
+            hx-target="#interactions-panel" hx-swap="outerHTML">Delete interaction</button>
+    <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+  </div>
+</div>

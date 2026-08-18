@@ -1474,3 +1474,196 @@ table.rows tr.is-waived td {
   color: var(--paper);
   cursor: pointer;
 }
+
+/* --- TIMELINE (interactions, Task 10) ------------------------------------
+   Account View.dc.html:198-284. The Relationship tab is two columns: PEOPLE
+   fixed at 340px with a hairline to its right, TIMELINE taking what is left.
+   Each row is the design's own 104px/1fr grid — the date over the type on the
+   left, the subject over the attendees over the note body on the right.
+
+   The subject carries NO dashed underline, unlike the prototype: that
+   affordance means "click to edit this value in place", and interactions are
+   edited through the whole form (bookkit.forms.inline declares no
+   INTERACTION_FIELDS, and that list is shared with the TUI). An underline
+   there would promise an edit that isn't there — the same rule the contact
+   card's first/last name already follow. */
+
+.relationship-columns {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.relationship-columns > #contacts-panel {
+  width: 340px;
+  flex: none;
+  min-width: 0;
+  padding-right: 0.75rem;
+  border-right: 1px solid var(--hairline);
+}
+
+.relationship-columns > .timeline-panel {
+  flex: 1;
+  min-width: 0;
+  padding-left: 1.25rem;
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding-bottom: 0.5rem;
+}
+
+.timeline-label {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--label-size);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.timeline-count {
+  font-family: var(--mono);
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.timeline-head-spacer {
+  flex: 1;
+}
+
+.timeline-filters {
+  display: flex;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+
+/* Pills, per the spec's 15-18px radius for pills. The current one takes the
+   accent — colour is signal, and `aria-current` carries the same fact for a
+   reader that never sees the colour. */
+.timeline-filter {
+  font-size: var(--hint-size);
+  line-height: 1.6;
+  padding: 0.0625rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.timeline-filter:hover {
+  border-color: var(--accent);
+}
+
+.timeline-filter.is-current {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: 104px 1fr;
+  gap: 0.875rem;
+  padding: 0.6875rem 0;
+  border-bottom: 1px solid var(--hairline-2);
+}
+
+.timeline-when {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+  min-width: 0;
+}
+
+.timeline-date {
+  font-family: var(--mono);
+  font-size: var(--hint-size);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-type {
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+.timeline-what {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+  min-width: 0;
+}
+
+.timeline-subject-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.timeline-subject {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+/* Row actions sit at the end of the row, muted until the row is hovered —
+   the spec's trailing-actions treatment, on a card-ish list instead of a
+   table. They stay reachable by keyboard at all times (:focus-within), so
+   "revealed on hover" never becomes "mouse only". */
+.timeline-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex: none;
+  opacity: 0;
+}
+
+.timeline-row:hover .timeline-actions,
+.timeline-actions:focus-within {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline-actions {
+    opacity: 1;
+  }
+}
+
+.timeline-who {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.timeline-note {
+  margin: 0;
+  font-size: var(--hint-size);
+  color: var(--ink);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+/* Below ~1000px the rail already moves under the tab body; the two columns
+   here stack at the same point rather than squeezing the timeline to nothing. */
+@media (max-width: 1000px) {
+  .relationship-columns {
+    flex-direction: column;
+  }
+
+  .relationship-columns > #contacts-panel {
+    width: auto;
+    padding-right: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--hairline);
+    padding-bottom: 0.75rem;
+  }
+
+  .relationship-columns > .timeline-panel {
+    padding-left: 0;
+    padding-top: 0.75rem;
+  }
+}

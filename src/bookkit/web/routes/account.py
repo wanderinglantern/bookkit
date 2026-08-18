@@ -31,7 +31,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ... import money
 from ...forms.spec import BatchSpec, FieldError, FormSpec, parse_values
-from ...models import Contact, EventBatch, Org, RfiItem, RfiRequest, Task
+from ...models import Contact, EventBatch, Interaction, Org, RfiItem, RfiRequest, Task
 from ...repo import base as base_repo
 from ...repo import batches as batches_repo
 from ...repo import contacts as contacts_repo
@@ -108,7 +108,7 @@ def _org(request: Request, ref: str) -> Org:
 # in relationship.py, thirteen in work.py — and tests/test_web_scoping.py
 # drives every one of them.)
 
-_Owned = TypeVar("_Owned", Contact, Task, RfiRequest, RfiItem)
+_Owned = TypeVar("_Owned", Contact, Task, RfiRequest, RfiItem, Interaction)
 
 
 def _not_here(kind: str, entity_id: str, org: Org) -> HTTPException:
@@ -120,7 +120,7 @@ def _not_here(kind: str, entity_id: str, org: Org) -> HTTPException:
 
 
 def _owner_org_ids(
-    conn: sqlite3.Connection, entity: Contact | Task | RfiRequest | RfiItem
+    conn: sqlite3.Connection, entity: Contact | Task | RfiRequest | RfiItem | Interaction
 ) -> set[str]:
     """Which account(s) an entity belongs to — the ownership rule itself.
 
@@ -130,7 +130,7 @@ def _owner_org_ids(
     `task.org_id == org.id` alone would 404 rows the same page just rendered.
     An item belongs to whoever its request does — items carry no org of their
     own."""
-    if isinstance(entity, Contact | RfiRequest):
+    if isinstance(entity, Contact | RfiRequest | Interaction):
         return {entity.org_id}
     if isinstance(entity, RfiItem):
         try:
@@ -188,18 +188,30 @@ def _owned_item(
     return item
 
 
-def _owns_contact_row(conn: sqlite3.Connection, org: Org, contact_id: str) -> None:
+def _owns_raw_row(conn: sqlite3.Connection, org: Org, kind: str, entity_id: str) -> None:
     """The same ownership question asked of the RAW row, dead ones included.
 
-    Only the removal POST needs this. `contacts_repo.get` is alive-filtered, so
-    guarding that route through `_owned` would turn an already-removed contact
-    into "no contact …" — burying services.contacts.remove's far better
-    "already removed", which is precisely what a double-submitted confirm
-    produces. Ownership is checked here; liveness stays the service's answer to
-    give."""
-    row = base_repo.raw_row(conn, "contact", contact_id)
+    Only the two DESTRUCTIVE flows need this — removing a contact, deleting an
+    interaction. Their repo getters are alive-filtered, so guarding those
+    routes through `_owned` would turn an already-removed row into "no contact
+    …"/"no interaction …" — burying the services' far better "already
+    removed"/"already deleted", which is precisely what a double-submitted
+    confirm, or a stale second tab, produces. Ownership is checked here;
+    liveness stays the service's answer to give.
+
+    Both halves of each flow use it, GET and POST: the confirm GET is reached
+    from a control the page rendered while the row was alive, and htmx swaps
+    neither 4xx nor 5xx, so a bare 404 there is no swap, no message and no
+    change at all."""
+    row = base_repo.raw_row(conn, kind, entity_id)
     if row is None or str(row["org_id"]) != org.id:
-        raise _not_here("contact", contact_id, org)
+        raise _not_here(kind, entity_id, org)
+
+
+def _owns_contact_row(conn: sqlite3.Connection, org: Org, contact_id: str) -> None:
+    """Kept as its own name because relationship.py's two removal routes read
+    better for it; the rule itself lives once, above."""
+    _owns_raw_row(conn, org, "contact", contact_id)
 
 
 def _save(

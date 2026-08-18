@@ -1,9 +1,13 @@
 {% extends "account/page.html" %}
 {% block panel %}
-  {# Contacts (Task 8) — interactions (the timeline) join them in Task 10.
-     _contacts_panel.html supplies its own #contacts-panel root (fix round
-     2) — the id has to live on that partial's own wrapper, not here, or
-     an out-of-band-swapped panel response (see contact_create) would carry
-     a SECOND #contacts-panel and match nothing. #}
-  {% include "account/_contacts_panel.html" %}
+  {# Two columns, per Account View.dc.html:198-284: PEOPLE fixed at 340px on
+     the left, TIMELINE taking the rest. Each partial supplies its own
+     #contacts-panel / #interactions-panel root (fix round 2 of Task 8) — the
+     ids have to live on the partials' own wrappers, not here, or an
+     out-of-band-swapped panel response would carry a SECOND element with the
+     same id and match nothing. #}
+  <div class="relationship-columns">
+    {% include "account/_contacts_panel.html" %}
+    {% include "account/_interactions_panel.html" %}
+  </div>
 {% endblock %}
