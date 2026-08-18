@@ -224,14 +224,21 @@ def is_internal_category(category: str | None) -> bool:
     "INTERNAL " and "Internal" all count; "Internal Review" does NOT.
 
     A prefix match would be friendlier and is the wrong trade. The two rules
-    fail in opposite directions and only one failure is visible: under
+    fail in opposite directions and only one failure is recoverable: under
     equality, someone who types "Internal Review" ships the task under a
-    section header in the client's workbook literally naming it (loud, and
-    the row badge already told them the flag did not take). Under a prefix
-    rule, "Internal audit support" — a real client-facing broking task —
-    silently vanishes from the deliverable with nothing anywhere saying a
-    section was removed. Guessing at intent from a freeform string is what
-    parse_human_date refuses to do with a bare number, for the same reason.
+    section header in the client's workbook literally naming it — loud, and
+    self-teaching. Under a prefix rule, "Internal audit support" — a real
+    client-facing broking task — silently vanishes from the deliverable with
+    nothing anywhere saying a section was removed. Guessing at intent from a
+    freeform string is what parse_human_date refuses to do with a bare number,
+    for the same reason.
+
+    The near miss is NOT left to an absence, though. Nothing on the row marks
+    "Internal Review" — it renders exactly like "Renewal", which is correct,
+    and an absence informs nobody who has not yet seen the presence. So
+    export_open_items.withheld_note NAMES it on the line that reports the
+    export, on both surfaces: the rule stays exact and still says out loud
+    when it nearly fired.
     """
     return category is not None and category.strip().lower() == INTERNAL_CATEGORY.lower()
 

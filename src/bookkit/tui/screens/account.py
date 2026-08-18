@@ -56,7 +56,7 @@ from ..widgets.tables import (
     task_detail_wrapped,
 )
 from ..widgets.tower_preview import TowerPreview
-from .navigator import TASK_INLINE
+from .navigator import task_inline
 
 
 def _pretty(value: str) -> str:
@@ -734,7 +734,7 @@ class AccountScreen(Screen):
         table = self.query_one("#open-items-table", InlineTable)
         table.clear(columns=True)
         table.add_columns("due", "task", "category", "description", "detail", "status")
-        table.inline_fields = TASK_INLINE
+        table.inline_fields = task_inline(conn)
         for t in grouped_by_category(tasks_repo.open_tasks_for_client(conn, org_id)):
             due = (
                 date_text(t.due_on, days_until(t.due_on, today))

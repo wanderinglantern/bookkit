@@ -41,7 +41,7 @@ from ...forms.entities import (
     rfi_item_form,
     task_form,
 )
-from ...forms.inline import RFI_ITEM_FIELDS, TASK_FIELDS
+from ...forms.inline import RFI_ITEM_FIELDS, TASK_FIELDS, task_fields
 from ...forms.spec import Field, initial_text, parse_value
 from ...models import Org, RfiRequest, Task, is_internal_category
 from ...repo import rfi as rfi_repo
@@ -72,6 +72,17 @@ def _task_field(key: str) -> Field:
     if field is None:
         raise HTTPException(status_code=404, detail=f"{key!r} is not editable here")
     return field
+
+
+def _task_editor_field(request: Request, key: str) -> Field:
+    """The same field, carrying the book's category vocabulary — the cell
+    macro renders it as a <datalist>. Only the EDITOR needs it (a display cell
+    has nothing to complete), so the vocabulary query runs once per opened
+    cell rather than once per cell of every row. Which field gets the
+    vocabulary is forms.inline.task_fields' call, not this route's: the TUI's
+    inline cell reads the identical list."""
+    _task_field(key)  # the editable-set guard, before any query runs
+    return {f.key: f for f in task_fields(_conn(request))}[key]
 
 
 def _task_due_suffix(task: Task) -> str:
@@ -166,7 +177,7 @@ def _task_editor_cell(
     request: Request, ref: str, task_id: str, key: str,
     error: str | None = None, typed: str | None = None,
 ) -> HTMLResponse:
-    field = _task_field(key)
+    field = _task_editor_field(request, key)
     existing = tasks_repo.get(_conn(request), task_id)
     value = typed if typed is not None else initial_text(field, getattr(existing, key, None))
     action = _task_cell_action(ref, task_id, key)

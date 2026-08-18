@@ -181,10 +181,15 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         ALL open tasks (undated and future-due included, not just due-today),
         unmet project needs, submissions past SLA, and incomplete onboarding,
         across the whole book (project needs use the same 120-day attention
-        window as today_brief). Also carries "information_requests": the
-        outstanding questions and documents clients still owe us — ALL of them,
-        regardless of due date (undated and far-future asks included), in both
-        the per-client and the book-wide view. requests_to_chase is the
+        window as today_brief). Book-wide "tasks_due" rows carry `internal`
+        too, on the same rule — so a task no client will ever see is labelled
+        in BOTH branches of this tool, not just the per-client one. The match
+        is exact: a task categorised "Internal Review" is internal: false and
+        DOES reach the client's workbook. Also carries
+        "information_requests": the outstanding questions and documents
+        clients still owe us — ALL of them, regardless of due date (undated
+        and far-future asks included), in both the per-client and the
+        book-wide view. requests_to_chase is the
         narrower 120-day attention view of the same requests."""
         return _open_items(ro, client=client)
 

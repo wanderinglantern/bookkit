@@ -161,15 +161,43 @@ def test_cancel_is_not_a_submit_button():
     assert 'type="button"' in html[tag_start:tag_end]
 
 
-def test_inline_field_sets_are_shared_not_duplicated():
+def test_inline_field_sets_are_shared_not_duplicated(conn: sqlite3.Connection):
     """Which fields are editable in place is not a per-surface choice. The TUI
     screens build their column maps from these tuples; the web renders the same
-    ones as cells."""
+    ones as cells. Tasks go through inline.task_fields(conn) — same fields, in
+    the same order, with the category vocabulary attached."""
     from bookkit.forms import inline
-    from bookkit.tui.screens.navigator import CONTACT_INLINE, TASK_INLINE
+    from bookkit.tui.screens.navigator import CONTACT_INLINE, task_inline
 
     assert tuple(CONTACT_INLINE.values()) == inline.CONTACT_FIELDS
-    assert tuple(TASK_INLINE.values()) == inline.TASK_FIELDS
+    assert tuple(task_inline(conn).values()) == inline.task_fields(conn)
+    assert (
+        tuple(f.key for f in inline.task_fields(conn))
+        == tuple(f.key for f in inline.TASK_FIELDS)
+    )
+
+
+def test_inline_task_category_completes_from_the_vocabulary(conn: sqlite3.Connection):
+    """The inline cell is the PRIMARY edit path on both surfaces — `i` on the
+    Open Items tab, click-the-cell on the web. A vocabulary wired only into
+    the add/edit modal puts the discoverability mitigation everywhere except
+    where the risk lives, so "Internal" is offered in the cell too: it is the
+    one category that changes what leaves the building, and repo.vocab always
+    carries it whether or not anyone has typed it."""
+    from bookkit.forms import inline
+    from bookkit.repo import orgs
+    from bookkit.repo import tasks as tasks_repo
+
+    org = orgs.create(conn, name="Vocab Co", kind="client")
+    tasks_repo.create(conn, "renew GL", org_id=org.id, category="Renewal")
+
+    by_key = {f.key: f for f in inline.task_fields(conn)}
+    assert by_key["category"].suggestions == ("Internal", "Renewal")
+    # only the category field — nothing else here has a vocabulary
+    assert all(f.suggestions == () for k, f in by_key.items() if k != "category")
+    # and the static tuple stays vocabulary-free: it is the column shape, and
+    # a module-level constant cannot see a category typed a minute ago
+    assert all(f.suggestions == () for f in inline.TASK_FIELDS)
 
 
 def test_rfi_item_inline_is_shared_not_duplicated():

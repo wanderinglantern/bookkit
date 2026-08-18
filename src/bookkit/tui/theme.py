@@ -95,9 +95,18 @@ def status_text(status: str) -> Text:
 
 def category_text(category: str | None) -> Text:
     """A task's category cell. The Internal category says, ON THE ROW, that
-    the task is withheld from the client export — the WORD, not only a glyph:
-    this renders on four tables across two screens and a marker only one of
-    them has room to explain in a hint line is not a signal, it is a puzzle.
+    the task is withheld from the client export — the WORD, not only a glyph,
+    and on the row rather than in a hint line.
+
+    Four tables across two screens render this: the account overview and its
+    Open Items tab, the navigator's attention feed and its per-account tasks
+    group. Their hint lines have UNEQUAL headroom against the 140-column floor
+    CLAUDE.md sets — TAB_HINTS["tab-overview"] is already 133 columns and has
+    none, while "tab-open-items" is 96 and the navigator's tasks hint is 89
+    with the "enter/tab into rows" prefix. So a legend would fit on three of
+    the four and be impossible on the default tab of every account. The fact
+    belongs to the TASK, not to a screen; putting it in the cell makes it read
+    the same on all four, at 23 columns, whatever the hint line is doing.
     "not exported" is the same wording the web surface uses."""
     if not category:
         return dash()

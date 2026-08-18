@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 import re
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -27,7 +28,13 @@ from pathlib import Path
 from towerkit.model import load_program
 from towerkit.soi import SoiRow, SoiSection, build_soi
 
-from ..models import Placement, Project, Task, is_internal_category
+from ..models import (
+    INTERNAL_CATEGORY,
+    Placement,
+    Project,
+    Task,
+    is_internal_category,
+)
 from ..money import MoneyParseError, cents_to_dollars, format_cents
 from ..repo import orgs, placements, submissions
 from ..repo import projects as projects_repo
@@ -217,14 +224,62 @@ def withheld_internal(conn: sqlite3.Connection, org_id: str) -> list[Task]:
     ]
 
 
+def near_miss_internal(conn: sqlite3.Connection, org_id: str) -> list[Task]:
+    """This client's open tasks whose category LOOKS internal but is not:
+    case-folded and trimmed it contains "internal" without equalling it —
+    "Internal Review", "internal note", "Client internal audit".
+
+    These were EXPORTED. The match rule is exact equality on purpose
+    (models.is_internal_category says why), so this is the one shape the rule
+    fails on, and the failure is otherwise invisible: nothing about the row or
+    the file says a category that reads internal was not treated as one."""
+    return [
+        t for t in tasks_repo.open_tasks_for_client(conn, org_id)
+        if t.category
+        and INTERNAL_CATEGORY.lower() in t.category.strip().lower()
+        and not is_internal_category(t.category)
+    ]
+
+
 def withheld_note(conn: sqlite3.Connection, org_id: str) -> str:
-    """The suffix both export surfaces append to "wrote <path>" — empty when
-    nothing was held back. That emptiness is the signal: file a task as
-    "Internal Review" by mistake and the line says nothing was withheld."""
-    count = len(withheld_internal(conn, org_id))
-    if not count:
-        return ""
-    return f" — {count} internal task{'' if count == 1 else 's'} withheld"
+    """The suffix both export surfaces append to "wrote <path>" — what the
+    client did NOT get, and what looked like it would be withheld and was not.
+
+    An absence is not a signal to someone who has never seen the presence. The
+    silence-means-it-worked version of this line taught nobody anything on
+    their first internal task: "Internal Review" renders byte-identically to
+    "Renewal" everywhere, so the near miss had no positive signal on any
+    surface. Naming it here says the rule fired and says what the rule is,
+    without weakening the rule (a prefix match would silently drop "Internal
+    audit support", a real client-facing task). Empty only when there is
+    genuinely nothing to say."""
+    parts: list[str] = []
+    held = len(withheld_internal(conn, org_id))
+    if held:
+        parts.append(f"{held} internal task{'' if held == 1 else 's'} withheld")
+    missed = near_miss_internal(conn, org_id)
+    if missed:
+        labels = ", ".join(
+            f'"{c}"' for c in _dedupe_categories(t.category or "" for t in missed)
+        )
+        parts.append(
+            f"{len(missed)} task{'' if len(missed) == 1 else 's'} categorised {labels} "
+            f"{'WAS' if len(missed) == 1 else 'WERE'} exported "
+            f'(only the exact category "{INTERNAL_CATEGORY}" is withheld)'
+        )
+    return f" — {'; '.join(parts)}" if parts else ""
+
+
+def _dedupe_categories(values: Iterable[str]) -> list[str]:
+    """Distinct spellings, first one wins, alphabetical — the same rule
+    repo/vocab._dedupe applies, so two tasks both filed "Internal Review" name
+    the category once."""
+    seen: dict[str, str] = {}
+    for value in values:
+        cleaned = value.strip()
+        if cleaned:
+            seen.setdefault(cleaned.lower(), cleaned)
+    return sorted(seen.values(), key=str.lower)
 
 
 # --- sheet 2: Projects — the full projects report, not the unmet slice ---------

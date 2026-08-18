@@ -125,6 +125,51 @@ def test_a_non_internal_category_carries_no_badge(app_and_org):
     assert "not exported" not in response.text
 
 
+def test_the_task_category_cell_editor_offers_the_vocabulary(app_and_org):
+    """The inline cell is the PRIMARY edit path here — click the cell, no
+    modal — so the completion that makes "Internal" discoverable has to be in
+    it. The whole-record modal already had it; this is where the risk lives."""
+    client, org, _ = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import tasks as tasks_repo
+
+    task = tasks_repo.create(conn, "audit support", org_id=org.id, category="Renewal")
+    response = client.get(f"/accounts/{org.ref}/tasks/{task.id}/cell/category/edit")
+    assert response.status_code == 200
+    assert 'list="cl-category"' in response.text
+    assert '<datalist id="cl-category">' in response.text
+    # the one category nobody has typed yet, offered anyway (repo.vocab)
+    assert '<option value="Internal">' in response.text
+    assert '<option value="Renewal">' in response.text
+
+
+def test_a_non_vocabulary_cell_editor_carries_no_datalist(app_and_org):
+    """Only the category field has a vocabulary — a stray datalist on `title`
+    would mean the enrichment is being applied by position, not by key."""
+    client, org, _ = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import tasks as tasks_repo
+
+    task = tasks_repo.open_tasks_for_client(conn, org.id)[0]
+    response = client.get(f"/accounts/{org.ref}/tasks/{task.id}/cell/title/edit")
+    assert response.status_code == 200
+    assert "datalist" not in response.text
+
+
+def test_a_non_editable_key_is_404_before_the_vocabulary_query(app_and_org):
+    """The editable-set guard still runs first on the editor route — the
+    vocabulary lookup must not become a way to reach a field the cell
+    contract does not expose."""
+    client, org, _ = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import tasks as tasks_repo
+
+    task = tasks_repo.open_tasks_for_client(conn, org.id)[0]
+    assert client.get(
+        f"/accounts/{org.ref}/tasks/{task.id}/cell/priority/edit"
+    ).status_code == 404
+
+
 def test_editing_a_task_cell_writes_one_web_batch(app_and_org):
     client, org, _ = app_and_org
     conn = client.app.state.conn
