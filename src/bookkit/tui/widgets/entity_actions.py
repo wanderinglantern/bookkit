@@ -279,7 +279,7 @@ def export_open_items_flow(screen: Screen, org_id: str) -> None:
     except OSError as exc:
         screen.notify(f"export failed: {exc}", severity="error")
         return
-    screen.notify(f"wrote {path}")
+    screen.notify(f"wrote {path}{export_open_items.withheld_note(conn, org_id)}")
 
 
 def add_request(screen: Screen, org_id: str) -> None:

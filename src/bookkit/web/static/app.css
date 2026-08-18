@@ -1106,6 +1106,16 @@ table.rows td.mono {
   height: 1.5rem;
 }
 
+/* an Internal task is withheld from the client export — the row says so in
+   words, matching the TUI's category cell */
+.tag-internal {
+  margin-left: 0.375rem;
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
 /* an overdue due date carries the word, not just the colour */
 .tag-overdue {
   margin-left: 0.375rem;

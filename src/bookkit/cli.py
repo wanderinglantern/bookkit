@@ -423,7 +423,7 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
         except OSError as exc:
             print(f"could not write {out}: {exc}")
             return 1
-        print(f"wrote {path}")
+        print(f"wrote {path}{export_open_items.withheld_note(conn, org.id)}")
         return 0
 
     return 2

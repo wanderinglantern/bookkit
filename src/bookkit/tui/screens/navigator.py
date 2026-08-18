@@ -699,7 +699,7 @@ class NavigatorScreen(Screen):
                 )
                 table.add_row(
                     due, task.title,
-                    Text(task.category, style=theme.AMBER) if task.category else dash(),
+                    theme.category_text(task.category),
                     task.description or dash(),
                     task_detail_cell(task), name, key=key,
                 )
@@ -802,7 +802,7 @@ class NavigatorScreen(Screen):
                 )
                 table.add_row(
                     due, task.title,
-                    Text(task.category, style=theme.AMBER) if task.category else dash(),
+                    theme.category_text(task.category),
                     task.description or dash(),
                     task_detail_cell(task), status_text(task.status), key=key,
                 )

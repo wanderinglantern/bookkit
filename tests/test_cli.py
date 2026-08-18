@@ -130,6 +130,40 @@ def test_export_open_items_writes_workbook(tmp_path: Path, capsys, monkeypatch) 
     assert rc == 0 and out.exists()
 
 
+def test_export_reports_internal_tasks_withheld(tmp_path: Path, capsys, monkeypatch) -> None:
+    """The `wrote …` line says what did NOT go in the file. Without it a
+    mistyped category ("Internal Review") is indistinguishable from a
+    correctly flagged one at the moment the file leaves the building."""
+    from bookkit.repo import orgs
+    from bookkit.repo import tasks as tasks_repo
+    db_path = tmp_path / "b.db"
+    monkeypatch.setenv("BOOKKIT_DB", str(db_path))
+    conn = db.connect(db_path)
+    org = orgs.create(conn, name="Acme", kind="client")
+    tasks_repo.create(conn, "chase quote", org_id=org.id)
+    tasks_repo.create(conn, "our own file note", org_id=org.id, category="Internal")
+    conn.close()
+    out = tmp_path / "acme.xlsx"
+    assert main(["export", "open-items", "Acme", "--out", str(out)]) == 0
+    printed = capsys.readouterr().out
+    assert "1 internal task withheld" in printed
+
+
+def test_export_says_nothing_about_withholding_when_nothing_was(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    from bookkit.repo import orgs
+    from bookkit.repo import tasks as tasks_repo
+    db_path = tmp_path / "b.db"
+    monkeypatch.setenv("BOOKKIT_DB", str(db_path))
+    conn = db.connect(db_path)
+    org = orgs.create(conn, name="Acme", kind="client")
+    tasks_repo.create(conn, "audit support", org_id=org.id, category="Internal Review")
+    conn.close()
+    assert main(["export", "open-items", "Acme", "--out", str(tmp_path / "a.xlsx")]) == 0
+    assert "withheld" not in capsys.readouterr().out
+
+
 def test_export_unknown_org_suggests(tmp_path: Path, capsys, monkeypatch) -> None:
     from bookkit.repo import orgs
     db_path = tmp_path / "b.db"

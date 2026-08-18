@@ -158,7 +158,10 @@ def _ov_detail_width(tasks: list[Task], total: int) -> int | None:
         10  # due, a date
         + 6  # due in
         + widest(lambda t: t.title)
-        + widest(lambda t: t.category or "—")
+        # the RENDERED label, not the raw value: an Internal task's cell
+        # carries a badge, and measuring t.category alone overflows the row
+        # by its width (theme.category_text)
+        + widest(lambda t: theme.category_text(t.category).plain)
         + widest(lambda t: t.description or "—")
         + 6 * 2  # cell padding, all six columns
         + 2  # the pane's own margin
@@ -678,7 +681,7 @@ class AccountScreen(Screen):
                 due, due_in = dash(), Text("", justify="right")
             table.add_row(
                 due, due_in, t.title,
-                Text(t.category, style=theme.AMBER) if t.category else dash(),
+                theme.category_text(t.category),
                 t.description or dash(),
                 task_detail_wrapped(t) if detail_width else task_detail_cell(t),
                 key=t.id, height=None if detail_width else 1,
@@ -739,7 +742,7 @@ class AccountScreen(Screen):
             )
             table.add_row(
                 due, t.title,
-                Text(t.category, style=theme.AMBER) if t.category else dash(),
+                theme.category_text(t.category),
                 t.description or dash(),
                 task_detail_cell(t), status_text(t.status), key=t.id,
             )

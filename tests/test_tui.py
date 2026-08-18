@@ -1206,6 +1206,118 @@ async def test_open_items_tab_inline_cell_edit_regroups(seeded_db: Path) -> None
         assert str(table.get_row_at(table.get_row_index(task.id))[2]) == "Apple"
 
 
+def test_overview_detail_width_measures_the_rendered_category(seeded_db: Path) -> None:
+    """The overview's five auto-width columns are measured off the data and
+    taken off the pane width first; the detail column wraps into what is left.
+    An Internal task's category cell carries a badge, so measuring the RAW
+    category under-counts the row by the badge's width and the detail column
+    overflows. Nothing else in the suite notices — the tables still render, a
+    few characters too wide."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.screens.account import _ov_detail_width
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    plain = tasks_repo.create(
+        app.conn, "t", org_id=org.id, category="Renewal", detail="note")
+    internal = tasks_repo.create(
+        app.conn, "t", org_id=org.id, category="Internal", detail="note")
+
+    plain_width = _ov_detail_width([plain], 100)
+    internal_width = _ov_detail_width([internal], 100)
+    assert plain_width is not None and internal_width is not None
+    assert internal_width < plain_width, (
+        "the badge was not counted — the detail column overflows by its width")
+
+
+async def test_open_items_marks_internal_tasks(seeded_db: Path) -> None:
+    """An Internal task reads as export-excluded ON THE ROW. The category is
+    what decides whether a task leaves the building, so it says so where the
+    category is rendered — not only in a legend somewhere else."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    internal = tasks_repo.create(
+        app.conn, "our own file note", org_id=org.id, category="Internal")
+    normal = tasks_repo.create(app.conn, "renew GL", org_id=org.id, category="Renewal")
+    async with app.run_test(size=(150, 44)) as pilot:
+        app.push_screen(AccountScreen(org.id))
+        await pilot.pause()
+        await pilot.press("8")
+        await pilot.pause()
+        table = app.screen.query_one("#open-items-table", InlineTable)
+
+        def cell(t) -> str:
+            return str(table.get_row_at(table.get_row_index(t.id))[2])
+
+        assert "not exported" in cell(internal)
+        assert "Internal" in cell(internal)
+        assert cell(normal) == "Renewal"
+
+
+async def test_navigator_marks_internal_tasks(seeded_db: Path) -> None:
+    """Same fact on the navigator's attention feed — the screen CLAUDE.md
+    calls home. A marker that only one screen explains is not a signal."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    internal = tasks_repo.create(
+        app.conn, "our own file note", org_id=org.id, category="Internal",
+        due_on=date.today().isoformat(),
+    )
+    async with app.run_test(size=(150, 44)) as pilot:
+        nav = app.screen
+        nav._current = ("group", ("tasks", org.id))
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", InlineTable)
+        row = table.get_row_at(table.get_row_index(f"task:{internal.id}"))
+        assert "not exported" in str(row[2])
+
+
+async def test_export_says_how_many_internal_tasks_were_withheld(
+    seeded_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The signal that catches a mistyped category at the moment it matters:
+    you filed it as "Internal Review", you export, and the toast tells you
+    nothing was withheld."""
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets import entity_actions
+
+    monkeypatch.chdir(tmp_path)
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    tasks_repo.create(app.conn, "our own file note", org_id=org.id, category="Internal")
+    tasks_repo.create(app.conn, "our own reserve note", org_id=org.id, category="internal")
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        entity_actions.export_open_items_flow(nav, org.id)
+        await pilot.pause()
+        messages = [str(n.message) for n in app._notifications]
+        assert any("2 internal tasks withheld" in m for m in messages), messages
+
+
+async def test_export_says_nothing_when_nothing_was_withheld(
+    seeded_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.tui.widgets import entity_actions
+
+    monkeypatch.chdir(tmp_path)
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    tasks_repo.create(app.conn, "audit support", org_id=org.id, category="Internal Review")
+    async with app.run_test(size=(160, 48)) as pilot:
+        nav = app.screen
+        entity_actions.export_open_items_flow(nav, org.id)
+        await pilot.pause()
+        assert not any("withheld" in str(n.message) for n in app._notifications)
+
+
 async def test_navigator_rfi_chase_bucket_and_group(seeded_db: Path) -> None:
     """A request with an outstanding item shows in the attention feed as ONE
     row carrying its open count, and under its account as a group."""

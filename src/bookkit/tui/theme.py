@@ -13,13 +13,14 @@ from rich.text import Text
 from textual.theme import Theme
 
 from ..dates import days_until
+from ..models import is_internal_category
 from ..money import format_cents_compact
 from ..palette import AMBER, BG, BLUE, DIM, FG, GOLD, GREEN, PANEL, RED, RULE, SURFACE
 
 __all__ = [
     "AMBER", "BG", "BLUE", "DIM", "FG", "GOLD", "GREEN", "PANEL", "RED", "RULE",
     "SURFACE", "BOOKKIT_THEME", "STATUS_STYLES", "status_text", "days_text",
-    "date_text", "money_text", "dash", "lines_text", "right",
+    "date_text", "money_text", "dash", "lines_text", "right", "category_text",
 ]
 
 BOOKKIT_THEME = Theme(
@@ -90,6 +91,19 @@ STATUS_STYLES: dict[str, str] = {
 
 def status_text(status: str) -> Text:
     return Text(status, style=STATUS_STYLES.get(status, FG))
+
+
+def category_text(category: str | None) -> Text:
+    """A task's category cell. The Internal category says, ON THE ROW, that
+    the task is withheld from the client export — the WORD, not only a glyph:
+    this renders on four tables across two screens and a marker only one of
+    them has room to explain in a hint line is not a signal, it is a puzzle.
+    "not exported" is the same wording the web surface uses."""
+    if not category:
+        return dash()
+    if is_internal_category(category):
+        return Text(f"{category} ⊘ not exported", style=DIM)
+    return Text(category, style=AMBER)
 
 
 def days_text(days: int) -> Text:
