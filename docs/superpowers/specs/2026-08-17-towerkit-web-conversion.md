@@ -1,8 +1,11 @@
 # towerkit in the web front end — design
 
-Date: 2026-08-17
-Status: draft, for review. Nothing in this document is implemented; it
-extends `2026-08-17-web-frontend-design.md` and is bound by
+Date: 2026-08-17 (D2 approved and amended 2026-08-18)
+Status: **D2 is APPROVED; the rest is draft, for review.** Grant approved the
+two-renderer split on 2026-08-18. Nothing in this document is implemented —
+`towerkit/src/towerkit/render/web.py` does not exist, and neither does
+`label_visibility`; both are design here, not descriptions of shipped code.
+It extends `2026-08-17-web-frontend-design.md` and is bound by
 `2026-08-17-web-visual-direction.md`. Where this document and either of
 those disagree unintentionally, they win and this document is wrong.
 
@@ -198,49 +201,76 @@ twin. The server computes every percentage; the browser only paints what
 it's given and (later) posts drag deltas back for the server to
 re-resolve. See D4 for the one JS "island" this still leaves.
 
-**Explicit decision: label *fit* is not guaranteed to match between the
-two renderers, and this spec accepts that as a scoped, known limitation
-rather than closing it in slice 1.** Geometry parity between the two paths
-is real and load-bearing — both consume the identical `TowerLayout`, so a
-block's boundaries and coordinates cannot diverge. Label *fit* is a
-separate property `layout.py`'s geometry says nothing about, and the two
-renderers solve it by genuinely different means. `mpl_program.py`'s
-`_fit_text` (`mpl_program.py:332-370`) measures each candidate string's
-real rendered width and height against the target rectangle before
-committing to it. `render/web.py`'s `label_visibility` (D4) does not — it
-gates a label on the block's *height* alone (the 30/13/11px thresholds)
-and says nothing about whether the shown text fits the block's *width* at
-its rendered font. The prototype's own CSS for the label
-(`overflow:hidden;text-overflow:ellipsis`, `BookKit Web.dc.html:779`) does
-not actually protect against this: `text-overflow:ellipsis` only takes
-effect on a `white-space:nowrap` element, which this one is not, so a long
-carrier or program name wraps (correctly, per the word-boundary point
-above) and then simply gets clipped by `overflow:hidden` at whatever pixel
-row the box ends on — no ellipsis, no guarantee the cut lands between
-words, the exact "never cut mid-word" failure this document argues HTML
-avoids relative to raw SVG. So a long name can legitimately render
-differently — wrapped-and-clipped in the interactive panel, correctly
-shrunk-or-abbreviated in the export — on the one axis shared geometry does
-not protect.
+### D2.1 — Approved, and what the approval obliges (R66)
 
-Two ways to close it: give `render/web.py` a cheap monospace-width
-estimate (`len(text) * avg_char_px` against the block's rendered width,
-enough to pick a shorter candidate the way `_fit_text` does, without a
-real text-measurement backend) and drop to a shorter label the same way
-the export path does; or accept CSS-level clipping as a known
-interactive-only limitation and fix the panel's CSS so a clip is at least
-a clean line clip (`overflow-wrap: break-word` off, wrap at word
-boundaries, `overflow: hidden` on the whole-lines box) rather than the
-mockup's currently-broken ellipsis-that-never-fires. **Decision: the
-second, for slice 1.** A monospace-width estimate is one more constant to
-keep in sync with whatever font actually ships (`JetBrains Mono` per the
-handoff, not yet vendored — visual-direction spec's own flagged
-deviation), and it buys accuracy the docked panel's own audience (the
-broker, working, not a client) doesn't obviously need on day one. Fix the
-CSS so a clip is at least clean, ship it, and revisit with a real
-width-estimate only if a genuinely garbled label shows up in practice —
-consistent with this spec's general posture of not building infrastructure
-ahead of evidence (see "recommend against," below).
+**Grant approved the split on 2026-08-18:** *"HTML fine for the UI and
+interface rendering with SVG being able to be exported just as the TUI."*
+D2 stops being a recommendation. Slice 1 is unblocked.
+
+The approval creates the constraint, and the constraint is the whole risk:
+two renderers now describe one program, and the export is the one that
+reaches a client. A tower that reads correctly on screen and exports
+differently is worse than either alone.
+
+**The rule. Both renderers must agree about the FACTS a block asserts. They
+may differ about which candidate string a fitter chose to assert them with.**
+
+This is not a compromise invented for the web. It is the line towerkit
+already drew, in code, the last time it had this problem.
+`render/labels.py`'s own docstring calls it "the single authority both
+renderers (the matplotlib graphic and the xlsx schematic worksheet) quote,
+so a block reads identically on the chart and in the cells"
+(`towerkit/src/towerkit/render/labels.py:1-3`). Those two renderers already
+**fit** by completely different means — the graphic measures real text
+extents and walks a candidate ladder (`mpl_program.py:332-370`); the
+worksheet quantizes onto a row grid and drops through a narrow-merge ladder
+to `carrier_only_label` (`labels.py:40-44`). Nobody has ever required them
+to drop the same labels. They are required to *say the same things*. The web
+panel is the fourth consumer of that authority, not a new species.
+
+**Why fit cannot be unified — a fact, not a budget.** The export measures
+against matplotlib's own font metrics inside a fixed figure, with bundled
+faces registered for determinism (`render/common.py:21-27`). The panel lays
+out in a browser box in whatever the browser resolves. Matching *decisions*
+would require matching *metrics*, and there is no server-side way to obtain
+browser metrics in the request path. R66 is satisfied at the facts layer or
+it is not satisfied at all.
+
+**The five facts.** Slice 1 must make each of these come from ONE source
+that both renderers consume, rather than from two implementations that
+happen to agree:
+
+1. **Geometry** — one `TowerLayout` from `build_layout`, at the same gamma.
+   `TowerLayout` is a frozen dataclass of tuples (`layout.py:121-125`), so
+   equality is exact and needs no tolerance.
+2. **Label text** — `render/web.py` quotes `render/labels.py` and composes
+   no strings of its own.
+3. **Which block carries the layer heading** — `heading_blocks`
+   (`labels.py:71`), already shared with the graphic.
+4. **Whether a layer is pending** — the predicate behind
+   `unplaced_label(..., pending)` (`labels.py:47-50`), which decides
+   "To be placed" against an open remainder. These are different claims
+   about the world and must not be decided twice.
+5. **Money and share** — one formatting authority, already `towerkit.money`.
+
+**Slice 1 must carry an agreement test**: render the same program both ways
+and assert they agree on the facts above. Not merely that both produce
+output — that test passes on two renderers that disagree about everything.
+
+**What the agreement test compares is DEFERRED to slice 1's plan, and that
+is deliberate.** Two independent adversarial passes were run over a
+specification of that test's mechanics, and both found it broken in the same
+way: the proposed per-block string comparison conflated *wrapping* — which
+this section explicitly permits as a fit difference — with fact divergence,
+so it would have failed on legitimate differences and taught everyone to
+weaken it. The mechanics cannot be settled honestly against a module that
+does not exist. Slice 1 writes the test against the real signature, and the
+rule above is what it must enforce.
+
+*Superseded by this subsection:* the earlier "Explicit decision: label fit
+is not guaranteed to match" paragraph, which accepted divergence as a scoped
+limitation without saying what may diverge. What may diverge is fit. What
+may not is the five facts.
 
 ### D3 — The compressed vertical scale: no y-axis, ever
 
