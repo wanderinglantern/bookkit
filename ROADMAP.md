@@ -542,3 +542,112 @@ fact lives in two places and they will disagree.
 **Also still standing from C10's first half** (unchanged by this answer): Part B's three real limits
 instead of one unqualified figure, `Included with Part A` rather than `$0.00`, and the captive
 retention stated once rather than on both WC rows.
+
+---
+
+## MCP as an LLM capability surface — audit, 2026-08-18
+
+Grant asked whether an assistant can do the full range of real work through MCP, and whether the
+surface **grows with the platform without hand-coding every item**. Audit run against a seeded
+throwaway DB. **Four load-bearing claims re-verified independently before recording them here.**
+
+**Verdict.** An assistant can run a real slice of the day through this — and the write tools are
+unusually well built for LLM use: refusals name candidates, writes never fuzzy-match a ref,
+`edit_field` is a compare-and-set, and **all 31 mutating tools are batched and revertible** (the
+only two unbatched are the two reverts, deliberately). But **the surface does not grow on its own.**
+It is 29 hand-written verb tools plus one generic seam (`edit_field`: 10 kinds, 58 fields) whose
+field table is a manual restatement of declarations `forms/entities.py` already owns.
+
+### The finding that proves it is decay, not design
+
+**No read tool on the entire surface returns an opportunity ref.** Verified: `pipeline_status`
+returns `stage`/`count`/`avg_days_in_stage` only, and opportunities are not in FTS. The only two
+places an `OPP-` ref appears in a return value are `_opportunity_create` (`mcpserver.py:1110`) and
+`_opportunity_stage` (`:1609`) — both writes. So `opportunity_stage` and
+`edit_field(kind="opportunity")` **can only ever act on a deal the assistant created in the same
+session.**
+
+That is precisely the bug `_recent_activity`'s own docstring records as having been found and fixed
+for interactions — "a mistake found later was unnameable" — still live one entity over, because
+nothing enumerates the surface and asks the question a second time.
+
+### Three more verified
+
+- **`_editable()["org"]` is literally `dict(_ENRICHABLE_ORG)`** (`mcpserver.py:1660`) — the
+  *deliberate-overwrite* surface was defined as a copy of the *blank-fill* surface. Consequence: an
+  assistant **cannot rename an account, or move a prospect to active or lost.** Nothing records that
+  as a decision; it is inheritance.
+- **`tests/test_mcpserver.py:891` is named `test_every_write_tool_returns_a_batch_ref` and checks
+  TWO tools** (`_log_activity`, `_task_create`). ~10 write tools have no batch-ref assertion
+  anywhere. They *are* batched — verified mechanically — but nothing holds them there. A test whose
+  name answers an auditor's question wrongly is worse than no test.
+- **`list_batches`' docstring is false.** It says "changes THIS server made"; `repo/batches.recent`
+  issues `SELECT * FROM event_batch WHERE created_at >= ?` with **no source filter**, so it returns
+  TUI and web batches too. The tool is more capable than advertised, so a model will not reach for
+  it to answer "what changed on this account this week".
+
+### There is no MCP parity ledger, and that is the real gap
+
+`web/parity.py` fails the suite in **both** directions — an unaccounted TUI action turns it red, and
+so does a stale entry. Nothing equivalent guards MCP: the nine registration tests are all *subset*
+assertions, so a 43rd tool or a deleted tool changes no assertion. Zero tests assert any tool has a
+docstring.
+
+The cost is small — the repo has the pattern twice already. The genuine cost is the argument the
+ledger forces: `web/parity.py` can say "1:1 with the TUI" because that destination is obvious.
+**MCP's destination is not obvious, and the ledger makes someone decide it.** That is a feature.
+
+### What can and cannot be derived
+
+*Generalises:* field name → kind → cleaner/parser (`forms/spec.CLEANERS` already owns it, and
+`test_web_forms_spec.py:118` already forbids MCP keeping a second cleaner map — the same
+duplication one layer up); select vocabularies; the write itself (`base.update` is already generic
+over 15 entity types with uniform event-logging); "what fields does kind X have".
+
+*Cannot, and should not be forced to:* identity resolution (`_edit_target` is 10 resolvers with 10
+ref conventions — one generic rule would make writes fuzzy, the thing this surface is most
+carefully not); fields owned by a transition (`opportunity.stage`, `rfi_item.status`,
+`team_member.active`, assignment re-scoping — these must stay a **denylist**, not be rediscovered);
+money and dates; program writes.
+
+**Shape that falls out: derive the allowlist from `FormSpec`, subtract an explicit denylist, keep
+the verbs.** The hand-written verb tools are the *good* part of this design — `opportunity_stage`
+refusing with the legal ladder, `member_deactivate` refusing while assignments are live,
+`client_create`'s duplicate guard — every one encodes a domain rule a generic `create(kind, fields)`
+would erase, and several exist because a specific bug happened. **Generalise the field table; keep
+the verbs.**
+
+### Needs Grant before it is built
+
+**Deriving `_EDITABLE` WIDENS the write surface.** `org.name`, `org.status`, `contact.role`,
+`task.priority`, `rfi_item.detail` become assistant-editable the moment the derivation lands. That
+is the intended outcome and it is a real behaviour change — he should say yes to it explicitly
+rather than discover it. The denylist is what makes it safe, and it must be built by **walking every
+currently-unreachable field and writing down which are deliberate**, not by starting from empty.
+
+### Ranked, with the safe ones first
+
+1. **Emit opportunity refs from a read tool** — highest severity, lowest cost, no widening.
+2. **Fix the four bare-`KeyError` refusals** in `_edit_target`/`task_complete` — six kinds already
+   name a recovery path; four fall through to `task TSK-9999 not found`. One function, two standards.
+3. **`list_batches`: fix the docstring, add an `account` filter and a `days` parameter.**
+4. **`log_activity` should take `type` and `occurred_on`** — today the assistant cannot record
+   yesterday's call, and cannot correct it afterwards.
+5. **Rename or fix the two-tool "every write tool" test.**
+6. **The parity ledger + roster test** (needs the destination decision).
+7. **Derive `_EDITABLE`** (needs the widening decision).
+8. **`describe(kind)`** — turns four capabilities from undiscoverable into discoverable.
+9. **`revert_plan(ref)`** exposing `services.batches.plan_revert`, so a model can show conflicts
+   before considering `force=true`. Today force's only guardrail is a sentence in a docstring, while
+   the web refused force outright *because* it had no way to show the plan.
+10. Then by size: an `interaction` kind in `edit_field`; submissions; `contact_reassign_org`
+    (`contacts_repo.reassign_org` exists at `:42` with no door onto it); `renew_program` over
+    `sync.renew`; `merge_markets`.
+
+### Keep exactly as it is
+
+The batching spine (one call, one undo unit; the cap enforced under `log_event` so no tool can
+forget it; revert refusing all-or-nothing and naming conflicts). The hand-written verb tools and
+their refusals. `edit_field`'s compare-and-set with `expecting`, including `expecting=None` meaning
+"assert blank". `_EDIT_REDIRECTS`. **Writes never fuzzy-matching a ref while every resolution
+refusal names candidates** — the single most important safety property here.
