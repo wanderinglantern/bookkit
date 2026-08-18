@@ -842,7 +842,7 @@ def test_compose_soi_linked_placement_uses_towerkit_soi(conn, tmp_path):
     dump_program(program, path)
     placements.update(conn, p.id, program_path=str(path))
 
-    sections = compose_soi(conn, org.id)
+    sections = compose_soi(conn, org.id, date(2026, 1, 1))
     assert len(sections) == 1
     section = sections[0]
     # build_soi's unlabeled section takes the program name as its label
@@ -863,7 +863,7 @@ def test_compose_soi_unlinked_placement_gets_book_data_section(conn):
         conn, org.id, "Legacy Property", "2025-01-01", "2026-01-01",
         status="bound", total_premium=12_345_00,
     )
-    sections = compose_soi(conn, org.id)
+    sections = compose_soi(conn, org.id, date(2025, 6, 1))
     assert len(sections) == 1
     assert sections[0].label == "Legacy Property (Bound)"
     row = sections[0].rows[0]
@@ -885,7 +885,7 @@ def test_compose_soi_unreadable_file_falls_back_to_book_data(conn, tmp_path):
         conn, org.id, "Moved Program", "2025-01-01", "2026-01-01",
         program_path=str(tmp_path / "gone.json"),  # linked, but the file moved
     )
-    sections = compose_soi(conn, org.id)
+    sections = compose_soi(conn, org.id, date(2025, 6, 1))
     assert len(sections) == 1  # the policy list is never silently partial
     assert sections[0].rows[0].carrier == "See policy documents"
 
@@ -894,7 +894,125 @@ def test_compose_soi_empty_when_no_placements(conn):
     from bookkit.services.export_open_items import compose_soi
 
     org = orgs.create(conn, name="Bare Co", kind="client")
-    assert compose_soi(conn, org.id) == []
+    assert compose_soi(conn, org.id, date(2026, 8, 18)) == []
+
+
+# --- C3: expired policy years are not a current Schedule of Insurance --------
+
+
+def test_compose_soi_excludes_an_expired_policy_year(conn):
+    """A prior year renders IDENTICALLY to current cover — same columns, same
+    styling, "(Bound)" true in the past tense. Exclusion is decided on
+    period_to, the same date the Expiration column prints."""
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Two Years Co", kind="client")
+    placements.create(conn, org.id, "2024 Casualty Program",
+                      "2024-09-07", "2025-09-07", status="bound")
+    placements.create(conn, org.id, "2025 Casualty Program",
+                      "2025-09-07", "2026-09-07", status="bound")
+
+    labels = [s.label for s in compose_soi(conn, org.id, date(2026, 8, 18))]
+    assert labels == ["2025 Casualty Program (Bound)"]
+
+
+def test_compose_soi_keeps_cover_expiring_today(conn):
+    """Cover runs to the END of its last day: the comparison is strictly `<`.
+    A `<=` here drops a client's live policy from their schedule on its final
+    day, which is the day they are most likely to be reading it."""
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Last Day Co", kind="client")
+    placements.create(conn, org.id, "Expiring Today", "2025-08-18", "2026-08-18",
+                      status="bound")
+
+    today = date(2026, 8, 18)
+    assert [s.label for s in compose_soi(conn, org.id, today)] == [
+        "Expiring Today (Bound)"]
+    # and gone the next morning
+    assert compose_soi(conn, org.id, date(2026, 8, 19)) == []
+
+
+def test_compose_soi_keeps_a_program_whose_earliest_line_has_already_lapsed(
+    conn, tmp_path
+):
+    """THE renewal_on TRAP. renewal_on is the EARLIEST line end, because
+    attention must open when the first layer runs out. Exclusion asks the
+    opposite question. This program's IM layer ended in March; its GL runs to
+    October. Deciding exclusion on the earliest line end would take a live
+    General Liability policy off the client's Schedule of Insurance."""
+    from towerkit.model import Layer, Line, Participant, Period, Program, dump_program
+    from towerkit.model import Placement as TkPlacement
+
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Staggered Co", kind="client", status="active")
+    p = placements.create(
+        conn, org.id, "2026 Package", "2025-10-01", "2026-10-01", status="bound"
+    )
+    program = Program(
+        insured="Staggered Co", program="Package", placement=TkPlacement.BOUND,
+        period=Period(start=date(2025, 10, 1), end=date(2026, 10, 1)),
+        lines=[
+            Line(id="gl", name="General Liability", abbr="GL"),
+            Line(id="im", name="Inland Marine", abbr="IM"),
+        ],
+        layers=[
+            Layer(
+                id="gl1", name="Primary GL", applies_to=["gl"],
+                attach=0, limit=1_000_000, premium=52_000,
+                participants=[Participant(carrier="Zurich", share_bps=10_000)],
+            ),
+            Layer(
+                id="im1", name="IM", applies_to=["im"],
+                period=Period(start=date(2025, 10, 1), end=date(2026, 3, 1)),
+                attach=0, limit=250_000, premium=4_000,
+                participants=[Participant(carrier="Chubb", share_bps=10_000)],
+            ),
+        ],
+    )
+    path = tmp_path / "package.json"
+    dump_program(program, path)
+    placements.update(conn, p.id, program_path=str(path))
+
+    from bookkit import sync
+    # the trap is real: renewal_on for this placement IS the lapsed IM date
+    assert sync.line_ends(str(path))[0][1] == date(2026, 3, 1)
+
+    sections = compose_soi(conn, org.id, date(2026, 6, 1))
+    coverages = [r.coverage for s in sections for r in s.rows]
+    assert "General Liability" in coverages, (
+        "live GL cover fell off the schedule — exclusion used the earliest "
+        "line end instead of the program period"
+    )
+
+
+def test_all_expired_account_gets_no_soi_sheet_rather_than_an_empty_one(
+    conn, tmp_path
+):
+    """The sheet-inclusion rule under C3: every placement historic ⇒ the tab
+    is omitted, exactly as Information Requests and Projects are when empty.
+    What must NEVER happen is a Schedule of Insurance sheet carrying column
+    headers and no policies."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Lapsed Co", kind="client")
+    placements.create(conn, org.id, "2024 Program", "2024-01-01", "2025-01-01",
+                      status="bound")
+    tasks.create(conn, "renew the whole account", org_id=org.id, category="Renewal")
+
+    path = write(conn, org.id, tmp_path / "l.xlsx", date(2026, 8, 18))
+    wb = load_workbook(path)
+    assert "Schedule of Insurance" not in wb.sheetnames
+
+    # and the same account, exported while that year was still running, does
+    # get the sheet — so the absence above is C3 and not a broken writer
+    path2 = write(conn, org.id, tmp_path / "l2.xlsx", date(2024, 6, 1))
+    wb2 = load_workbook(path2)
+    assert "Schedule of Insurance" in wb2.sheetnames
+    assert wb2["Schedule of Insurance"]["A2"].value == "2024 Program (Bound)"
 
 
 def test_premium_dollars_delegates_then_floors_for_display():

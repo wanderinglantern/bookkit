@@ -12,8 +12,9 @@ what the client still owes us, composed by services/export_rfi.py —
 omitted (not blank) when nothing is outstanding. Sheet 3 (Projects): every
 need on every live project, omitted (not blank) when the org has none.
 Sheet 4 (Schedule of Insurance): towerkit's SOI machinery per linked
-placement with a book-data fallback, present whenever any placement
-exists. Determinism: `today` is a parameter, never the wall clock."""
+placement with a book-data fallback, covering only placements whose cover
+is still in force on the export date — omitted (not blank) when none is.
+Determinism: `today` is a parameter, never the wall clock."""
 
 from __future__ import annotations
 
@@ -335,6 +336,27 @@ def compose_projects(conn: sqlite3.Connection, org_id: str) -> list[SheetSection
 _UNLINKED_CARRIER = "See policy documents"
 
 
+def _expired(placement: Placement, today: date) -> bool:
+    """Is this policy year OVER as of `today`? Decided on the placement's own
+    `period_to` — the very date the SOI prints in its Expiration column, so
+    the sheet cannot contradict its own rule.
+
+    NOT `RenewalItem.renewal_on`. CLAUDE.md's rule ("the renewal date is
+    renewal_on, never period_to") governs a different question: renewal_on is
+    the EARLIEST line end, because attention must open the moment the first
+    layer runs out. Exclusion asks the opposite question — has ALL cover
+    ended — and the earliest line end answers it wrong in the dangerous
+    direction: a program whose IM layer lapsed in March while GL runs to
+    October would vanish from the client's Schedule of Insurance with their
+    General Liability policy still in force. A wrong INCLUSION here is loud
+    (a dated row the reader can see is historic); a wrong exclusion is
+    silent, and takes live cover off the schedule.
+
+    Expiring TODAY is still in force: cover runs to the end of its last day,
+    so the comparison is strictly `<`, never `<=`."""
+    return placement.period_to < today.isoformat()
+
+
 def _premium_dollars(cents: int | None) -> int | None:
     """Placement premium cents → the SOI's whole-dollar premium column.
     Delegates to the guarded money boundary first; on its sub-dollar refusal
@@ -369,14 +391,26 @@ def _book_data_section(org_name: str, placement: Placement) -> SoiSection:
     )
 
 
-def compose_soi(conn: sqlite3.Connection, org_id: str) -> list[SoiSection]:
-    """build_soi sections for every LINKED placement, each under a
-    program-name label (prefixing flattens the per-program nesting); minimal
-    book-data sections for UNLINKED, unreadable, or layerless ones. Non-empty
-    exactly when the org has any placement — the sheet-inclusion rule."""
+def compose_soi(conn: sqlite3.Connection, org_id: str, today: date) -> list[SoiSection]:
+    """build_soi sections for every LINKED placement still in force, each
+    under a program-name label (prefixing flattens the per-program nesting);
+    minimal book-data sections for UNLINKED, unreadable, or layerless ones.
+
+    EXPIRED POLICY YEARS ARE EXCLUDED (see `_expired`). A Schedule of
+    Insurance is a statement of cover in force; a prior year rendered
+    identically beside current cover reads as current cover, and "(Bound)"
+    is true in the past tense. Non-empty exactly when the org has a placement
+    that has not expired — the sheet-inclusion rule. An account whose cover
+    has ALL expired therefore gets no SOI sheet rather than a sheet with
+    headers and no policies: the same omitted-not-blank rule sheets 2 and 3
+    already follow, and the honest one, because there is no schedule to
+    print. It is never an empty sheet — write()'s `if soi_sections` guard is
+    what makes that true, and a test pins it."""
     org = orgs.get(conn, org_id)
     out: list[SoiSection] = []
     for placement in placements.for_org(conn, org_id):
+        if _expired(placement, today):
+            continue
         sections: list[SoiSection] = []
         if placement.program_path:
             try:
@@ -445,7 +479,8 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
     SOI formatting exactly (the money.parse_share pattern: formatting
     authority in one place). Information Requests appears only when the
     client has outstanding items; Projects only when live projects exist;
-    the SOI sheet whenever any placement exists; finalize runs ONCE."""
+    the SOI sheet only when some placement is still in force; finalize runs
+    ONCE."""
     from towerkit.render.soi_xlsx import render_soi_sheet
     from towerkit.render.table_xlsx import (
         TableColumn,
@@ -519,10 +554,10 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
             row_height=lambda values: 18.0 * max(2, str(values[1]).count("\n") + 1),
         )
 
-    # Sheet 4 — Schedule of Insurance: whenever any placement exists
-    # (compose_soi is non-empty exactly then). The client's own program:
-    # show_premiums=True.
-    soi_sections = compose_soi(conn, org_id)
+    # Sheet 4 — Schedule of Insurance: whenever some placement is still in
+    # force (compose_soi is non-empty exactly then). The client's own
+    # program: show_premiums=True.
+    soi_sections = compose_soi(conn, org_id, today)
     if soi_sections:
         ws_soi = wb.create_sheet(sanitize_sheet_title("Schedule of Insurance"))
         render_soi_sheet(ws_soi, soi_sections, theme=theme, show_premiums=True)
