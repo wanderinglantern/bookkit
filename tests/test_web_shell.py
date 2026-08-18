@@ -106,3 +106,74 @@ def test_serve_binds_loopback_only(db_path: Path, monkeypatch):
 
     assert seen["host"] == "127.0.0.1"
     assert seen["port"] == 8931
+
+
+# --- the self-hosted webfonts ------------------------------------------------
+#
+# The fonts are package data, and package data is the one thing pytest, mypy
+# and ruff structurally cannot check: a stylesheet that names a weight nobody
+# shipped does not fail anything — the browser silently synthesises it or
+# falls back, and the app quietly stops looking like the design. These two
+# tests close that in both directions (every src: has a file, every file has a
+# src:) and a third proves the files are actually reachable over HTTP, which
+# being on disk does not prove: /static is a mount, and a route registered
+# ahead of it can shadow the whole prefix.
+
+
+def _font_face_srcs() -> list[str]:
+    """Every url() inside a @font-face src:, taken from app.css itself.
+
+    Parsed rather than hand-listed on purpose: a hand-written list of
+    filenames only ever asserts that the list matches itself, and would stay
+    green through exactly the change these tests exist to catch."""
+    import re
+    from pathlib import Path
+
+    import bookkit
+
+    css = (Path(bookkit.__file__).parent / "web" / "static" / "app.css").read_text()
+    urls = [
+        url
+        for block in re.findall(r"@font-face\s*\{(.*?)\}", css, re.DOTALL)
+        for url in re.findall(r"""src:[^;]*url\(\s*["']?([^"')]+)""", block)
+    ]
+    assert urls, "no @font-face src: found in app.css — the parser, or the fonts, are gone"
+    return urls
+
+
+def _web_dir():
+    from pathlib import Path
+
+    import bookkit
+
+    return Path(bookkit.__file__).parent / "web"
+
+
+def test_every_font_face_src_resolves_to_a_file_in_package_data():
+    """A missing weight must fail the build, not fall back silently."""
+    for url in _font_face_srcs():
+        path = _web_dir() / url.lstrip("/")
+        assert path.is_file(), f"@font-face src {url} resolves to no file ({path})"
+
+
+def test_every_vendored_font_file_is_declared_by_a_font_face():
+    """The other direction. Without this, deleting a whole @font-face block
+    pins nothing: the remaining src: lines all still resolve, so the set of
+    weights the app declares is unguarded and a family can lose its bold in
+    silence. Derived from the directory, so it cannot drift into a list."""
+    srcs = " ".join(_font_face_srcs())
+    shipped = sorted((_web_dir() / "static" / "fonts").glob("*.woff2"))
+    assert shipped, "no .woff2 in package data — the fonts are not vendored"
+    for font in shipped:
+        assert font.name in srcs, f"{font.name} ships but no @font-face names it"
+
+
+def test_the_vendored_fonts_are_served(client):
+    """Present on disk is not the same as reachable: /static is a mount, and a
+    route registered before it can shadow the prefix (see the theme.css test
+    above). This asserts the HTTP path the browser will actually request."""
+    for url in _font_face_srcs():
+        response = client.get(url)
+        assert response.status_code == 200, f"{url} is not served ({response.status_code})"
+        assert response.headers["content-type"] == "font/woff2", url
+        assert response.content[:4] == b"wOF2", f"{url} is not a woff2 file"
