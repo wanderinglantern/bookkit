@@ -824,7 +824,10 @@ a {
 .snapshot-scope {
   margin: 0;
   padding-left: 0.5rem;
+  /* this caption prints a program NAME and a placement ref, both free text —
+     JetBrains Mono's calt would ligate a "--" inside either. */
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--hint-size);
   color: var(--muted);
 }
