@@ -1,18 +1,19 @@
-"""The client-facing export: a four-tab workbook — Open Items ·
-Information Requests · Projects · Schedule of Insurance — composed
-PURELY, with rendering left to towerkit (write() in this module glues to
+"""The client-facing export: a four-tab workbook — Open Items · Information
+Requests · Projects · Schedule of Insurance — composed PURELY, with
+rendering left to towerkit (write() in this module glues to
 towerkit.render.table_xlsx / render.soi_xlsx; bookkit has no xlsx
 dependency). Sheet 1 (Open Items): org-level tasks split by category
-(SOV-style, alphabetical) plus a trailing General for uncategorized tasks
-and loose submissions, one section per placement (its tasks + outstanding
-submissions), one per project (unmet needs) — always present, even when
-empty. Sheet 2 (Information Requests): what the client still owes us,
-composed by services/export_rfi.py — omitted (not blank) when nothing is
-outstanding. Sheet 3 (Projects): every need on every live project,
-omitted (not blank) when the org has none. Sheet 4 (Schedule of
-Insurance): towerkit's SOI machinery per linked placement with a
-book-data fallback, present whenever any placement exists. Determinism:
-`today` is a parameter, never the wall clock."""
+(SOV-style, alphabetical — except the Internal category, which is withheld from
+the client entirely: see compose's include_internal) plus a trailing
+General for uncategorized tasks and loose submissions, one section per
+placement (its tasks + outstanding submissions), one per project (unmet
+needs) — always present, even when empty. Sheet 2 (Information Requests):
+what the client still owes us, composed by services/export_rfi.py —
+omitted (not blank) when nothing is outstanding. Sheet 3 (Projects): every
+need on every live project, omitted (not blank) when the org has none.
+Sheet 4 (Schedule of Insurance): towerkit's SOI machinery per linked
+placement with a book-data fallback, present whenever any placement
+exists. Determinism: `today` is a parameter, never the wall clock."""
 
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ from pathlib import Path
 from towerkit.model import load_program
 from towerkit.soi import SoiRow, SoiSection, build_soi
 
-from ..models import Placement, Project, Task
+from ..models import Placement, Project, Task, is_internal_category
 from ..money import MoneyParseError, cents_to_dollars, format_cents
 from ..repo import orgs, placements, submissions
 from ..repo import projects as projects_repo
@@ -45,6 +46,11 @@ class ExportRow:
     # needs this to satisfy task_complete's "exact ref you read" contract;
     # the xlsx writer's explicit column tuple in write() does NOT include
     # it, so refs never reach the client-facing workbook (see write()).
+    internal: bool = False  # same mechanism as `ref`: carried for callers that
+    # ask for the internal rows (MCP), absent from write()'s column tuple, so
+    # the flag itself can never print. ExportRow has no `category` field, so
+    # without this an Internal task shown to an MCP caller under a PLACEMENT
+    # section — which is labelled by program name — would carry no sign of it.
 
 
 @dataclass(frozen=True)
@@ -88,14 +94,29 @@ def _task_row(task: Task, today: date) -> ExportRow:
         kind="Task", due=task.due_on or "",
         status="Overdue" if overdue else "Open",
         ref=task.id,
+        internal=is_internal_category(task.category),
     )
 
 
-def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSection]:
+def compose(
+    conn: sqlite3.Connection, org_id: str, today: date, *, include_internal: bool = False
+) -> list[ExportSection]:
+    """Sheet 1, as data. Tasks filed under the Internal category are withheld
+    unless `include_internal` — the default is the client-safe one, so a
+    future caller composing something client-facing inherits it without
+    knowing this feature exists. A caller that wanted the internal rows and
+    forgot to ask gets a visibly missing task; the other way round is a leak
+    nobody sees. Exactly one caller asks: MCP's per-client open_items."""
     org = orgs.get(conn, org_id)
     sections: list[ExportSection] = []
 
     org_tasks = tasks_repo.open_tasks_for_client(conn, org.id)
+    if not include_internal:
+        # ON THE TASK LIST, before either split. Sheet 1 buckets these tasks
+        # TWICE — by category, and by placement with category ignored — so a
+        # filter inside the category branch would let an Internal task that
+        # carries a placement_id ship to the client anyway.
+        org_tasks = [t for t in org_tasks if not is_internal_category(t.category)]
     by_category: dict[str, list[Task]] = {}
     # case-insensitive bucketing, first-seen spelling wins (repo/vocab.py's
     # _dedupe rule) — "renewal" and "Renewal" land in one section
@@ -182,6 +203,28 @@ def compose(conn: sqlite3.Connection, org_id: str, today: date) -> list[ExportSe
                 ),
             ))
     return sections
+
+
+def withheld_internal(conn: sqlite3.Connection, org_id: str) -> list[Task]:
+    """This client's open tasks filed under the Internal category — exactly
+    what compose() withholds on the default path. Deliberately narrow: it is
+    NOT "everything compose() leaves out" (a task pointing at a soft-deleted
+    placement is dropped too, for unrelated reasons), because the number it
+    backs is user-facing and must mean one thing."""
+    return [
+        t for t in tasks_repo.open_tasks_for_client(conn, org_id)
+        if is_internal_category(t.category)
+    ]
+
+
+def withheld_note(conn: sqlite3.Connection, org_id: str) -> str:
+    """The suffix both export surfaces append to "wrote <path>" — empty when
+    nothing was held back. That emptiness is the signal: file a task as
+    "Internal Review" by mistake and the line says nothing was withheld."""
+    count = len(withheld_internal(conn, org_id))
+    if not count:
+        return ""
+    return f" — {count} internal task{'' if count == 1 else 's'} withheld"
 
 
 # --- sheet 2: Projects — the full projects report, not the unmet slice ---------

@@ -375,7 +375,22 @@ def test_task_category_round_trips_and_feeds_vocab(conn):
     tasks.create(conn, "chase quote", category="Renewal")
     tasks.create(conn, "send COI", category="Certificates")
     tasks.create(conn, "misc")  # no category
-    assert vocab.task_categories(conn) == ["Certificates", "Renewal"]
+    # "Internal" is always offered, typed or not — it is the flag that keeps a
+    # task out of the client export, and nobody discovers it otherwise
+    assert vocab.task_categories(conn) == ["Certificates", "Internal", "Renewal"]
+
+
+def test_task_categories_offers_internal_on_an_empty_book(conn):
+    from bookkit.repo import vocab
+
+    assert vocab.task_categories(conn) == ["Internal"]
+
+
+def test_task_categories_does_not_double_an_existing_internal_spelling(conn):
+    from bookkit.repo import vocab
+
+    tasks.create(conn, "our own file note", category="internal")
+    assert vocab.task_categories(conn) == ["internal"]  # first spelling wins
 
 
 # -- event batches (MCP undo units) ------------------------------------------

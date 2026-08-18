@@ -207,6 +207,35 @@ class Task(Row):
     deleted_at: str | None = None
 
 
+# The one task category that never leaves the building: a task filed under it
+# is withheld from the client-facing export (services/export_open_items.py).
+# Declared here, not in the export service, because four modules ask the
+# question (the export composition, mcpserver, tui/theme, web/routes/work) and
+# a fifth needs the constant (repo/vocab) — while the export service imports
+# towerkit at module scope, so a TUI row renderer or a web route asking "is
+# this internal?" there would drag the workbook stack into the import graph.
+# `category` stays freeform; this is a well-known VALUE, not an enum, so
+# nothing existing is invalidated and no migration is needed.
+INTERNAL_CATEGORY = "Internal"
+
+
+def is_internal_category(category: str | None) -> bool:
+    """EXACT equality on the trimmed, case-folded value — "internal",
+    "INTERNAL " and "Internal" all count; "Internal Review" does NOT.
+
+    A prefix match would be friendlier and is the wrong trade. The two rules
+    fail in opposite directions and only one failure is visible: under
+    equality, someone who types "Internal Review" ships the task under a
+    section header in the client's workbook literally naming it (loud, and
+    the row badge already told them the flag did not take). Under a prefix
+    rule, "Internal audit support" — a real client-facing broking task —
+    silently vanishes from the deliverable with nothing anywhere saying a
+    section was removed. Guessing at intent from a freeform string is what
+    parse_human_date refuses to do with a bare number, for the same reason.
+    """
+    return category is not None and category.strip().lower() == INTERNAL_CATEGORY.lower()
+
+
 class Project(Row):
     id: str
     ref: str
