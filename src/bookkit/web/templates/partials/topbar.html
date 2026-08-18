@@ -27,8 +27,15 @@
        (routes/changes.py). `undo_action` is the whole url, assembled in
        routes/account._context — this partial is shared with /book, which
        has no `tab` to build one from, so it is handed the finished action
-       or nothing at all rather than two halves to join. #}
-    <button type="button" class="undo-pill" hx-post="{{ undo_action }}" hx-swap="none">Undo <span class="undo-pill-detail">{{ last_undo.summary }}</span></button>
+       or nothing at all rather than two halves to join.
+
+       hx-confirm for the same reason the rail's Revert has one: a revert
+       rewrites the last write and cannot itself be reverted, and this pill
+       lives in the top bar between Search and the avatar, where a misclick
+       is cheap and the consequence is not (review round 1, F4). #}
+    <button type="button" class="undo-pill" hx-post="{{ undo_action }}"
+            hx-confirm="Put back: {{ last_undo.summary }}? This cannot be undone."
+            hx-swap="none">Undo <span class="undo-pill-detail">{{ last_undo.summary }}</span></button>
   {% endif %}
   <div class="avatar">GB</div>
 </div>

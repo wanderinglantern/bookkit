@@ -4,9 +4,13 @@ Two controls, one route: the right rail's per-change `Revert` and the top
 bar's `Undo <last change>` pill both POST here. Both were rendered and inert
 from Task 7 until now (`aria-disabled="true"`, a title saying so); the rules
 they drive have existed the whole time in services/batches.revert, which is
-also what the TUI's `R` calls. The exception handling and the message wording
-below deliberately mirror navigator.py's `_apply_batch_revert`: two surfaces
+also what the TUI's `R` calls. The wording below tracks navigator.py's
+`_apply_batch_revert` for `reverted`, `already` and `gone` — two surfaces
 disagreeing about what a revert SAYS is how a user learns to distrust both.
+The REFUSAL deliberately diverges: the TUI notifies a count ("N conflict(s)")
+into a one-line toast, the web names the fields, because the web has room for
+the sentence and a refusal says something. Claiming a mirror the code does not
+keep is worse than stating the divergence (review round 1, F6).
 
 Three things this module owns that the service does not:
 
@@ -25,7 +29,14 @@ leave the rest of the page reading the pre-revert book. The response is
 **The message.** The URL carries a short token, never the sentence: a message
 passed through a query string is a message a crafted link can put on the page.
 `toast_for` below is the one place the text lives, and an unknown or absent
-token renders no toast at all.
+token renders no toast at all — nor does a token naming a batch that does not
+exist, is not this account's, or is not in the state the token claims. That
+last set of checks is not belt-and-braces: `reverted` used to interpolate the
+`undo` param straight into the sentence, so
+`?outcome=reverted&undo=SECURITY+NOTICE+call+555-0100&n=9999` rendered
+attacker-chosen prose plus a fabricated success claim inside BookKit's own
+toast — the exact thing the paragraph above says the design forbids (review
+round 1, F1).
 
 Force is deliberately not offered here — see parity.IMPLEMENTED["undo"].
 """
@@ -93,6 +104,17 @@ def revert_change(
         raise HTTPException(
             status_code=404, detail=f"{batch_ref} is not a change on {ref}"
         )
+    if batch.tool.startswith("program_"):
+        # Decided from the BATCH, not from an exception class. This used to be
+        # `except ValueError` around the revert call below, on the assumption
+        # that the program-file refusal is the only ValueError revert can
+        # raise. It is not: pydantic's ValidationError subclasses ValueError
+        # and repo/base.py raises bare ones — one malformed event_log row under
+        # an `edit_contact` batch was enough to make the page state, with
+        # confidence, that a contact edit "wrote a towerkit program FILE"
+        # (review round 1, F2). services/batches.revert makes the same call off
+        # the same attribute, so this is the condition, not a guess at it.
+        return _redirect(ref, tab, batch_ref, "program")
 
     try:
         result = batches_svc.revert(conn, batch_ref, now=db.utc_now())
@@ -100,30 +122,42 @@ def revert_change(
         # someone else (the TUI, the MCP server, a second tab) got there first
         return _redirect(ref, tab, batch_ref, "already")
     except KeyError:
+        # NOT dead despite the successful get_by_ref above: the connection is
+        # autocommit and the MCP server or a TUI session can hard-delete the
+        # batch between those two reads. Rare, real, and cheaper to answer
+        # than to lose. Nothing else is caught here — an unexpected exception
+        # is a bug and must not be dressed up as a user-facing outcome.
         return _redirect(ref, tab, batch_ref, "gone")
-    except ValueError:
-        # a program_* batch wrote a towerkit FILE; the sentence is re-derived
-        # in toast_for from the same service function that raised here
-        return _redirect(ref, tab, batch_ref, "program")
 
     if result.applied:
         return _redirect(ref, tab, batch_ref, "reverted", len(result.reverted))
     return _redirect(ref, tab, batch_ref, "refused", len(result.refused))
 
 
-def _refusal_text(conn: Connection, batch_ref: str, batch: EventBatch) -> str:
+def _refusal_text(conn: Connection, batch: EventBatch) -> str:
     """A REFUSAL SAYS SOMETHING (CLAUDE.md): the toast names WHAT conflicts,
     not just how many. The batch is still unreverted — that is what refused
-    means — so re-planning it here yields the same conflicts the POST hit."""
-    conflicts = batches_svc.plan_revert(conn, batch).conflicts
+    means — so re-planning it here yields the same conflicts the POST hit.
+
+    Conflicts are deduped by (entity_type, field) first, in order. One clause
+    per Conflict meant two contacts conflicting on `title` printed "contact
+    title changed since, contact title changed since" — which reads as a
+    rendering fault and still names neither record, so it was strictly worse
+    than saying it once (review round 1, F5). The `+N more` count follows the
+    deduped list, or it would promise clauses that do not exist."""
+    pairs: list[tuple[str, str]] = []
+    for conflict in batches_svc.plan_revert(conn, batch).conflicts:
+        pair = (conflict.change.entity_type, conflict.change.field)
+        if pair not in pairs:
+            pairs.append(pair)
     named = ", ".join(
-        f"{c.change.entity_type} {c.change.field} changed since"
-        for c in conflicts[:_NAMED_CONFLICTS]
+        f"{entity_type} {field} changed since"
+        for entity_type, field in pairs[:_NAMED_CONFLICTS]
     )
-    extra = len(conflicts) - _NAMED_CONFLICTS
+    extra = len(pairs) - _NAMED_CONFLICTS
     if extra > 0:
         named = f"{named}, +{extra} more"
-    return f"{batch_ref} refused — {named}"
+    return f"{batch.ref} refused — {named}"
 
 
 def _int(params: Mapping[str, str], key: str) -> int | None:
@@ -138,34 +172,57 @@ def toast_for(
     conn: Connection, org: Org, params: Mapping[str, str]
 ) -> dict[str, str | None] | None:
     """The one home for what a revert says, read back off the redirect's own
-    query string. None renders nothing at all — an unknown token, a missing
-    count, or a batch that is not this account's is silently no toast rather
-    than a message a crafted link chose.
+    query string.
+
+    Every token but `gone` names a batch, and every one of those is checked
+    against the book before a word is rendered: the batch must exist, must
+    belong to THIS account, and must be in the state its token claims. None
+    renders nothing at all — silence beats a sentence a crafted link chose.
+
+    Nothing from the query string reaches the text. `batch.ref` is printed,
+    not `params["undo"]`, so the ref in the toast is one the database
+    confirmed; the only query value that survives is `n`, an int, on a batch
+    already proven reverted (review round 1, F1).
 
     `remedy` is rendered as a second line: an error says how to fix it, and
     the fix for a conflict (force) lives on the other surface this slice."""
     outcome = params.get("outcome")
-    batch_ref = params.get("undo", "")
+
+    if outcome == "gone":
+        # The one outcome with no batch to check — it exists BECAUSE the ref
+        # resolved to nothing. Fixed prose, nothing interpolated into it.
+        return {"text": "that change no longer exists", "remedy": None}
+    if outcome not in ("reverted", "refused", "already", "program"):
+        return None
+
+    try:
+        batch = batches_repo.get_by_ref(conn, params.get("undo", ""))
+    except KeyError:
+        return None
+    if batch.org_id != org.id:
+        return None
 
     if outcome == "already":
+        if batch.reverted_at is None:
+            return None
         return {"text": "already reverted", "remedy": None}
-    if outcome == "gone":
-        return {"text": "that change no longer exists", "remedy": None}
     if outcome == "reverted":
+        # reverted_at is what makes the count a report rather than a claim: a
+        # crafted `n` can only inflate the tally of a revert that did happen,
+        # on this account's own batch.
         count = _int(params, "n")
-        if count is None:
+        if count is None or batch.reverted_at is None:
             return None
-        return {"text": f"{batch_ref} reverted — {count} change(s)", "remedy": None}
-    if outcome in ("refused", "program"):
-        try:
-            batch = batches_repo.get_by_ref(conn, batch_ref)
-        except KeyError:
+        return {"text": f"{batch.ref} reverted — {count} change(s)", "remedy": None}
+    if outcome == "program":
+        if not batch.tool.startswith("program_"):
             return None
-        if batch.org_id != org.id:
-            return None
-        if outcome == "program":
-            # the sentence services/batches.revert itself raises, never a
-            # second copy of it living in the web layer
-            return {"text": batches_svc.program_file_refusal(batch_ref), "remedy": None}
-        return {"text": _refusal_text(conn, batch_ref, batch), "remedy": _REMEDY}
-    return None
+        # the sentence services/batches.revert itself raises, never a
+        # second copy of it living in the web layer
+        return {"text": batches_svc.program_file_refusal(batch.ref), "remedy": None}
+    # refused. Still unreverted is what refused MEANS, and _refusal_text
+    # re-plans the batch to name the conflicts — replanning a reverted batch
+    # would conflict on everything and print a sentence about nothing.
+    if batch.reverted_at is not None:
+        return None
+    return {"text": _refusal_text(conn, batch), "remedy": _REMEDY}

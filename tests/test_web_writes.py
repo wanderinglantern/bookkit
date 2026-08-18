@@ -14,6 +14,7 @@ saves."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -358,3 +359,180 @@ def test_a_program_batch_refuses_and_names_program_revert_file(app_and_org):
 
     page = client.get(response.headers["HX-Redirect"])
     assert str(raised.value) in page.text
+
+
+def test_an_unknown_batch_ref_is_gone_not_a_500(app_and_org):
+    """The `gone` token had no test at all until review round 1 (F9). A ref
+    that resolves to nothing is a stale page — someone reverted from the TUI
+    while this tab sat open — so it answers like every other outcome instead
+    of raising."""
+    client, org = app_and_org
+
+    response = _revert(client, org.ref, "MCP-9999")
+    assert response.status_code == 204
+    assert _redirect_params(response)["outcome"] == "gone"
+
+    page = client.get(response.headers["HX-Redirect"])
+    assert "that change no longer exists" in page.text
+
+
+def test_a_crafted_tab_is_404_and_never_reaches_the_redirect(app_and_org):
+    """`tab` is the only part of the redirect target a caller supplies, so it
+    is the open-redirect surface — and nothing pinned it before review round
+    1 (F9). It is refused outright, not sanitised: the batch must not be
+    reverted on the way to a 404 either."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import contacts as contacts_repo
+
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    _set_title(client, org, contact.id, "Head of Risk")
+    batch = _latest_batch(conn)
+
+    # ("program" is deliberately NOT in this list — it is a real tab id.)
+    for crafted in ("//evil.example.com/", "../../evil", "overview", ""):
+        response = client.post(
+            f"/accounts/{org.ref}/changes/{batch.ref}/revert",
+            params={"tab": crafted},
+        )
+        assert response.status_code == 404, crafted
+        assert "HX-Redirect" not in response.headers, crafted
+        assert batches_repo.get(conn, batch.id).reverted_at is None, crafted
+
+
+def test_the_refusal_names_three_conflicts_then_counts_the_rest(app_and_org):
+    """`+N more` had no test (review round 1, F9), and one clause per Conflict
+    printed the same sentence twice for two records conflicting on one field
+    (F5). Five distinct fields conflict here: three are named, two are
+    counted, and each named clause appears exactly once."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.services import batches as batches_svc
+
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    fields = {
+        "title": "Head of Risk", "role": "syndicate lead",
+        "email": "a@example.com", "phone": "555-0101", "mobile": "555-0102",
+    }
+    with batches_svc.open_batch(
+        conn, source="web", tool="edit_contact",
+        summary="five cells on the first contact", org_id=org.id,
+    ):
+        contacts_repo.update(conn, contact.id, **fields)
+
+    batch = _latest_batch(conn)
+    # every one of the five changed again, outside that batch
+    with batches_svc.open_batch(
+        conn, source="web", tool="edit_contact", summary="and again", org_id=org.id,
+    ):
+        contacts_repo.update(conn, contact.id, **{k: v + " x" for k, v in fields.items()})
+
+    response = _revert(client, org.ref, batch.ref)
+    assert _redirect_params(response)["outcome"] == "refused"
+
+    page = client.get(response.headers["HX-Redirect"])
+    text = re.search(r'<span class="toast-text">([^<]*)</span>', page.text)
+    assert text, "no toast rendered"
+    said = text.group(1)
+    assert said.startswith(f"{batch.ref} refused — ")
+    assert said.count("changed since") == 3, said
+    assert said.endswith(", +2 more"), said
+
+
+def test_the_remedy_is_a_second_line_not_a_second_column(app_and_org):
+    """`.toast` is a flex row, so the remedy rendered BESIDE the message until
+    review round 1 (F7). Both now live in one `.toast-lines` column — the
+    markup is what makes "second line" true, so the markup is what is
+    asserted."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.services import batches as batches_svc
+
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    with batches_svc.open_batch(
+        conn, source="web", tool="edit_contact", summary="a title", org_id=org.id,
+    ):
+        contacts_repo.update(conn, contact.id, title="Head of Risk")
+    batch = _latest_batch(conn)
+    _set_title(client, org, contact.id, "Head of Claims")
+
+    page = client.get(_revert(client, org.ref, batch.ref).headers["HX-Redirect"])
+    block = re.search(r'<div class="toast-lines">(.*?)</div>', page.text, re.S)
+    assert block, "the toast has no message column"
+    assert 'class="toast-text"' in block.group(1)
+    assert 'class="toast-remedy"' in block.group(1)
+
+
+def test_a_crafted_outcome_url_cannot_put_words_in_the_toast(app_and_org):
+    """Review round 1, F1. `?outcome=reverted&undo=<prose>&n=9999` used to
+    render that prose plus a fabricated success count inside BookKit's own
+    toast — attacker-chosen text in the app's chrome, which is phishing even
+    though Jinja escapes it. Every batch-naming token is now checked against
+    the book first, and the toast prints `batch.ref`, never the param."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import contacts as contacts_repo
+
+    crafted = "SECURITY NOTICE call 555-0100"
+    page = client.get(
+        f"/accounts/{org.ref}/relationship",
+        params={"outcome": "reverted", "undo": crafted, "n": "9999"},
+    )
+    assert page.status_code == 200
+    assert crafted not in page.text
+    assert 'class="toast"' not in page.text
+
+    # ...and a REAL ref that has not been reverted cannot be dressed up as one
+    # either: the count is only a report about a revert that happened.
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    _set_title(client, org, contact.id, "Head of Risk")
+    batch = _latest_batch(conn)
+    page = client.get(
+        f"/accounts/{org.ref}/relationship",
+        params={"outcome": "reverted", "undo": batch.ref, "n": "9999"},
+    )
+    assert 'class="toast"' not in page.text
+
+
+def test_a_plain_value_error_is_not_dressed_up_as_a_program_file(app_and_org):
+    """Review round 1, F2. `except ValueError` around revert assumed the
+    program-file refusal was the only ValueError it could raise; pydantic's
+    ValidationError subclasses ValueError and repo/base.py raises bare ones,
+    so a malformed event_log row under an `edit_contact` batch made the page
+    state that a contact edit "wrote a towerkit program FILE". The outcome is
+    decided from `batch.tool` now, and an unexpected exception propagates as
+    the bug it is rather than wearing a wrong explanation."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.services import batches as batches_svc
+
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    with batches_svc.open_batch(
+        conn, source="web", tool="edit_contact", summary="a title", org_id=org.id,
+    ):
+        contacts_repo.update(conn, contact.id, title="Head of Risk")
+    batch = _latest_batch(conn)
+    assert not batch.tool.startswith("program_")
+
+    from bookkit.web.routes import changes as changes_route
+
+    def exploding_plan(_conn, _batch):
+        raise ValueError("event_log row names no column of 'contact'")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(batches_svc, "plan_revert", exploding_plan)
+        with pytest.raises(ValueError):
+            _revert(client, org.ref, batch.ref)
+
+    # and the token itself is off the tool, so no crafted `outcome=program`
+    # can claim a towerkit file was written by a contact edit either
+    page = client.get(
+        f"/accounts/{org.ref}/relationship",
+        params={"outcome": "program", "undo": batch.ref},
+    )
+    assert "towerkit program FILE" not in page.text
+    assert changes_route.toast_for(conn, org, {"outcome": "program", "undo": batch.ref}) is None

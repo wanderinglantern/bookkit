@@ -43,7 +43,13 @@ IMPLEMENTED: dict[str, str] = {
         "behind ConfirmRevertBatch, and the web refuses conflicts outright, "
         "naming the fields that changed and pointing at the TUI's `R` — a "
         "force path needs a confirmation screen showing the plan, and "
-        "inventing one unspecified is not this slice's call to make."
+        "inventing one unspecified is not this slice's call to make. Both "
+        "controls carry hx-confirm naming what goes back: a revert cannot "
+        "itself be reverted (its writes carry no batch_id), and the TUI puts "
+        "the same call behind ConfirmRevertBatch, so shipping it as one "
+        "unconfirmed click was the wrong trade (review round 1, F4). A browser "
+        "confirm() is NOT that modal — it shows no plan — and should give way "
+        "to the _confirm.html fragment when Task 10 builds it."
     ),
     "task_done": (
         "POST /accounts/{ref}/tasks/{task_id}/done (tasks_repo.complete) and "

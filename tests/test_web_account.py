@@ -329,6 +329,13 @@ _INERT_CONTROL_MARKERS = frozenset(
     {"btn-pill", "undo-pill", "revert-link", "rail-action", "row-action"}
 )
 
+# What counts as "this control does something". NOT a bare `hx-` prefix: htmx
+# attributes are mostly modifiers, so `hx-swap`, `hx-confirm` or `hx-target`
+# alone used to satisfy the check — deleting `hx-post` from the wired Revert
+# button and leaving `hx-swap="none"` behind kept this test green over a
+# control that posts nowhere (review round 1, F8). Only verbs count.
+_ACTION_ATTRS = ("href=", "hx-post", "hx-get", "hx-delete", "hx-put")
+
 
 def _assert_inert_controls_are_consistently_marked(html: str) -> int:
     tags = re.findall(r"<[a-zA-Z][^>]*>", html)
@@ -338,7 +345,7 @@ def _assert_inert_controls_are_consistently_marked(html: str) -> int:
         if class_match and set(class_match.group(1).split()) & _INERT_CONTROL_MARKERS:
             matched.append(tag)
     for tag in matched:
-        has_action = "href=" in tag or "hx-" in tag
+        has_action = any(attr in tag for attr in _ACTION_ATTRS)
         has_disabled = 'aria-disabled="true"' in tag
         assert has_action != has_disabled, (
             f"control is neither clearly pending nor clearly wired: {tag}"

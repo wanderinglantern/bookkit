@@ -48,8 +48,13 @@
      Cancel button. #}
   {% if toast %}
     <div class="toast" role="status">
-      <span class="toast-text">{{ toast.text }}</span>
-      {% if toast.remedy %}<span class="toast-remedy">{{ toast.remedy }}</span>{% endif %}
+      {# .toast-lines, not two bare spans: .toast is a flex ROW, so a remedy
+         written as its sibling rendered BESIDE the message rather than under
+         it. The column wrapper is what makes "a second line" true. #}
+      <div class="toast-lines">
+        <span class="toast-text">{{ toast.text }}</span>
+        {% if toast.remedy %}<span class="toast-remedy">{{ toast.remedy }}</span>{% endif %}
+      </div>
       <button type="button" class="toast-close" data-toast-close aria-label="Dismiss">✕</button>
     </div>
   {% endif %}
@@ -113,9 +118,19 @@
                      htmx navigates instead of swapping. A revert can move a
                      panel, the header badge, the tab counts and this rail at
                      once — swapping any one of them would leave the rest
-                     reading the pre-revert book. #}
+                     reading the pre-revert book.
+
+                     hx-confirm: a revert rewrites the last write and CANNOT
+                     itself be reverted (services/batches.revert's own writes
+                     carry no batch_id), while this button sits one stray
+                     click away in a scrolling list. The TUI puts the same
+                     call behind ConfirmRevertBatch; this is the one-attribute
+                     version of that bar, and it names WHAT goes back rather
+                     than asking "are you sure?". Task 10's _confirm.html can
+                     replace it with the real fragment (review round 1, F4). #}
                   <button type="button" class="revert-link"
                           hx-post="/accounts/{{ header.org.ref }}/changes/{{ c.ref }}/revert?tab={{ tab }}"
+                          hx-confirm="Put back: {{ c.what }}? This cannot be undone."
                           hx-swap="none">Revert</button>
                 {% else %}
                   <span class="change-reverted">reverted</span>

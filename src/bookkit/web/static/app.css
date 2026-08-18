@@ -133,12 +133,18 @@ a {
   text-overflow: ellipsis;
 }
 
-/* Not wired yet (aria-disabled="true" in the markup) — no hover affordance,
-   muted colour, default cursor. A control that looks live and is dead is
-   worse than one that looks pending (Grant, review round 1, 2026-08-17). */
 /* A <button> as of Task 15b (it POSTs the revert route now) — the reset
    below keeps a button rendering as the design's pill: browsers give buttons
-   their own font, background and border otherwise. */
+   their own font, background and border otherwise.
+
+   It is LIVE, so it is styled live: pointer cursor and a hover accent, per
+   the visual direction's top-bar entry (a 1px border, radius 17, HOVER
+   ACCENT). The pending treatment this rule used to carry — muted colour,
+   `cursor: default`, no :hover — was correct while the markup said
+   aria-disabled and became its own inversion of Grant's bar the moment the
+   button started posting: a control that IS live and LOOKS dead (review
+   round 1, F3). The comment describing the pending state is gone with it;
+   two contradictory comments stacked is how the dead one wins. */
 .undo-pill {
   display: flex;
   font: inherit;
@@ -155,7 +161,11 @@ a {
   max-width: 220px;
   overflow: hidden;
   color: var(--muted);
-  cursor: default;
+}
+
+.undo-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .undo-pill-detail {
@@ -1166,6 +1176,16 @@ table.rows tr.is-waived td {
   box-shadow: var(--shadow-toast);
   font-size: var(--body-size);
   z-index: 50;
+}
+
+/* The message column. `.toast` is a row (text | close button), so the text
+   and the remedy have to stack inside it — they were flex SIBLINGS of the
+   close button and rendered side by side, a "second line" that was never on
+   a second line (review round 1, F7). */
+.toast-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
 }
 
 /* The remedy line — a refusal says how to fix it. Muted against the ink
