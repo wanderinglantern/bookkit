@@ -292,3 +292,101 @@ surfaces read these rules. And check the MCP tool's return shape — it reports
 
 **Touches.** `mcpserver.py` (`_activity_delete`), `services/interactions.py`,
 `tests/test_mcp*.py`.
+
+---
+
+## The SOI schematic worksheet crashes on a normal casualty programme (2026-08-18)
+
+**A crash, in a client-facing deliverable, on the commonest program shape there is.**
+Found by a review conducted in the persona of a client-side risk manager/CFO reading the
+export, and **reproduced independently** before being recorded here.
+
+```
+statutory WC Part A alone .................... OK
+Part A + Employers Liability (WC only) ....... OK
+Part A + a GL primary (no Part B) ............ OK
+Part A + Part B + a GL primary ............... AttributeError:
+    'MergedCell' object attribute 'value' is read-only
+    towerkit/src/towerkit/render/schematic_xlsx.py:610, in _block
+```
+
+So it needs a statutory layer, a second layer on the same line, AND a second line of
+cover. That is WC Part A + Part B alongside GL — which is close to every US casualty
+programme written.
+
+**Why it happens (diagnosis, not yet a fix).** `_block` computes a cell range and does
+`ws.cell(row=r0, column=c0, value=...)`. openpyxl returns a read-only `MergedCell` when
+that coordinate is *inside* a merge some earlier block already made rather than being its
+anchor. So two blocks' quantized ranges overlap. The statutory layer is drawn off-scale
+above `y=1.0` (`TowerLayout.chevrons`), which is the likely source of the collision once a
+second line forces a column split.
+
+**Watch when fixing:** the repo rule is that rendered output stays byte-identical across
+runs, and there are determinism tests on the statutory path already
+(`tests/test_render.py::test_statutory_svg_is_byte_identical_across_runs`). A fix that
+changes quantization changes every existing schematic. Prefer detecting the overlap and
+refusing loudly over silently shifting a boundary.
+
+---
+
+## The client workbook, reviewed from the client's side (2026-08-18)
+
+A reviewer in the persona of a risk manager / CFO generated real workbooks from seeded
+data and read them as the recipient. Verdict: **would not forward to a CFO as-is.** The
+full review is in the session record; the load-bearing findings, in their order:
+
+**1. Unbound cover sits on the Schedule of Insurance, unmarked and inside subtotals.**
+A submitted-not-bound cyber programme prints with a premium and a carrier of "See policy
+documents", and a `To be placed` excess layer's premium is included in the section
+subtotal. A schedule of insurance asserts that cover exists; two of four things on the
+sample did not. **This is the only finding that can cause a real loss.** Needs a per-row
+status (Bound / Quoted / Submitted / Expired / To be placed) and unbound rows excluded
+from, or subtotalled separately to, bound ones.
+
+**2. The status marker is applied backwards.** A placement WITHOUT a linked program file
+gets a status suffix; one WITH a file gets none. So the more we know about a programme,
+the less the client can tell about whether it is real.
+
+**3. Open items do not say whose item it is.** "Return signed TRIA form" (client's) and
+"Chase Zurich on the Q2 loss run" (ours) render identically. One column, two values —
+Owner: You / Us — was rated worth more than every format fix combined.
+
+**4. Sheets are anonymous and undated.** Tabs 2 and 3 carry no client name and no "as of"
+date; printed and passed round a table they are unattributable. Document properties list
+the tool version as Author and stamp 1980-01-01.
+
+**5. Nothing anywhere says what renews when.** Named as the first question the document is
+opened to answer.
+
+**6. Sections are ordered alphabetically**, so the most overdue item sits below a
+certificate that is not due for three days.
+
+Format issues worth doing in one pass: the Premium column is narrower than the values it
+holds (`$4,140,000.00` at width 12.16 → `########` on exactly the figures that matter);
+three date formats across four sheets, none of them real date values on sheets 1-3; no
+print setup at all on a sheet ~22 inches wide; no AutoFilter; gridlines left on; tab names
+truncated mid-word.
+
+**On withholding Internal items, from the recipient's side:** withhold silently, do NOT
+print a count ("it converts a non-event into a standing question on every export"), but
+state the scope once in fixed wording on every export so the omission is a published rule
+rather than a discovery. **And the sharp one we had not considered:** with exact matching,
+a task typed `Internal Review` still ships AND ships as a section BANNER reading
+"Internal…" in the client's copy. A heading that says Internal reads as a leak of our
+private list whatever the item says. Either suppress client-visible section labels
+beginning with "Internal", or stop using raw category text as the section heading.
+They also drew a line we should hold: whoever benefits from an item being hidden must not
+also decide, per item, in free text, whether it is hidden — anything that changes what the
+client pays, what they are covered for, or that involves a conflict, is disclosable
+regardless of label.
+
+**On statutory WC presentation:** `Statutory` alone is correct to a broker and ambiguous to
+a CFO — write `Statutory — no policy limit (Part A)`, give Part B its three real limits
+(each accident / disease each employee / disease policy limit) instead of one unqualified
+figure, write `Included with Part A` rather than `$0.00`, name the states (statutory
+benefits in a state we are not filed in are worth nothing), and state the captive
+retention once rather than on both WC rows. On the tower: give WC its own column with a
+deliberately open top edge, and **do not let the statutory block set the vertical scale** —
+running off the top is the honest idiom for unbounded, and capping it flat reads as a limit
+whose number was left off. Draw Employers Liability as a discrete block so it is
+unmistakable that the umbrella drops over Part B, not over Part A.
