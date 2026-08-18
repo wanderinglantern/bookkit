@@ -50,7 +50,7 @@ from ...services import batches as batches_svc
 from ...services import rfi as rfi_svc
 from ..app import TEMPLATES
 from ..forms_render import render_cell, render_cell_display, render_form
-from .account import _conn, _context, _org, _save
+from .account import _conn, _context, _org, _owned, _owned_item, _save
 
 router = APIRouter()
 
@@ -164,13 +164,15 @@ def _task_editor_cell(
 
 @router.get("/accounts/{ref}/tasks/{task_id}/cell/{key}", response_class=HTMLResponse)
 def task_cell(request: Request, ref: str, task_id: str, key: str) -> HTMLResponse:
-    _org(request, ref)
+    org = _org(request, ref)
+    _owned(_conn(request), org, "task", task_id, tasks_repo.get)
     return _task_display_cell(request, ref, task_id, key)
 
 
 @router.get("/accounts/{ref}/tasks/{task_id}/cell/{key}/edit", response_class=HTMLResponse)
 def task_cell_edit(request: Request, ref: str, task_id: str, key: str) -> HTMLResponse:
-    _org(request, ref)
+    org = _org(request, ref)
+    _owned(_conn(request), org, "task", task_id, tasks_repo.get)
     return _task_editor_cell(request, ref, task_id, key)
 
 
@@ -180,6 +182,7 @@ async def task_cell_save(request: Request, ref: str, task_id: str, key: str) -> 
     never the row position — a refresh can reorder open tasks mid-edit."""
     org = _org(request, ref)
     conn = _conn(request)
+    existing = _owned(conn, org, "task", task_id, tasks_repo.get)
     field = _task_field(key)
     raw = str((await request.form()).get(key, ""))
     try:
@@ -190,7 +193,6 @@ async def task_cell_save(request: Request, ref: str, task_id: str, key: str) -> 
         return _task_editor_cell(
             request, ref, task_id, key, error=f"{field.label} is required", typed=raw
         )
-    existing = tasks_repo.get(conn, task_id)
     try:
         with batches_svc.open_batch(
             conn, source="web", tool="edit_task",
@@ -209,7 +211,7 @@ def task_done(request: Request, ref: str, task_id: str) -> HTMLResponse:
     one column."""
     org = _org(request, ref)
     conn = _conn(request)
-    existing = tasks_repo.get(conn, task_id)
+    existing = _owned(conn, org, "task", task_id, tasks_repo.get)
     with batches_svc.open_batch(
         conn, source="web", tool="task_done",
         summary=f"completed {existing.title}", org_id=org.id,
@@ -265,7 +267,7 @@ async def request_create(request: Request, ref: str) -> HTMLResponse:
 def request_edit_form(request: Request, ref: str, request_id: str) -> HTMLResponse:
     org = _org(request, ref)
     conn = _conn(request)
-    existing = rfi_repo.get_request(conn, request_id)
+    existing = _owned(conn, org, "request", request_id, rfi_repo.get_request)
     spec = request_form(existing, conn=conn, org_id=org.id)
     action = f"/accounts/{ref}/requests/{request_id}/edit"
     return HTMLResponse(render_form(request, spec, action))
@@ -275,7 +277,7 @@ def request_edit_form(request: Request, ref: str, request_id: str) -> HTMLRespon
 async def request_update(request: Request, ref: str, request_id: str) -> HTMLResponse:
     org = _org(request, ref)
     conn = _conn(request)
-    existing = rfi_repo.get_request(conn, request_id)
+    existing = _owned(conn, org, "request", request_id, rfi_repo.get_request)
     spec = request_form(existing, conn=conn, org_id=org.id)
     raw = {k: str(v) for k, v in (await request.form()).items()}
     action = f"/accounts/{ref}/requests/{request_id}/edit"
@@ -365,7 +367,8 @@ def _items_panel(request: Request, org: Org, request_id: str, *, oob: bool = Fal
 
 @router.get("/accounts/{ref}/requests/{request_id}/items/new", response_class=HTMLResponse)
 def item_new_form(request: Request, ref: str, request_id: str) -> HTMLResponse:
-    _org(request, ref)
+    org = _org(request, ref)
+    _owned(_conn(request), org, "request", request_id, rfi_repo.get_request)
     spec = rfi_item_form(conn=_conn(request))
     action = f"/accounts/{ref}/requests/{request_id}/items/new"
     return HTMLResponse(render_form(request, spec, action))
@@ -375,6 +378,7 @@ def item_new_form(request: Request, ref: str, request_id: str) -> HTMLResponse:
 async def item_create(request: Request, ref: str, request_id: str) -> HTMLResponse:
     org = _org(request, ref)
     conn = _conn(request)
+    _owned(conn, org, "request", request_id, rfi_repo.get_request)
     spec = rfi_item_form(conn=conn)
     raw = {k: str(v) for k, v in (await request.form()).items()}
     action = f"/accounts/{ref}/requests/{request_id}/items/new"
@@ -422,7 +426,8 @@ def _item_editor_cell(
     response_class=HTMLResponse,
 )
 def item_cell(request: Request, ref: str, request_id: str, item_id: str, key: str) -> HTMLResponse:
-    _org(request, ref)
+    org = _org(request, ref)
+    _owned_item(_conn(request), org, request_id, item_id)
     return _item_display_cell(request, ref, request_id, item_id, key)
 
 
@@ -433,7 +438,8 @@ def item_cell(request: Request, ref: str, request_id: str, item_id: str, key: st
 def item_cell_edit(
     request: Request, ref: str, request_id: str, item_id: str, key: str
 ) -> HTMLResponse:
-    _org(request, ref)
+    org = _org(request, ref)
+    _owned_item(_conn(request), org, request_id, item_id)
     return _item_editor_cell(request, ref, request_id, item_id, key)
 
 
@@ -450,6 +456,7 @@ async def item_cell_save(
     bookkit.forms.inline.RFI_ITEM_FIELDS, not assumed."""
     org = _org(request, ref)
     conn = _conn(request)
+    existing = _owned_item(conn, org, request_id, item_id)
     field = _item_field(key)
     raw = str((await request.form()).get(key, ""))
     try:
@@ -461,7 +468,6 @@ async def item_cell_save(
             request, ref, request_id, item_id, key,
             error=f"{field.label} is required", typed=raw,
         )
-    existing = rfi_repo.get_item(conn, item_id)
     try:
         with batches_svc.open_batch(
             conn, source="web", tool="edit_rfi_item",
@@ -482,7 +488,7 @@ def item_received(request: Request, ref: str, request_id: str, item_id: str) -> 
     received_on; the batch is what makes the pair revert together."""
     org = _org(request, ref)
     conn = _conn(request)
-    existing = rfi_repo.get_item(conn, item_id)
+    existing = _owned_item(conn, org, request_id, item_id)
     with batches_svc.open_batch(
         conn, source="web", tool="task_done",
         summary=f"received {existing.prompt}", org_id=org.id,
@@ -495,6 +501,7 @@ def item_received(request: Request, ref: str, request_id: str, item_id: str) -> 
 def request_detail(request: Request, ref: str, request_id: str) -> HTMLResponse:
     conn = _conn(request)
     org = _org(request, ref)
+    _owned(conn, org, "request", request_id, rfi_repo.get_request)
     context = _context(conn, org, "work", request)
     context.update(_items_context(request, org, request_id))
     return TEMPLATES.TemplateResponse(request, "account/request_detail.html", context)

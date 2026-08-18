@@ -177,6 +177,13 @@
   // surprise" rule from the visual-direction spec, applied to the whole
   // form instead of one cell. Scoped to .entity-form so it never fires for
   // an Escape typed inside an unrelated cell editor elsewhere on the page.
+  //
+  // The contact-removal confirm (_contact_confirm_remove.html) deliberately
+  // does NOT join this selector: after its htmx swap, focus stays on the
+  // "Remove" trigger in .contact-actions, which is OUTSIDE the swapped
+  // fragment, so evt.target.closest would never match and the key would be
+  // advertised-but-dead — the failure mode tests/test_dead_keys.py exists to
+  // stop on the other surface. Its Cancel button is the way out.
   document.body.addEventListener("keydown", function (evt) {
     if (evt.key !== "Escape") return;
     var form = evt.target.closest && evt.target.closest(".entity-form");

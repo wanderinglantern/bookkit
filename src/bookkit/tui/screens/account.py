@@ -74,12 +74,13 @@ def _status(value: str) -> Text:
 TAB_HINTS: dict[str, str] = {
     "tab-overview": (
         "[b]a[/b] task · [b]e[/b] edit task/team/account · [b]d[/b] task done · "
-        "[b]D[/b] delete interaction / team row · [b]w[/b] assign team · "
+        "[b]D[/b] delete interaction / team / contact row · [b]w[/b] assign team · "
         "[b]I[/b] paste import · [b]u[/b] undo"
     ),
     "tab-contacts": (
         "[b]a[/b] add · [b]e[/b] edit · [b]p[/b] make primary · "
-        "[b]I[/b] paste import · [b]w[/b] assign team"
+        "[b]D[/b] remove contact · [b]I[/b] paste import · [b]w[/b] assign team · "
+        "[b]u[/b] undo"
     ),
     "tab-interactions": (
         "[b]a[/b] log · [b]e[/b] edit this interaction · [b]D[/b] delete · "
@@ -245,6 +246,52 @@ class ConfirmDeleteInteraction(ModalScreen):
             yield Static("DELETE INTERACTION", classes="modal-title")
             yield Static(f"{i.occurred_on}  {_pretty(i.type)}\n{i.subject}")
             yield Static("y / enter delete · n / esc cancel · undoable with u",
+                         classes="hint")
+
+    def action_accept(self) -> None:
+        self.dismiss(True)
+
+    def action_decline(self) -> None:
+        self.dismiss(False)
+
+
+class ConfirmRemoveContact(ModalScreen):
+    """One look before taking a contact off the account.
+
+    It names the person AND what survives, because the two things a user
+    cannot see from the row vanishing are the ones that matter: the
+    interactions they attended keep their record, and if they were the primary
+    the account is left with NO primary rather than someone promoted behind
+    the user's back (services/contacts.py owns that rule).
+
+    The notes come from services.contacts.consequences and are asserted
+    string-for-string against the web confirm's own render
+    (tests/test_contact_remove.py) — deleting this loop used to leave the suite
+    green."""
+
+    app: BookkitApp
+    BINDINGS = [
+        Binding("escape,n", "decline", "No"),
+        Binding("y,enter", "accept", "Yes"),
+    ]
+
+    def __init__(self, contact, notes: list[str]) -> None:
+        super().__init__()
+        self.contact = contact
+        # services.contacts.consequences — the same list the web confirm shows
+        self.notes = notes
+
+    def compose(self) -> ComposeResult:
+        c = self.contact
+        detail = " · ".join(
+            part for part in (c.title or "", c.role or "", c.email or "") if part
+        )
+        with VerticalScroll(classes="modal-box"):
+            yield Static("REMOVE CONTACT", classes="modal-title")
+            yield Static(f"[b]{c.name}[/b]" + (f"\n{detail}" if detail else ""))
+            for note in self.notes:
+                yield Static(f"· {note}", classes="hint")
+            yield Static("y / enter remove · n / esc cancel · undoable with u",
                          classes="hint")
 
     def action_accept(self) -> None:
@@ -1236,6 +1283,8 @@ class AccountScreen(Screen):
         "ov-tasks": "task",
         "open-items-table": "task",
         "ov-team": "team_assignment",
+        "contacts-table": "contact",
+        "ov-contacts": "contact",
     }
 
     def action_delete_row(self) -> None:
@@ -1265,6 +1314,8 @@ class AccountScreen(Screen):
                 self._drop_task(str(key))
             elif kind == "team_assignment":
                 self._confirm_remove_assignment(str(key))
+            elif kind == "contact":
+                self._confirm_remove_contact(str(key))
             else:
                 self._confirm_delete_interaction(str(key))
             return
@@ -1273,7 +1324,7 @@ class AccountScreen(Screen):
         # the screen's own rule is that an inapplicable key says so (r, t, l
         # and x all do). Silence is what made it look broken.
         self.notify(
-            "D removes a task or an interaction — tab into one of those rows",
+            "D removes a task, an interaction or a contact — tab into one of those rows",
             severity="warning",
         )
 
@@ -1307,6 +1358,36 @@ class AccountScreen(Screen):
         ):
             interactions.delete(self.app.conn, interaction_id)
         self.notify("interaction deleted — u to undo")
+        self.refresh_data()
+
+    def _confirm_remove_contact(self, contact_id: str) -> None:
+        from ...services import contacts as contacts_svc
+
+        try:
+            contact = contacts.get(self.app.conn, contact_id)
+            notes = contacts_svc.consequences(self.app.conn, contact_id)
+        except KeyError:  # row key went stale under a concurrent rebuild
+            return
+        self.app.push_screen(
+            ConfirmRemoveContact(contact, notes),
+            lambda ok, cid=contact.id: self._remove_contact(cid, ok),
+        )
+
+    def _remove_contact(self, contact_id: str, confirmed: bool | None) -> None:
+        """No _batched() here on purpose: services.contacts.remove opens its
+        own batch, because the is_primary clear and the delete must be one undo
+        unit on every surface — and db.transaction nests by JOINING, so
+        wrapping it would leave a second, empty batch in the changes list."""
+        from ...services import contacts as contacts_svc
+
+        if not confirmed:
+            return
+        try:
+            removed = contacts_svc.remove(self.app.conn, contact_id, source="tui")
+        except ValueError as exc:              # already removed under us
+            self.notify(str(exc), severity="warning")
+            return
+        self.notify(f"{removed.message} — u to undo")
         self.refresh_data()
 
     def _assignment_row(self, assignment_id: str):

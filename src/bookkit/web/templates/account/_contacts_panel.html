@@ -33,6 +33,13 @@
    .form-host:empty already hides it), and the OOB swap replaces the panel
    in one shot, as a completely separate DOM operation. #}
 <div id="contacts-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {# A refused destructive write lands HERE, not in a 404 the browser drops on
+     the floor: htmx does not swap 4xx and nothing listens for
+     htmx:responseError, so "already removed" used to produce no swap, no
+     message and no change at all (fix round 1, 2026-08-18). Same .form-error
+     class macros/form.html uses for a refused save — one look for a refusal,
+     wherever it happens. #}
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
   <div class="people-head">
     <h2 class="people-label">People</h2>
     <span class="people-count">{{ count }}</span>
@@ -68,7 +75,19 @@
             {% endif %}
             <span class="row-action" aria-disabled="true"
                   title="Not wired yet — logging an interaction is a later task">Log interaction</span>
+            {# Remove is LIVE (.row-action-btn, not the muted .row-action the
+               two above use): a real <button> that opens the confirm step
+               into this card's own .form-host below. Never a bare hx-post —
+               see _contact_confirm_remove.html on why a confirm STEP and not
+               an hx-confirm. #}
+            <button type="button" class="row-action-btn"
+                    hx-get="/accounts/{{ header.org.ref }}/contacts/{{ row.id }}/remove"
+                    hx-target="next .form-host" hx-swap="innerHTML">Remove</button>
           </div>
+          {# per-card host for the confirm step. .form-host:empty is already
+             display:none, and the panel-level host above still wins "next
+             .form-host" for the + Add contact button, which precedes it. #}
+          <div class="form-host"></div>
         </div>
       {% endfor %}
     </div>

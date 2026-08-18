@@ -109,7 +109,21 @@ PENDING: dict[str, str] = {
         "deferred by decision, not yet reached: bulk paste-import needs a "
         "browser-side parser design of its own; the TUI flow does not port"
     ),
-    "delete_row": "row deletion not built on the web yet",
+    "delete_row": (
+        "PARTLY built. `D` resolves by focused table: seven tables, FOUR kinds "
+        "of row (contact, interaction, task, team assignment — AccountScreen."
+        "DELETABLE), and request items are not among them on either surface. "
+        "Exactly one kind has a web route: contacts, via GET "
+        "/accounts/{ref}/contacts/{contact_id}/remove (the confirm step, "
+        "which writes nothing) then POST to the same path (routes/"
+        "relationship.py, services.contacts.remove — the same service the TUI "
+        "and MCP call, so all three clear is_primary first and land in one "
+        "revertible batch). Built ahead of its turn because it was a LIVE "
+        "DATA problem: MCP filed a wholesaler as a client contact and no "
+        "surface could take it off. Interactions, tasks, request items and "
+        "team assignments still have no web removal, so the action as a whole "
+        "stays PENDING — do not promote this entry until they do."
+    ),
     "mark_primary": (
         "rendered as a pending row action on the contacts table "
         "(_contacts_panel.html, aria-disabled) — not wired; the rest of a "

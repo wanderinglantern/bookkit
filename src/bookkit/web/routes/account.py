@@ -22,15 +22,17 @@ generic {tab} catch-all (both match the same two-segment path)."""
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import date
-from typing import Any
+from typing import Any, TypeVar
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ... import money
 from ...forms.spec import BatchSpec, FieldError, FormSpec, parse_values
-from ...models import EventBatch, Org
+from ...models import Contact, EventBatch, Org, RfiItem, RfiRequest, Task
+from ...repo import base as base_repo
 from ...repo import batches as batches_repo
 from ...repo import contacts as contacts_repo
 from ...repo import interactions as interactions_repo
@@ -89,6 +91,115 @@ def _org(request: Request, ref: str) -> Org:
     if org is None:
         raise HTTPException(status_code=404, detail=f"no account matches {ref!r}")
     return org
+
+
+# --- ownership: {ref} plus an entity id is TWO claims, and both get checked --
+#
+# Every route below /accounts/{ref}/ that also names an entity id is making a
+# compound claim: this account, AND this row of it. Only the id was ever
+# resolved, so a stale tab or a pasted URL could edit — or REMOVE — a row
+# belonging to another account while the page rendered this one's, and the
+# contact remove-confirm rendered a header naming one account beside a
+# consequence naming the other (fix round 1, 2026-08-18). routes/changes.py
+# had the check because it was written for it specifically; the other eighteen
+# did not. So the rule lives HERE, once, the way team name-uniqueness had to
+# live in repo/team.py: a guard in one caller is a guard the other eighteen
+# write straight past. (Eighteen is the count the code carries — five handlers
+# in relationship.py, thirteen in work.py — and tests/test_web_scoping.py
+# drives every one of them.)
+
+_Owned = TypeVar("_Owned", Contact, Task, RfiRequest, RfiItem)
+
+
+def _not_here(kind: str, entity_id: str, org: Org) -> HTTPException:
+    """One sentence for every mismatch, and it says nothing about the OTHER
+    account. 404, not 403: from this page's point of view the row does not
+    exist, and naming whose it is would leak a name off an account the request
+    has not asked for."""
+    return HTTPException(status_code=404, detail=f"no {kind} {entity_id!r} on {org.name}")
+
+
+def _owner_org_ids(
+    conn: sqlite3.Connection, entity: Contact | Task | RfiRequest | RfiItem
+) -> set[str]:
+    """Which account(s) an entity belongs to — the ownership rule itself.
+
+    A task is the one with two answers, and the reason this is a set:
+    repo.tasks.open_tasks_for_client joins through placement because a
+    placement-attached task may carry `org_id` NULL and still be the client's.
+    `task.org_id == org.id` alone would 404 rows the same page just rendered.
+    An item belongs to whoever its request does — items carry no org of their
+    own."""
+    if isinstance(entity, Contact | RfiRequest):
+        return {entity.org_id}
+    if isinstance(entity, RfiItem):
+        try:
+            return _owner_org_ids(conn, rfi_repo.get_request(conn, entity.request_id))
+        except KeyError:
+            # An item whose request was removed belongs to no account any more,
+            # so it is not this one's: 404, the same answer every other miss
+            # gets. This call sits OUTSIDE `_owned`'s try, so letting the
+            # KeyError out was a 500 and a traceback — and htmx drops 5xx
+            # exactly as it drops 4xx (fix round 2). Mirrors the deleted
+            # placement two lines below.
+            return set()
+    owners = {entity.org_id} if entity.org_id else set()
+    if entity.placement_id:
+        try:
+            owners.add(placements_repo.get(conn, entity.placement_id).org_id)
+        except KeyError:  # a deleted placement carries nothing onto the page
+            pass
+    return owners
+
+
+def _owned(
+    conn: sqlite3.Connection,
+    org: Org,
+    kind: str,
+    entity_id: str,
+    fetch: Callable[[sqlite3.Connection, str], _Owned],
+) -> _Owned:
+    """THE guard: resolve the entity, prove it is this account's, hand it back.
+
+    `fetch` is the caller's own repo getter, so the entity comes back TYPED and
+    the route needs no second read. Both refusals — unknown id and someone
+    else's id — are the same 404, deliberately: telling the two apart is how a
+    guessable id becomes a membership oracle."""
+    try:
+        entity = fetch(conn, entity_id)
+    except KeyError:
+        raise _not_here(kind, entity_id, org) from None
+    if org.id not in _owner_org_ids(conn, entity):
+        raise _not_here(kind, entity_id, org)
+    return entity
+
+
+def _owned_item(
+    conn: sqlite3.Connection, org: Org, request_id: str, item_id: str
+) -> RfiItem:
+    """An item is reached through TWO ids, so both are checked: the request is
+    this account's, and the item is that request's. Without the second check an
+    item could be edited under a request it does not belong to — the panel that
+    comes back would list a row the write never touched."""
+    _owned(conn, org, "request", request_id, rfi_repo.get_request)
+    item = _owned(conn, org, "item", item_id, rfi_repo.get_item)
+    if item.request_id != request_id:
+        raise _not_here("item", item_id, org)
+    return item
+
+
+def _owns_contact_row(conn: sqlite3.Connection, org: Org, contact_id: str) -> None:
+    """The same ownership question asked of the RAW row, dead ones included.
+
+    Only the removal POST needs this. `contacts_repo.get` is alive-filtered, so
+    guarding that route through `_owned` would turn an already-removed contact
+    into "no contact …" — burying services.contacts.remove's far better
+    "already removed", which is precisely what a double-submitted confirm
+    produces. Ownership is checked here; liveness stays the service's answer to
+    give."""
+    row = base_repo.raw_row(conn, "contact", contact_id)
+    if row is None or str(row["org_id"]) != org.id:
+        raise _not_here("contact", contact_id, org)
 
 
 def _save(
