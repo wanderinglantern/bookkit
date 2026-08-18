@@ -5,7 +5,58 @@ below is verified state, not intention. Written mid-flight because the session w
 running into a usage limit.
 
 
-> ## UPDATE — later the same afternoon. Read this before §1; it supersedes it.
+
+> ## FINAL STATE — end of the afternoon session. This supersedes both sections below.
+>
+> **`main` = `0276822`, pushed. 972 passed, mypy clean (114 files), ruff clean,
+> `uv build --wheel` builds with all 9 font files inside.** Every gate run by the
+> controller, not by an agent, both before and after each merge.
+>
+> **The entire queue from the morning handoff is done and merged:**
+> `web-interactions` · Tasks 9 + 17 (`web-snapshot`) · Task 16b fonts (`web-fonts`).
+> `git branch --no-merged main` is empty. All four worktrees under `.claude/worktrees/`
+> are free to reuse or remove (keep the `towerkit` symlink).
+>
+> **The merge of the last two was textually clean and semantically not.** `web-fonts`
+> landed a guard that every `--mono` consumer must set `font-variant-ligatures: none`;
+> `web-snapshot` added `.snapshot-scope` after that guard was written. The suite went red
+> on the merge commit and the guard named the remedy. Fixed in `0276822`. **Two branches
+> that each pass in isolation can still be wrong together — always run the full suite on
+> the merge commit, never only on the branches.**
+> One thing to know about that guard: it checks the *literal next line*, so a comment
+> between `font-family: var(--mono)` and `font-variant-ligatures: none` fails it. Put the
+> comment above the `font-family` line. Minor brittleness, worth knowing before you fight it.
+>
+> ### What is left, in order
+>
+> 1. **Revise the five spec drafts** the adversarial pass marked needs-revision
+>    (`docs/superpowers/specs/2026-08-18-*.md`). The findings are at the bottom of each
+>    file and several would break an implementation built from the body above them. The
+>    sixth (`internal-tasks-export`) is verified sound and is the cheapest real feature
+>    on the board.
+> 2. **towerkit slice 1.** Its R66 amendment is DRAFTED but NOT spliced into
+>    `docs/superpowers/specs/2026-08-17-towerkit-web-conversion.md`, and it needs its
+>    revision round first — its Testing section names a mutation that cannot fire and
+>    rejects an approach on a false impossibility (matplotlib's SVG backend *does* write
+>    the full string as an XML comment). Its best finding is real and load-bearing:
+>    towerkit already solved two-renderers-must-agree once, in
+>    `towerkit/src/towerkit/render/labels.py` — "the single authority both renderers
+>    quote". Extend that precedent rather than inventing a rule.
+>
+> ### Still open for Grant (none blocking)
+>
+> - **`★` renders from a system fallback** — U+2605 is in none of the vendored families.
+>   `◆` and `✕` were routed to JetBrains Mono, which does carry them. Accept, or swap `★`
+>   for a shape JBM has.
+> - **`top of tower` on a multi-line program is the tallest COLUMN, not the tower.**
+>   Delta Marine: GL/AL top at $27M, IM tops at $5M, the rail says $27M. Standard broker
+>   shorthand, but the label is unqualified. His vocabulary call.
+> - **`JetBrainsMono-Medium.woff2` (43K) is vendored and unused** — kept because Design
+>   pinned 400/500/700; its `@font-face` carries a comment saying so.
+> - Timeline empty-state copy, and the `MCP-` batch-ref prefix. Both carried over.
+>
+
+> ## UPDATE — mid-afternoon (superseded by FINAL STATE above, kept for the trail)
 >
 > - **`main` = `dca327b`, pushed. 955 passed, mypy clean, ruff clean, wheel builds
 >   with all 9 font files inside.**
