@@ -319,14 +319,35 @@ def test_undo_pill_and_recent_change_appear_after_a_batch_and_revert_is_wired(ap
     assert 'aria-disabled' not in pill_tag.group(0)
     assert action in pill_tag.group(0)
 
+    # hx-confirm was completely unpinned until review round 2 (C): deleting
+    # it from both templates left the whole suite green, over a control that
+    # is IRREVERSIBLE — services/batches.revert's own writes carry no
+    # batch_id, so there is no undoing the undo on either surface. The TUI
+    # gates the identical call behind ConfirmRevertBatch. It is not enough
+    # that the attribute exists: it has to NAME what goes back, which is what
+    # makes it the one-attribute version of that bar rather than a generic
+    # "are you sure?" users learn to click through.
+    for tag in (revert_tag.group(0), pill_tag.group(0)):
+        confirm = re.search(r'hx-confirm="([^"]*)"', tag)
+        assert confirm, f"revert control carries no hx-confirm: {tag}"
+        assert "premium PLC-0001 → $4.13M" in confirm.group(1), confirm.group(1)
+        assert "cannot be undone" in confirm.group(1), confirm.group(1)
+
 
 # Every control that isn't wired to anything yet must say so: no href/hx-*
 # attribute WITHOUT aria-disabled="true" (looks live, is dead — the bug),
 # and no href/hx-* attribute WITH aria-disabled="true" either (a control
 # that's actually wired must drop the disabled marker — this is what forces
 # the next task that wires one to remove it, or this test breaks).
+#
+# `row-action-btn` is in the set as of review round 2 (G): it is the class on
+# the wired row controls in _requests_panel, _items_panel and _tasks_panel,
+# and a substring check would never have reached them — the marker match is
+# on the split class list, so "row-action" does not cover "row-action-btn".
+# Those four controls sat outside this check entirely, which bounded what the
+# F8 fix protected to the two panels that happen to use the bare class.
 _INERT_CONTROL_MARKERS = frozenset(
-    {"btn-pill", "undo-pill", "revert-link", "rail-action", "row-action"}
+    {"btn-pill", "undo-pill", "revert-link", "rail-action", "row-action", "row-action-btn"}
 )
 
 # What counts as "this control does something". NOT a bare `hx-` prefix: htmx
@@ -376,3 +397,31 @@ def test_inert_controls_stay_marked_with_a_recent_change_present(app_and_org):
     response = client.get(f"/accounts/{org.ref}/relationship")
     assert "undo-pill" in response.text and "revert-link" in response.text
     _assert_inert_controls_are_consistently_marked(response.text)
+
+
+def test_inert_controls_stay_marked_on_the_pages_with_row_action_buttons(app_and_org):
+    """Review round 2, G. `row-action-btn` was never in the marker set, so the
+    four wired row controls in _requests_panel, _items_panel and _tasks_panel
+    sat outside the XOR check entirely — and the two tests above only ever
+    load /relationship, which renders none of them. Adding the class to the
+    set changes nothing on its own; this is the test that makes it bite, on
+    the work tab and the request detail page where those controls live."""
+    client, org = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+    from bookkit.repo import tasks as tasks_repo
+
+    conn = client.app.state.conn
+    if not tasks_repo.open_tasks_for_client(conn, org.id):
+        tasks_repo.create(conn, "Chase loss runs", org_id=org.id, due_on="2026-08-20")
+    request = rfi_repo.create_request(conn, org.id, "Loss run refresh", "2026-08-10")
+    rfi_repo.add_item(conn, request.id, "loss runs 2021-2025", category="Financials")
+
+    work = client.get(f"/accounts/{org.ref}/work")
+    assert work.status_code == 200
+    assert work.text.count("row-action-btn") >= 3, "the work tab renders none of them"
+    _assert_inert_controls_are_consistently_marked(work.text)
+
+    detail = client.get(f"/accounts/{org.ref}/requests/{request.id}")
+    assert detail.status_code == 200
+    assert "row-action-btn" in detail.text, "the request detail renders none of them"
+    _assert_inert_controls_are_consistently_marked(detail.text)

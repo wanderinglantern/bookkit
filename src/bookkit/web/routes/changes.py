@@ -125,9 +125,20 @@ def revert_change(
         # NOT dead despite the successful get_by_ref above: the connection is
         # autocommit and the MCP server or a TUI session can hard-delete the
         # batch between those two reads. Rare, real, and cheaper to answer
-        # than to lose. Nothing else is caught here — an unexpected exception
-        # is a bug and must not be dressed up as a user-facing outcome.
-        return _redirect(ref, tab, batch_ref, "gone")
+        # than to lose.
+        #
+        # But KeyError is no more the batch's signature than ValueError was
+        # the program file's (F2): base.update, base.undelete and
+        # ENTITY_TABLES[entity_type] all raise KeyError from INSIDE revert
+        # for a missing ENTITY, and answering those with "that change no
+        # longer exists" says it about a batch that is still there (review
+        # round 2, B). So decide from the data here too — re-read the ref,
+        # and only claim it is gone when it actually is.
+        try:
+            batches_repo.get_by_ref(conn, batch_ref)
+        except KeyError:
+            return _redirect(ref, tab, batch_ref, "gone")
+        raise  # the batch is still here; this KeyError came from elsewhere
 
     if result.applied:
         return _redirect(ref, tab, batch_ref, "reverted", len(result.reverted))
@@ -174,10 +185,12 @@ def toast_for(
     """The one home for what a revert says, read back off the redirect's own
     query string.
 
-    Every token but `gone` names a batch, and every one of those is checked
-    against the book before a word is rendered: the batch must exist, must
-    belong to THIS account, and must be in the state its token claims. None
-    renders nothing at all — silence beats a sentence a crafted link chose.
+    Every token names a batch, and every one is checked against the book
+    before a word is rendered: the batch must exist, must belong to THIS
+    account, and must be in the state its token claims. `gone` is the same
+    rule read backwards — it is the claim that the ref resolves to nothing,
+    so it renders only when the ref resolves to nothing. None renders nothing
+    at all — silence beats a sentence a crafted link chose.
 
     Nothing from the query string reaches the text. `batch.ref` is printed,
     not `params["undo"]`, so the ref in the toast is one the database
@@ -189,9 +202,20 @@ def toast_for(
     outcome = params.get("outcome")
 
     if outcome == "gone":
-        # The one outcome with no batch to check — it exists BECAUSE the ref
-        # resolved to nothing. Fixed prose, nothing interpolated into it.
-        return {"text": "that change no longer exists", "remedy": None}
+        # Fixed prose, nothing interpolated into it — but the CLAIM still has
+        # to be true. `?outcome=gone&undo=<a live ref>` used to render "that
+        # change no longer exists" while the Recent changes rail listed that
+        # very batch one screenful away: two contradictory sentences on one
+        # page (review round 2, D). The ref genuinely failing to resolve — or
+        # belonging to another account — is the condition the route redirects
+        # on, so it is the condition rendered on.
+        try:
+            batch = batches_repo.get_by_ref(conn, params.get("undo", ""))
+        except KeyError:
+            return {"text": "that change no longer exists", "remedy": None}
+        if batch.org_id != org.id:
+            return {"text": "that change no longer exists", "remedy": None}
+        return None
     if outcome not in ("reverted", "refused", "already", "program"):
         return None
 
@@ -209,9 +233,11 @@ def toast_for(
     if outcome == "reverted":
         # reverted_at is what makes the count a report rather than a claim: a
         # crafted `n` can only inflate the tally of a revert that did happen,
-        # on this account's own batch.
+        # on this account's own batch. Inflation is accepted; a NEGATIVE count
+        # is not — "reverted — -9999 change(s)" describes no batch state that
+        # can exist (review round 2, E).
         count = _int(params, "n")
-        if count is None or batch.reverted_at is None:
+        if count is None or count < 0 or batch.reverted_at is None:
             return None
         return {"text": f"{batch.ref} reverted — {count} change(s)", "remedy": None}
     if outcome == "program":

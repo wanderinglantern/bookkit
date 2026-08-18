@@ -401,11 +401,59 @@ def test_a_crafted_tab_is_404_and_never_reaches_the_redirect(app_and_org):
         assert batches_repo.get(conn, batch.id).reverted_at is None, crafted
 
 
+def test_two_records_conflicting_on_one_field_say_it_once(app_and_org):
+    """Review round 1, F5, and round 2, A. One clause per Conflict printed
+    "contact title changed since, contact title changed since" for TWO
+    contacts conflicting on ONE field — a sentence that reads as a rendering
+    fault and still names neither record.
+
+    The fixture is the whole point of this test and the reason it was
+    rewritten: round 1 shipped a version that conflicted five FIELDS on one
+    contact, which is five distinct (entity_type, field) pairs — the exact
+    case the dedupe cannot touch. Deleting the dedupe left it green. Two
+    records, one field, is what makes the assertion below depend on it."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.services import batches as batches_svc
+
+    contacts = contacts_repo.for_org(conn, org.id)
+    assert len(contacts) >= 2, "need two contacts to conflict on the same field"
+    first, second = contacts[0], contacts[1]
+
+    with batches_svc.open_batch(
+        conn, source="web", tool="edit_contact",
+        summary="retitled two contacts", org_id=org.id,
+    ):
+        contacts_repo.update(conn, first.id, title="Head of Risk")
+        contacts_repo.update(conn, second.id, title="Head of Claims")
+
+    batch = _latest_batch(conn)
+    # both retitled again, outside that batch: two conflicts, one pair
+    with batches_svc.open_batch(
+        conn, source="web", tool="edit_contact", summary="and again", org_id=org.id,
+    ):
+        contacts_repo.update(conn, first.id, title="Head of Risk x")
+        contacts_repo.update(conn, second.id, title="Head of Claims x")
+
+    response = _revert(client, org.ref, batch.ref)
+    assert _redirect_params(response)["outcome"] == "refused"
+    # two changes really are in conflict — otherwise the dedupe has nothing
+    # to dedupe and the assertion below is vacuous
+    assert _redirect_params(response)["n"] == "2"
+
+    page = client.get(response.headers["HX-Redirect"])
+    text = re.search(r'<span class="toast-text">([^<]*)</span>', page.text)
+    assert text, "no toast rendered"
+    said = text.group(1)
+    assert said == f"{batch.ref} refused — contact title changed since", said
+
+
 def test_the_refusal_names_three_conflicts_then_counts_the_rest(app_and_org):
-    """`+N more` had no test (review round 1, F9), and one clause per Conflict
-    printed the same sentence twice for two records conflicting on one field
-    (F5). Five distinct fields conflict here: three are named, two are
-    counted, and each named clause appears exactly once."""
+    """`+N more` had no test (review round 1, F9). Five distinct fields
+    conflict here — five distinct (entity_type, field) pairs, so nothing is
+    deduped: three are named and two are counted. The dedupe itself is
+    covered by the test above, which is the one that can see it."""
     client, org = app_and_org
     conn = client.app.state.conn
     from bookkit.repo import contacts as contacts_repo
@@ -536,3 +584,164 @@ def test_a_plain_value_error_is_not_dressed_up_as_a_program_file(app_and_org):
     )
     assert "towerkit program FILE" not in page.text
     assert changes_route.toast_for(conn, org, {"outcome": "program", "undo": batch.ref}) is None
+
+
+def test_a_key_error_from_inside_revert_is_not_dressed_up_as_gone(app_and_org):
+    """Review round 2, B — F2's failure mode wearing a different exception.
+    `except KeyError` around revert was written for one race (the batch being
+    hard-deleted between the two reads on this autocommit connection), but it
+    caught every KeyError revert can raise: base.update, base.undelete and
+    ENTITY_TABLES[entity_type] all raise KeyError for a missing ENTITY, and
+    answering those with "that change no longer exists" says it about a batch
+    that is still sitting in the rail. The route re-reads the ref now and only
+    claims `gone` when the ref is actually gone."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.services import batches as batches_svc
+
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    with batches_svc.open_batch(
+        conn, source="web", tool="edit_contact", summary="a title", org_id=org.id,
+    ):
+        contacts_repo.update(conn, contact.id, title="Head of Risk")
+    batch = _latest_batch(conn)
+
+    def missing_entity(_conn, _batch):
+        raise KeyError("no contact CON-9999")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(batches_svc, "plan_revert", missing_entity)
+        with pytest.raises(KeyError):
+            _revert(client, org.ref, batch.ref)
+
+    # ...and the race the clause exists for still answers `gone` rather than
+    # raising: with the ref itself unresolvable, KeyError IS the batch being
+    # gone. Both halves, or the fix is just a different wrong answer.
+    assert _redirect_params(_revert(client, org.ref, "MCP-9999"))["outcome"] == "gone"
+
+
+def test_gone_is_not_rendered_about_a_batch_that_is_still_here(app_and_org):
+    """Review round 2, D. `?outcome=gone&undo=<a live ref>` rendered "that
+    change no longer exists" while the Recent changes rail on the SAME screen
+    listed that batch — two contradictory statements one screenful apart.
+    `gone` is a claim about the ref, so it is checked like every other."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import contacts as contacts_repo
+
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    _set_title(client, org, contact.id, "Head of Risk")
+    batch = _latest_batch(conn)
+
+    page = client.get(
+        f"/accounts/{org.ref}/relationship",
+        params={"outcome": "gone", "undo": batch.ref},
+    )
+    assert page.status_code == 200
+    assert "that change no longer exists" not in page.text
+    # the batch really is on the page it would have contradicted
+    assert batch.ref in page.text
+
+    # a ref that resolves to nothing still says it — the token is not dead
+    page = client.get(
+        f"/accounts/{org.ref}/relationship",
+        params={"outcome": "gone", "undo": "MCP-9999"},
+    )
+    assert "that change no longer exists" in page.text
+
+
+def test_a_negative_count_renders_no_toast(app_and_org):
+    """Review round 2, E. `n` was unvalidated beyond int(), so
+    `?outcome=reverted&undo=<ref>&n=-9999` rendered "reverted — -9999
+    change(s)". Inflation is accepted (the revert did happen); a negative
+    count describes no batch state that can exist."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import contacts as contacts_repo
+
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    _set_title(client, org, contact.id, "Head of Risk")
+    batch = _latest_batch(conn)
+    assert _revert(client, org.ref, batch.ref).status_code == 204
+
+    page = client.get(
+        f"/accounts/{org.ref}/relationship",
+        params={"outcome": "reverted", "undo": batch.ref, "n": "-9999"},
+    )
+    assert "-9999" not in page.text
+    assert 'class="toast"' not in page.text
+
+
+def test_toast_for_refuses_a_batch_from_another_account(app_and_org):
+    """Review round 2, F. The org check on the WRITE path is pinned; the one
+    in `toast_for` was not, and removing it left the suite green. Without it,
+    a crafted link on account A prints account B's activity in A's chrome —
+    a cross-account leak on a read the account page performs for anyone."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.repo import orgs
+    from bookkit.web.routes import changes as changes_route
+
+    other = next(o for o in orgs.list_orgs(conn, kind="client") if o.id != org.id)
+    contact = contacts_repo.for_org(conn, other.id)[0]
+    _set_title(client, other, contact.id, "Head of Risk")
+    batch = _latest_batch(conn)
+    assert _revert(client, other.ref, batch.ref).status_code == 204
+
+    # the same ref, rendered on the OTHER account's page: no toast at all
+    for outcome in ("reverted", "already", "refused", "program"):
+        params = {"outcome": outcome, "undo": batch.ref, "n": "1"}
+        assert changes_route.toast_for(conn, org, params) is None, outcome
+    page = client.get(
+        f"/accounts/{org.ref}/relationship",
+        params={"outcome": "reverted", "undo": batch.ref, "n": "1"},
+    )
+    assert 'class="toast"' not in page.text
+    assert batch.ref not in page.text
+
+    # ...and it DOES render on its own account — otherwise this passes just
+    # as well against a toast_for that renders nothing for anybody
+    assert changes_route.toast_for(
+        conn, other, {"outcome": "reverted", "undo": batch.ref, "n": "1"}
+    ) is not None
+
+
+def test_a_token_naming_a_state_the_batch_is_not_in_renders_nothing(app_and_org):
+    """Review round 2, F. `already` and `refused` each assert a batch state,
+    and neither gate was tested: removing either left the suite green. A
+    crafted `already` on a live batch says a revert happened that did not,
+    and a crafted `refused` on a reverted one makes _refusal_text re-plan a
+    batch whose every change now conflicts — a sentence about nothing."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.web.routes import changes as changes_route
+
+    contact = contacts_repo.for_org(conn, org.id)[0]
+    _set_title(client, org, contact.id, "Head of Risk")
+    batch = _latest_batch(conn)
+
+    # unreverted: `already` is a lie, `refused` is the honest state
+    assert changes_route.toast_for(
+        conn, org, {"outcome": "already", "undo": batch.ref}
+    ) is None
+    assert changes_route.toast_for(
+        conn, org, {"outcome": "refused", "undo": batch.ref}
+    ) is not None
+    page = client.get(
+        f"/accounts/{org.ref}/relationship",
+        params={"outcome": "already", "undo": batch.ref},
+    )
+    assert "already reverted" not in page.text
+
+    assert _revert(client, org.ref, batch.ref).status_code == 204
+
+    # reverted: the two swap over
+    assert changes_route.toast_for(
+        conn, org, {"outcome": "already", "undo": batch.ref}
+    ) is not None
+    assert changes_route.toast_for(
+        conn, org, {"outcome": "refused", "undo": batch.ref}
+    ) is None
