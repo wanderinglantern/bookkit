@@ -228,7 +228,13 @@ class ConfirmDeleteInteraction(ModalScreen):
     """One look before removing a logged interaction. Deleting the relationship
     log is how a wrong entry gets corrected — most often one the MCP server
     logged against the wrong account — so it names what is going and says out
-    loud that the delete is soft."""
+    loud that the delete is soft.
+
+    The consequences come from services.interactions.consequences and are
+    asserted string-for-string against the web confirm's own render
+    (tests/test_web_writes.py), the way ConfirmRemoveContact's already are:
+    two surfaces that each compose their own sentences end up promising
+    different things about one write."""
 
     app: BookkitApp
     BINDINGS = [
@@ -236,17 +242,20 @@ class ConfirmDeleteInteraction(ModalScreen):
         Binding("y,enter", "accept", "Yes"),
     ]
 
-    def __init__(self, interaction) -> None:
+    def __init__(self, interaction, notes: list[str]) -> None:
         super().__init__()
         self.interaction = interaction
+        # services.interactions.consequences — the same list the web shows
+        self.notes = notes
 
     def compose(self) -> ComposeResult:
         i = self.interaction
         with VerticalScroll(classes="modal-box"):
             yield Static("DELETE INTERACTION", classes="modal-title")
             yield Static(f"{i.occurred_on}  {_pretty(i.type)}\n{i.subject}")
-            yield Static("y / enter delete · n / esc cancel · undoable with u",
-                         classes="hint")
+            for note in self.notes:
+                yield Static(f"· {note}")
+            yield Static("y / enter delete · n / esc cancel", classes="hint")
 
     def action_accept(self) -> None:
         self.dismiss(True)
@@ -1341,23 +1350,35 @@ class AccountScreen(Screen):
         self.refresh_data()
 
     def _confirm_delete_interaction(self, interaction_id: str) -> None:
+        from ...services import interactions as interactions_svc
+
         try:
             interaction = interactions.get(self.app.conn, interaction_id)
-        except KeyError:
+            notes = interactions_svc.consequences(self.app.conn, interaction_id)
+        except KeyError:  # row key went stale under a concurrent rebuild
             return
         self.app.push_screen(
-            ConfirmDeleteInteraction(interaction),
+            ConfirmDeleteInteraction(interaction, notes),
             lambda ok, iid=interaction.id: self._delete_interaction(iid, ok),
         )
 
     def _delete_interaction(self, interaction_id: str, confirmed: bool | None) -> None:
+        """No _batched() here on purpose, for the reason _remove_contact gives:
+        services.interactions.delete opens its own batch so both surfaces land
+        one identical undo unit — tool AND summary — and db.transaction nests by
+        JOINING, so wrapping it would leave a second, empty batch in the changes
+        list."""
+        from ...services import interactions as interactions_svc
+
         if not confirmed:
             return
-        with _batched(
-            self, tool="interaction_delete", summary="deleted an interaction"
-        ):
-            interactions.delete(self.app.conn, interaction_id)
-        self.notify("interaction deleted — u to undo")
+        try:
+            summary = interactions_svc.delete(self.app.conn, interaction_id, source="tui")
+        except ValueError as exc:            # already deleted under us
+            self.notify(str(exc), severity="warning")
+            self.refresh_data()
+            return
+        self.notify(f"{summary} — u to undo")
         self.refresh_data()
 
     def _confirm_remove_contact(self, contact_id: str) -> None:

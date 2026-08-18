@@ -1,4 +1,4 @@
-"""Relationship tab: contacts (Task 8), interactions land in Task 10.
+"""Relationship tab: contacts (Task 8) and the interactions timeline (Task 10).
 
 Split out of routes/account.py (Task 8's structural requirement — that file
 is edited by four more tasks and needs to stay one shell, not accrue every
@@ -17,25 +17,48 @@ Editing is IN PLACE, cell by cell — not behind an Edit button (Grant's
 Both macros render a whole <td> and swap outerHTML, so activating a cell
 REPLACES the display element and its htmx listener — an innerHTML swap left
 the old listener in place and a click into the editor bubbled back to it,
-discarding the edit before it could be typed."""
+discarding the edit before it could be typed.
+
+Interactions are the exception, and deliberately so (R49). They are edited
+through the WHOLE `interaction_form`, not cell by cell, because
+bookkit.forms.inline owns which fields are inline-editable for both surfaces
+and declares no INTERACTION_FIELDS — the TUI edits an interaction through that
+same modal. A web-only inline set would fork the two surfaces on exactly the
+axis that module exists to keep unified, so the prototype's dashed underline
+on the subject is dropped. Creation is absent for the matching reason:
+forms.entities has an interaction EDIT builder and no create builder, because
+logging one is quick capture's job (account matching, the follow-up-task
+offer), so the header's "+ Log interaction" pill stays inert."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ...forms.entities import apply_contact, contact_form
+from ...forms.entities import apply_contact, apply_interaction, contact_form, interaction_form
 from ...forms.inline import CONTACT_FIELDS
 from ...forms.spec import Field, initial_text, parse_value
-from ...models import Org
+from ...models import Interaction, InteractionType, Org
 from ...repo import contacts as contacts_repo
+from ...repo import interactions as interactions_repo
 from ...services import batches as batches_svc
 from ...services import contacts as contacts_svc
+from ...services import interactions as interactions_svc
 from ..app import TEMPLATES
 from ..forms_render import render_cell, render_cell_display, render_form
-from .account import _conn, _context, _org, _owned, _owns_contact_row, _save
+from .account import (
+    _conn,
+    _context,
+    _org,
+    _owned,
+    _owns_contact_row,
+    _owns_raw_row,
+    _save,
+)
 
 router = APIRouter()
 
@@ -127,14 +150,216 @@ def _contacts_panel(
     return TEMPLATES.TemplateResponse(request, "account/_contacts_panel.html", context)
 
 
+# --- the timeline (Task 10) --------------------------------------------------
+#
+# The same read the tab badge counts (routes/account._counts), so the number
+# beside TIMELINE and the number on the tab cannot describe different books.
+_TIMELINE_LIMIT = 200
+
+_INTERACTION_TYPES = frozenset(t.value for t in InteractionType)
+
+
+def _filter_type(params: Mapping[str, str]) -> str | None:
+    """The `type` query param, or None — and NEVER the raw string.
+
+    Validated against models.InteractionType rather than passed through: an
+    unrecognised value renders the unfiltered timeline instead of echoing a
+    crafted word back into the page as a selected pill, and there is no
+    template name or SQL fragment it could reach either way."""
+    raw = params.get("type")
+    return raw if raw in _INTERACTION_TYPES else None
+
+
+def _timeline_query(type_filter: str | None) -> str:
+    """`type` ALONE, never the request's whole query string.
+
+    ?undo=&outcome=&n= live on this same tab url (routes/changes.py's revert
+    toast). Carrying them through a filter link — or through an edit form's
+    action — would re-show a message about a revert that already happened, on
+    a page the user reached by clicking something else entirely."""
+    return f"?{urlencode({'type': type_filter})}" if type_filter else ""
+
+
+def _type_label(interaction_type: str) -> str:
+    """`site_visit` reads as "site visit" — the same de-slugging the TUI's
+    _pretty does. The stored value is untouched; only the label changes."""
+    return interaction_type.replace("_", " ")
+
+
+def _timeline_row(request: Request, ref: str, entry: Interaction, query: str) -> dict[str, Any]:
+    people = interactions_repo.attendees(_conn(request), entry.id)
+    return {
+        "id": entry.id,
+        "date": entry.occurred_on,
+        "type": _type_label(str(entry.type)),
+        "subject": entry.subject,
+        # who was in the room. A logged call with nobody on it is half a
+        # record, and the attendee list is alive-filtered by the repo, so a
+        # removed contact drops off here without touching the interaction.
+        "who": ", ".join(f"{c.first_name} {c.last_name}" for c in people),
+        # the body was stored and shown NOWHERE before review F33
+        "body": entry.body,
+        "edit_href": f"/accounts/{ref}/interactions/{entry.id}/edit{query}",
+        "delete_href": f"/accounts/{ref}/interactions/{entry.id}/delete{query}",
+    }
+
+
+def _timeline_context(request: Request, org: Org, type_filter: str | None) -> dict[str, Any]:
+    conn = _conn(request)
+    entries = interactions_repo.for_org(conn, org.id, limit=_TIMELINE_LIMIT)
+    shown = [e for e in entries if type_filter is None or str(e.type) == type_filter]
+    query = _timeline_query(type_filter)
+    base = f"/accounts/{org.ref}/relationship"
+    # A pill per type that actually OCCURS here, in the vocabulary's own order
+    # — a filter that can only ever return nothing is not a filter.
+    present = [t.value for t in InteractionType if any(str(e.type) == t.value for e in entries)]
+    if type_filter:
+        empty = (
+            f"no {_type_label(type_filter)} logged — "
+            f"clear the filter to see all {len(entries)}"
+        )
+    else:
+        # NOT "empty — add the first row": the web has no create control for
+        # interactions (quick capture owns logging one), so that sentence names
+        # a button that is not there. NOT "nothing here — that's good" either —
+        # this is not an attention list, and an account nobody has spoken to is
+        # not good news. Factual, promising nothing, until the header's
+        # "+ Log interaction" pill is wired (Grant's ruling, 2026-08-18).
+        empty = "no interactions logged"
+    return {
+        "timeline_rows": [_timeline_row(request, org.ref, e, query) for e in shown],
+        "timeline_count": len(shown),
+        "timeline_type": type_filter,
+        "timeline_base": base,
+        "timeline_query": query,
+        "timeline_filters": [
+            {"id": t, "label": _type_label(t), "href": f"{base}?{urlencode({'type': t})}"}
+            for t in present
+        ],
+        "timeline_empty": empty,
+    }
+
+
+def _interactions_panel(
+    request: Request,
+    org: Org,
+    type_filter: str | None,
+    *,
+    oob: bool = False,
+    error: str | None = None,
+) -> HTMLResponse:
+    """`oob=True` renders the panel as an out-of-band swap and NOTHING else —
+    _contacts_panel's docstring explains the nesting bug that forces it, and
+    the addendum-two half is just as load-bearing: htmx applies out-of-band
+    content BEFORE the primary swap, so an error rendered outside the OOB
+    element lands in a node the OOB replace has already detached, and shows as
+    nothing at all. One element, out of band, error inside it.
+
+    `type_filter` rides along so a panel refresh keeps the filter the user was
+    looking at: dropping back to All after every edit would re-hide the row
+    they just corrected in a list of two hundred."""
+    context = {
+        "oob": oob, "error": error,
+        **_timeline_context(request, org, type_filter),
+    }
+    return TEMPLATES.TemplateResponse(request, "account/_interactions_panel.html", context)
+
+
 @router.get("/accounts/{ref}/relationship", response_class=HTMLResponse)
 def relationship_tab(request: Request, ref: str) -> HTMLResponse:
     conn = _conn(request)
     org = _org(request, ref)
     context = _context(conn, org, "relationship", request)
     context.update(_contacts_context(request, org))
+    context.update(_timeline_context(request, org, _filter_type(request.query_params)))
     context["oob"] = False  # a full tab-page render is never an OOB swap
     return TEMPLATES.TemplateResponse(request, "account/relationship.html", context)
+
+
+@router.get("/accounts/{ref}/interactions/{interaction_id}/edit", response_class=HTMLResponse)
+def interaction_edit_form(request: Request, ref: str, interaction_id: str) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    existing = _owned(conn, org, "interaction", interaction_id, interactions_repo.get)
+    spec = interaction_form(existing)
+    query = _timeline_query(_filter_type(request.query_params))
+    action = f"/accounts/{ref}/interactions/{interaction_id}/edit{query}"
+    return HTMLResponse(render_form(request, spec, action))
+
+
+@router.post("/accounts/{ref}/interactions/{interaction_id}/edit", response_class=HTMLResponse)
+async def interaction_update(request: Request, ref: str, interaction_id: str) -> HTMLResponse:
+    """One writer action, one batch — through the shared `_save`, so a refused
+    save re-renders the form with the input intact and writes nothing (the
+    exception propagates out of open_batch and the transaction rolls back).
+
+    A bare number is refused as a date here exactly as in the TUI: the parser
+    is forms.spec's, the sentence is forms.spec.date_refusal's, and the refusal
+    comes back as a 200 with the form in it — htmx swaps neither 4xx nor 5xx,
+    so a refusal answered with an HTTPException renders as silence."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    existing = _owned(conn, org, "interaction", interaction_id, interactions_repo.get)
+    type_filter = _filter_type(request.query_params)
+    spec = interaction_form(existing)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = f"/accounts/{ref}/interactions/{interaction_id}/edit{_timeline_query(type_filter)}"
+    refused = _save(
+        request, org, spec, action, raw,
+        lambda values: apply_interaction(conn, values, existing),
+    )
+    return refused or _interactions_panel(request, org, type_filter, oob=True)
+
+
+@router.get("/accounts/{ref}/interactions/{interaction_id}/delete", response_class=HTMLResponse)
+def interaction_delete_confirm(request: Request, ref: str, interaction_id: str) -> HTMLResponse:
+    """The confirm step. Writes nothing, and refuses IN THE PAGE.
+
+    Ownership is checked against the RAW row for the reason the contact
+    removal's is: this control is the one a stale tab clicks — two tabs open,
+    or a TUI/MCP delete while the timeline is on screen — and `_owned` is
+    alive-filtered, so it would answer that with a flat 404 that htmx does not
+    swap: no modal, no message, no change. Unknown and foreign ids keep their
+    404; those urls were never rendered by this page."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owns_raw_row(conn, org, "interaction", interaction_id)
+    type_filter = _filter_type(request.query_params)
+    gone = interactions_svc.already_deleted(conn, interaction_id)
+    if gone is not None:
+        return _interactions_panel(request, org, type_filter, oob=True, error=gone)
+    return TEMPLATES.TemplateResponse(
+        request,
+        "account/_interaction_confirm_delete.html",
+        {
+            "org": org,
+            "interaction": interactions_repo.get(conn, interaction_id),
+            "notes": interactions_svc.consequences(conn, interaction_id),
+            "timeline_query": _timeline_query(type_filter),
+        },
+    )
+
+
+@router.post("/accounts/{ref}/interactions/{interaction_id}/delete", response_class=HTMLResponse)
+def interaction_delete(request: Request, ref: str, interaction_id: str) -> HTMLResponse:
+    """The confirmed delete — SOFT, and one revertible batch, both owned by
+    services.interactions.delete so the TUI's `D` and this button cannot differ
+    on either. `def`, not `async def`: nothing may await inside a batch
+    (tests/test_conventions.py), so this belongs on the threadpool.
+
+    "Already deleted" comes back as the refreshed panel carrying the service's
+    own sentence — a 200 with the truth on screen, nothing written — because a
+    double-submitted confirm is the likeliest way to reach it and htmx would
+    drop a 4xx in silence."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owns_raw_row(conn, org, "interaction", interaction_id)
+    type_filter = _filter_type(request.query_params)
+    try:
+        interactions_svc.delete(conn, interaction_id, source="web")
+    except ValueError as exc:
+        return _interactions_panel(request, org, type_filter, error=str(exc))
+    return _interactions_panel(request, org, type_filter)
 
 
 @router.get("/accounts/{ref}/contacts/new", response_class=HTMLResponse)

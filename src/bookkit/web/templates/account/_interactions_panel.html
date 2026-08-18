@@ -1,0 +1,86 @@
+{# The TIMELINE — the right-hand column of the Relationship tab (Task 10),
+   beside PEOPLE. Account View.dc.html:252-284 is the source: a header of
+   TIMELINE + count + a right-aligned row of type filters, then rows on a
+   104px/1fr grid — the date over the type on the left, the subject over the
+   attendees over the note body on the right.
+
+   #interactions-panel is THIS partial's own root, carrying hx-swap-oob when
+   asked for — the same rule _contacts_panel.html's header comment explains at
+   length. A successful edit returns the panel as an OUT-OF-BAND swap and
+   nothing else: the form's own primary swap (macros/form.html, "closest
+   .form-host", innerHTML) then clears the host that opened it, while the OOB
+   swap replaces the panel. Returning the panel as the primary swap instead
+   nests a second copy of the panel inside itself, and returning an error
+   OUTSIDE the OOB element renders as nothing at all, because htmx applies
+   out-of-band content BEFORE the primary swap and the primary target is by
+   then a detached child of the panel just replaced.
+
+   THE SUBJECT IS NOT AN INLINE CELL, though the prototype draws it with the
+   dashed underline that means "click to edit here". forms/inline.py owns which
+   fields are inline-editable for BOTH surfaces — "which fields are inline-
+   editable is not a per-surface choice, so the list lives once, here" — and it
+   declares no INTERACTION_FIELDS, because the TUI edits an interaction through
+   the whole interaction_form modal. A web-only set would fork the surfaces on
+   the one axis that file exists to keep unified (R49), so editing is the whole
+   form, reached from a visible Edit control like requests' own. #}
+<div id="interactions-panel"{% if oob %} hx-swap-oob="true"{% endif %} class="timeline-panel">
+  {# A refused destructive write lands HERE, not in a 4xx the browser drops on
+     the floor (see _contacts_panel.html — same rule, same class). #}
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <div class="timeline-header">
+    <h2 class="timeline-label">Timeline</h2>
+    <span class="timeline-count">{{ timeline_count }}</span>
+    <span class="timeline-head-spacer"></span>
+    {# Server-side filtering, no JS: each pill is a plain link to this same tab
+       carrying `type` ALONE. That is what stops it from resurrecting the
+       revert toast — ?undo=&outcome=&n= (routes/changes.py) live on this url
+       too, and a filter built from the current query string would re-show a
+       message about a revert that already happened. Only the types that
+       actually occur on this account get a pill. #}
+    <div class="timeline-filters">
+      <a href="{{ timeline_base }}"
+         class="timeline-filter{% if not timeline_type %} is-current{% endif %}"
+         {% if not timeline_type %}aria-current="true"{% endif %}>All</a>
+      {% for f in timeline_filters %}
+        <a href="{{ f.href }}"
+           class="timeline-filter{% if f.id == timeline_type %} is-current{% endif %}"
+           {% if f.id == timeline_type %}aria-current="true"{% endif %}>{{ f.label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if timeline_rows %}
+    <div class="timeline-rows">
+      {% for row in timeline_rows %}
+        <div class="timeline-row">
+          <div class="timeline-when">
+            <span class="timeline-date">{{ row.date }}</span>
+            <span class="timeline-type">{{ row.type }}</span>
+          </div>
+          <div class="timeline-what">
+            <div class="timeline-subject-row">
+              <span class="timeline-subject">{{ row.subject }}</span>
+              <span class="timeline-actions">
+                <button type="button" class="row-action-btn"
+                        hx-get="{{ row.edit_href }}"
+                        hx-target="next .form-host" hx-swap="innerHTML">Edit</button>
+                <button type="button" class="row-action-btn"
+                        hx-get="{{ row.delete_href }}"
+                        hx-target="next .form-host" hx-swap="innerHTML">Delete</button>
+              </span>
+            </div>
+            {% if row.who %}<span class="timeline-who">{{ row.who }}</span>{% endif %}
+            {% if row.body %}<p class="timeline-note">{{ row.body }}</p>{% endif %}
+            {# per-row host for the edit form and the delete confirm.
+               .form-host:empty is already display:none. #}
+            <div class="form-host"></div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="panel-empty">
+      <p>{{ timeline_empty }}</p>
+    </div>
+  {% endif %}
+</div>
