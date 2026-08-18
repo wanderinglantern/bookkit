@@ -792,6 +792,56 @@ a {
   color: var(--muted);
 }
 
+/* The program-scoped block: caption plus a left rule down the three rows it
+   covers, so the group closes before `open work` (an account figure) starts
+   again. `bound premium` is the account's, `program premium` is one
+   placement's — mixing the two scopes silently in one panel is the hazard
+   this markup exists to prevent, and the caption carries the program name so
+   the distinction survives without the rule.
+
+   The rule lives on a WRAPPER, not on each row. Per-row borders drew three
+   disconnected segments — `.rail-section` is a flex column with a 0.5625rem
+   gap, and a gap has no border to draw — and the caption, being a sibling of
+   the rows rather than a child of anything, sat OUTSIDE its own bracket. One
+   element with one border is the only way the bracket visibly contains the
+   thing that names it. The wrapper repeats the section's gap so the rows
+   inside keep the rail's rhythm, and pads its block edges so the rule runs
+   past the caption above and the last row below.
+
+   (Round-1 fix: the border was `var(--rule)`, which is the TUI palette's name
+   and undefined on the web. An invalid var() makes the whole `border-left`
+   shorthand compute to `unset`, so what shipped was three rows indented by
+   8px with no rule at all — the tests/test_web_shell.py var-resolution test
+   exists so that class of silent death cannot recur.) */
+.snapshot-scope-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5625rem;
+  padding: 0.25rem 0;
+  border-left: 1px solid var(--border);
+}
+
+.snapshot-scope {
+  margin: 0;
+  padding-left: 0.5rem;
+  font-family: var(--mono);
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+/* the indent inside the bracket — the wrapper draws the rule, this sets how
+   far the scoped rows sit off it (matching the caption above them) */
+.snapshot-row.is-scoped {
+  padding-left: 0.5rem;
+}
+
+/* unplaced capacity — warn, not danger: a hole is work to do, not a
+   failure. Never colour alone; the row prints the share and the layer name
+   ("20% on 3rd Excess"), both of which read without it. */
+.snapshot-value.is-warn {
+  color: var(--warn);
+}
+
 /* TEAM */
 
 .team-row {

@@ -18,6 +18,40 @@ from fastapi.testclient import TestClient
 from bookkit.web.app import create_app
 
 
+def _snapshot_value(html: str, label: str) -> str:
+    """The value rendered against ONE snapshot label. A bare `x in html` check
+    cannot tell `program premium` from `bound premium` when both are money on
+    the same panel — which is the whole thing the tower rows must not get
+    wrong."""
+    match = re.search(
+        rf'<span class="snapshot-label">{re.escape(label)}</span>\s*'
+        rf'<span class="snapshot-value[^"]*"[^>]*>([^<]*)</span>',
+        html,
+    )
+    assert match, f"no snapshot row labelled {label!r} in response"
+    return match.group(1)
+
+
+def _snapshot_labels(html: str) -> list[str]:
+    """Every snapshot row label in the rail, in render order."""
+    return re.findall(r'<span class="snapshot-label">([^<]*)</span>', html)
+
+
+def _scope_group(html: str) -> str:
+    """The program-scoped bracket, whole — caption and rows.
+
+    Depth-counted rather than regexed: the group holds `div`s, so a non-greedy
+    match stops at the first row's closing tag and would call a group of one
+    row "the whole group"."""
+    start = html.index('<div class="snapshot-scope-group">')
+    depth = 0
+    for match in re.finditer(r"<div\b|</div>", html[start:]):
+        depth += 1 if match.group().startswith("<div") else -1
+        if depth == 0:
+            return html[start : start + match.end()]
+    raise AssertionError("unclosed snapshot-scope-group")
+
+
 def _tab_badge(html: str, label: str) -> str:
     match = re.search(rf"{label}\s*<span class=\"tab-badge\">(\d+)</span>", html)
     assert match, f"tab {label!r} badge not found in response"
@@ -253,15 +287,410 @@ def test_documents_empty_state_copy(app_and_org):
         in response.text
 
 
-def test_snapshot_omits_rows_it_has_no_real_read_for(app_and_org):
-    """program premium, top of tower and unplaced have no towerkit-tower read
-    behind them this task — they must not appear at all."""
+# --- the tower rows (Task 17) ------------------------------------------------
+# `bound premium` is summed over EVERY bound placement on the account.
+# `program premium`, `top of tower` and `unplaced` describe ONE program — the
+# one behind the `next renewal` row. Money columns say whose money: the book's
+# per-account figure was once whichever placement renewed next, which showed
+# revenue that did not exist. These tests exist to keep the two scopes apart.
+
+
+@pytest.fixture
+def divergent_tower(app_and_org):
+    """An account whose next renewal IS file-linked and whose account-wide
+    bound premium DIFFERS from that program's own premium.
+
+    No seeded account is both, so this builds one. Only three seeded
+    placements carry a program file at all (PLC-0001, PLC-0006, PLC-0028),
+    and PLC-0006 is the only one its account's next renewal actually picks —
+    Delta Marine's single bound placement, so its program premium and its
+    account bound premium are the same number ($4.13M). Written against the
+    seed as-is, the scope assertion would pass just as well with `program
+    premium` wired straight to the account total: that is precisely the
+    vacuous assertion Task 7 shipped. A SECOND bound placement — no program
+    file of its own, period far enough out that it never becomes the next
+    renewal — is what makes the two figures diverge.
+
+    Returns (client, org, placement, layers) where `placement` is the
+    file-linked one the next renewal points at."""
     client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit import sync
+    from bookkit.repo import placements as placements_repo
+    from bookkit.services import renewals
+
+    item = renewals.next_for_org(conn, org.id)
+    assert item is not None and item.placement.program_path, (
+        "fixture account's next renewal must be file-linked"
+    )
+    layers = sync.layer_details(conn, item.placement.id)
+    assert layers, "fixture account's next renewal must have a real tower"
+
+    placements_repo.create(
+        conn, org.id, "2031 Property Program", "2030-01-01", "2031-01-01",
+        status="bound", total_premium=900_000_00, commission_bps=1250,
+    )
+    still = renewals.next_for_org(conn, org.id)
+    assert still is not None and still.placement.id == item.placement.id, (
+        "the added placement stole the next-renewal slot — move its period out"
+    )
+    return client, org, item.placement, layers
+
+
+def test_snapshot_tower_rows_come_from_the_renewal_placement(divergent_tower):
+    """program premium / top of tower / unplaced describe ONE program — the
+    one behind the next renewal — while bound premium is the account total.
+    Mixing the two scopes silently is how the book once showed revenue that
+    did not exist, so the two numbers are asserted to be DIFFERENT numbers and
+    each to appear against its own label."""
+    from bookkit import money
+    from bookkit.services import book as book_service
+
+    client, org, placement, layers = divergent_tower
+    conn = client.app.state.conn
+
+    program_premium = money.format_cents_compact(
+        sum(layer["premium_cents"] for layer in layers if layer["premium_cents"] is not None)
+    )
+    top_of_tower = money.format_cents_compact(
+        max(layer["attach_cents"] + layer["limit_cents"] for layer in layers)
+    )
+    account_bound = money.format_cents_compact(
+        book_service.bound_premium_for_org(conn, org.id)
+    )
+    assert program_premium != account_bound, (
+        "fixture must make the two scopes different numbers or this test "
+        "cannot tell them apart"
+    )
+
     response = client.get(f"/accounts/{org.ref}/relationship")
+    assert response.status_code == 200
+
+    assert _snapshot_value(response.text, "program premium") == program_premium
+    assert _snapshot_value(response.text, "top of tower") == top_of_tower
+    assert _snapshot_value(response.text, "bound premium") == account_bound
+    # and the panel says WHICH program the three describe, so `program
+    # premium` can never be read as an account total. Asserted as the VISIBLE
+    # caption element, not as a bare substring: the rows also carry the scope
+    # in a `title` attribute, and a substring check passed with the caption
+    # deleted entirely — a tooltip nobody hovers is not a label (mutation 4).
+    assert (
+        f'<p class="snapshot-scope">{placement.program_name} · {placement.ref}</p>'
+        in response.text
+    )
+
+
+def test_snapshot_omits_tower_rows_when_no_program_is_linked(app_and_org):
+    """layer_details returns [] with no linked file. A zero would be a lie —
+    "$0 program premium" reads as a program worth nothing, not as no program.
+
+    The account here has a live renewal, so the omission is about the missing
+    FILE and not about a page that rendered nothing: `bound premium` and the
+    `next renewal` row are both asserted present alongside."""
+    client, _org = app_and_org
+    conn = client.app.state.conn
+    from bookkit import sync
+    from bookkit.repo import orgs
+    from bookkit.services import renewals
+
+    unlinked = next(
+        (
+            (o, item) for o in orgs.list_orgs(conn, kind="client")
+            if (item := renewals.next_for_org(conn, o.id)) is not None
+            and not sync.layer_details(conn, item.placement.id)
+        ),
+        None,
+    )
+    assert unlinked is not None, "no seeded client has an unlinked next renewal"
+    org, item = unlinked
+
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    assert response.status_code == 200
     assert "bound premium" in response.text
-    assert "open work" in response.text
-    for invented in ("program premium", "top of tower", "unplaced"):
-        assert invented not in response.text
+    assert item.renewal_on in response.text
+    for omitted in ("program premium", "top of tower", "unplaced"):
+        assert omitted not in response.text
+
+
+def test_unplaced_names_the_layer_and_the_open_share(divergent_tower):
+    """'20% on 3rd Excess' — a bare percentage does not say where the hole is,
+    and a hole on the primary is a different conversation from a hole at the
+    top of the tower.
+
+    The open layer is written through towerkit the way the app writes one
+    (add_layer then add_participant), so the share the row prints is the one
+    the file actually carries."""
+    client, org, placement, _layers = divergent_tower
+    conn = client.app.state.conn
+    from bookkit import sync
+
+    added = sync.add_layer(
+        conn, placement.id, "3rd Excess", ["gl"],
+        attach_cents=27_000_000_00, limit_cents=10_000_000_00,
+        premium_cents=400_000_00,
+    )
+    assert added.ok, added.items
+    signed = sync.add_participant(conn, placement.id, "3rd-excess", "Markel", 8_000)
+    assert signed.ok, signed.items
+
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    assert response.status_code == 200
+    assert _snapshot_value(response.text, "unplaced") == "20% on 3rd Excess"
+    # warn, not danger, and never colour alone — the share and the layer name
+    # both read without it
+    assert re.search(
+        r'class="snapshot-value[^"]*\bis-warn\b[^"]*"[^>]*>20% on 3rd Excess<',
+        response.text,
+    ), "the unplaced row does not carry the warn treatment"
+
+
+def test_unplaced_leads_with_the_widest_hole_and_counts_the_rest(divergent_tower):
+    """One 296px row cannot list a whole tower's open capacity, so it leads
+    with the WIDEST hole — the one being worked — and says how many others
+    there are. Leading with the narrowest would put the least urgent gap in
+    the only slot the rail has."""
+    client, org, placement, _layers = divergent_tower
+    conn = client.app.state.conn
+    from bookkit import sync
+
+    # stacked, not overlapping: towerkit's validator refuses a layer that
+    # overlaps one already in the tower, and a refused add is silent here
+    for name, layer_id, attach, share in (
+        ("3rd Excess", "3rd-excess", 27_000_000_00, 8_000),
+        ("4th Excess", "4th-excess", 37_000_000_00, 5_000),
+    ):
+        added = sync.add_layer(
+            conn, placement.id, name, ["gl"],
+            attach_cents=attach, limit_cents=10_000_000_00, premium_cents=400_000_00,
+        )
+        assert added.ok, added.items
+        signed = sync.add_participant(conn, placement.id, layer_id, "Markel", share)
+        assert signed.ok, signed.items
+
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    # 4th Excess is 50% open against 3rd Excess's 20% — the wider hole leads
+    assert _snapshot_value(response.text, "unplaced") == "50% on 4th Excess +1 more"
+
+
+def test_unplaced_says_none_when_every_layer_is_signed(divergent_tower):
+    """A fully placed tower is a real read with a real answer, not an absent
+    one — and "none" carries no warn treatment, because there is nothing to
+    warn about."""
+    client, org, _placement, layers = divergent_tower
+    assert all(layer["signed_pct"] == 100 for layer in layers), (
+        "the seeded tower is expected to be fully signed"
+    )
+
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    assert _snapshot_value(response.text, "unplaced") == "none"
+    assert not re.search(
+        r'class="snapshot-value[^"]*is-warn[^"]*"[^>]*>none<', response.text
+    ), "a fully placed tower must not render as a warning"
+
+
+# --- the scope group: membership, not just a caption (review round 1, item C)
+
+
+def test_the_snapshot_rail_renders_exactly_these_rows_in_this_order(divergent_tower):
+    """The caption's meaning is POSITIONAL — "these rows below are that
+    program's" — so nothing but the order pins what it governs. An
+    account-scoped row inserted between `program premium` and `top of tower`
+    rendered under the program caption, inside the rule, and every test
+    passed.
+
+    The whole ordered sequence is asserted, not a subset: a subset check
+    cannot see a row that appears where it should not, which is the entire
+    failure mode."""
+    client, org, _placement, _layers = divergent_tower
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    assert _snapshot_labels(response.text) == [
+        "next renewal",
+        "bound premium",
+        "program premium",
+        "top of tower",
+        "unplaced",
+        "open work",
+        "last touch",
+    ]
+
+
+def test_the_scope_bracket_holds_exactly_the_program_scoped_rows(divergent_tower):
+    """Membership in the bracket is STRUCTURAL: the caption and the three rows
+    it names are children of one element, and the rule is that element's
+    border. So "which rows does this caption govern" has an answer that does
+    not depend on render order, and `bound premium` (the ACCOUNT's money)
+    cannot end up under a caption naming one program.
+
+    Also pins the two things the caption alone never covered: every row in the
+    bracket carries `is-scoped`, and every one carries the scope as a `title`
+    on the ROW (hovering the label, not just the number, says whose money it
+    is)."""
+    client, org, placement, _layers = divergent_tower
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    scope = f"{placement.program_name} · {placement.ref}"
+
+    group = _scope_group(response.text)
+    assert f'<p class="snapshot-scope">{scope}</p>' in group
+    assert _snapshot_labels(group) == ["program premium", "top of tower", "unplaced"]
+
+    rows = re.findall(r"<div class=\"snapshot-row[^\"]*\"[^>]*>", group)
+    assert len(rows) == 3
+    for row in rows:
+        assert "is-scoped" in row, f"a row inside the bracket is not marked scoped: {row}"
+        assert f'title="{scope}' in row, f"a row inside the bracket names no scope: {row}"
+
+    # and nothing OUTSIDE the bracket claims to be program-scoped
+    outside = response.text.replace(group, "")
+    assert "is-scoped" not in outside
+    assert "snapshot-scope" not in outside
+    for account_row in ("bound premium", "open work", "next renewal"):
+        assert account_row in _snapshot_labels(outside)
+
+
+def test_layer_details_is_read_once_per_page(app_and_org, monkeypatch):
+    """It opens and parses the towerkit JSON file, so every extra caller is
+    another disk read of the same bytes. Called once per render is a claim
+    about the code that only a counter can hold: a second call inside
+    `_snapshot` left the whole suite green."""
+    from bookkit.web.routes import account as account_routes
+
+    client, org = app_and_org
+    real = account_routes.sync.layer_details
+    calls: list[str] = []
+
+    def counting(conn, placement_id):
+        calls.append(placement_id)
+        return real(conn, placement_id)
+
+    monkeypatch.setattr(account_routes.sync, "layer_details", counting)
+
+    for tab in ("program", "relationship", "work", "pipeline"):
+        calls.clear()
+        response = client.get(f"/accounts/{org.ref}/{tab}")
+        assert response.status_code == 200
+        assert len(calls) == 1, f"{tab} tab read the program file {len(calls)} times"
+
+
+# --- the two zeros that are lies (review round 1, item B) --------------------
+# The omit guard tested for "no program", not for "no data". With a program
+# linked but the data absent, both money rows printed a figure that claims
+# something false: `$0 program premium` (a program worth nothing) and
+# `$0 top of tower` (a tower with no height). One treatment for both — no
+# figure is printed, because there is no figure.
+
+
+def _stub_layers(monkeypatch, layers):
+    """Render the rail against a made-up tower. Neither case can be built out
+    of the seed: no seeded program leaves a premium unset, and towerkit's
+    validator will not let a normal layer sit at zero limit — the statutory
+    case that produces `max(attach + limit) == 0` is a WC Part A flag."""
+    from bookkit.web.routes import account as account_routes
+
+    monkeypatch.setattr(
+        account_routes.sync, "layer_details", lambda conn, placement_id: list(layers)
+    )
+
+
+def _layer(name="Primary", attach=0, limit=10_000_000_00, premium=None, signed=100.0):
+    return {
+        "name": name, "attach_cents": attach, "limit_cents": limit,
+        "premium_cents": premium, "signed_pct": signed,
+    }
+
+
+def test_program_premium_says_no_figure_rather_than_zero(divergent_tower, monkeypatch):
+    """Every layer's premium unset sums to nothing and printed `$0` — which
+    reads as a program worth nothing, the exact misreading the omit guard was
+    written to prevent one level up."""
+    client, org, placement, _layers = divergent_tower
+    _stub_layers(monkeypatch, [_layer("Primary"), _layer("1st XS", attach=10_000_000_00)])
+
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    assert _snapshot_value(response.text, "program premium") == "—"
+    assert "$0" not in response.text
+    # and the row says WHY there is no figure, not just that there isn't one
+    assert (
+        f'title="{placement.program_name} · {placement.ref} · no layer carries a premium"'
+        in response.text
+    )
+
+
+def test_top_of_tower_says_no_figure_for_statutory_only_cover(
+    divergent_tower, monkeypatch
+):
+    """towerkit: statutory cover is "no dollar limit (WC Part A); limit MUST be
+    0". A WC-only program therefore has max(attach + limit) == 0, and `$0 top
+    of tower` says the tower has no height when it has no ceiling."""
+    client, org, placement, _layers = divergent_tower
+    _stub_layers(
+        monkeypatch,
+        [_layer("WC Part A", attach=0, limit=0, premium=250_000_00)],
+    )
+
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    assert _snapshot_value(response.text, "top of tower") == "—"
+    assert "$0" not in response.text
+    assert (
+        f'title="{placement.program_name} · {placement.ref} · no dollar limit '
+        f'(statutory cover)"' in response.text
+    )
+
+
+def test_a_partly_priced_program_marks_its_premium_as_incomplete(
+    divergent_tower, monkeypatch
+):
+    """Skipping unpriced layers is the spec, but it silently UNDERSTATES a
+    money figure, and money columns say what they are. The `~` travels with
+    the number (the rail is 296px — a footnote elsewhere would not), and the
+    title says how much of the tower is missing."""
+    client, org, placement, _layers = divergent_tower
+    _stub_layers(
+        monkeypatch,
+        [
+            _layer("Primary", premium=100_000_00),
+            _layer("1st XS", attach=10_000_000_00, premium=None),
+        ],
+    )
+
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    assert _snapshot_value(response.text, "program premium") == "~$100K"
+    assert (
+        f'title="{placement.program_name} · {placement.ref} · 1 of 2 layers '
+        f'carry no premium"' in response.text
+    )
+
+
+def test_a_fully_priced_program_carries_no_incompleteness_mark(divergent_tower):
+    """The mark has to mean something, so it must be absent when the figure is
+    whole."""
+    client, org, _placement, _layers = divergent_tower
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    assert not _snapshot_value(response.text, "program premium").startswith("~")
+
+
+def test_a_one_basis_point_hole_is_still_a_hole(divergent_tower, monkeypatch):
+    """`signed_pct < 100` is the threshold, and it is exact: 10000 is the only
+    integer bps whose /100 is exactly 100.0, so no float slack is needed and
+    none may be added. towerkit stores a 99.99% signing as 9999 bps — real
+    data, not rounding noise — and loosening the comparison to `< 99.99` would
+    swallow it while every other test stayed green."""
+    client, org, _placement, _layers = divergent_tower
+    _stub_layers(monkeypatch, [_layer("Primary", premium=100_000_00, signed=9_999 / 100)])
+
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    assert _snapshot_value(response.text, "unplaced") == "0.01% on Primary"
+
+
+def test_a_fully_signed_layer_is_not_a_hole(divergent_tower, monkeypatch):
+    """The other side of the same boundary: 10000 bps is exactly 100.0 and
+    reads as placed, so the threshold cannot be widened to `<= 100` either."""
+    client, org, _placement, _layers = divergent_tower
+    _stub_layers(
+        monkeypatch, [_layer("Primary", premium=100_000_00, signed=10_000 / 100)]
+    )
+
+    response = client.get(f"/accounts/{org.ref}/relationship")
+    assert _snapshot_value(response.text, "unplaced") == "none"
 
 
 def test_team_and_recent_changes_empty_states_use_canonical_copy(app_and_org):

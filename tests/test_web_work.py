@@ -274,6 +274,40 @@ def test_editing_a_request_writes_one_web_batch_and_reverts(app_and_org):
     assert rfi_repo.get_request(conn, request.id).title == before_title
 
 
+def test_a_refused_request_edit_keeps_every_value_and_writes_nothing(app_and_org):
+    """The refusal contract on the form that shipped after Task 8. It routes
+    through the shared `_save`, so this asserts the seam is actually taken —
+    a green suite proves nothing broke, not that the new path is used.
+
+    The batch count is not redundant with the row check: `_save` opens its
+    batch BEFORE calling `write`, so a swallowed refusal strands an empty
+    EventBatch in RECENT CHANGES with nothing for `Revert` to put back, even
+    when the record itself is untouched."""
+    client, org, request = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import rfi as rfi_repo
+
+    before_batches = len(batches_repo.recent(conn, since="", limit=50))
+
+    response = client.post(
+        f"/accounts/{org.ref}/requests/{request.id}/edit",
+        data={"title": "", "requested_on": request.requested_on,
+              "due_on": "2026-08-31", "market_org_id": "", "placement_id": "",
+              "project_id": "", "cancelled_at": "", "notes": "chase Friday"},
+    )
+
+    assert response.status_code == 200, "htmx drops 4xx — a refusal must be a 200"
+    assert '<p class="form-error" role="alert">request is required</p>' in response.text
+    # every other value survives the refusal
+    assert "2026-08-31" in response.text
+    assert "chase Friday" in response.text
+    # and nothing was written — not the record, not a stranded batch
+    assert rfi_repo.get_request(conn, request.id).title == request.title
+    assert rfi_repo.get_request(conn, request.id).due_on == request.due_on
+    assert len(batches_repo.recent(conn, since="", limit=50)) == before_batches
+
+
 # --- items: detail page, inline editing, mark received -----------------------
 
 

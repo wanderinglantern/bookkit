@@ -63,13 +63,41 @@
     <div class="tab-panel">{% block panel %}{% endblock %}</div>
 
     <aside class="right-rail">
+      {# One macro, two callers: the account-scoped rows and the
+         program-scoped ones inside the bracket. Written once so the two can
+         never drift into rendering a snapshot row two different ways.
+
+         `title` sits on the ROW, not on the value span — hovering the LABEL
+         is at least as likely as hovering the number, and on the value alone
+         it said nothing (review round 1, item E). #}
+      {% macro snapshot_row(row) %}
+        <div class="snapshot-row{% if row.overdue %} is-overdue{% endif %}{% if row.scoped %} is-scoped{% endif %}"{% if row.title %} title="{{ row.title }}"{% endif %}>
+          <span class="snapshot-label">{{ row.label }}</span>
+          <span class="snapshot-value{% if row.muted %} is-muted{% endif %}{% if row.warn %} is-warn{% endif %}">{{ row.value }}</span>
+        </div>
+      {% endmacro %}
+
       <section class="rail-section">
         <h2 class="rail-label">Snapshot</h2>
         {% for row in snapshot %}
-          <div class="snapshot-row{% if row.overdue %} is-overdue{% endif %}">
-            <span class="snapshot-label">{{ row.label }}</span>
-            <span class="snapshot-value{% if row.muted %} is-muted{% endif %}">{{ row.value }}</span>
-          </div>
+          {% if row.scope %}
+            {# The program-scoped bracket. `bound premium` above is the
+               ACCOUNT's; these rows are ONE program's. Money columns say
+               whose money, and the caption is the line that says it —
+               without it "program premium" reads as another account total.
+
+               The caption and the rows it governs are CHILDREN of one
+               element, so the rule that brackets them is one continuous
+               border and membership is structural rather than positional: a
+               row rendered after this block cannot land inside the bracket
+               by accident. #}
+            <div class="snapshot-scope-group">
+              <p class="snapshot-scope">{{ row.scope }}</p>
+              {% for scoped in row.rows %}{{ snapshot_row(scoped) }}{% endfor %}
+            </div>
+          {% else %}
+            {{ snapshot_row(row) }}
+          {% endif %}
         {% endfor %}
       </section>
 
