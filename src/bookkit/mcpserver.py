@@ -625,11 +625,21 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
                            expecting=expecting, client=client)
 
     @server.tool()
-    async def list_batches(limit: int = 20) -> list[dict[str, Any]]:
-        """Recent changes THIS server made, newest first, each with the `ref`
-        that `revert_batch` takes. Covers the last 14 days. Use it to show the
-        user what you changed, or to find a change that needs putting back."""
-        return _list_batches(rw, date.today(), limit=limit)
+    async def list_batches(
+        limit: int = 20, days: int = 14, client: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Recent changes to the book, newest first, each with the `ref` that
+        `revert_batch` takes. NOT just this server's work: every batched write
+        is here, whatever made it — this assistant, the TUI, or the web app —
+        and each row's `tool` and `source` say which. So this answers "what
+        changed on this account lately", not only "what did I change".
+        `days` is the window (default 14). `client` narrows to one account
+        (exact name or ref; on a miss the error lists the nearest candidates)
+        — note that a batch which names no account, such as the one that
+        CREATED that client, cannot be matched by it. Anything reverted
+        already is marked `reverted: true`."""
+        return _list_batches(rw, date.today(), limit=limit, days=days,
+                             client=client)
 
     @server.tool()
     async def revert_batch(ref: str, force: bool = False) -> dict[str, Any]:
@@ -2125,15 +2135,22 @@ def _request_create(
 
 
 def _list_batches(
-    conn: sqlite3.Connection, today: date, limit: int = 20, days: int = 14
+    conn: sqlite3.Connection, today: date, limit: int = 20, days: int = 14,
+    client: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Recent batched writes, newest first — what this server changed and
-    whether it has been put back."""
+    """Recent batched writes, newest first, and whether they have been put
+    back. EVERY source, not just this server's — repo.batches.recent has no
+    source filter and never had one, while the tool docstring claimed
+    otherwise for long enough that a model would never have reached for this
+    to answer "what changed on this account this week". `source` is returned
+    so the caller can tell them apart rather than being told a half-truth."""
     from .repo import batches as batches_repo
     from .services import batches as batches_svc
 
+    org_id = _resolve_client(conn, client).id if client is not None else None
     since = (today - timedelta(days=days)).isoformat()
-    recent = batches_repo.recent(conn, since=since, limit=limit)
+    recent = batches_repo.recent(
+        conn, since=since, limit=limit, org_id=org_id)
     labels = batches_svc.account_names(conn, recent)  # one query, not N
     out = []
     for batch in recent:
@@ -2142,7 +2159,7 @@ def _list_batches(
             account = labels.get(batch.org_id, "(deleted account)")
         out.append({
             "ref": batch.ref, "tool": batch.tool, "summary": batch.summary,
-            "account": account, "at": batch.created_at,
+            "source": batch.source, "account": account, "at": batch.created_at,
             "reverted": batch.reverted_at is not None,
         })
     return out

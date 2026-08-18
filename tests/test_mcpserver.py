@@ -1024,6 +1024,117 @@ def test_list_batches_shows_recent_work_newest_first(server_db):
     assert out[1]["account"] == "Acme"
 
 
+def test_list_batches_covers_every_surface_not_just_this_server(server_db):
+    """The docstring said "changes THIS server made"; repo.batches.recent has
+    no source filter and never had one. The tool is MORE capable than it
+    advertised, so a model would never have reached for it to answer "what
+    changed on this account this week" — the fix is the docstring plus the
+    `source` field that lets a caller tell them apart."""
+    from datetime import date as date_cls
+
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+
+    mine = mcpserver._log_activity(rw, "Acme", "an assistant note")
+    with batches_svc.open_batch(
+        rw, source="tui", tool="task_form", summary="a TUI edit", org_id=org.id
+    ):
+        tasks_repo.create(rw, "typed at the keyboard", org_id=org.id)
+
+    out = mcpserver._list_batches(rw, today=date_cls.today())
+    by_source = {row["source"] for row in out}
+    assert by_source == {"mcp", "tui"}
+    assert next(r for r in out if r["ref"] == mine["batch"])["source"] == "mcp"
+
+
+def test_list_batches_filters_to_one_account(server_db):
+    from datetime import date as date_cls
+
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    orgs.create(conn, name="Borealis Foods", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+
+    acme = mcpserver._log_activity(rw, "Acme", "acme note")
+    mcpserver._log_activity(rw, "Borealis Foods", "borealis note")
+
+    out = mcpserver._list_batches(rw, today=date_cls.today(), client="Acme")
+    assert [row["ref"] for row in out] == [acme["batch"]]
+    assert out[0]["account"] == "Acme"
+
+
+def test_list_batches_unknown_account_names_the_nearest(server_db):
+    from datetime import date as date_cls
+
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+    with pytest.raises(ValueError, match="no client matching"):
+        mcpserver._list_batches(rw, today=date_cls.today(), client="Acmee")
+
+
+def test_list_batches_window_is_a_parameter_defaulting_to_fourteen_days(server_db):
+    """Default behaviour is unchanged for existing callers: 14 days, every
+    account. `days` widens or narrows it."""
+    from datetime import date as date_cls
+    from datetime import timedelta
+
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+
+    out = mcpserver._log_activity(rw, "Acme", "a note")
+    today = date_cls.today()
+
+    # 20 days on: outside the default window, inside a 30-day one
+    later = today + timedelta(days=20)
+    assert mcpserver._list_batches(rw, today=later) == []
+    refs = [row["ref"] for row in mcpserver._list_batches(rw, today=later, days=30)]
+    assert refs == [out["batch"]]
+
+    # and the default really is 14, not "everything"
+    edge = today + timedelta(days=13)
+    assert [r["ref"] for r in mcpserver._list_batches(rw, today=edge)] == [out["batch"]]
+
+
+def test_registered_tools_pass_their_arguments_through(server_db):
+    """The rest of this module calls the _verb helpers directly (see the
+    module docstring), which cannot catch a wrapper that forgets to forward a
+    new argument — a mutation that dropped list_batches' `days`/`client` from
+    the wrapper survived the whole suite. These drive the REGISTERED closures.
+    """
+    import asyncio
+
+    from bookkit.repo import opportunities as opportunities_repo
+
+    conn = db.connect(server_db)
+    acme = orgs.create(conn, name="Acme", kind="client")
+    other = orgs.create(conn, name="Borealis Foods", kind="client")
+    opportunities_repo.create(conn, acme.id, "Acme cyber renewal")
+    # a second account's deal, so a wrapper that drops `client` and falls
+    # back to the book-wide list returns two rows and fails below
+    opportunities_repo.create(conn, other.id, "Borealis property")
+    conn.close()
+
+    server = build_server(server_db)
+    tools = {t.name: t for t in server._tool_manager.list_tools()}
+
+    deals = asyncio.run(tools["opportunities"].fn(client="Acme"))
+    assert [d["title"] for d in deals] == ["Acme cyber renewal"]
+    assert deals[0]["opportunity_ref"].startswith("OPP-")
+
+    asyncio.run(tools["log_activity"].fn(client="Acme", note="a note"))
+    asyncio.run(tools["log_activity"].fn(client="Borealis Foods", note="other"))
+    scoped = asyncio.run(tools["list_batches"].fn(days=30, client="Acme"))
+    assert [row["account"] for row in scoped] == ["Acme"]
+    assert scoped[0]["source"] == "mcp"
+
+
 def test_revert_batch_puts_the_value_back(server_db):
     conn = db.connect(server_db)
     org = orgs.create(conn, name="Acme", kind="client")
