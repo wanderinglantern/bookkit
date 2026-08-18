@@ -34,7 +34,24 @@
    UI glyphs (◆ △ ★ ✓ ▶ ▼ →) — only · — … — and JetBrains Mono contains all
    of them except ★. A glyph the font lacks falls through the stack on its
    own, exactly as it does today; subsetting cannot add what the source font
-   never had. */
+   never had. The two glyphs the UI actually renders and Noto Sans lacks —
+   ◆ (.badge-glyph) and ✕ (.toast-close) — are pointed at --mono for that
+   reason. ★ (.contact-star, U+2605) is in NO vendored family and stays on
+   the system fallback; that is Grant's call to change, not a cleanup.
+
+   EVERY --mono consumer also sets `font-variant-ligatures: none`. JetBrains
+   Mono ships `calt` (it has no `liga` at all), which substitutes -> != == --
+   :: ... and friends. Nothing in the UI hits one today — the empty-value
+   placeholder is — (U+2014), not --, and dates use single hyphens — but free
+   text lands in a td.mono (a filename like renewal--2026.xlsx), and the
+   substitution is off by default nowhere. Not set globally: the property is
+   inherited and `none` also kills the common ligatures Noto Sans and Noto
+   Serif do ship.
+
+   `font-variant-numeric: tabular-nums` appears at six sites. It is a NO-OP
+   against these files — JetBrains Mono ships neither `tnum` nor `kern` — and
+   is kept because all six are --mono rules and a monospaced face is tabular
+   by construction; the declaration only earns its keep on the fallback path. */
 
 @font-face {
   font-family: "Noto Sans";
@@ -76,6 +93,10 @@
   src: url("/static/fonts/JetBrainsMono-Regular.woff2") format("woff2");
 }
 
+/* UNUSED TODAY, ON PURPOSE — do not "clean this up". No rule in this file
+   asks for a mono 500; the weight is vendored because Design pinned mono at
+   400/500/700 in the visual-direction spec, and reversing that is not a
+   maintenance decision. If you want it gone, ask Design, not the linter. */
 @font-face {
   font-family: "JetBrains Mono";
   font-style: normal;
@@ -183,7 +204,7 @@ a {
 .topbar-nav-item.is-current-section {
   background: var(--ink);
   color: var(--paper);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .topbar-spacer {
@@ -264,7 +285,7 @@ a {
   align-items: center;
   justify-content: center;
   font-size: 0.75rem;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 /* --- header block -------------------------------------------------------
@@ -310,6 +331,7 @@ a {
   flex: none;
   white-space: nowrap;
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--hint-size);
   color: var(--muted);
 }
@@ -321,7 +343,7 @@ a {
   padding: 0.125rem 0.5rem;
   border-radius: 3px;
   font-size: var(--hint-size);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .badge-status {
@@ -332,6 +354,17 @@ a {
 .badge-overdue {
   background: var(--danger-wash);
   color: var(--danger);
+}
+
+/* The badge's ◆ (U+25C6), drawn from a font this repo ships. Noto Sans'
+   cmap contains no geometric UI glyph at all — only — · … — so the one
+   mark that carries the overdue state ("every coloured state carries a
+   glyph or a word too") was the single part of the badge rendering from
+   whatever the OS happened to substitute. JetBrains Mono has it. The span
+   exists so only the glyph changes face, not the badge's words. */
+.badge-glyph {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
 }
 
 .header-spacer {
@@ -373,7 +406,7 @@ a {
 .btn-pill-primary {
   border-color: var(--accent);
   background: var(--accent);
-  font-weight: 600;
+  font-weight: 700;
   color: var(--paper);
 }
 
@@ -429,12 +462,13 @@ a {
 
 .tab.is-current {
   color: var(--ink);
-  font-weight: 600;
+  font-weight: 700;
   border-bottom-color: var(--accent);
 }
 
 .tab-badge {
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: 0.625rem;
   padding: 0.0625rem 0.375rem;
   border-radius: 8px;
@@ -505,6 +539,7 @@ a {
 .people-label {
   margin: 0;
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--label-size);
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -514,6 +549,7 @@ a {
 
 .people-count {
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--hint-size);
   color: var(--muted);
 }
@@ -580,7 +616,7 @@ a {
 .contact-name {
   flex: 1;
   min-width: 0;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--ink);
   /* Deliberately no dashed underline: first_name/last_name are display-only
      (CONTACT_FIELDS doesn't declare them) — the affordance must not promise
@@ -612,6 +648,7 @@ a {
 
 .contact-field-label {
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: 0.5625rem;
   letter-spacing: 0.1em;
   color: var(--muted);
@@ -695,6 +732,7 @@ a {
 .rail-label {
   margin: 0;
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--label-size);
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -736,6 +774,7 @@ a {
 
 .snapshot-value {
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-variant-numeric: tabular-nums;
   font-size: 0.75rem;
   color: var(--ink);
@@ -764,7 +803,12 @@ a {
 }
 
 .team-who {
-  font-weight: 500;
+  /* 700, not 500: --sans resolves to Noto Sans, which ships 400 and 700
+     only. CSS font matching answers a desired 500 with the 400 face, so
+     since the fonts were vendored this rule had been silently rendering
+     as regular — it used to land on system-ui's real Medium. 700 is the
+     one emphasis weight the family actually has. */
+  font-weight: 700;
 }
 
 .team-detail {
@@ -819,6 +863,7 @@ a {
 .change-time {
   flex: none;
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-variant-numeric: tabular-nums;
   font-size: var(--hint-size);
   color: var(--muted);
@@ -898,6 +943,7 @@ table.rows th {
   text-align: left;
   padding: 0.4rem 0.6rem;
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--label-size);
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -921,6 +967,7 @@ table.rows tr:hover td {
 table.rows td.num,
 table.rows td.mono {
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-variant-numeric: tabular-nums;
 }
 
@@ -956,6 +1003,7 @@ table.rows td.mono {
 .cell-editor select {
   font: inherit;
   font-family: var(--mono);
+  font-variant-ligatures: none;
   padding: 0.15rem 0.3rem;
   border: 1px solid var(--accent);
   border-radius: 4px;
@@ -1009,6 +1057,7 @@ table.rows td.mono {
 .tag-overdue {
   margin-left: 0.375rem;
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--hint-size);
   font-weight: 700;
   color: var(--danger);
@@ -1060,6 +1109,7 @@ table.rows tr.is-waived td {
 
 .request-ref {
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--hint-size);
   color: var(--muted);
   margin-right: 0.625rem;
@@ -1075,7 +1125,7 @@ table.rows tr.is-waived td {
 }
 
 .request-meta strong {
-  font-weight: 600;
+  font-weight: 700;
   color: var(--ink);
 }
 
@@ -1113,6 +1163,7 @@ table.rows tr.is-waived td {
   width: 5rem;
   text-align: right;
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-variant-numeric: tabular-nums;
   font-size: var(--body-size);
   color: var(--muted);
@@ -1122,6 +1173,7 @@ table.rows tr.is-waived td {
   display: inline-block;
   margin-bottom: 0.2rem;
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--label-size);
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -1171,6 +1223,7 @@ table.rows tr.is-waived td {
 
 .entity-form .field label {
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--label-size);
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -1284,6 +1337,11 @@ table.rows tr.is-waived td {
    [data-toast-close] listener in inline-cell.js. */
 .toast-close {
   font: inherit;
+  /* After the `font:` shorthand, which resets family to the inherited sans.
+     The button's whole content is ✕ (U+2715), which Noto Sans does not
+     contain and JetBrains Mono does. */
+  font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--hint-size);
   color: var(--paper);
   background: none;
@@ -1354,7 +1412,7 @@ table.rows tr.is-waived td {
 .book-title {
   margin: 0;
   font-family: var(--serif);
-  font-weight: 600;
+  font-weight: 700;
   font-size: 1.3125rem;
 }
 
@@ -1409,6 +1467,7 @@ table.rows tr.is-waived td {
   border-top: 1px solid var(--ink);
   border-bottom: 1px solid var(--hairline);
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--label-size);
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1462,6 +1521,7 @@ table.rows tr.is-waived td {
 
 .book-cell.mono {
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-variant-numeric: tabular-nums;
   font-size: 0.75rem;
 }
@@ -1596,6 +1656,7 @@ table.rows tr.is-waived td {
 .timeline-label {
   margin: 0;
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--label-size);
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -1605,6 +1666,7 @@ table.rows tr.is-waived td {
 
 .timeline-count {
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--hint-size);
   color: var(--muted);
 }
@@ -1659,6 +1721,7 @@ table.rows tr.is-waived td {
 
 .timeline-date {
   font-family: var(--mono);
+  font-variant-ligatures: none;
   font-size: var(--hint-size);
   color: var(--ink);
   font-variant-numeric: tabular-nums;
@@ -1686,7 +1749,12 @@ table.rows tr.is-waived td {
 .timeline-subject {
   flex: 1;
   min-width: 0;
-  font-weight: 500;
+  /* 700, not 500: --sans resolves to Noto Sans, which ships 400 and 700
+     only. CSS font matching answers a desired 500 with the 400 face, so
+     since the fonts were vendored this rule had been silently rendering
+     as regular — it used to land on system-ui's real Medium. 700 is the
+     one emphasis weight the family actually has. */
+  font-weight: 700;
   color: var(--ink);
 }
 

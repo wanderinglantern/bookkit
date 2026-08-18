@@ -16,7 +16,7 @@
       {% if header.overdue %}
         {# Same header dict as the snapshot's "next renewal" row — one
            RenewalItem, never placement.period_to. #}
-        <span class="badge-overdue">◆ renewal {{ -header.days_remaining }}d overdue</span>
+        <span class="badge-overdue"><span class="badge-glyph">◆</span> renewal {{ -header.days_remaining }}d overdue</span>
       {% endif %}
       <span class="header-spacer"></span>
       <div class="header-actions">

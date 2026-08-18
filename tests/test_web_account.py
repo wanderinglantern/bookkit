@@ -151,12 +151,17 @@ def test_header_count_and_date_come_from_one_renewal_item(
 
     count = abs(days_remaining)
     if days_remaining < 0:
-        assert f"◆ renewal {count}d overdue" in response.text
+        assert f"renewal {count}d overdue" in response.text
         assert "badge-overdue" in response.text
+        # The ◆ sits in its own span so that ONE glyph renders from the
+        # vendored JetBrains Mono; Noto Sans' cmap has no geometric glyph at
+        # all, so unwrapped it came from whatever the OS substituted.
+        assert '<span class="badge-glyph">◆</span>' in response.text
         suffix = f"{count}d over"
     else:
         assert "badge-overdue" not in response.text
-        assert "◆ renewal" not in response.text
+        assert "badge-glyph" not in response.text
+        assert f"renewal {count}d overdue" not in response.text
         suffix = f"{count}d"
     # the snapshot row: exact date AND exact count, from the same item
     assert f"{renewal_on} · {suffix}" in response.text

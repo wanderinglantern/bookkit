@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -177,3 +178,151 @@ def test_the_vendored_fonts_are_served(client):
         assert response.status_code == 200, f"{url} is not served ({response.status_code})"
         assert response.headers["content-type"] == "font/woff2", url
         assert response.content[:4] == b"wOF2", f"{url} is not a woff2 file"
+
+
+def _app_css() -> str:
+    return (_web_dir() / "static" / "app.css").read_text()
+
+
+def _declared_families() -> set[str]:
+    """The families app.css actually SHIPS, read off its @font-face blocks.
+
+    Derived, never hand-listed: a literal ("Noto Sans", "Noto Serif",
+    "JetBrains Mono") written here would reintroduce one level up exactly the
+    hole the test below exists to close — the list would agree with itself
+    while the stylesheet asked for nothing that ships."""
+    families = set()
+    for block in re.findall(r"@font-face\s*\{(.*?)\}", _app_css(), re.DOTALL):
+        match = re.search(r"font-family:\s*([^;]+);", block)
+        assert match, f"@font-face with no font-family:\n{block}"
+        families.add(match.group(1).strip().strip("\"'"))
+    assert families, "no @font-face families in app.css"
+    return families
+
+
+def _stack_leads() -> dict[str, str]:
+    """The FIRST family in each of --sans / --serif / --mono."""
+    leads = {}
+    css = _app_css()
+    for name in ("sans", "serif", "mono"):
+        match = re.search(rf"--{name}:\s*([^;]+);", css)
+        assert match, f"--{name} is not defined in app.css"
+        leads[name] = match.group(1).split(",")[0].strip().strip("\"'")
+    return leads
+
+
+def test_every_vendored_family_leads_the_stack_that_uses_it():
+    """THE test. Vendoring, serving and declaring all seven files is worth
+    nothing if no stack asks for them, and every other test here stays green
+    through that: rename a @font-face family to "Noto Sanz", or delete
+    "JetBrains Mono" from --mono, and the files still ship, still resolve and
+    still serve — the page just quietly renders in system-ui again. This is
+    CLAUDE.md's own rule ("a green suite proves nothing broke, not that the
+    new path is taken") applied to the one seam this branch adds.
+
+    Both directions in one equality: every declared family must lead a stack
+    (nothing is vendored that the page never asks for) and every stack must be
+    led by a declared family (no stack silently falls back to the system)."""
+    leads = _stack_leads()
+    assert len(set(leads.values())) == 3, f"two stacks lead with the same family: {leads}"
+    assert set(leads.values()) == _declared_families(), (
+        f"the stacks ask for {sorted(set(leads.values()))} but app.css declares "
+        f"{sorted(_declared_families())} — a vendored family the page never "
+        f"requests, or a stack that falls straight through to the system font"
+    )
+
+
+def test_the_theme_import_precedes_every_font_face():
+    """@import must come first — CSS ignores one that follows any rule other
+    than @charset/@layer. Move a @font-face above it and the import of
+    theme.css is discarded silently, which drops EVERY --colour token on the
+    page: total blast radius, no error anywhere, and nothing else here notices
+    because the fonts themselves still load."""
+    css = _app_css()
+    first_import = css.find("@import")
+    first_face = css.find("@font-face")
+    assert first_import != -1, "app.css no longer imports theme.css"
+    assert first_face != -1, "app.css declares no @font-face"
+    assert first_import < first_face, (
+        "a @font-face precedes the @import of theme.css — the import is "
+        "invalid there and every colour token on the page is lost"
+    )
+
+
+def test_every_mono_rule_switches_ligatures_off():
+    """JetBrains Mono ships `calt`, which rewrites -> != == -- :: ... on sight.
+    Nothing in the chrome hits one (the empty-value placeholder is — U+2014,
+    not --), but free text reaches a td.mono — a filename like
+    renewal--2026.xlsx. Paired at every site rather than set once on :root,
+    because font-variant-ligatures INHERITS and `none` would also kill the
+    common ligatures Noto Sans and Noto Serif do ship."""
+    css = _app_css()
+    consumers = css.count("font-family: var(--mono);")
+    assert consumers, "no --mono consumers found — did the property get renamed?"
+    guarded = len(
+        re.findall(r"font-family: var\(--mono\);\n\s*font-variant-ligatures: none;", css)
+    )
+    assert guarded == consumers, (
+        f"{consumers - guarded} of {consumers} --mono rules do not switch "
+        f"ligatures off; put font-variant-ligatures: none on the next line"
+    )
+
+
+def test_the_open_font_licences_ship_beside_the_fonts_they_cover():
+    """An OFL obligation, not a nicety: the notice must travel with the font,
+    including inside the wheel. Both licence files could be deleted today
+    without a single test noticing.
+
+    Checked under the INSTALLED package directory, which is what hatch ships
+    (`packages = ["src/bookkit"]` copies the tree wholesale), so a file that
+    is here is a file in the wheel. Matched by derivation — each font's
+    project prefix must be covered by some OFL-<project>.txt — so deleting
+    either licence fails, rather than a hand-written pair of filenames that
+    would only agree with itself."""
+    fonts_dir = _web_dir() / "static" / "fonts"
+    licences = sorted(fonts_dir.glob("OFL*.txt"))
+    assert licences, "no OFL notice ships with the vendored fonts"
+    for licence in licences:
+        assert "SIL OPEN FONT LICENSE" in licence.read_text().upper(), (
+            f"{licence.name} is not an OFL notice"
+        )
+    projects = [licence.stem.removeprefix("OFL-") for licence in licences]
+    for font in sorted(fonts_dir.glob("*.woff2")):
+        family = font.name.split("-")[0]  # NotoSans, NotoSerif, JetBrainsMono
+        assert any(family.startswith(project) for project in projects), (
+            f"{font.name} ships with no OFL notice covering it (have {projects})"
+        )
+
+
+def test_woff2_is_typed_without_the_system_mime_files():
+    """The .woff2 -> font/woff2 mapping is NOT in Python's own table, and this
+    is the test that stops it being deleted again for that wrong reason.
+
+    Wiping `mimetypes.knownfiles` is the only honest way to check it: the
+    obvious `mimetypes.init(files=())` is a NO-OP, because CPython's init does
+    `files = knownfiles + list(files)` and re-reads the system files anyway.
+    With them gone — the state of python:3.13-slim, Alpine, and most CI
+    images — the stdlib types .woff2 as nothing at all, StaticFiles serves
+    every vendored font as application/octet-stream, and
+    test_the_vendored_fonts_are_served above fails on any machine that is not
+    a Mac."""
+    import mimetypes
+
+    from bookkit.web import app as app_module
+
+    original = mimetypes.knownfiles
+    try:
+        mimetypes.knownfiles = []
+        mimetypes.init()  # stdlib defaults only
+        assert mimetypes.guess_type("x.woff2")[0] is None, (
+            "this Python now types .woff2 by itself, so web/app.py's "
+            "_register_font_types may finally be redundant — but check the "
+            "OLDEST Python in requires-python before deleting it, and delete "
+            "this test in the same commit"
+        )
+        app_module._register_font_types()
+        assert mimetypes.guess_type("x.woff2")[0] == "font/woff2"
+    finally:
+        mimetypes.knownfiles = original
+        mimetypes.init()
+        app_module._register_font_types()  # init() dropped it; put it back

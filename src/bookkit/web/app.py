@@ -6,6 +6,7 @@ through the same apply_* the TUI calls, inside one batch."""
 
 from __future__ import annotations
 
+import mimetypes
 import sqlite3
 import threading
 import weakref
@@ -22,6 +23,33 @@ from . import theme_css as theme_css_mod
 
 HERE = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(HERE / "templates"))
+
+
+def _register_font_types() -> None:
+    """Teach mimetypes about .woff2. NOT redundant — this was checked properly
+    the second time.
+
+    Python's own table does not carry it: on 3.13.5
+    `mimetypes._types_map_default.get(".woff2")` is None, and `grep woff` over
+    the stdlib module finds nothing. It resolves on THIS Mac only because
+    `mimetypes.init()` reads /etc/apache2/mime.types, which macOS ships. On
+    python:3.13-slim, on Alpine, and on most CI images there is no such file,
+    StaticFiles falls back to application/octet-stream for every vendored
+    font, and tests/test_web_shell.py::test_the_vendored_fonts_are_served goes
+    red on a machine that is not this one.
+
+    A named function rather than a bare module-level call so the invariant can
+    be tested after wiping mimetypes back to stdlib defaults, without
+    reloading this module. Deleting it is pinned by
+    tests/test_web_shell.py::test_woff2_is_typed_without_the_system_mime_files
+    — a `mimetypes.init(files=())` "proof" that it is dead is a NO-OP, because
+    CPython does `files = knownfiles + list(files)`; the wipe is
+    `mimetypes.knownfiles = []`.
+    """
+    mimetypes.add_type("font/woff2", ".woff2")
+
+
+_register_font_types()
 
 
 class ThreadConnections:
