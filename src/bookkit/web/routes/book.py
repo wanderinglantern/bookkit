@@ -45,11 +45,17 @@ def _conn(request: Request) -> sqlite3.Connection:
 def _status_class(status: str) -> str:
     """Colour is signal, never decoration (visual-direction spec) — every
     coloured state here still prints the status word itself, this only
-    supplies the ink. Every row on /book is currently status='active'
-    (that's the filter), but the mapping is written generally rather than
-    special-cased to the one value that can appear today."""
+    supplies the ink. /book lists every client regardless of status (fix
+    round 1, 2026-08-18: it used to filter to status='active', which
+    silently hid every prospect — narrowing by status is the filter
+    field's job, not the query's), so prospect/dormant/active all need
+    their own visible ink, matching the design source's own STATUS_INK
+    map (verified against towerkit's palette, not the TUI's terminal
+    theme, since the web palette is the binding one here)."""
     if status == "active":
         return "is-good"
+    if status == "prospect":
+        return "is-accent"
     if status in ("lost", "declined", "lapsed"):
         return "is-danger"
     if status == "dormant":
@@ -113,8 +119,14 @@ def index() -> RedirectResponse:
 
 @router.get("/book", response_class=HTMLResponse)
 def book(request: Request) -> HTMLResponse:
+    """Every client, any status — narrowing to one status is the filter
+    field's job (rendered, not wired yet), not this query's. A book that
+    silently hides every prospect is worse than one that shows them
+    distinguishably coloured: you cannot filter to something you cannot
+    see. Matches tui/screens/book.py's own orgs.list_orgs(kind="client")
+    call, with no status= argument."""
     conn = _conn(request)
-    clients = orgs_repo.list_orgs(conn, kind="client", status="active")
+    clients = orgs_repo.list_orgs(conn, kind="client")
     rows = [_row(conn, org) for org in clients]
     total_cents = sum(book_service.bound_premium_for_org(conn, o.id) for o in clients)
     context = {

@@ -43,7 +43,13 @@ def test_the_root_path_lands_somewhere_useful(app_and_conn):
     assert "The book" in landed.text
 
 
-def test_the_book_lists_active_clients_with_their_next_renewal(app_and_conn):
+def test_the_book_lists_every_client_regardless_of_status(app_and_conn):
+    """Fix round 1, 2026-08-18: this used to filter to status='active',
+    which silently hid every prospect (and any dormant account) — the
+    screen already has a status column and a filter field, so narrowing by
+    status is the user's job, not the query's. Matches
+    tui/screens/book.py's own orgs.list_orgs(kind="client") call, which
+    takes no status= argument."""
     client, conn = app_and_conn
     from bookkit.repo import orgs
     from bookkit.services import renewals
@@ -51,7 +57,8 @@ def test_the_book_lists_active_clients_with_their_next_renewal(app_and_conn):
     response = client.get("/book")
     assert response.status_code == 200
 
-    active = orgs.list_orgs(conn, kind="client", status="active")
+    all_clients = orgs.list_orgs(conn, kind="client")
+    active = [o for o in all_clients if o.status == "active"]
     assert active, "fixture must seed at least one active client"
     org = active[0]
     assert org.name in response.text
@@ -63,13 +70,13 @@ def test_the_book_lists_active_clients_with_their_next_renewal(app_and_conn):
         # placement.period_to — print the date the countdown was counted to.
         assert item.renewal_on in response.text
 
-    # a dormant/prospect client seeded by seed.py must NOT appear — the
-    # book lists ACTIVE clients
-    non_active = [
-        o for o in orgs.list_orgs(conn, kind="client") if o.status != "active"
-    ]
-    assert non_active, "fixture must seed at least one non-active client"
-    assert non_active[0].name not in response.text
+    # A prospect seeded by seed.py MUST appear — picked by ref so this
+    # fails again if the status filter comes back.
+    prospects = [o for o in all_clients if o.status == "prospect"]
+    assert prospects, "fixture must seed at least one prospect client"
+    prospect = prospects[0]
+    assert prospect.ref in response.text
+    assert prospect.name in response.text
 
 
 def test_the_premium_column_is_the_account_total_not_one_placement(db_path: Path):

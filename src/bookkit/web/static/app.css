@@ -1194,6 +1194,13 @@ table.rows td.mono {
   color: var(--good);
 }
 
+/* prospect — distinguishable from active/dormant per the design source's
+   own STATUS_INK map (fix round 1, 2026-08-18: /book now lists every
+   client, not just active ones, so prospect needs its own visible ink). */
+.book-cell.is-accent {
+  color: var(--accent);
+}
+
 .book-cell.is-warn {
   color: var(--warn);
 }
