@@ -395,3 +395,87 @@ deliberately open top edge, and **do not let the statutory block set the vertica
 running off the top is the honest idiom for unbounded, and capping it flat reads as a limit
 whose number was left off. Draw Employers Liability as a discrete block so it is
 unmistakable that the umbrella drops over Part B, not over Part A.
+
+---
+
+## The client workbook — Grant's answers to the CFO review (2026-08-18)
+
+Twelve of fourteen answered. **C9 (the "Internal…" section banner leaking into the client
+copy) and C14 (what the review got wrong) were left blank — blank means "not now", not
+"agreed".** C9 in particular is still open and is the one finding about our own conduct.
+
+| | Decision |
+|---|---|
+| **C1** SOI row status, unbound out of subtotals | **build next** |
+| **C2** status suffix applied backwards | **fix with C1** |
+| **C3** expired policy years | **exclude them** |
+| **C4** Owner column | **build — and see below, he widened it** |
+| **C5** sheet header block | **build** |
+| **C6** renewals | **renewal date + a calendar tab** |
+| **C7** open-item ordering | **overdue first** |
+| **C8** withholding scope line | **adopt** |
+| **C10** statutory wording | **adopt all — the phrase is `Statutory - State Limits`** |
+| **C11** statutory on the tower | **adopt** |
+| **C12** format pass | **do it as one pass** |
+| **C13** missing content | **named insured schedule only — optional, capturing FEIN** |
+
+### C4 is not a two-value column any more
+
+His words: *"I think this is helpful for the AE as well to formally assign someone. Perhaps
+leveraging a list of individuals or ability to freeform if needed. Frequently the AE (me)
+will be working with a host of people in placement and needs to know who to chase for
+whatever."*
+
+So the client's **Owner: You / Us** is the *export projection* of a richer internal fact:
+a named assignee on a task. That is a different feature from the one the CFO asked for,
+and it is the more useful one.
+
+Shape to build to (controller's call, 2026-08-18 — say so if wrong):
+
+- **One additive `assignee` column on task**, a freeform string with `Field.suggestions`
+  drawn from team members and the account's contacts — the vocabulary pattern CLAUDE.md
+  already prescribes, wired on BOTH halves (autocomplete dropdown and ghost text). Freeform
+  matters: underwriters, wholesalers and third parties are exactly who the AE chases and
+  none of them are records in the book.
+- **The export derives You / Us; it does not store it.** An assignee matching a contact on
+  *this* account renders `You`; anything else, including empty, renders `Us` — unassigned
+  work is ours until someone says otherwise. Deriving rather than storing is what stops the
+  two from disagreeing, and it means the column cannot be wrong for a client who was never
+  told about it.
+- **Watch the ambiguity**: two people sharing a name is precisely what `repo/team.py`'s
+  uniqueness guard exists for, and a contact and a team member sharing one would flip the
+  derived side. Decide what a collision renders before building it.
+- Additive column, no destructive migration. Snapshot before the migration runs regardless.
+
+### C10 — use Grant's phrase, not the reviewer's
+
+The cell reads **`Statutory - State Limits`**, not the reviewer's proposed
+"Statutory — no policy limit (Part A)". His vocabulary wins on his deliverable. The rest of
+that package still stands: Part B's three real limits instead of one unqualified figure,
+`Included with Part A` rather than `$0.00`, the captive retention stated once rather than on
+both WC rows. Whether the *states themselves* are still listed alongside the phrase is not
+settled — "State Limits" may be intended to carry that implicitly. Ask before assuming.
+
+Lives in `towerkit/src/towerkit/soi.py:38` (`limits_text`), not in bookkit.
+
+### C13 — named insureds, optional, with FEIN
+
+Only the named-insured/subsidiary schedule was wanted; the renewal calendar arrives via C6
+and everything else on that list was declined for now. **FEIN is new data about a legal
+entity** — it is a schema question, not a formatting one, and it wants its own small spec
+before code: where the entity list lives (a program fact in towerkit, or an org fact in
+bookkit), whether FEIN is per named insured or per org, and the backup story for the
+migration. FEIN is also mildly sensitive; decide whether it belongs on a client-facing sheet
+at all before putting it there.
+
+### Where each of these actually lives
+
+Two repos, and the split is not the obvious one:
+
+- **bookkit** (`services/export_open_items.py`): C3 (filter expired placements), C7 (section
+  ordering), C8 (the scope line), and the composition half of C1/C4.
+- **towerkit**: `SoiRow` is a frozen dataclass in `soi.py:94` with no status field, so
+  **C1 needs a field there and a column in the renderer**; C2 falls out of C1 for free,
+  because the `(Bound)` suffix is a label hack applied only in bookkit's
+  `_book_data_section` for UNLINKED placements — which is exactly why the marker appears on
+  the placements we know less about. C10, C5, C11 and C12 are all towerkit renderer work.
