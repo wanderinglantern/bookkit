@@ -2112,3 +2112,91 @@ def test_every_ref_taking_verb_refuses_the_same_way(server_db):
 
     with pytest.raises(ValueError, match="no batch 'MCP-9999' — read list_batches"):
         mcpserver._program_revert_file(rw, "MCP-9999")
+
+
+# -- log_activity can record yesterday ----------------------------------------
+
+
+def test_log_activity_records_the_type_and_the_day_it_happened(server_db):
+    """It hardcoded type="note" and occurred_on=today, so "the call I had with
+    Sarah last Tuesday" could not be logged — and, there being no interaction
+    kind in edit_field, could not be corrected after the fact either."""
+    rw, org = _rw(server_db)
+
+    out = mcpserver._log_activity(
+        rw, "Acme", "walked the yard with Sarah",
+        type="site_visit", occurred_on="2026-08-11",
+    )
+
+    assert out["type"] == "site_visit"
+    assert out["occurred_on"] == "2026-08-11"
+    logged = interactions.get(rw, out["interaction_ref"])
+    assert logged.type == "site_visit"
+    assert logged.occurred_on == "2026-08-11"
+    # and it is findable by the read that names refs
+    found = mcpserver._recent_activity(rw, "Acme")[0]
+    assert found["type"] == "site_visit" and found["occurred_on"] == "2026-08-11"
+
+
+def test_log_activity_defaults_are_exactly_what_it_used_to_hardcode(server_db):
+    from datetime import date as date_cls
+
+    rw, org = _rw(server_db)
+    out = mcpserver._log_activity(rw, "Acme", "a note")
+    assert out["type"] == "note"
+    assert out["occurred_on"] == date_cls.today().isoformat()
+
+
+def test_log_activity_refuses_a_type_outside_the_vocabulary(server_db):
+    rw, org = _rw(server_db)
+    with pytest.raises(ValueError) as err:
+        mcpserver._log_activity(rw, "Acme", "a note", type="phonecall")
+    assert "'type' must be one of" in str(err.value)
+    assert "site_visit" in str(err.value)          # names the legal values
+    assert interactions.for_org(rw, org.id) == []  # nothing written
+
+
+def test_log_activity_refuses_a_bare_number_as_a_date(server_db):
+    """CLAUDE.md's rule, reached through the tool: dateparser reads "5" as a
+    MONTH and future-biases it, so "the 5th" once saved as 2027-05-01 and fell
+    off every attention window silently. parse_human_date refuses it and the
+    refusal must reach the model intelligibly, not be routed around."""
+    rw, org = _rw(server_db)
+    with pytest.raises(ValueError) as err:
+        mcpserver._log_activity(rw, "Acme", "a note", occurred_on="5")
+    assert "'5' is not a date" in str(err.value)
+    assert "a bare number is ambiguous" in str(err.value)
+    assert interactions.for_org(rw, org.id) == []  # nothing written
+
+
+def test_log_activity_takes_a_human_backdate(server_db):
+    """The write-up-after-the-fact case, in the forms parse_human_date
+    actually accepts. NOTE: "last tuesday" is NOT one of them — it returns
+    None and is refused, so the tool docstring must not promise it."""
+    from datetime import date as date_cls
+    from datetime import timedelta
+
+    rw, org = _rw(server_db)
+    today = date_cls.today()
+
+    yesterday = mcpserver._log_activity(
+        rw, "Acme", "spoke to Sarah", type="call", occurred_on="yesterday")
+    assert yesterday["occurred_on"] == (today - timedelta(days=1)).isoformat()
+
+    older = mcpserver._log_activity(
+        rw, "Acme", "and again", type="call", occurred_on="2 days ago")
+    assert older["occurred_on"] == (today - timedelta(days=2)).isoformat()
+
+
+def test_registered_log_activity_forwards_type_and_occurred_on(server_db):
+    import asyncio
+
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    server = build_server(server_db)
+    tools = {t.name: t for t in server._tool_manager.list_tools()}
+
+    out = asyncio.run(tools["log_activity"].fn(
+        client="Acme", note="a call", type="call", occurred_on="2026-08-11"))
+    assert out["type"] == "call" and out["occurred_on"] == "2026-08-11"

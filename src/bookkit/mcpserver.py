@@ -254,16 +254,26 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
 def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
     @server.tool()
     async def log_activity(
-        client: str, note: str, follow_up: str | None = None
+        client: str, note: str, follow_up: str | None = None,
+        type: str = "note", occurred_on: str | None = None,
     ) -> dict[str, Any]:
-        """Log a client interaction (call, email, meeting, site note) — additive
-        and event-logged; nothing existing is touched. `client` resolves the same
-        way as every other client-scoped tool (exact client name or ref; on a
-        miss the error lists the nearest candidates — never guess an id). Pass
-        `follow_up` as any human date ("friday", "+2w", "2026-09-01") to also
-        create a follow-up task in the same transaction; omit it to just log
-        the note."""
-        return _log_activity(rw, client, note, follow_up=follow_up)
+        """Log a client interaction — additive and event-logged; nothing
+        existing is touched. `client` resolves the same way as every other
+        client-scoped tool (exact client name or ref; on a miss the error
+        lists the nearest candidates — never guess an id). `type` is what
+        actually happened: call | meeting | email | note | site_visit | event
+        (default note; anything else is refused with the list).
+        `occurred_on` is WHEN, as a human date ("yesterday", "2 days ago",
+        "2026-08-11" — but NOT "last tuesday", which does not parse) — it
+        defaults to today, so pass it for anything you are writing up after
+        the fact. A bare 1-2 digit number is refused rather than read as a
+        day of the month. Get both right at the time: there is no interaction
+        kind in edit_field, so the only correction is activity_delete
+        (find the ref with recent_activity) and log it again. Pass
+        `follow_up` as any human date to also create a follow-up task in the
+        same transaction."""
+        return _log_activity(rw, client, note, follow_up=follow_up,
+                             type=type, occurred_on=occurred_on)
 
     @server.tool()
     async def recent_activity(client: str, limit: int = 20) -> list[dict[str, Any]]:
@@ -893,14 +903,35 @@ def _provenance(conn: sqlite3.Connection, entity: str, entity_id: str) -> None:
 
 
 def _log_activity(
-    conn: sqlite3.Connection, client: str, note: str, follow_up: str | None = None
+    conn: sqlite3.Connection, client: str, note: str, follow_up: str | None = None,
+    type: str = "note", occurred_on: str | None = None,
 ) -> dict[str, Any]:
+    """`type` and `occurred_on` both default to what this tool used to
+    hardcode, so nothing that called it before changes. They exist because an
+    assistant could not record "the call I had with Sarah last Tuesday" — and
+    could not correct it afterwards either, there being no interaction kind in
+    edit_field. Both parse through machinery that already exists: the
+    InteractionType vocabulary (refused with the list, like every other closed
+    vocabulary here) and parse_human_date, which refuses a bare 1-2 digit
+    number on purpose — dateparser reads "5" as a MONTH and future-biases it,
+    which once saved a follow-up as 2027-05-01 and dropped it out of every
+    attention window silently. That refusal is passed through, not routed
+    around."""
     from .dates import parse_human_date
     from .forms.spec import date_refusal
+    from .models import InteractionType
     from .repo import interactions
     from .repo import tasks as tasks_repo
 
     org = _resolve_client(conn, client)
+    kind = _clean_typed(
+        tuple(t.value for t in InteractionType), "type", type)
+    when = date.today().isoformat()
+    if occurred_on:
+        happened = parse_human_date(occurred_on)
+        if happened is None:
+            raise ValueError(date_refusal(occurred_on))
+        when = happened.isoformat()
     due = None
     if follow_up:
         parsed = parse_human_date(follow_up)
@@ -909,12 +940,11 @@ def _log_activity(
         due = parsed.isoformat()
     with _open_batch(
         conn, tool="log_activity", org_id=org.id,
-        summary=f"logged a note on {org.name}"
+        summary=f"logged a {kind} on {org.name}"
         + (" with a follow-up task" if due else ""),
     ) as batch:
         interaction = interactions.log(
-            conn, org.id, type="note",
-            occurred_on=date.today().isoformat(),
+            conn, org.id, type=kind, occurred_on=when,
             subject=note[:80], body=note,
         )
         _provenance(conn, "interaction", interaction.id)
@@ -924,6 +954,7 @@ def _log_activity(
                 conn, f"Follow up: {note[:60]}", org_id=org.id, due_on=due)
             _provenance(conn, "task", task.id)
     return {"org_id": org.id, "interaction_ref": interaction.id,
+            "type": interaction.type, "occurred_on": interaction.occurred_on,
             "follow_up_task": task.id if task else None,
             "batch": batch.ref}
 
