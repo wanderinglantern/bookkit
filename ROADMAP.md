@@ -50,3 +50,46 @@ belongs in bookkit's composition, not in towerkit's renderer.
 carries org-level tasks, so it is the only one the flag applies to. Leave
 Information Requests, Projects and Schedule of Insurance alone — do not
 generalise the filter across sheets on the grounds that it would be tidier.
+
+---
+
+## Remove a contact from an account (2026-08-18) — LIVE DATA PROBLEM
+
+**What.** A way to remove a contact from an account, on all three surfaces.
+
+**Why.** Grant, 2026-08-18: the MCP server added a wholesaler as a *client*
+contact, and it cannot be fixed from MCP, the TUI, or the web. There is bad
+data in the real book right now with no path to correct it on any surface.
+This is not a missing convenience — it is a write that has no inverse.
+
+**The plumbing already exists.** `repo/contacts.py:67` `delete()` is a soft
+delete (`base.soft_delete`), and `for_org(active_only=True)` already hides a
+contact whose `active` flag is 0. Neither is reachable: no MCP tool, no TUI
+binding, no web route calls either. So this is wiring, not new machinery.
+
+**Decide first: delete or deactivate — they are different answers.**
+- *Soft delete* suits this case: the row should never have existed on this
+  account. It stays recoverable via `base.undelete`.
+- *Deactivate* suits a contact who left the company: keep them attached to the
+  history, drop them out of the working list.
+  Both probably want surfacing eventually; do not conflate them behind one
+  control, and do not label a delete "remove" on one surface and "delete" on
+  another.
+
+**Watch — the reason this is not a one-liner.**
+- **Interactions reference contacts** (`interaction_contact`, and
+  `interactions.attendees`). Decide what a removed contact does to an
+  interaction's attendee list before writing the delete, not after. A soft
+  delete that leaves attendees dangling makes the timeline lie.
+- **`is_primary`.** Removing the primary contact must promote or clear, never
+  leave an account whose primary points at a deleted row.
+- **It must be one revertible batch**, like `member_deactivate` — which is the
+  precedent worth copying: it refuses while assignments are live, and
+  `cascade=True` removes them all in one revertible unit.
+- **The MCP tool needs it most**, since MCP is what created the bad row. A
+  surface that can add but not remove is how this happened.
+
+**Interim, if the real book needs fixing before this ships.** `./bookctl backup`
+first, then call `repo.contacts.delete` directly against the DB. Soft, and
+reversible with `base.undelete`. Ask before running it — it touches the real
+book.
