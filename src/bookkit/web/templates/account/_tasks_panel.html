@@ -1,0 +1,52 @@
+{# Open tasks — table.rows per the visual-direction spec (mono for dates,
+   trailing actions column). due/title/category/description are inline-
+   editable cells (bookkit.forms.inline.TASK_FIELDS); `Mark done` is a
+   button, not a cell, because tasks_repo.complete stamps completed_at AND
+   status together.
+
+   #tasks-panel is this partial's own root (same fix as #contacts-panel,
+   routes/relationship.py): task_create's form targets "closest .form-host"
+   with an innerHTML swap, and .form-host lives INSIDE this panel, so a
+   successful add returns this whole panel as an out-of-band swap instead
+   of nesting a second copy of itself. Every "open a form" trigger below
+   targets `#tasks-panel .form-host` by id rather than "previous"/"closest"
+   — unambiguous regardless of how deep in the table the trigger sits. #}
+<div id="tasks-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="people-head">
+    <h2 class="people-label">Open tasks</h2>
+    <span class="people-count">{{ task_rows | length }}</span>
+    <span class="people-head-spacer"></span>
+    <button type="button" class="people-add"
+            hx-get="/accounts/{{ header.org.ref }}/tasks/new"
+            hx-target="#tasks-panel .form-host" hx-swap="innerHTML">+ Add task</button>
+  </div>
+  <div class="form-host"></div>
+  {% if task_rows %}
+    <div class="table-scroll">
+      <table class="rows">
+        <thead>
+          <tr><th>Due</th><th>Task</th><th>Category</th><th>Description</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for row in task_rows %}
+            <tr>
+              <td class="num">{{ row.due_cell | safe }}{% if row.overdue %}<span class="tag-overdue">over</span>{% endif %}</td>
+              <td>{{ row.title_cell | safe }}</td>
+              <td>{{ row.category_cell | safe }}</td>
+              <td>{{ row.description_cell | safe }}</td>
+              <td>
+                <button type="button" class="row-action-btn"
+                        hx-post="/accounts/{{ header.org.ref }}/tasks/{{ row.id }}/done"
+                        hx-target="#tasks-panel" hx-swap="outerHTML">Done</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="panel-empty">
+      <p>no open tasks — add one</p>
+    </div>
+  {% endif %}
+</div>

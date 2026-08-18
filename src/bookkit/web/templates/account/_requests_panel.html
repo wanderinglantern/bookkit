@@ -1,0 +1,62 @@
+{# Information requests — the master list. A request says who was asked
+   (asker_name) and what it is about (scope_label): one with neither is one
+   you cannot chase. Requests stay a whole-form edit (not inline) because
+   they carry FK selects — market/placement/project — the cell contract has
+   no editor for; that mirrors the TUI's own edit_request. Open/closed is
+   DERIVED (services.rfi.is_open), never a stored flag, and carries the word
+   "open"/"closed" as well as the dim treatment on a closed row.
+
+   #requests-panel is this partial's own root — same OOB reasoning as
+   #tasks-panel above. #}
+<div id="requests-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="people-head">
+    <h2 class="people-label">Information requests</h2>
+    <span class="people-count">{{ request_rows | length }}</span>
+    <span class="people-head-spacer"></span>
+    <button type="button" class="people-add"
+            hx-get="/accounts/{{ header.org.ref }}/requests/new"
+            hx-target="#requests-panel .form-host" hx-swap="innerHTML">+ Add request</button>
+  </div>
+  <div class="form-host"></div>
+  {% if request_rows %}
+    <div class="table-scroll">
+      <table class="rows">
+        <thead>
+          <tr><th>Request</th><th>Asked by</th><th>About</th><th>Asked</th>
+              <th>Due</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for r in request_rows %}
+            <tr class="{% if not r.open %}is-closed{% endif %}">
+              <td>{{ r.request.title }}</td>
+              <td>{{ r.asker }}</td>
+              <td>{{ r.scope }}</td>
+              <td class="num">{{ r.request.requested_on }}</td>
+              <td class="num">{{ r.request.due_on or "—" }}</td>
+              <td class="num">
+                {% if r.request.cancelled_at %}
+                  <span class="status-waived">cancelled</span>
+                {% elif r.open %}
+                  <span class="status-outstanding">open · {{ r.open_count }} of {{ r.total_count }}</span>
+                {% else %}
+                  <span class="status-received">closed · all in</span>
+                {% endif %}
+              </td>
+              <td>
+                <a class="row-action-btn"
+                   href="/accounts/{{ header.org.ref }}/requests/{{ r.request.id }}">Items</a>
+                <button type="button" class="row-action-btn"
+                        hx-get="/accounts/{{ header.org.ref }}/requests/{{ r.request.id }}/edit"
+                        hx-target="#requests-panel .form-host" hx-swap="innerHTML">Edit</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="panel-empty">
+      <p>empty — add the first row</p>
+    </div>
+  {% endif %}
+</div>

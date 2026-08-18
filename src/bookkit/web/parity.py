@@ -24,24 +24,42 @@ IMPLEMENTED: dict[str, str] = {
         "GET/POST /accounts/{ref}/contacts/{contact_id}/cell/{key} — click-to-edit "
         "cells for role/title/email/phone (bookkit.forms.inline.CONTACT_FIELDS), "
         "Enter/Tab/Escape/blur per the visual-direction spec (routes/relationship.py, "
-        "the cell contract settled in Task 6). Contacts is the first table this "
-        "lands on; other tabs' rows get it as they're built."
+        "the cell contract settled in Task 6). Also on the Work tab "
+        "(routes/work.py): due/title/category/description on open tasks "
+        "(bookkit.forms.inline.TASK_FIELDS) and prompt/category/due_on/response "
+        "on request items (bookkit.forms.inline.RFI_ITEM_FIELDS) — 'status' is "
+        "deliberately excluded there since apply_rfi_item owns the "
+        "status/received_on pair."
+    ),
+    "task_done": (
+        "POST /accounts/{ref}/tasks/{task_id}/done (tasks_repo.complete) and "
+        "POST /accounts/{ref}/requests/{request_id}/items/{item_id}/received "
+        "(services.rfi.mark_received) — one TUI key ('d') drives both flows "
+        "(action_task_done dispatches to _mark_item_received on the requests "
+        "tab), so both share this ledger entry. Each is a POST button, not a "
+        "cell: both write two fields together (status+completed_at, "
+        "status+received_on) and a cell edit only ever writes one column."
     ),
 }
 
 # action name -> why it is not covered yet
 PENDING: dict[str, str] = {
     "add_here": (
-        "generic per-tab add ('a') — contacts now has one "
-        "(POST /accounts/{ref}/contacts/new, routes/relationship.py); "
-        "placements/pipeline/projects/tasks/requests tabs don't yet, and the "
-        "action covers all of them, so it stays PENDING as a whole"
+        "generic per-tab add ('a') — contacts, tasks, requests and request "
+        "items now have one each (POST .../contacts/new, .../tasks/new, "
+        ".../requests/new, .../requests/{id}/items/new); placements/pipeline/"
+        "projects tabs don't yet, and the action covers all of them, so it "
+        "stays PENDING as a whole"
     ),
     "edit_here": (
-        "generic per-tab edit ('e', a whole-form modal) — for contacts this is "
-        "deliberately NOT what got built (Grant's 2026-08-17 amendment replaced "
-        "it with inline_edit's cell-by-cell editing instead, see that entry); "
-        "no tab implements the whole-form edit flow this action names"
+        "generic per-tab edit ('e', a whole-form modal) — for contacts, tasks "
+        "and request items this is deliberately NOT what got built (Grant's "
+        "2026-08-17 amendment replaced it with inline_edit's cell-by-cell "
+        "editing, see that entry). Requests DO get a whole-form edit "
+        "(GET/POST .../requests/{request_id}/edit, routes/work.py) — they "
+        "carry FK selects the cell contract has no editor for, matching the "
+        "TUI's own edit_request — but org-level edit_here (falling through to "
+        "_edit_org) is still not built, so the action as a whole stays PENDING"
     ),
     "new_submission": (
         "a plain DB write (repo/submissions.create, no towerkit involvement) — "
@@ -71,7 +89,6 @@ PENDING: dict[str, str] = {
         "deferred by decision, not yet reached: bulk paste-import needs a "
         "browser-side parser design of its own; the TUI flow does not port"
     ),
-    "task_done": "task mutation not built on the web yet",
     "delete_row": "row deletion not built on the web yet",
     "mark_primary": (
         "rendered as a pending row action on the contacts table "
