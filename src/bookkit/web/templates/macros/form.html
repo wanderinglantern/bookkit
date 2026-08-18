@@ -35,6 +35,15 @@
     {% for row in rows %}{{ render_field(row.field, row.value, row.placeholder) }}{% endfor %}
     <div class="form-actions">
       <button type="submit">Save</button>
+      {# Cancel writes nothing — it only clears the .form-host this form
+         was opened into, the same target/swap Save's own hx-target above
+         already uses on success. data-form-cancel is picked up by a
+         delegated click listener in inline-cell.js (not an inline
+         onclick, and not a second script) — the same file already owns
+         Escape-cancels-an-editor for cells, and a whole-form Escape lives
+         there too now, right beside it. Both close the form; neither ever
+         submits or posts. #}
+      <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
     </div>
   </form>
 {% endmacro %}

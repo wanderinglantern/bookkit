@@ -17,7 +17,7 @@
    at Grant's explicit request not to let the tag drift silently. Every
    existing table-based caller is unaffected: the default is unchanged. #}
 
-{% macro display(field, value, action, tag="td") %}
+{% macro display(field, value, action, tag="td", extra_class="", suffix="") %}
   {# The persistent state: a plain, tab-reachable cell. Activation swaps the
      WHOLE element (outerHTML, not innerHTML) — an innerHTML swap left this
      cell's own click/Enter listener sitting around the injected editor, so
@@ -32,13 +32,25 @@
      surgery on hx-get — needed for Tab-hop (finding the next cell's URL)
      and the blur-cancel fetch. is-editable is the dashed-underline
      discoverability affordance from the visual-direction spec: without it
-     a mouse-first user has no way to tell this value is editable. #}
-  <{{ tag }} class="cell" data-field="{{ field.key }}" data-cell-action="{{ action }}" tabindex="0"
+     a mouse-first user has no way to tell this value is editable.
+
+     extra_class/suffix exist so a caller never wraps this element's own
+     <td>/<th> in a second one of its own to add a column class (e.g. "num")
+     or a trailing badge (overdue, due-fallback) — a <td> nested inside a
+     <td> is invalid HTML; the parser silently closes the outer one empty
+     and opens a new real column for the inner one, so every column after
+     the first wrapped cell drifted out from under its header with no
+     visible error (found 2026-08-18, chasing a header-alignment bug that
+     turned out not to be a CSS issue at all). suffix is raw HTML the
+     caller has already escaped/built — it renders inside this cell, not a
+     sibling one. #}
+  <{{ tag }} class="cell{% if extra_class %} {{ extra_class }}{% endif %}" data-field="{{ field.key }}"
+      data-cell-action="{{ action }}" tabindex="0"
       hx-get="{{ action }}/edit" hx-trigger="click, keyup[key=='Enter']"
-      hx-swap="outerHTML"><span class="is-editable">{{ value if value else "—" }}</span></{{ tag }}>
+      hx-swap="outerHTML"><span class="is-editable">{{ value if value else "—" }}</span>{{ suffix | safe }}</{{ tag }}>
 {% endmacro %}
 
-{% macro editor(field, value, placeholder, action, error, tag="td") %}
+{% macro editor(field, value, placeholder, action, error, tag="td", extra_class="") %}
   {# Same outerHTML reasoning going the other way: Escape reverts by
      re-fetching the display cell and replacing this whole element — form,
      input and this element's own Escape listener all at once — rather than
@@ -54,7 +66,7 @@
      both reaching for the same event and only one of them checking it.
      hx-target below tracks `tag` too — a literal "closest td" would
      silently no-op when tag="div". #}
-  <{{ tag }} class="cell cell-editing{% if error %} cell-error{% endif %}"
+  <{{ tag }} class="cell cell-editing{% if error %} cell-error{% endif %}{% if extra_class %} {{ extra_class }}{% endif %}"
       data-field="{{ field.key }}" data-cell-action="{{ action }}"
       hx-get="{{ action }}" hx-trigger="keyup[key=='Escape']" hx-swap="outerHTML">
     <form class="cell-editor" method="post" action="{{ action }}"

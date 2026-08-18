@@ -137,6 +137,30 @@ def test_the_error_message_is_rendered():
     assert "is not a date" in html
 
 
+def test_the_form_macro_renders_a_cancel_affordance():
+    """Every add/edit form used to open with Save and nothing else to back
+    out with — no Cancel, no Escape (found while clicking through the app,
+    2026-08-18). Cancel must render so it cannot silently disappear again;
+    inline-cell.js's delegated click/Escape handlers depend on this exact
+    button being here to close the form without writing."""
+    spec = FormSpec("probe", [Field("name", "name")])
+    html = render_form(None, spec, action="/probe")
+    assert "data-form-cancel" in html
+    assert 'type="button"' in html
+
+
+def test_cancel_is_not_a_submit_button():
+    """Cancel must never post — it only clears the form (see
+    inline-cell.js). A stray type="submit" here would fire Save's own
+    hx-post instead of closing cleanly."""
+    spec = FormSpec("probe", [Field("name", "name")])
+    html = render_form(None, spec, action="/probe")
+    cancel_start = html.index("data-form-cancel")
+    tag_start = html.rindex("<button", 0, cancel_start)
+    tag_end = html.index(">", tag_start)
+    assert 'type="button"' in html[tag_start:tag_end]
+
+
 def test_inline_field_sets_are_shared_not_duplicated():
     """Which fields are editable in place is not a per-surface choice. The TUI
     screens build their column maps from these tuples; the web renders the same

@@ -31,6 +31,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from markupsafe import escape
 
 from ...forms.entities import (
     apply_request,
@@ -73,17 +74,27 @@ def _task_field(key: str) -> Field:
     return field
 
 
+def _task_due_suffix(task: Task) -> str:
+    """The overdue badge, rendered INSIDE the due_on cell's own <td> via
+    render_cell_display's `suffix` — never as a sibling appended by wrapping
+    the cell in a second <td> (see macros/cell.html's `display` docstring:
+    that nests illegally and silently misaligns every later column)."""
+    overdue = task.due_on is not None and task.due_on < date.today().isoformat()
+    return '<span class="tag-overdue">over</span>' if overdue else ""
+
+
 def _task_row(request: Request, ref: str, task: Task) -> dict[str, Any]:
-    def cell(key: str) -> str:
+    def cell(key: str, *, extra_class: str = "", suffix: str = "") -> str:
         field = _TASK_CELLS[key]
         value = initial_text(field, getattr(task, key, None))
-        return render_cell_display(request, field, value, _task_cell_action(ref, task.id, key))
+        action = _task_cell_action(ref, task.id, key)
+        return render_cell_display(
+            request, field, value, action, extra_class=extra_class, suffix=suffix
+        )
 
-    overdue = task.due_on is not None and task.due_on < date.today().isoformat()
     return {
         "id": task.id,
-        "overdue": overdue,
-        "due_cell": cell("due_on"),
+        "due_cell": cell("due_on", extra_class="num", suffix=_task_due_suffix(task)),
         "title_cell": cell("title"),
         "category_cell": cell("category"),
         "description_cell": cell("description"),
@@ -130,7 +141,11 @@ def _task_display_cell(request: Request, ref: str, task_id: str, key: str) -> HT
     existing = tasks_repo.get(_conn(request), task_id)
     value = initial_text(field, getattr(existing, key, None))
     action = _task_cell_action(ref, task_id, key)
-    return HTMLResponse(render_cell_display(request, field, value, action))
+    extra_class = "num" if key == "due_on" else ""
+    suffix = _task_due_suffix(existing) if key == "due_on" else ""
+    return HTMLResponse(
+        render_cell_display(request, field, value, action, extra_class=extra_class, suffix=suffix)
+    )
 
 
 def _task_editor_cell(
@@ -141,7 +156,10 @@ def _task_editor_cell(
     existing = tasks_repo.get(_conn(request), task_id)
     value = typed if typed is not None else initial_text(field, getattr(existing, key, None))
     action = _task_cell_action(ref, task_id, key)
-    return HTMLResponse(render_cell(request, field, value, action, error=error))
+    extra_class = "num" if key == "due_on" else ""
+    return HTMLResponse(
+        render_cell(request, field, value, action, error=error, extra_class=extra_class)
+    )
 
 
 @router.get("/accounts/{ref}/tasks/{task_id}/cell/{key}", response_class=HTMLResponse)
@@ -282,25 +300,40 @@ def _item_field(key: str) -> Field:
     return field
 
 
+def _item_due_suffix(item: Any, request_row: RfiRequest) -> str:
+    """The 'req: <date>' fallback note, rendered INSIDE the due_on cell's own
+    <td> via render_cell_display's `suffix` — never as a sibling appended by
+    wrapping the cell in a second <td> (see macros/cell.html's `display`
+    docstring: that nests illegally and silently misaligns every later
+    column). Only shown when the item has no due date of its own and falls
+    back to the request's."""
+    if item.due_on:
+        return ""
+    due_effective = rfi_svc.effective_due(item, request_row)
+    if not due_effective:
+        return ""
+    return f'<span class="due-fallback">req: {escape(due_effective)}</span>'
+
+
 def _item_row(
     request: Request, ref: str, request_id: str, item: Any, request_row: RfiRequest
 ) -> dict[str, Any]:
-    def cell(key: str) -> str:
+    def cell(key: str, *, extra_class: str = "", suffix: str = "") -> str:
         field = _ITEM_CELLS[key]
         value = initial_text(field, getattr(item, key, None))
         action = _item_cell_action(ref, request_id, item.id, key)
-        return render_cell_display(request, field, value, action)
+        return render_cell_display(
+            request, field, value, action, extra_class=extra_class, suffix=suffix
+        )
 
     return {
         "id": item.id,
         "kind": item.kind,
         "status": item.status,
         "received_on": item.received_on,
-        "has_own_due": bool(item.due_on),
-        "due_effective": rfi_svc.effective_due(item, request_row),
         "prompt_cell": cell("prompt"),
         "category_cell": cell("category"),
-        "due_cell": cell("due_on"),
+        "due_cell": cell("due_on", extra_class="num", suffix=_item_due_suffix(item, request_row)),
         "response_cell": cell("response"),
     }
 
@@ -356,10 +389,18 @@ def _item_display_cell(
     request: Request, ref: str, request_id: str, item_id: str, key: str
 ) -> HTMLResponse:
     field = _item_field(key)
-    existing = rfi_repo.get_item(_conn(request), item_id)
+    conn = _conn(request)
+    existing = rfi_repo.get_item(conn, item_id)
     value = initial_text(field, getattr(existing, key, None))
     action = _item_cell_action(ref, request_id, item_id, key)
-    return HTMLResponse(render_cell_display(request, field, value, action))
+    extra_class = ""
+    suffix = ""
+    if key == "due_on":
+        extra_class = "num"
+        suffix = _item_due_suffix(existing, rfi_repo.get_request(conn, request_id))
+    return HTMLResponse(
+        render_cell_display(request, field, value, action, extra_class=extra_class, suffix=suffix)
+    )
 
 
 def _item_editor_cell(
@@ -370,7 +411,10 @@ def _item_editor_cell(
     existing = rfi_repo.get_item(_conn(request), item_id)
     value = typed if typed is not None else initial_text(field, getattr(existing, key, None))
     action = _item_cell_action(ref, request_id, item_id, key)
-    return HTMLResponse(render_cell(request, field, value, action, error=error))
+    extra_class = "num" if key == "due_on" else ""
+    return HTMLResponse(
+        render_cell(request, field, value, action, error=error, extra_class=extra_class)
+    )
 
 
 @router.get(

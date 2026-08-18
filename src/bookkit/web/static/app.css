@@ -776,7 +776,14 @@ a {
 }
 
 table.rows {
-  width: 100%;
+  /* min-width keeps the table at least as wide as .table-scroll (so short
+     tables still fill the panel); width: max-content lets it grow past
+     that when content needs more room. Plain `width: 100%` resolved to the
+     .table-scroll container's width even when content overflowed it, so
+     `th` backgrounds and the header rule stopped short of the `td`s that
+     scrolled past them underneath (2026-08-18). */
+  min-width: 100%;
+  width: max-content;
   border-collapse: collapse;
   font-size: var(--body-size);
 }
@@ -791,6 +798,7 @@ table.rows th {
   letter-spacing: 0.1em;
   color: var(--muted);
   font-weight: 400;
+  white-space: nowrap;
   border-bottom: 1px solid var(--ink);
 }
 
@@ -1082,9 +1090,18 @@ table.rows tr.is-waived td {
 
 .form-actions {
   margin-top: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
 }
 
-.form-actions button {
+/* Save is the filled --ink primary; Cancel (below) is deliberately quieter
+   — bordered, --border, muted text, accent on hover, same colour story as
+   the header's own secondary pills (+ Task / Renew) — so the two are never
+   equally weighty and a form can never be mistaken for having only one way
+   out. [type="submit"] scopes this to Save alone now that Cancel lives in
+   the same .form-actions row. */
+.form-actions button[type="submit"] {
   font: inherit;
   font-family: var(--sans);
   padding: 0.45rem 1rem;
@@ -1093,6 +1110,22 @@ table.rows tr.is-waived td {
   background: var(--ink);
   color: var(--paper);
   cursor: pointer;
+}
+
+.btn-cancel {
+  font: inherit;
+  font-family: var(--sans);
+  padding: 0.45rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.btn-cancel:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* --- the undo toast, forward-styled: nothing writes on the web yet, so

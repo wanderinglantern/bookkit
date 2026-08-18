@@ -69,6 +69,8 @@ def render_cell_display(
     value: str,
     action: str,
     tag: str = "td",
+    extra_class: str = "",
+    suffix: str = "",
 ) -> str:
     """The persistent state of one inline-editable cell: its value, or an
     em-dash when empty. `action` is the base cell URL; activation (click, or
@@ -79,11 +81,18 @@ def render_cell_display(
     table (Task 8's contacts card panel). A `<td>` outside a table-row
     ancestor is dropped outright by the HTML parser, attributes and all —
     see macros/cell.html's docstring comment — so this can't default to
-    anything but the caller's actual container."""
+    anything but the caller's actual container.
+
+    `extra_class` adds a column class (e.g. "num") and `suffix` appends
+    caller-built, already-safe HTML (a badge) inside this SAME cell —
+    the whole point is that this call already returns the cell's own
+    `<td>`/`<th>`, so a caller must never wrap the result in another one to
+    get either effect. See macros/cell.html's `display` docstring for why
+    that nests illegally and silently misaligns every later column."""
     template = TEMPLATES.env.get_template("macros/cell.html")
     module = template.make_module({})
     render = module.display  # type: ignore[attr-defined]
-    return str(render(field, value, action, tag))
+    return str(render(field, value, action, tag, extra_class, suffix))
 
 
 def render_cell(
@@ -93,14 +102,16 @@ def render_cell(
     action: str,
     error: str | None = None,
     tag: str = "td",
+    extra_class: str = "",
 ) -> str:
     """The editor swapped into one cell on activation: the same input the
     form macro renders for this field's kind, `autofocus` because exactly one
     of these is ever on the page at a time. On a refusal `value` is what the
     user typed (not the stored value) and `error` sits beside the input —
-    nothing is retyped, nothing is written. `tag` — see render_cell_display."""
+    nothing is retyped, nothing is written. `tag`/`extra_class` — see
+    render_cell_display."""
     template = TEMPLATES.env.get_template("macros/cell.html")
     module = template.make_module({})
     render = module.editor  # type: ignore[attr-defined]
     placeholder = field.placeholder or PLACEHOLDERS.get(field.kind, "")
-    return str(render(field, value, placeholder, action, error, tag))
+    return str(render(field, value, placeholder, action, error, tag, extra_class))

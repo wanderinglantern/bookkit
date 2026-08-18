@@ -28,12 +28,20 @@
           <tr><th>Due</th><th>Task</th><th>Category</th><th>Description</th><th></th></tr>
         </thead>
         <tbody>
+          {# Each *_cell value is ALREADY a full <td> (render_cell_display,
+             macros/cell.html) — never wrap it in another one. A <td> nested
+             inside a <td> is invalid HTML; the parser silently closes the
+             outer one empty and opens a real column for the inner one, so
+             every column after the first wrapped cell drifts out from under
+             its header with no visible error (found 2026-08-18). The
+             "num" class and the overdue badge are baked into due_cell
+             itself via render_cell_display's extra_class/suffix. #}
           {% for row in task_rows %}
             <tr>
-              <td class="num">{{ row.due_cell | safe }}{% if row.overdue %}<span class="tag-overdue">over</span>{% endif %}</td>
-              <td>{{ row.title_cell | safe }}</td>
-              <td>{{ row.category_cell | safe }}</td>
-              <td>{{ row.description_cell | safe }}</td>
+              {{ row.due_cell | safe }}
+              {{ row.title_cell | safe }}
+              {{ row.category_cell | safe }}
+              {{ row.description_cell | safe }}
               <td>
                 <button type="button" class="row-action-btn"
                         hx-post="/accounts/{{ header.org.ref }}/tasks/{{ row.id }}/done"

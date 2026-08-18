@@ -4,6 +4,11 @@
  * Enter commits and closes, Tab commits and hops to the next editable cell
  * in the same record, Escape and blur both cancel — never a surprise write.
  *
+ * The bottom of this file also owns whole-form cancel (macros/form.html's
+ * Cancel button and Escape) — a second small file for one button was worse
+ * than one shared "nothing writes by surprise" file covering both the cell
+ * editor and the form editor (2026-08-18).
+ *
  * Enter needs no JS: it's a native form submit (the editor's <form> already
  * carries hx-post). Escape is still declarative — the cell's own
  * hx-trigger="keyup[key=='Escape']" in macros/cell.html. Both Tab-hop and
@@ -130,5 +135,39 @@
     var action = hop.nextCell.getAttribute("data-cell-action");
     if (!action || typeof htmx === "undefined") return;
     htmx.ajax("GET", action + "/edit", { target: hop.nextCell, swap: "outerHTML" });
+  });
+
+  // --- whole-form cancel (macros/form.html) -------------------------------
+  // Every add/edit form (+ Add task, + Add contact, + Add request, + Add
+  // item, and every field edit that isn't an inline cell) opened with a
+  // Save button and nothing else to back out with — no Cancel, no Escape.
+  // You either saved a record you did not want or navigated away and lost
+  // your place. Both close the form the same way Save's own success swap
+  // already does: clear .form-host, the exact target/swap the form's
+  // hx-target/hx-swap use (macros/form.html). Neither ever submits or
+  // posts anything, so a refused save (which re-renders the form with the
+  // typed values intact, commit-in-place) still closes cleanly on Cancel —
+  // nothing is retyped, nothing is written.
+  function closeForm(withinForm) {
+    var host = withinForm.closest && withinForm.closest(".form-host");
+    if (host) host.innerHTML = "";
+  }
+
+  document.body.addEventListener("click", function (evt) {
+    var btn = evt.target.closest && evt.target.closest("[data-form-cancel]");
+    if (!btn) return;
+    closeForm(btn);
+  });
+
+  // Matches the cell editor's own Escape-cancels rule (macros/cell.html's
+  // hx-trigger="keyup[key=='Escape']") — same key, same "nothing writes by
+  // surprise" rule from the visual-direction spec, applied to the whole
+  // form instead of one cell. Scoped to .entity-form so it never fires for
+  // an Escape typed inside an unrelated cell editor elsewhere on the page.
+  document.body.addEventListener("keydown", function (evt) {
+    if (evt.key !== "Escape") return;
+    var form = evt.target.closest && evt.target.closest(".entity-form");
+    if (!form) return;
+    closeForm(form);
   });
 })();
