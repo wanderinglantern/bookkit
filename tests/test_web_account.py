@@ -212,6 +212,18 @@ def test_four_tabs_render_with_real_counts(app_and_org):
 )
 def test_each_tab_renders_its_empty_state_and_marks_itself_current(app_and_org, tab, heading_text):
     client, org = app_and_org
+    if tab == "work":
+        # Work tab (Tasks 11-13) now renders real open tasks and requests —
+        # seed.py seeds ~25 tasks at random across client orgs (and never
+        # seeds any RFI request), so this org's own tasks have to be cleared
+        # for its empty state to be the thing actually under test here,
+        # rather than accidentally passing only when the random draw missed
+        # this org.
+        from bookkit.repo import tasks as tasks_repo
+
+        conn = client.app.state.conn
+        for t in tasks_repo.open_tasks_for_client(conn, org.id):
+            tasks_repo.complete(conn, t.id)
     response = client.get(f"/accounts/{org.ref}/{tab}")
     assert response.status_code == 200
     assert heading_text in response.text

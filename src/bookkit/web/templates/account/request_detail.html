@@ -1,0 +1,24 @@
+{% extends "account/page.html" %}
+{% block panel %}
+  {# One request's detail: who was asked, what it is about, and its items.
+     Extends the same account/page.html shell as work.html (tab stays
+     "work" so the nav badge and active state don't lie about which tab
+     this page belongs to) — reached from the requests panel's "Items"
+     link, not a nav entry of its own. #}
+  <a class="back-link" href="/accounts/{{ header.org.ref }}/work">&larr; Work</a>
+  <div class="request-summary">
+    <h2 class="request-title">{{ rfi_request.title }}</h2>
+    <span class="request-ref">{{ rfi_request.ref }}</span>
+    {% if rfi_request.cancelled_at %}<span class="status-waived">cancelled</span>
+    {% elif is_open %}<span class="status-outstanding">open</span>
+    {% else %}<span class="status-received">closed</span>{% endif %}
+    <div class="request-meta">
+      <span>Asked by <strong>{{ asker }}</strong></span>
+      <span>About <strong>{{ scope }}</strong></span>
+      <span>Asked <span class="num">{{ rfi_request.requested_on }}</span></span>
+      <span>Due <span class="num">{{ rfi_request.due_on or "—" }}</span></span>
+    </div>
+    {% if rfi_request.notes %}<p class="request-notes">{{ rfi_request.notes }}</p>{% endif %}
+  </div>
+  {% include "account/_items_panel.html" %}
+{% endblock %}
