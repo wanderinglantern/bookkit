@@ -71,9 +71,16 @@ _PANEL_TEMPLATE = {
 
 
 def _conn(request: Request) -> sqlite3.Connection:
-    """THIS THREAD's connection, never a shared one — every route here is a
-    sync def and FastAPI runs those in an anyio worker threadpool. See
-    web.app.ThreadConnections for what sharing one cost."""
+    """THIS THREAD's connection, never a shared one — the read routes are sync
+    defs and FastAPI runs those in an anyio worker threadpool, so concurrent
+    requests are concurrent threads.
+
+    Not every caller is one, though: the eight `async def` write routes in
+    relationship.py and work.py run on the event loop, so this returns the
+    LOOP thread's connection to all of them at once (under uvicorn, that is
+    app.state.conn). What keeps them apart is that asyncio does not preempt
+    and nothing awaits inside a transaction — see web.app.ThreadConnections
+    for both halves, and for what sharing one cost the read path."""
     return request.app.state.connections.get()  # type: ignore[no-any-return]
 
 

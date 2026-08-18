@@ -27,20 +27,36 @@ TEMPLATES = Jinja2Templates(directory=str(HERE / "templates"))
 class ThreadConnections:
     """ONE sqlite3.Connection PER THREAD. Never share one across threads.
 
-    Every route in web/routes/ is a sync `def`, so FastAPI runs it in an anyio
-    worker thread — concurrent requests are concurrent threads. This app used
-    to park a single connection on app.state.conn and hand it to all of them,
-    and that is not a style preference: measured on the real app, 2 concurrent
-    requests returned 2.6% wrong answers and 6 returned ~21%, including 404
-    "no such account" for accounts that exist, saves that vanished behind a
-    404, and — the one that outlives the request — event_log rows recording
-    `old_value = NULL` for fields that had a value, which a later revert
-    pastes back over live data. sqlite3.Connection keeps an LRU cache of
-    prepared statements keyed by SQL text and steps them with the GIL
-    released; two threads running the SAME query text on one connection step
-    and reset one statement. Diagnosis, measurements and the three rejected
+    The READ routes in web/routes/ are sync `def`, so FastAPI runs each one in
+    an anyio worker thread — concurrent requests are concurrent threads. This
+    app used to park a single connection on app.state.conn and hand it to all
+    of them, and that is not a style preference: measured on the real app, 2
+    concurrent requests returned 2.6% wrong answers and 6 returned ~21%,
+    including 404 "no such account" for accounts that exist, saves that
+    vanished behind a 404, and — the one that outlives the request — event_log
+    rows recording `old_value = NULL` for fields that had a value, which a
+    later revert pastes back over live data. sqlite3.Connection keeps an LRU
+    cache of prepared statements keyed by SQL text and steps them with the
+    GIL released; two threads running the SAME query text on one connection
+    step and reset one statement. Diagnosis, measurements and the three rejected
     alternatives:
     .superpowers/sdd/2026-08-17-web-account-page/flaky-batch-test-investigation.md
+
+    THE WRITE ROUTES ARE `async def` and this registry does not help them.
+    There are eight (relationship.contact_create / contact_cell_save;
+    work.task_create / task_cell_save / request_create / request_update /
+    item_create / item_cell_save), all async only because they `await
+    request.form()`. An async route runs ON the event loop, so it is handed
+    whichever connection the loop's thread owns — under uvicorn that thread is
+    the one that called create_app (serve.py), so every write route gets
+    app.state.conn, the single shared connection. They are safe for a
+    DIFFERENT reason than the reads: asyncio does not preempt, and no `await`
+    occurs between any BEGIN and its COMMIT, so two write coroutines never
+    interleave statements on it. That reason is a rule, not an accident —
+    NEVER `await` inside a db.transaction / open_batch block, enforced by
+    tests/test_conventions.py::test_no_await_inside_a_transaction. It cannot
+    be caught by the web tests: TestClient runs the loop on a portal thread of
+    its own, so under test the async routes get a connection nobody else has.
 
     Per-thread rather than a checked-out pool because it costs the two call
     sites nothing: `_conn(request)` in routes/account.py and routes/book.py
@@ -129,7 +145,10 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
 
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
-        return {"ok": True, "db": str(db_path) if db_path else "default"}
+        # `resolved`, not `db_path`: on the default path the argument is
+        # None and "default" tells an operator nothing about which file the
+        # server actually opened.
+        return {"ok": True, "db": str(resolved)}
 
     # Registered before the StaticFiles mount below: a mount on the same
     # prefix ("/static") would otherwise shadow this route, since FastAPI/

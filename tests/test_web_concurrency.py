@@ -1,13 +1,22 @@
 """Concurrent requests must not share a sqlite3.Connection.
 
-Every route in web/routes/ is a sync `def`, so FastAPI runs it in an anyio
-worker thread and two browser requests are two threads. web/app.py used to
-hand all of them one connection parked on app.state.conn; measured on this
+The READ routes in web/routes/ are sync `def`, so FastAPI runs each in an
+anyio worker thread and two browser requests are two threads. web/app.py used
+to hand all of them one connection parked on app.state.conn; measured on this
 app that returned wrong answers for ~21-28% of requests at 6 concurrent
 workers — 404 "no such account" for accounts that exist, saves that vanished
 behind a 404, and event_log rows recording `old_value = NULL` for fields that
 had a value, which a revert then pastes back over live data. Diagnosis:
 .superpowers/sdd/2026-08-17-web-account-page/flaky-batch-test-investigation.md
+
+The eight WRITE routes are `async def` (they await request.form()), so they
+run on the event loop and DO share one connection — the loop thread's. This
+file cannot see that: TestClient drives the loop from a portal thread of its
+own, so under test the async routes get a per-thread connection like every
+other request, while under uvicorn they all get app.state.conn. What keeps
+them correct is that asyncio does not preempt and nothing awaits inside a
+transaction, which is asserted where it can be —
+tests/test_conventions.py::test_no_await_inside_a_transaction.
 
 Both tests below were run against the shared-connection code before being
 committed; each fails there. Read their docstrings for which assertion is the
@@ -97,9 +106,17 @@ def test_concurrent_requests_each_get_their_own_connection(
         "concurrent requests shared a sqlite3.Connection — that is the defect "
         f"this app was fixed for: {held}"
     )
+    # Scoped to the SYNC routes this test drives, and only those. It holds
+    # for them everywhere: a worker thread is never the thread that called
+    # create_app. It does NOT hold for the async write routes under uvicorn —
+    # they run on the loop thread, which IS the creating thread there, so they
+    # are handed exactly this object. Under TestClient the loop lives on a
+    # portal thread, which is the only reason a broader claim would look true
+    # here; see the module docstring.
     assert id(app.state.conn) not in {conn_id for _, conn_id in held}, (
-        "a request was handed app.state.conn, the connection the creating "
-        "thread (and every test) uses — the two must never meet"
+        "a sync route was handed app.state.conn, the connection the creating "
+        "thread (and every test) uses — for threadpool routes the two must "
+        "never meet"
     )
 
 
@@ -121,9 +138,6 @@ def test_concurrent_reads_and_writes_all_come_back_right(app_and_refs) -> None:
     conn = app.state.conn
     org = orgs.find(conn, refs[0])
     assert org is not None
-    from bookkit import db
-    from bookkit.repo import contacts as contacts_repo
-
     person = contacts_repo.for_org(conn, org.id)[0]
     with db.transaction(conn):
         contacts_repo.update(conn, person.id, title="Head of Risk 0")

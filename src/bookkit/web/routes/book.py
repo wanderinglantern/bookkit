@@ -39,9 +39,11 @@ router = APIRouter()
 
 
 def _conn(request: Request) -> sqlite3.Connection:
-    """THIS THREAD's connection, never a shared one — every route here is a
-    sync def and FastAPI runs those in an anyio worker threadpool. See
-    web.app.ThreadConnections for what sharing one cost.
+    """THIS THREAD's connection, never a shared one — every route in THIS
+    module is a sync def and FastAPI runs those in an anyio worker threadpool,
+    so concurrent requests are concurrent threads. (routes/account.py's copy
+    also serves the `async def` write routes, which run on the event loop and
+    share one connection; see its docstring and web.app.ThreadConnections.)
 
     A second copy of routes/account.py's `_conn`: /book is the front door and
     imports none of the account shell. These two are the ONLY places the web

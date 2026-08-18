@@ -110,11 +110,23 @@ Measured both ways, because the obvious form of that claim is false: ordinary
 concurrent web saves do NOT need this lock — 4 writers x 300 POSTs came back
 clean without it, each transaction being microseconds long and busy_timeout
 absorbing the overlap. What needs it is a writer holding the transaction
-LONGER than the timeout: a bulk import, a 250-entity batch, a slow towerkit
-round-trip. With the lock a concurrent save queues and succeeds; without it
-the save is refused after 5s with "database is locked" and the user's edit is
-lost. tests/test_web_concurrency.py asserts that, so deleting this lock fails
-the suite rather than a review."""
+LONGER than the timeout, IN THIS PROCESS. The web app has exactly one such
+writer today: the batch revert behind web/routes/changes.py, whose single
+transaction (services.batches.revert) applies up to BLAST_CAP entities of
+undelete/update/soft-delete with an event_log row each. A bulk import or a
+TUI batch is NOT an example, though both are longer — they run in a SEPARATE
+PROCESS with its own instance of this lock, which therefore excludes nothing;
+there the "database is locked" refusal happens exactly as the paragraph above
+warns, and only SQLite's own busy_timeout stands between it and the user.
+With the lock a concurrent save queues and succeeds; without it the save is
+refused after 5s with "database is locked" and the user's edit is lost.
+tests/test_web_concurrency.py asserts that, so deleting this lock fails the
+suite rather than a review.
+
+Known and deliberately not restructured: an `async def` route that waits here
+blocks the WHOLE event loop, because this is a threading.RLock and the write
+routes run on the loop (see web.app.ThreadConnections). Harmless while every
+web write is microseconds long; read this before adding a slow one."""
 
 
 def current_batch() -> BatchState | None:
@@ -236,6 +248,13 @@ def connect(
     arrangement that replaced it: one connection per thread, still
     check_same_thread=False purely for the shutdown sweep.
 
+    `async def` handlers DO run on the loop's thread, and bookkit's eight web
+    write routes are async (they await request.form()), so they really do all
+    share one connection. That is safe only because asyncio does not preempt
+    and no `await` sits inside a transaction — a rule, enforced by
+    tests/test_conventions.py::test_no_await_inside_a_transaction, not a
+    property of this function.
+
     The TUI and CLI stay on the strict default: each opens and uses its
     connection from a single thread, and the check catches a real bug
     there."""
@@ -248,10 +267,18 @@ def connect(
         db_path, isolation_level=None, check_same_thread=check_same_thread
     )
     conn.row_factory = sqlite3.Row
+    # busy_timeout FIRST: it is the only pragma here that changes how the
+    # other three behave when a writer holds the file, and journal_mode=WAL
+    # can need an exclusive lock to convert the journal — with a zero timeout
+    # it gives up instantly instead of waiting. Insurance, not a measured fix:
+    # no defect was found in the old order (WAL readers do not block, ~2ms
+    # under both BEGIN IMMEDIATE and BEGIN EXCLUSIVE). It matters more now
+    # that connections open on the REQUEST path (web.app.ThreadConnections),
+    # not only at startup.
+    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     if migrate:
         apply_migrations(conn)
     return conn
