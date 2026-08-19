@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from bookkit import sync
+from bookkit.money import format_cents
 from bookkit.web.app import create_app
 
 
@@ -160,15 +161,30 @@ def test_a_placement_with_no_file_says_so_rather_than_looking_empty(app_and_org)
 
 
 def test_layer_money_is_formatted_not_raw_cents(app_and_org):
-    """A layer that attaches at $10M must not render as 1000000000."""
+    """A layer with a $5M limit must not render as 500000000.
+
+    The first version of this asserted `str(cents) not in page or cents == 0`
+    against the FIRST layer — which attaches at 0 in the seeded book, so the
+    right-hand side was always true and the test passed with the formatter
+    replaced by str(). Review caught it by mutation. It now checks a non-zero
+    figure, in a named cell, and asserts the formatted form is present as well
+    as the raw one absent."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)[0]
-    layer = sync.layer_details(conn, placement.id)[0]
+    priced = next(
+        layer for layer in sync.layer_details(conn, placement.id)
+        if layer["limit_cents"]
+    )
 
-    page = client.get(f"/accounts/{org.ref}/program").text
+    cell = _cell_text(
+        client.get(f"/accounts/{org.ref}/program").text,
+        placement, priced["id"], "limit_cents",
+    )
 
-    assert str(layer["attach_cents"]) not in page or layer["attach_cents"] == 0
+    assert cell != str(priced["limit_cents"]), "raw cents rendered"
+    assert "," in cell, f"money rendered without thousands separators: {cell!r}"
+    assert cell == format_cents(priced["limit_cents"]).lstrip("$")
 
 
 def test_a_primary_layer_attaching_at_zero_says_zero(app_and_org):
@@ -341,18 +357,28 @@ def test_a_sub_dollar_premium_is_refused_not_rounded(app_and_org):
 
 def test_a_refused_layer_edit_leaves_no_batch_and_no_snapshot(app_and_org):
     """A refusal that logged an undo unit would offer to revert a write that
-    never happened."""
+    never happened — and a refusal that left a snapshot would offer to restore
+    a pre-image of nothing.
+
+    The name promised the snapshot half and the body never checked it: moving
+    `capture` above `raise_on_errors` in services/program_files.py left this
+    green while every refused edit wrote a .mcp-snapshots file. Review found
+    it by exactly that mutation."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement, layer = _first_layer(conn, org)
-    before = _latest_batch(conn)
+    snapdir = Path(placement.program_path).parent / ".mcp-snapshots"
+    before_batch = _latest_batch(conn)
+    before_snaps = set(snapdir.glob("*.json")) if snapdir.exists() else set()
 
     client.post(
         _cell(org, placement, layer, "premium_cents"), data={"premium_cents": "1,234.56"}
     )
 
     after = _latest_batch(conn)
-    assert (after.ref if after else None) == (before.ref if before else None)
+    assert (after.ref if after else None) == (before_batch.ref if before_batch else None)
+    after_snaps = set(snapdir.glob("*.json")) if snapdir.exists() else set()
+    assert after_snaps == before_snaps, "a refused write left snapshot debris"
 
 
 def test_a_layer_under_another_account_is_not_reachable(app_and_org):
@@ -543,3 +569,124 @@ def test_a_market_is_taken_off_a_layer_and_the_layer_survives(app_and_org):
     )
     assert carrier not in [p["carrier"] for p in fresh["participants"]]
     assert fresh["name"] == layer["name"], "the layer went with the market"
+
+
+# --- what the review caught -----------------------------------------------
+#
+# Six defects, three of which the tests above were too weak to see. Each one
+# gets an assertion here rather than a comment.
+
+
+def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
+    """The refusal used to be a bare message, and every control that could
+    trigger it swapped the whole <section class="program"> — so a refused add
+    deleted the layers table, the add controls and the panel's own id, leaving
+    the placement unusable until a full page reload."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={
+            "name": "Floating Excess",
+            "attach_cents": "900,000,000",
+            "limit_cents": "5,000,000",
+            "premium_cents": "",
+        },
+    )
+
+    assert refused.status_code == 200
+    assert "<form" in refused.text, "the form did not come back"
+    assert "Floating Excess" in refused.text, "the typed name was thrown away"
+    assert "900,000,000" in refused.text, "the typed attachment was thrown away"
+
+
+def test_the_add_form_posts_into_the_form_host_not_over_the_panel(app_and_org):
+    """The swap target IS the bug. A form that targets the panel replaces the
+    panel with whatever comes back, and a refusal is not a panel."""
+    client, org = app_and_org
+    placement, _ = _first_layer(client.app.state.conn, org)
+
+    form = client.get(f"/accounts/{org.ref}/program/{placement.id}/layers/new").text
+
+    assert 'hx-target="closest .form-host"' in form
+    assert 'hx-swap="innerHTML"' in form
+    assert "closest .program" not in form
+
+
+def test_a_blank_attachment_is_refused_in_the_broker_s_language(app_and_org):
+    """It used to reach sync.add_layer as None and come back as
+    "unsupported operand type(s) for %: 'NoneType' and 'int'"."""
+    client, org = app_and_org
+    placement, _ = _first_layer(client.app.state.conn, org)
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "No Money", "attach_cents": "", "limit_cents": "", "premium_cents": ""},
+    )
+
+    assert "attaches at is required" in refused.text
+    assert "NoneType" not in refused.text
+
+
+def test_a_blank_share_is_refused_in_the_broker_s_language(app_and_org):
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    refused = client.post(
+        _markets(org, placement, layer["id"]), data={"carrier": "Nobody Re", "share_pct": ""}
+    )
+
+    assert "share is required" in refused.text
+
+
+def test_a_placement_with_no_file_says_so_rather_than_an_errno(app_and_org):
+    """Path(str(None)) is the literal path "None", so the first thing a broker
+    saw was "[Errno 2] No such file or directory: 'None'"."""
+    client, org = app_and_org
+    from bookkit.repo import placements
+
+    conn = client.app.state.conn
+    bare = placements.create(
+        conn, org.id, "Unlinked Program", "2026-03-01", "2027-03-01",
+    )
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{bare.id}/layers",
+        data={"name": "Nowhere", "attach_cents": "0", "limit_cents": "1,000,000",
+              "premium_cents": ""},
+    )
+
+    assert "no program file linked" in refused.text
+    assert "Errno" not in refused.text
+
+
+def test_a_market_can_be_reached_for_editing_from_the_page(app_and_org):
+    """market_cell_save existed and nothing rendered a way to it: the share
+    test passed by POSTing the URL directly, which is not evidence a broker
+    can correct a share."""
+    import re
+
+    client, org = app_and_org
+    placement, _ = _first_layer(client.app.state.conn, org)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert re.search(r"markets/\d+/edit/share_pct", page), "no way in from the page"
+    assert re.search(r"markets/\d+/edit/carrier", page)
+
+
+def test_a_layer_edit_refreshes_the_rows_it_moved(app_and_org):
+    """write_through heals follows-underlying layers, so a limit change re-seats
+    OTHER rows. Returning one cell left them showing the pre-write number — a
+    tower on screen that does not exist in the file."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    saved = client.post(
+        _cell(org, placement, layer, "name"), data={"name": "Refreshed Layer"}
+    )
+
+    assert 'hx-swap-oob="true"' in saved.text, "no panel refresh came back with the cell"

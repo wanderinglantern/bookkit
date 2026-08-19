@@ -164,6 +164,13 @@ def _owned_layer(
     raise HTTPException(status_code=404, detail=f"layer {layer_id} is not on {placement.ref}")
 
 
+def _text(response: Any) -> str:
+    """A rendered response's body as text. Starlette types `.body` as
+    bytes | memoryview, and only one of those decodes."""
+    body = response.body
+    return bytes(body).decode()
+
+
 def _layer_field(key: str) -> Field:
     """Only what LAYER_FIELDS declares. signed_pct and statutory are derived,
     and an editor for a derived value writes nothing and reads as broken."""
@@ -276,7 +283,17 @@ async def layer_cell_save(
     # one has just written, so the cached parse is now the pre-image.
     request.state.layer_details = {}
     _, fresh = _owned_layer(request, org, placement_id, layer_id)
-    return _layer_display_cell(request, ref, placement_id, fresh, key)
+
+    # THE CELL, PLUS THE WHOLE PANEL OUT OF BAND. A layer write can move rows
+    # this cell knows nothing about: write_through runs heal_follows, which
+    # re-seats the attachment of every follows-underlying layer above the one
+    # edited. Swapping back only the edited cell left those rows showing the
+    # pre-write attachment — a tower with a gap or an overlap that does not
+    # exist in the file, and the next edit made from that row would be made
+    # against a number that is already gone (found by review, 2026-08-19).
+    cell = _layer_display_cell(request, ref, placement_id, fresh, key)
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(cell) + _text(panel))
 
 
 # --- adding a layer, and working the markets on one ---------------------------
@@ -342,10 +359,31 @@ def _panel(request: Request, ref: str, org: Any, placement_id: str) -> HTMLRespo
     )
 
 
+def _refused_form(
+    request: Request, fields: tuple[Field, ...], action: str, title: str,
+    message: str, typed: dict[str, str],
+) -> HTMLResponse:
+    """The form again, with the message and everything that was typed.
+
+    COMMIT IN PLACE, the platform default since 2026-08-12: a refused save
+    keeps the form open with its input intact. Returning a bare message
+    instead threw away what the broker had entered — and, because the control
+    that triggered it swapped the whole panel, took the panel with it."""
+    return TEMPLATES.TemplateResponse(
+        request, "account/_program_form.html",
+        {
+            "fields": fields, "action": action, "title": title,
+            "error": message, "values": typed,
+        },
+    )
+
+
 def _refusal(request: Request, message: str) -> HTMLResponse:
-    """A refused program write, rendered where the form was. Deliberately not
-    a 4xx: htmx swaps 2xx only, and a refusal the user cannot read is the
-    silent failure this codebase keeps finding."""
+    """A refused write with no form behind it — the market remove button.
+
+    Deliberately 200: htmx swaps 2xx only, and a refusal the user cannot read
+    is the silent failure this codebase keeps finding. It lands in the
+    placement's .form-host, never over the panel."""
     return TEMPLATES.TemplateResponse(
         request, "account/_program_refusal.html", {"message": message}
     )
@@ -357,10 +395,12 @@ async def layer_add(request: Request, ref: str, placement_id: str) -> HTMLRespon
     conn = _conn(request)
     placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
     raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = f"/accounts/{ref}/program/{placement_id}/layers"
+    fields = _layer_add_fields()
     try:
-        values = _parsed(_layer_add_fields(), raw)
+        values = _parsed(fields, raw)
     except ValueError as exc:
-        return _refusal(request, str(exc))
+        return _refused_form(request, fields, action, "new layer", str(exc), raw)
 
     try:
         program_files.write(
@@ -376,7 +416,7 @@ async def layer_add(request: Request, ref: str, placement_id: str) -> HTMLRespon
             open_batch=_open_batch_web,
         )
     except Exception as exc:
-        return _refusal(request, str(exc))
+        return _refused_form(request, fields, action, "new layer", str(exc), raw)
     return _panel(request, ref, org, placement_id)
 
 
@@ -391,10 +431,12 @@ async def market_add(
     conn = _conn(request)
     placement, layer = _owned_layer(request, org, placement_id, layer_id)
     raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets"
+    title = f"bind a market to {layer['name']}"
     try:
         values = _parsed(PARTICIPANT_FIELDS, raw)
     except ValueError as exc:
-        return _refusal(request, str(exc))
+        return _refused_form(request, PARTICIPANT_FIELDS, action, title, str(exc), raw)
 
     try:
         program_files.write(
@@ -407,8 +449,15 @@ async def market_add(
             open_batch=_open_batch_web,
         )
     except Exception as exc:
-        return _refusal(request, str(exc))
+        return _refused_form(request, PARTICIPANT_FIELDS, action, title, str(exc), raw)
     return _panel(request, ref, org, placement_id)
+
+
+def _market_field(key: str) -> Field:
+    field = next((f for f in PARTICIPANT_FIELDS if f.key == key), None)
+    if field is None:
+        raise HTTPException(status_code=404, detail=f"{key} is not an editable market field")
+    return field
 
 
 def _seated(layer: dict[str, Any], index: int) -> dict[str, Any]:
@@ -419,6 +468,35 @@ def _seated(layer: dict[str, Any], index: int) -> dict[str, Any]:
             status_code=404, detail=f"no market {index} on {layer['name']}"
         ) from None
     return seat
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/{index}/edit/{key}",
+    response_class=HTMLResponse,
+)
+def market_cell_edit(
+    request: Request, ref: str, placement_id: str, layer_id: str, index: int, key: str
+) -> HTMLResponse:
+    """One market field, in a form. Not the inline-cell macro: a market is
+    addressed by its index rather than an id, and its edit re-renders the whole
+    panel (a share changes the layer's signed percentage), so it rides the same
+    form-host contract the adds do rather than the cell contract."""
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    seat = _seated(layer, index)
+    field = _market_field(key)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_program_form.html",
+        {
+            "fields": (field,),
+            "action": (
+                f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}"
+                f"/markets/{index}/cell/{key}"
+            ),
+            "title": f"{seat['carrier']} on {layer['name']}",
+            "values": {key: initial_text(field, seat.get(key))},
+        },
+    )
 
 
 @router.post(
@@ -436,10 +514,7 @@ async def market_cell_save(
     conn = _conn(request)
     placement, layer = _owned_layer(request, org, placement_id, layer_id)
     seat = _seated(layer, index)
-    field = next((f for f in PARTICIPANT_FIELDS if f.key == key), None)
-    if field is None:
-        raise HTTPException(status_code=404, detail=f"{key} is not an editable market field")
-
+    field = _market_field(key)
     raw = str((await request.form()).get(key, ""))
     try:
         value = parse_value(field, raw)

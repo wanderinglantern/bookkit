@@ -73,8 +73,15 @@ def task_fields(
 LAYER_FIELDS: tuple[Field, ...] = (
     Field("name", "layer", required=True),
     Field("policy_number", "policy no"),
-    Field("attach_cents", "attaches at", "money"),
-    Field("limit_cents", "limit", "money"),
+    # REQUIRED, both of them. A layer without an attachment point and a limit
+    # is not a layer — towerkit's own model demands both — and declaring them
+    # optional let a blank field through as None, which reached sync.add_layer
+    # and came back to the broker as
+    # "unsupported operand type(s) for %: 'NoneType' and 'int'" (found by
+    # review, 2026-08-19). Premium stays optional: a layer is routinely placed
+    # before it is priced.
+    Field("attach_cents", "attaches at", "money", required=True),
+    Field("limit_cents", "limit", "money", required=True),
     Field("premium_cents", "premium", "money"),
     Field("period_from", "from", "date"),
     Field("period_to", "to", "date"),
@@ -96,7 +103,9 @@ to reach the field as its error text."""
 
 PARTICIPANT_FIELDS: tuple[Field, ...] = (
     Field("carrier", "market", required=True),
-    Field("share_pct", "share", "share"),
+    # A seat with no share is not a seat. Blank reached add_participant as None
+    # and surfaced as a towerkit type error rather than "share is required".
+    Field("share_pct", "share", "share", required=True),
 )
 """A market's seat on a layer.
 

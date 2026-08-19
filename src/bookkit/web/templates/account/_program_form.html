@@ -2,19 +2,33 @@
 
    Not a FormSpec: this sub-project adds no whole-record form builders (spec
    D7). The fields are the same Field objects the inline cells use, so the
-   parser, the placeholder and the refusal wording are shared with them and a
-   value typed here is read exactly as one typed into a cell.
+   parser, the placeholder and the refusal wording are shared with them.
 
-   The response targets this placement's whole panel rather than a row: a
-   program write can move more than the thing that caused it — a market's
-   share changes the layer's signed percentage — so no partial swap is honest. #}
+   TARGETS THE FORM HOST, NOT THE PANEL, and that is the whole point of this
+   file's shape. It used to post with hx-target="closest .program"
+   hx-swap="outerHTML": on success the OOB panel did the work, but on a
+   REFUSAL — which returns this form again, not a panel — htmx swapped the
+   one-line message over the entire <section class="program">. The header,
+   the layers table, every market row, the add controls, the typed values and
+   the panel's own id all vanished, and because the id had gone no later
+   out-of-band refresh could put it back: the placement was unusable until a
+   full page reload (found by review, 2026-08-19).
+
+   The house pattern is documented at length in _contacts_panel.html: the form
+   targets `closest .form-host` with innerHTML, so a refusal swaps into the
+   form host with the input intact, and a SUCCESS returns an out-of-band panel
+   plus nothing else — the empty primary content closes the form. #}
 <form class="program-form" hx-post="{{ action }}"
-      hx-target="closest .program" hx-swap="outerHTML">
+      hx-target="closest .form-host" hx-swap="innerHTML">
   <h3 class="program-form-title">{{ title }}</h3>
+  {% if error %}
+    <p class="form-error" role="alert">{{ error }}</p>
+  {% endif %}
   {% for f in fields %}
     <label class="field">
       <span class="field-label">{{ f.label }}</span>
       <input type="text" name="{{ f.key }}" placeholder="{{ f.placeholder or '' }}"
+             value="{{ values.get(f.key, '') if values else '' }}"
              {% if f.required %}required{% endif %}>
     </label>
   {% endfor %}

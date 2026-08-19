@@ -1,11 +1,11 @@
-{# A refused program write, rendered where the form was.
+{# A refused write with no form to go back to — the market remove button.
 
-   200, not 4xx, on purpose: htmx swaps 2xx responses and drops 4xx and 5xx
-   alike, so a refusal returned with an error status vanishes and the page
-   reads as if nothing happened — the silent-failure shape this codebase keeps
-   finding. The message is towerkit's own words; it names the layers a gap
-   falls between, or the share that over-signs, and paraphrasing it here would
-   lose the only part a broker can act on. #}
-<div class="program-refusal" role="alert">
-  <p>{{ message }}</p>
-</div>
+   200, not 4xx: htmx swaps 2xx responses and drops 4xx and 5xx alike, so a
+   refusal returned with an error status vanishes and the page reads as if
+   nothing happened.
+
+   This lands in the placement's .form-host, NEVER over the panel itself. The
+   message is towerkit's own words: it names the layers a gap falls between,
+   or the share that over-signs, and paraphrasing loses the only part a broker
+   can act on. #}
+<p class="form-error" role="alert">{{ message }}</p>

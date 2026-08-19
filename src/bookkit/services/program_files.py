@@ -51,6 +51,16 @@ class ProgramWriteRefused(ValueError):
         super().__init__("; ".join(d.message for d in diags.errors))
 
 
+def _one_error(code: str, message: str) -> Any:
+    """A one-error Diagnostics, so a refusal raised here carries the same shape
+    towerkit's own refusals do and every caller reads it the same way."""
+    from towerkit.validate import Diagnostics
+
+    diags = Diagnostics()
+    diags.error(code, message)
+    return diags
+
+
 def raise_on_errors(diags: Any) -> list[str]:
     """write_through's Diagnostics → a caller's contract: errors refuse
     (nothing was written), warnings ride along in the return.
@@ -94,6 +104,19 @@ def write(
     code='conflict', so a conflict arrives here as an ordinary refusal and the
     caller decides how much of a fuss to make about it.
     """
+    if not placement.program_path:
+        # Checked HERE, before the read. Path(str(None)) is the literal path
+        # "None", so the first thing a broker saw when adding a layer to an
+        # unlinked placement was "[Errno 2] No such file or directory: 'None'"
+        # — an errno for a state the app knows about perfectly well (found by
+        # review, 2026-08-19). sync.write_through has its own guard, but this
+        # read beats it.
+        raise ProgramWriteRefused(
+            _one_error(
+                "no-file",
+                f"{placement.ref} has no program file linked — scaffold one first",
+            )
+        )
     path = Path(str(placement.program_path))
     pre_image = path.read_bytes()
     with open_batch(

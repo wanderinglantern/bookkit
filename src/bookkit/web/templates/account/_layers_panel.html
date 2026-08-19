@@ -54,12 +54,24 @@
               <td class="prose">
                 {% if layer.participants %}
                   {% for part in layer.participants %}
-                    <span class="market">{{ part.carrier }} <span class="market-share">{{ part.share_pct }}%</span>
+                    {# Editable, because a share and a carrier name are both
+                       corrected in practice — and because a route nothing can
+                       reach is a route nobody tests honestly: the share-edit
+                       test passed by POSTing the URL directly while no UI
+                       rendered it (found by review, 2026-08-19). #}
+                    <span class="market"
+                          hx-target="#program-{{ placement.id }} .form-host" hx-swap="innerHTML">
+                      <span class="market-cell" tabindex="0"
+                            hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/{{ loop.index0 }}/edit/carrier"
+                            hx-trigger="click, keyup[key=='Enter']">{{ part.carrier }}</span>
+                      <span class="market-cell market-share" tabindex="0"
+                            hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/{{ loop.index0 }}/edit/share_pct"
+                            hx-trigger="click, keyup[key=='Enter']">{{ part.share_pct }}%</span>
                       <button type="button" class="row-action-btn"
                               title="Take {{ part.carrier }} off {{ layer.name }} — the layer stays"
                               hx-post="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/{{ loop.index0 }}/remove"
-                              hx-target="#program-{{ placement.id }}"
-                              hx-swap="outerHTML">remove</button>
+                              hx-target="#program-{{ placement.id }} .form-host"
+                              hx-swap="innerHTML">remove</button>
                     </span>
                   {% endfor %}
                 {% else %}
