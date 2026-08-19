@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from ..models import Submission
+from ..models import SUBJECTIVITY_OPEN_STATUS, Subjectivity, Submission
 from . import base
 
 
@@ -178,3 +178,165 @@ def update(
 
 def delete(conn: sqlite3.Connection, sub_id: str) -> None:
     base.soft_delete(conn, "submission", sub_id)
+
+
+# --- quotes in hand -----------------------------------------------------------
+#
+# `outstanding()` above is deliberately NOT widened to include them. It answers
+# "what has no answer yet", which is what services/sla.past_sla counts days
+# against; a quote HAS an answer and its clock is a different clock, running to
+# a different date. Widening one query to mean both would have made every SLA
+# figure wrong. These are new queries beside it, not a change to it.
+
+
+def quoted_rows_for_org(conn: sqlite3.Connection, org_id: str) -> list[sqlite3.Row]:
+    """Every quote in hand for ONE client, joined for display, soonest expiry
+    first and undated quotes last.
+
+    Aliveness on both subjects sits in the ON clause, the same rule
+    outstanding_for_org states: a quote whose only tie to the client is a
+    soft-deleted placement or opportunity drops out."""
+    return conn.execute(
+        f"""
+        SELECT s.*, m.name AS market_name,
+               COALESCE(p.program_name, o.title) AS about,
+               c.first_name AS uw_first, c.last_name AS uw_last, c.email AS uw_email,
+               (SELECT COUNT(*) FROM submission_subjectivity sj
+                 WHERE sj.submission_id = s.id AND sj.status = '{SUBJECTIVITY_OPEN_STATUS}'
+                   AND {base.alive('sj')}) AS open_subjectivities,
+               (SELECT COUNT(*) FROM submission_subjectivity sj
+                 WHERE sj.submission_id = s.id AND {base.alive('sj')}) AS total_subjectivities
+        FROM submission s
+        JOIN org m ON m.id = s.market_org_id
+        LEFT JOIN contact c ON c.id = s.underwriter_contact_id AND {base.alive('c')}
+        LEFT JOIN placement p ON p.id = s.placement_id AND {base.alive('p')}
+        LEFT JOIN opportunity o ON o.id = s.opportunity_id AND {base.alive('o')}
+        WHERE s.status = 'quoted' AND {base.alive('s')}
+          AND (p.org_id = ? OR o.org_id = ?)
+        ORDER BY s.quote_expires_on IS NULL, s.quote_expires_on, s.sent_on
+        """,
+        (org_id, org_id),
+    ).fetchall()
+
+
+def expiring_quote_rows(conn: sqlite3.Connection, horizon: str) -> list[sqlite3.Row]:
+    """Every quote in hand across the book whose expiry falls on or before the
+    horizon — or is already past, so a LAPSED quote never falls off the queue.
+
+    Undated quotes are excluded, exactly as rfi.outstanding_rows excludes an
+    undated request: a quote nobody gave us an expiry for is not yet a clock,
+    and inventing one would be guessing at the number the whole feature exists
+    to be honest about."""
+    return conn.execute(
+        f"""
+        SELECT s.*, m.name AS market_name,
+               COALESCE(p.org_id, o.org_id) AS org_id,
+               COALESCE(pc.name, oc.name)   AS org_name,
+               COALESCE(p.program_name, o.title) AS about,
+               c.first_name AS uw_first, c.last_name AS uw_last, c.email AS uw_email,
+               (SELECT COUNT(*) FROM submission_subjectivity sj
+                 WHERE sj.submission_id = s.id AND sj.status = '{SUBJECTIVITY_OPEN_STATUS}'
+                   AND {base.alive('sj')}) AS open_subjectivities,
+               (SELECT COUNT(*) FROM submission_subjectivity sj
+                 WHERE sj.submission_id = s.id AND {base.alive('sj')}) AS total_subjectivities
+        FROM submission s
+        JOIN org m ON m.id = s.market_org_id
+        LEFT JOIN contact c ON c.id = s.underwriter_contact_id AND {base.alive('c')}
+        LEFT JOIN placement p ON p.id = s.placement_id AND {base.alive('p')}
+        LEFT JOIN opportunity o ON o.id = s.opportunity_id AND {base.alive('o')}
+        LEFT JOIN org pc ON pc.id = p.org_id AND {base.alive('pc')}
+        LEFT JOIN org oc ON oc.id = o.org_id AND {base.alive('oc')}
+        WHERE s.status = 'quoted' AND {base.alive('s')}
+          AND s.quote_expires_on IS NOT NULL
+          AND s.quote_expires_on <= ?
+          AND COALESCE(p.org_id, o.org_id) IS NOT NULL
+        ORDER BY s.quote_expires_on
+        """,
+        (horizon,),
+    ).fetchall()
+
+
+# --- subjectivities -----------------------------------------------------------
+#
+# Children of a submission, so they live in this module rather than one of
+# their own — the same arrangement rfi_item has inside repo/rfi.py.
+
+
+def add_subjectivity(
+    conn: sqlite3.Connection, submission_id: str, description: str, **fields: Any
+) -> Subjectivity:
+    subj_id = base.insert(
+        conn,
+        "submission_subjectivity",
+        {"submission_id": submission_id, "description": description, **fields},
+    )
+    return get_subjectivity(conn, subj_id)
+
+
+def get_subjectivity(conn: sqlite3.Connection, subj_id: str) -> Subjectivity:
+    row = base.get(conn, "submission_subjectivity", subj_id)
+    if row is None:
+        raise KeyError(f"subjectivity {subj_id} not found")
+    return Subjectivity.from_row(row)
+
+
+def subjectivities_for(
+    conn: sqlite3.Connection, submission_id: str
+) -> list[Subjectivity]:
+    """Outstanding first, then by due date with undated last: the ones being
+    chased sit at the top of the list whatever their dates say."""
+    rows = conn.execute(
+        f"""SELECT * FROM submission_subjectivity
+            WHERE submission_id = ? AND {base.alive()}
+            ORDER BY status <> '{SUBJECTIVITY_OPEN_STATUS}',
+                     due_on IS NULL, due_on, created_at""",
+        (submission_id,),
+    ).fetchall()
+    return [Subjectivity.from_row(r) for r in rows]
+
+
+def update_subjectivity(
+    conn: sqlite3.Connection, subj_id: str, note: str | None = None, **changes: Any
+) -> Subjectivity:
+    base.update(conn, "submission_subjectivity", subj_id, changes, note)
+    return get_subjectivity(conn, subj_id)
+
+
+def delete_subjectivity(conn: sqlite3.Connection, subj_id: str) -> None:
+    base.soft_delete(conn, "submission_subjectivity", subj_id)
+
+
+def subjectivity_counts(conn: sqlite3.Connection, submission_id: str) -> tuple[int, int]:
+    """(still outstanding, total). Zero of zero means nobody has recorded any,
+    which reads differently from 0 of 4 — every surface prints both numbers."""
+    row = conn.execute(
+        f"""SELECT SUM(status = '{SUBJECTIVITY_OPEN_STATUS}') AS open_count,
+                   COUNT(*) AS total
+            FROM submission_subjectivity
+            WHERE submission_id = ? AND {base.alive()}""",
+        (submission_id,),
+    ).fetchone()
+    return int(row["open_count"] or 0), int(row["total"] or 0)
+
+
+def outstanding_subjectivity_rows_for_org(
+    conn: sqlite3.Connection, org_id: str
+) -> list[sqlite3.Row]:
+    """Every subjectivity this client still owes a market, with enough context
+    to name it on a chase list. Undated ones sort last, never out."""
+    return conn.execute(
+        f"""
+        SELECT sj.*, m.name AS market_name,
+               COALESCE(p.program_name, o.title) AS about
+        FROM submission_subjectivity sj
+        JOIN submission s ON s.id = sj.submission_id
+        JOIN org m ON m.id = s.market_org_id
+        LEFT JOIN placement p ON p.id = s.placement_id AND {base.alive('p')}
+        LEFT JOIN opportunity o ON o.id = s.opportunity_id AND {base.alive('o')}
+        WHERE sj.status = '{SUBJECTIVITY_OPEN_STATUS}'
+          AND {base.alive('sj')} AND {base.alive('s')}
+          AND (p.org_id = ? OR o.org_id = ?)
+        ORDER BY sj.due_on IS NULL, sj.due_on, sj.created_at
+        """,
+        (org_id, org_id),
+    ).fetchall()

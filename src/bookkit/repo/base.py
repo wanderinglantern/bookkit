@@ -23,6 +23,7 @@ ENTITY_TABLES = {
     "placement": "placement",
     "opportunity": "opportunity",
     "submission": "submission",
+    "submission_subjectivity": "submission_subjectivity",
     "document": "document",
     "team_member": "team_member",
     "team_assignment": "team_assignment",

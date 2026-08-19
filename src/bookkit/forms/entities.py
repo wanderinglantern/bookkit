@@ -15,6 +15,8 @@ from ..models import (
     PROJECT_STATUSES,
     RFI_ITEM_KINDS,
     RFI_ITEM_STATUSES,
+    SUBJECTIVITY_OPEN_STATUS,
+    SUBJECTIVITY_STATUSES,
     TEAM_ROLES,
     Appetite,
     Contact,
@@ -27,6 +29,7 @@ from ..models import (
     ProjectNeed,
     RfiItem,
     RfiRequest,
+    Subjectivity,
     Submission,
     Task,
     TeamAssignment,
@@ -304,12 +307,35 @@ def apply_opportunity(
 # --- submission ---------------------------------------------------------------
 
 
+def underwriter_options(conn: sqlite3.Connection) -> tuple[tuple[str, str], ...]:
+    """(label, contact id) for every active contact at a market.
+
+    The label carries the market — "Dana Reeve — Travelers" — because five
+    identical "Chen" rows is the exact complaint the AE review made about
+    search, and a picker repeats it worse: you cannot even hover it.
+
+    One helper, both the new-submission form and the response form, so the
+    two can never offer different people."""
+    return tuple(
+        (f"{row['first_name']} {row['last_name']} — {row['org_name']}", row["id"])
+        for row in contacts.at_market_orgs(conn)
+    )
+
+
 def submission_form(conn: sqlite3.Connection) -> FormSpec:
     markets = tuple((o.name, o.id) for o in orgs.list_orgs(conn, kind="market"))
     return FormSpec(
         "new submission",
         [
             Field("market_org_id", "market", "select", markets, required=True),
+            # optional on purpose: you often send to a submissions inbox and
+            # learn who picked it up a week later, and a required field here
+            # would push people to pick the wrong name to get past it. The
+            # response form asks again.
+            Field(
+                "underwriter_contact_id", "underwriter", "select",
+                underwriter_options(conn), optional_select=True,
+            ),
             Field("sent_on", "sent", "date", required=True),
             Field("notes", "notes", "textarea"),
         ],
@@ -334,7 +360,7 @@ def apply_submission(
     )
 
 
-def response_form(existing: Submission) -> FormSpec:
+def response_form(existing: Submission, conn: sqlite3.Connection) -> FormSpec:
     # NB: no `status` initial — the current value is 'out', which is not a
     # legal *outcome*, and Select rejects a value missing from its options.
     return FormSpec(
@@ -344,6 +370,18 @@ def response_form(existing: Submission) -> FormSpec:
             Field("response_on", "response date", "date"),
             Field("quoted_premium", "quoted premium", "money"),
             Field("quoted_limit", "quoted limit", "money"),
+            # THE point of this whole field: a quote lapses. Without it the
+            # row leaves the past-SLA queue on the day it is answered and
+            # enters no queue anywhere, and the three weeks of comparing
+            # terms happen off the tool entirely.
+            Field("quote_expires_on", "quote expires", "date"),
+            # asked here as well as on the submission because this is usually
+            # the first moment you know it: the answer arrives from a person,
+            # not from the inbox you sent it to.
+            Field(
+                "underwriter_contact_id", "underwriter", "select",
+                underwriter_options(conn), optional_select=True,
+            ),
             Field("decline_reason", "decline reason"),
             Field("notes", "notes", "textarea"),
         ],
@@ -351,6 +389,8 @@ def response_form(existing: Submission) -> FormSpec:
             "response_on": existing.response_on or "today",
             "quoted_premium": existing.quoted_premium,
             "quoted_limit": existing.quoted_limit,
+            "quote_expires_on": existing.quote_expires_on,
+            "underwriter_contact_id": existing.underwriter_contact_id,
             "decline_reason": existing.decline_reason,
             "notes": existing.notes,
         },
@@ -361,6 +401,56 @@ def apply_response(
     conn: sqlite3.Connection, submission_id: str, values: dict[str, Any]
 ) -> Submission:
     return submissions.update(conn, submission_id, **dropped(values))
+
+
+# --- subjectivities -----------------------------------------------------------
+
+
+_SUBJECTIVITY_STATUS = tuple((s, s) for s in SUBJECTIVITY_STATUSES)
+
+
+def subjectivity_form(existing: Subjectivity | None = None) -> FormSpec:
+    """One condition a market wants cleared before its quote is bindable.
+
+    `status` IS on this form, unlike rfi_item's — there is no `d`-style
+    mark-met action on any surface, so leaving it off would make a
+    subjectivity impossible to settle. It stays one writer action either
+    way: FormModal batches the whole save."""
+    return FormSpec(
+        "edit subjectivity" if existing else "new subjectivity",
+        [
+            Field(
+                "description", "subjectivity", required=True,
+                placeholder="signed application · loss runs to 8/1 · sprinkler cert",
+            ),
+            Field("due_on", "due", "date"),
+            Field(
+                "status", "status", "select", _SUBJECTIVITY_STATUS,
+                required=True,
+            ),
+            Field("satisfied_on", "satisfied on", "date"),
+            Field("notes", "notes", "textarea"),
+        ],
+        initial=(
+            existing.model_dump()
+            if existing
+            else {"status": SUBJECTIVITY_OPEN_STATUS}
+        ),
+    )
+
+
+def apply_subjectivity(
+    conn: sqlite3.Connection,
+    values: dict[str, Any],
+    submission_id: str,
+    existing: Subjectivity | None = None,
+) -> Subjectivity:
+    core = dropped(values)
+    if existing:
+        return submissions.update_subjectivity(conn, existing.id, **core)
+    return submissions.add_subjectivity(
+        conn, submission_id, core.pop("description"), **core
+    )
 
 
 # --- team ---------------------------------------------------------------------

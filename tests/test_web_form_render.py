@@ -28,7 +28,7 @@ def test_there_are_builders_to_check():
     discovery breaks, that test's real coverage collapses to zero silently
     (it walks `builders`, and an empty list means the for-loop never runs —
     the assertion below is what stops that from passing quietly)."""
-    assert len(list(_spec_builders())) >= 17
+    assert len(list(_spec_builders())) >= 18
 
 
 def _stub_org(conn: sqlite3.Connection, kind: str = "client"):
@@ -53,7 +53,7 @@ def _stub_interaction(conn: sqlite3.Connection):
     )
 
 
-# Every one of the 17 builders discovered by _spec_builders, mapped to how it
+# Every one of the builders discovered by _spec_builders, mapped to how it
 # is actually called. Explicit rather than generic reflection: several take
 # `conn`, some don't accept it at all, and three require a real model
 # instance — getting any of those wrong should fail loudly, not fall back to
@@ -73,7 +73,10 @@ _BUILD_CALLS: dict[str, Callable[[Callable, sqlite3.Connection], FormSpec]] = {
     "request_form": lambda build, conn: build(conn=conn),
     "rfi_item_form": lambda build, conn: build(conn=conn),
     "submission_form": lambda build, conn: build(conn),
-    "response_form": lambda build, conn: build(_stub_submission(conn)),
+    "response_form": lambda build, conn: build(_stub_submission(conn), conn),
+    # takes no conn: its only select is the status vocabulary, a models.py
+    # tuple rather than anything read from the book
+    "subjectivity_form": lambda build, conn: build(),
     "interaction_form": lambda build, conn: build(_stub_interaction(conn)),
     "org_form_initial_profile": lambda build, conn: build(conn, _stub_org(conn)),
 }
@@ -82,7 +85,7 @@ _BUILD_CALLS: dict[str, Callable[[Callable, sqlite3.Connection], FormSpec]] = {
 def test_the_macro_renders_every_field_of_every_builder(conn: sqlite3.Connection):
     """The real completeness test. A hand-typed list of kind strings can
     drift from what the builders actually declare — this walks the builders
-    themselves, so a new Field(..., kind="whatever") in any of the 17 fails
+    themselves, so a new Field(..., kind="whatever") in any of them fails
     here, by name, instead of rendering nothing and saving anyway."""
     builders = list(_spec_builders())
     assert builders, "builder discovery found nothing — see test_there_are_builders_to_check"

@@ -71,6 +71,7 @@ ROW_HINTS = {
     "renewals": "[b]e[/b] edit · [b]r[/b] renew · [b]l[/b] layer · [b]enter[/b] opens account",
     "needs": "[b]enter[/b] opens account",
     "sla": "[b]enter[/b] opens account",
+    "quotes": "[b]enter[/b] opens account",
     "onboarding": "[b]enter[/b] resume onboarding",
     "requests": "[b]a[/b] add · [b]e[/b] edit · [b]enter[/b] opens account",
     "rfi": "[b]e[/b] edit request · [b]enter[/b] opens account",
@@ -109,11 +110,17 @@ def _walk(node: TreeNode) -> Iterator[TreeNode]:
         yield from _walk(child)
 
 
-def _attention_label(key: str, label: str, count: int) -> str:
-    """Attention leaves: red+◆ when overdue items exist, dim when empty."""
+def _attention_label(
+    key: str, label: str, count: int, alert: bool = False
+) -> str:
+    """Attention leaves: red+◆ when overdue items exist, dim when empty.
+
+    `alert` is how a leaf that is not "overdue renewals" still says something
+    has already gone past — a LAPSED quote is money already lost, and a leaf
+    that reads the same whether the terms are live or gone would bury it."""
     if count == 0:
         return f"[{theme.DIM}]{label} · 0[/]"
-    if key == "overdue":
+    if key == "overdue" or alert:
         return f"[b {theme.RED}]◆ {label} · {count}[/]"
     return f"{label} [{theme.DIM}]·[/] [b]{count}[/b]"
 
@@ -325,22 +332,33 @@ class NavigatorScreen(Screen):
 
         pending_onboarding = onboarding_svc.incomplete_clients(conn, today)
         chases = rfi_svc.outstanding_requests(conn, today, days=120)
+        # A quote with an expiry inside the window is precisely what this
+        # model exists to surface: a dated thing that needs an action before
+        # its date, and after which the terms are gone. It joins the ATTENTION
+        # set on the SAME 120-day window as everything else, and — like every
+        # other leaf — an already-expired quote never falls off it.
+        # The window itself is untouched; see services/quotes.py.
+        from ...services import quotes as quotes_svc
+
+        expiring_quotes = quotes_svc.expiring(conn, today, days=120)
         self._attention = {
             "overdue": overdue, "renewals": soon, "needs": needs,
             "tasks": due_tasks, "sla": late, "onboarding": pending_onboarding,
-            "rfi": chases,
+            "rfi": chases, "quotes": expiring_quotes,
         }
+        lapsed = any(q.is_expired for q in expiring_quotes)
         att = tree.root.add(_section("ATTENTION"), expand=True, data=("att-root", None))
-        for key, label, count in (
-            ("overdue", "overdue renewals", len(overdue)),
-            ("renewals", "renewals ≤ 120d", len(soon)),
-            ("needs", "project needs due", len(needs)),
-            ("tasks", "tasks due", len(due_tasks)),
-            ("sla", "submissions past SLA", len(late)),
-            ("onboarding", "onboarding incomplete", len(pending_onboarding)),
-            ("rfi", "requests to chase", len(chases)),
+        for key, label, count, alert in (
+            ("overdue", "overdue renewals", len(overdue), False),
+            ("renewals", "renewals ≤ 120d", len(soon), False),
+            ("needs", "project needs due", len(needs), False),
+            ("tasks", "tasks due", len(due_tasks), False),
+            ("sla", "submissions past SLA", len(late), False),
+            ("quotes", "quotes expiring", len(expiring_quotes), lapsed),
+            ("onboarding", "onboarding incomplete", len(pending_onboarding), False),
+            ("rfi", "requests to chase", len(chases), False),
         ):
-            att.add_leaf(_attention_label(key, label, count), data=("att", key))
+            att.add_leaf(_attention_label(key, label, count, alert), data=("att", key))
 
         clients = orgs.list_orgs(conn, kind="client")
         overdue_orgs = {i.org.id for i in overdue}
@@ -721,9 +739,35 @@ class NavigatorScreen(Screen):
                 key = f"submission:{item.submission.id}"
                 self._row_org[key] = item.account.id
                 table.add_row(
-                    item.market.name, item.account.name,
+                    # the person, not just the carrier: "Travelers" is not
+                    # something you can email (AE review, 2026-08-18)
+                    theme.market_text(item.market.name, item.underwriter_name),
+                    item.account.name,
                     item.submission.sent_on,
                     days_text(-item.days_out), key=key,
+                )
+        elif which == "quotes":
+            table.add_columns(
+                "expires", right("in"), "account", "market", "program",
+                right("premium"), right("subj"),
+            )
+            for quote in self._attention["quotes"]:
+                key = f"quote:{quote.submission.id}"
+                self._row_org[key] = quote.org_id
+                table.add_row(
+                    # expires_on and days_remaining are both properties of the
+                    # same QuoteItem, off the same stored column — the fix the
+                    # renewal countdown's "70d over" defect generalised
+                    theme.expiry_text(quote.expires_on, quote.days_remaining),
+                    days_text(quote.days_remaining or 0),
+                    quote.org_name,
+                    theme.market_text(quote.market_name, quote.underwriter_name),
+                    quote.about,
+                    money_text(quote.submission.quoted_premium),
+                    theme.subjectivity_text(
+                        quote.open_subjectivities, quote.total_subjectivities
+                    ),
+                    key=key,
                 )
         elif which == "onboarding":
             table.add_columns("account", "missing", "since")

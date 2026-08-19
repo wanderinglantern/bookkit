@@ -32,6 +32,29 @@ def for_org(conn: sqlite3.Connection, org_id: str, active_only: bool = True) -> 
     return [Contact.from_row(r) for r in rows]
 
 
+def at_market_orgs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every active contact who works at a MARKET, with their market's name.
+
+    This is the underwriter picker's source. It is a repo query rather than a
+    loop over `for_org` per market because the picker needs one ordered list
+    across every market in the book, and because the label has to carry the
+    market — two underwriters called Chen at two carriers is the same
+    ambiguity that made search unusable (AE review, 2026-08-18).
+
+    Market contacts ARE records in this book: the correction recorded in the
+    overnight plan. Nothing had ever read them for this purpose because
+    submission.underwriter_contact_id had no way in."""
+    return conn.execute(
+        f"""
+        SELECT c.*, o.name AS org_name
+        FROM contact c JOIN org o ON o.id = c.org_id
+        WHERE o.kind = 'market' AND c.active = 1
+          AND {base.alive('c')} AND {base.alive('o')}
+        ORDER BY o.name, c.last_name, c.first_name
+        """
+    ).fetchall()
+
+
 def update(
     conn: sqlite3.Connection, contact_id: str, note: str | None = None, **changes: Any
 ) -> Contact:

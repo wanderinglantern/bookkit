@@ -280,8 +280,40 @@ def connect(
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA synchronous=NORMAL")
     if migrate:
+        snapshot_before_migrations(conn, db_path)
         apply_migrations(conn)
     return conn
+
+
+def snapshot_before_migrations(
+    conn: sqlite3.Connection, db_path: Path
+) -> Path | None:
+    """The rollback for a schema change, taken before the first one runs.
+
+    CLAUDE.md's rule is that a bulk write snapshots first (imports/commit.py
+    has done this since it was written) — a migration is the same bet with
+    worse odds, because it changes the SHAPE of the file and a half-applied
+    one is not something a user can unpick by hand. `connect(migrate=True)`
+    is where migrations actually run, on the TUI's, the CLI's, the web
+    layer's and the MCP server's first connection alike, so the snapshot
+    belongs here rather than in any one caller.
+
+    Returns the backup path, or None when there is nothing to protect:
+
+    - `:memory:` has no file to copy (every test connection);
+    - nothing pending means no schema change is about to happen — so an
+      ordinary open of an up-to-date book does NOT litter backups/;
+    - schema_version 0 is a database with no schema yet. 001_initial on an
+      empty file cannot destroy data that does not exist, and snapshotting
+      it would put an empty .bak beside every freshly created book.
+    """
+    if str(db_path) == ":memory:":
+        return None
+    if not pending_migrations(conn):
+        return None
+    if schema_version(conn) == 0:
+        return None
+    return snapshot(conn, db_path)
 
 
 def connect_readonly(path: Path | str | None = None) -> sqlite3.Connection:
