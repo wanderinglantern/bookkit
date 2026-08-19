@@ -563,3 +563,49 @@ def test_which_names_this_server_answers_to(authority: str, loopback: bool):
     from bookkit.web.origin import is_loopback
 
     assert is_loopback(authority) is loopback
+
+
+# --- the browser must notice an upgrade --------------------------------------
+
+
+def test_the_stylesheet_and_scripts_carry_a_version(client):
+    """Without a changing URL the browser keeps the CSS it already has, and an
+    upgrade lands with the code changed and the page unchanged. That is
+    indistinguishable from a fix that did not ship — it cost an hour of
+    chasing a layout change that was correct on the server the whole time."""
+    from bookkit.web.app import ASSET_VERSION
+
+    page = client.get("/book").text
+
+    for asset in ("app.css", "htmx.min.js", "inline-cell.js"):
+        assert f"/static/{asset}?v={ASSET_VERSION}" in page, asset
+
+
+def test_the_version_moves_when_the_stylesheet_does(tmp_path, monkeypatch):
+    """A digest, not a release number: the stylesheet changes many times
+    between versions, and a version that stands still while the file moves is
+    exactly the case that misleads."""
+    from bookkit.web import app as app_mod
+
+    before = app_mod._asset_version()
+
+    real = app_mod.HERE / "static" / "app.css"
+    edited = tmp_path / "static"
+    edited.mkdir()
+    for existing in (app_mod.HERE / "static").glob("*.css"):
+        (edited / existing.name).write_bytes(existing.read_bytes())
+    for existing in (app_mod.HERE / "static").glob("*.js"):
+        (edited / existing.name).write_bytes(existing.read_bytes())
+    (edited / real.name).write_text(real.read_text() + "\n/* a change */\n")
+    monkeypatch.setattr(app_mod, "HERE", tmp_path)
+
+    assert app_mod._asset_version() != before
+
+
+def test_the_generated_palette_is_revalidated_every_load(client):
+    """theme.css is reached by an @import inside app.css, with a URL no
+    template rewrites — so it cannot carry the digest and must revalidate."""
+    response = client.get("/static/theme.css")
+
+    assert response.status_code == 200
+    assert "no-cache" in response.headers.get("cache-control", "")

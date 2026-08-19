@@ -6,6 +6,7 @@ through the same apply_* the TUI calls, inside one batch."""
 
 from __future__ import annotations
 
+import hashlib
 import mimetypes
 import sqlite3
 import threading
@@ -24,6 +25,29 @@ from . import theme_css as theme_css_mod
 
 HERE = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(HERE / "templates"))
+
+
+def _asset_version() -> str:
+    """A short digest of the served CSS and JS, appended to their URLs.
+
+    Without it the browser keeps the stylesheet it already has. An upgrade
+    then lands with the code changed and the page unchanged, which reads as
+    "the fix did not ship" — it cost an hour of chasing a layout fix that was
+    already correct on the server and stale in the browser (2026-08-19).
+    Digest, not a release number: the stylesheet changes many times between
+    versions, and a version that stands still while the file moves is exactly
+    the case that misleads."""
+    digest = hashlib.sha256()
+    for name in sorted((HERE / "static").glob("*.css")) + sorted((HERE / "static").glob("*.js")):
+        digest.update(name.read_bytes())
+    # the palette is generated, not a file on disk, and a colour change alone
+    # must still bust the cache
+    digest.update(theme_css_mod.css_variables().encode())
+    return digest.hexdigest()[:12]
+
+
+ASSET_VERSION = _asset_version()
+TEMPLATES.env.globals["asset_version"] = ASSET_VERSION
 
 
 def _register_font_types() -> None:
@@ -189,7 +213,17 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
     # Starlette resolves routes in registration order.
     @app.get("/static/theme.css")
     def theme_css() -> Response:
-        return Response(content=theme_css_mod.css_variables(), media_type="text/css")
+        # app.css and the scripts carry ?v=<digest>; this one cannot, because
+        # it is reached by an @import inside app.css with a URL no template
+        # rewrites. It is a kilobyte of generated custom properties, so it
+        # revalidates on every load instead — a stale palette is the same
+        # class of bug (the code changed, the page did not) and this file is
+        # cheap enough that correctness wins.
+        return Response(
+            content=theme_css_mod.css_variables(),
+            media_type="text/css",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 

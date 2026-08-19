@@ -654,3 +654,71 @@ def test_a_task_priority_outside_the_vocabulary_is_refused(app_and_org):
     assert response.status_code == 200
     assert "form-error" in response.text
     assert len(tasks_repo.open_tasks_for_client(conn, org.id)) == before
+
+
+# --- the column class survives an edit ---------------------------------------
+#
+# A cell is built in three places per table: the panel's first render, the
+# display route htmx swaps back after a save, and the editor. They each used to
+# carry their own literal class map, so a class present on the first render
+# could vanish the moment the cell was edited — and the column would change
+# shape mid-session with nothing to explain it. These tests compare what the
+# panel rendered against what the routes return, rather than asserting a
+# hard-coded class list in three places of their own.
+
+
+def _cell_classes(html: str, field: str) -> set[str]:
+    """The classes on the cell for `field`, read out of rendered HTML."""
+    import re
+
+    match = re.search(rf'<td class="([^"]*)"[^>]*data-field="{field}"', html)
+    assert match, f"no cell rendered for {field} in:\n{html[:2000]}"
+    return set(match.group(1).split())
+
+
+@pytest.mark.parametrize("field", ["prompt", "response", "due_on", "category"])
+def test_an_item_cell_comes_back_from_a_save_dressed_as_it_started(app_and_org, field):
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+
+    item = rfi_repo.items_for_request(client.app.state.conn, request.id)[0]
+    panel = client.get(f"/accounts/{org.ref}/requests/{request.id}").text
+    swapped = client.get(
+        f"/accounts/{org.ref}/requests/{request.id}/items/{item.id}/cell/{field}"
+    ).text
+
+    assert _cell_classes(swapped, field) == _cell_classes(panel, field)
+
+
+@pytest.mark.parametrize("field", ["title", "description", "due_on", "assignee"])
+def test_a_task_cell_comes_back_from_a_save_dressed_as_it_started(app_and_org, field):
+    client, org, _request = app_and_org
+    from bookkit.repo import tasks as tasks_repo
+
+    task = tasks_repo.open_tasks_for_client(client.app.state.conn, org.id)[0]
+    panel = client.get(f"/accounts/{org.ref}/work").text
+    swapped = client.get(f"/accounts/{org.ref}/tasks/{task.id}/cell/{field}").text
+
+    assert _cell_classes(swapped, field) == _cell_classes(panel, field)
+
+
+def test_the_question_and_the_answer_are_marked_as_prose(app_and_org):
+    """Not decoration: `prose` is what lets those two columns wrap. Without it
+    the table sizes itself to the longest unwrapped sentence and the columns to
+    its right — Status, Response, and the Mark received button — render past
+    the panel's edge, live and invisible."""
+    client, org, request = app_and_org
+
+    panel = client.get(f"/accounts/{org.ref}/requests/{request.id}").text
+
+    assert "prose" in _cell_classes(panel, "prompt")
+    assert "prose" in _cell_classes(panel, "response")
+
+
+def test_the_tables_that_carry_prose_declare_that_they_fit(app_and_org):
+    """`rows-fit` is the other half of the same fix — prose can only wrap if
+    the table is not sizing itself to max-content."""
+    client, org, request = app_and_org
+
+    for url in (f"/accounts/{org.ref}/work", f"/accounts/{org.ref}/requests/{request.id}"):
+        assert 'class="rows rows-fit"' in client.get(url).text, url
