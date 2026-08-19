@@ -544,3 +544,104 @@ def test_an_unassigned_cell_prints_the_dash_and_not_a_blank() -> None:
 
     assert str(theme.assignee_text("")) == "—"
     assert str(theme.assignee_text("Dana Reyes")) == "Dana Reyes"
+
+
+# --- assigning through MCP (2026-08-19) ---------------------------------------
+#
+# The gap that caused a wrong record to be written in Grant's real book: a task
+# could be assigned in the TUI and on the web and NOT through MCP, so an
+# assistant asked to file an assigned open item could not do it — and filed an
+# information request instead. A capability gap the model routes around is
+# worse than one it reports, because what it does instead lands in the book.
+
+
+def test_a_task_can_be_created_with_an_assignee(conn) -> None:
+    from bookkit import mcpserver
+    from bookkit.repo import assignees, orgs, tasks
+
+    org = orgs.create(conn, kind="client", name="Atomic Industries")
+    mcpserver._member_create(conn, "Dana Okafor")
+
+    out = mcpserver._task_create(
+        conn, "chase the loss runs", client="Atomic Industries", assignee="Dana Okafor"
+    )
+
+    task = tasks.get(conn, out["task_ref"])
+    assert assignees.name_of(conn, task) == "Dana Okafor"
+    assert task.assignee_kind is not None, "resolved to a person, not free text"
+    assert out["assignee"] == "Dana Okafor"
+    del org
+
+
+def test_a_task_is_created_unassigned_when_nobody_is_named(conn) -> None:
+    """THE BACKSTOP. Assignment is a bonus, never a precondition — an open item
+    nobody has picked up yet is the normal state of a task, and refusing to
+    file one because no name was given is what sent an assistant looking for
+    another record type to write instead."""
+    from bookkit import mcpserver
+    from bookkit.repo import orgs, tasks
+
+    orgs.create(conn, kind="client", name="Atomic Industries")
+
+    out = mcpserver._task_create(conn, "chase the loss runs", client="Atomic Industries")
+
+    task = tasks.get(conn, out["task_ref"])
+    assert task.assignee_kind is None
+    assert task.assignee_id is None
+    assert task.assignee_name is None
+
+
+def test_an_unknown_name_is_kept_as_typed_rather_than_refused(conn) -> None:
+    """A name the book does not know yet is a note, not an error. Refusing it
+    would put the task's existence at the mercy of whether somebody has been
+    added to the team table yet — which is precisely the failure this fixes."""
+    from bookkit import mcpserver
+    from bookkit.repo import orgs, tasks
+
+    orgs.create(conn, kind="client", name="Atomic Industries")
+
+    out = mcpserver._task_create(
+        conn, "chase the loss runs", client="Atomic Industries",
+        assignee="Somebody Not In The Book",
+    )
+
+    task = tasks.get(conn, out["task_ref"])
+    assert task.assignee_name == "Somebody Not In The Book"
+    assert task.assignee_kind is None
+
+
+def test_an_existing_task_can_be_assigned_and_unassigned(conn) -> None:
+    from bookkit import mcpserver
+    from bookkit.repo import assignees, orgs, tasks
+
+    orgs.create(conn, kind="client", name="Atomic Industries")
+    mcpserver._member_create(conn, "Dana Okafor")
+    ref = mcpserver._task_create(
+        conn, "chase the loss runs", client="Atomic Industries"
+    )["task_ref"]
+
+    mcpserver._task_assign(conn, ref, "Dana Okafor")
+    assert assignees.name_of(conn, tasks.get(conn, ref)) == "Dana Okafor"
+
+    mcpserver._task_assign(conn, ref, None)
+    cleared = tasks.get(conn, ref)
+    assert cleared.assignee_kind is None
+    assert cleared.assignee_id is None
+    assert cleared.assignee_name is None
+
+
+def test_assigning_is_one_revertible_batch(conn) -> None:
+    from bookkit import db, mcpserver
+    from bookkit.repo import assignees, orgs, tasks
+    from bookkit.services import batches as batches_svc
+
+    orgs.create(conn, kind="client", name="Atomic Industries")
+    mcpserver._member_create(conn, "Dana Okafor")
+    ref = mcpserver._task_create(
+        conn, "chase the loss runs", client="Atomic Industries"
+    )["task_ref"]
+
+    out = mcpserver._task_assign(conn, ref, "Dana Okafor")
+    batches_svc.revert(conn, out["batch"], now=db.utc_now())
+
+    assert assignees.name_of(conn, tasks.get(conn, ref)) != "Dana Okafor"

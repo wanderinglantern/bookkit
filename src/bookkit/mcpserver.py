@@ -315,6 +315,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         detail: str | None = None,
         category: str | None = None,
         due: str | None = None,
+        assignee: str | None = None,
     ) -> dict[str, Any]:
         """Create a task — additive and event-logged. `client` links it to an
         account (exact client name or ref; on a miss the error lists the
@@ -322,11 +323,33 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         short one-line summary; `detail` holds longer markdown notes. `category`
         is a freeform grouping label — prefer an existing one over inventing a
         new one; call open_items first to see what's already in use. `due`
-        accepts any human date ("friday", "+2w", "2026-09-01")."""
+        accepts any human date ("friday", "+2w", "2026-09-01").
+
+        `assignee` is OPTIONAL AND NEVER BLOCKS THE TASK. Pass a name and it
+        resolves to that person when the book knows exactly one of them; a name
+        it does not know is kept verbatim as a note; an omitted one leaves the
+        task unassigned, which is the normal state of a new task. There is no
+        circumstance in which a task fails to be created because of who it is
+        for — and if you cannot record something the way you meant to, SAY SO
+        rather than writing a different KIND of record instead: an information
+        request is a question put to a CLIENT and appears in their workbook,
+        which is not what a note-to-self is."""
         return _task_create(
             rw, title, client=client, description=description, detail=detail,
-            category=category, due=due,
+            category=category, due=due, assignee=assignee,
         )
+
+    @server.tool()
+    async def task_assign(task_ref: str, assignee: str | None = None) -> dict[str, Any]:
+        """Put a task on somebody, or take it off them — one revertible batch.
+
+        `assignee` resolves against your colleagues and the account's own
+        contacts: the qualified label a picker would show ("Sam Garcia —
+        Atomic Industries") wins outright, a bare name resolves when exactly
+        one person answers to it, and anything else is kept as typed. Omit it
+        (or pass null) to clear the assignment. `task_ref` MUST be an exact id
+        read from open_items or today_brief."""
+        return _task_assign(rw, task_ref, assignee)
 
     @server.tool()
     async def task_complete(task_ref: str) -> dict[str, Any]:
@@ -414,6 +437,26 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
             rw, client, title, items, market=market, due_on=due_on,
             placement_ref=placement_ref, project_ref=project_ref,
         )
+
+    @server.tool()
+    async def request_remove(request_ref: str) -> dict[str, Any]:
+        """Take an information request off the book WITH ITS ITEMS, as one
+        revertible batch — for a request filed in ERROR, which is a different
+        fact from one withdrawn. A request you asked for and no longer need is
+        withdrawn by setting `cancelled_at`, and stays in the book; this one
+        was never true and goes. Refused once any item has been answered or
+        received, because deleting the question deletes the client's answer
+        with it — the refusal names the alternative. `request_ref` MUST be an
+        exact id or ref read from requests_to_chase or open_items."""
+        return _request_remove(rw, request_ref)
+
+    @server.tool()
+    async def request_item_remove(item_ref: str) -> dict[str, Any]:
+        """Take ONE ask off a request — a line filed in error. The request
+        survives even if this was its last item. Refused once the item has
+        been answered; waive it instead if it is simply no longer needed.
+        `item_ref` MUST be an exact id read from request_items."""
+        return _request_item_remove(rw, item_ref)
 
     @server.tool()
     async def program_layers(placement_ref: str) -> dict[str, Any]:
@@ -1030,9 +1073,11 @@ def _task_create(
     conn: sqlite3.Connection, title: str, client: str | None = None,
     description: str | None = None, detail: str | None = None,
     category: str | None = None, due: str | None = None,
+    assignee: str | None = None,
 ) -> dict[str, Any]:
     from .dates import parse_human_date
     from .forms.spec import date_refusal
+    from .repo import assignees as assignees_repo
     from .repo import tasks as tasks_repo
 
     fields: dict[str, Any] = {}
@@ -1056,9 +1101,76 @@ def _task_create(
         summary=f"created task: {title}",
     ) as batch:
         task = tasks_repo.create(conn, title, **fields)
+        if assignee is not None:
+            # AFTER the task exists, inside the same batch. Assignment is never
+            # a precondition: repo.assignees.columns resolves what it can and
+            # keeps the rest as typed, so an unknown name is a note rather than
+            # a refusal. Before this existed, a caller that wanted an assigned
+            # task could not make one at all — and an assistant, unable to file
+            # the open item, filed an information request instead: a question
+            # put to a client, in their workbook (Grant, at work, 2026-08-19).
+            assignees_repo.set_on_task(
+                conn, task.id, assignee, org_id=fields.get("org_id"), note="mcp"
+            )
+            task = tasks_repo.get(conn, task.id)
         _provenance(conn, "task", task.id)
     return {"task_ref": task.id, "title": task.title, "due": task.due_on,
-            "batch": batch.ref}
+            "assignee": assignees_repo.name_of(conn, task), "batch": batch.ref}
+
+
+def _task_assign(
+    conn: sqlite3.Connection, task_ref: str, assignee: str | None = None
+) -> dict[str, Any]:
+    """Set or clear one task's assignee. repo.assignees owns the three columns
+    and writes them in one statement, so the batch owns them as one undo
+    unit."""
+    from .repo import assignees as assignees_repo
+    from .repo import tasks as tasks_repo
+
+    task = _resolve_task(conn, task_ref)
+    with _open_batch(
+        conn, tool="task_assign", org_id=task.org_id,
+        summary=(
+            f"assigned to {assignee}: {task.title}" if assignee
+            else f"unassigned: {task.title}"
+        ),
+    ) as batch:
+        assignees_repo.set_on_task(
+            conn, task.id, assignee, org_id=task.org_id, note="mcp"
+        )
+    fresh = tasks_repo.get(conn, task.id)
+    return {
+        "task_ref": fresh.id, "title": fresh.title,
+        "assignee": assignees_repo.name_of(conn, fresh), "batch": batch.ref,
+    }
+
+
+def _request_remove(conn: sqlite3.Connection, request_ref: str) -> dict[str, Any]:
+    from .repo import rfi as rfi_repo
+    from .services import rfi as rfi_svc
+
+    found = rfi_repo.find_request(conn, request_ref)
+    if found is None:
+        raise ValueError(
+            f"no information request {request_ref!r} — read requests_to_chase "
+            f"for exact refs"
+        )
+    removed = rfi_svc.remove_request(conn, found.id, source="mcp")
+    return {
+        "removed": True, "request_ref": found.ref, "title": removed.title,
+        "items_removed": removed.items, "batch": removed.batch,
+    }
+
+
+def _request_item_remove(conn: sqlite3.Connection, item_ref: str) -> dict[str, Any]:
+    from .services import rfi as rfi_svc
+
+    item = _resolve_rfi_item(conn, item_ref)
+    removed = rfi_svc.remove_item(conn, item.id, source="mcp")
+    return {
+        "removed": True, "item_ref": item.id, "prompt": removed.prompt,
+        "batch": removed.batch,
+    }
 
 
 def _task_complete(conn: sqlite3.Connection, task_ref: str) -> dict[str, Any]:

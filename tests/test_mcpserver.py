@@ -1056,6 +1056,15 @@ _BATCHED_WRITES = {
         _acme(rw), mcpserver._task_create(rw, "chase the quote", client="Acme"))[1],
     "task_complete": lambda rw, tmp: mcpserver._task_complete(
         rw, _a_task(rw)[1].id),
+    "task_assign": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._member_create(rw, "Dana Okafor"),
+        mcpserver._task_assign(
+            rw,
+            mcpserver._task_create(rw, "chase the quote", client="Acme")["task_ref"],
+            "Dana Okafor",
+        ),
+    )[2],
     "task_reopen": lambda rw, tmp: mcpserver._task_reopen(
         rw, mcpserver._task_complete(rw, _a_task(rw)[1].id)["task_ref"]),
     "client_create": lambda rw, tmp: mcpserver._client_create(
@@ -1113,6 +1122,17 @@ _BATCHED_WRITES = {
     )[1],
     "request_item_received": lambda rw, tmp: mcpserver._request_item_received(
         rw, _a_request_item(rw)),
+    "request_remove": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._request_remove(
+            rw,
+            mcpserver._request_create(
+                rw, "Acme", "filed in error", ["loss runs"]
+            )["request_ref"],
+        ),
+    )[1],
+    "request_item_remove": lambda rw, tmp: mcpserver._request_item_remove(
+        rw, _a_request_item(rw)),
     "request_item_waive": lambda rw, tmp: mcpserver._request_item_waive(
         rw, _a_request_item(rw)),
     "program_layer_add": lambda rw, tmp: mcpserver._program_layer_add(
@@ -1139,6 +1159,7 @@ _TOUCHES = {
     "activity_delete": {"interaction"},
     "task_create": {"task"},
     "task_complete": {"task"},
+    "task_assign": {"task"},
     "task_reopen": {"task"},
     "client_create": {"org"},
     "enrich_field": {"org"},
@@ -1156,6 +1177,8 @@ _TOUCHES = {
     "member_reactivate": {"team_member"},
     "request_create": {"rfi_request", "rfi_item"},
     "request_item_received": {"rfi_item"},
+    "request_remove": {"rfi_request", "rfi_item"},
+    "request_item_remove": {"rfi_item"},
     "request_item_waive": {"rfi_item"},
     "program_layer_add": {"placement"},
     "program_bind": {"placement"},

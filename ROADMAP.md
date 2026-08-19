@@ -1063,3 +1063,76 @@ renewals. A seventh needs 109. `task_inline(..., assignee_at=None)` keeps the in
 the column that pane does not have, so `i` cannot open an editor into nothing.
 **Open, and Grant's call:** fitting it means dropping one of `account`, `detail` or
 `description` from that pane first — and that pane is over its edge either way.
+
+## Handover: expect_sha, or the deadlock stays open (2026-08-19)
+
+towerkit's MCP hardening pass (`towerkit/docs/superpowers/specs/2026-08-19-mcp-hardening-design.md`)
+adds an optional `expect_sha` to every write tool. Supplied, it is authoritative; omitted, the
+in-session `Programs.seen` map is used exactly as before, so nothing here breaks by doing nothing.
+
+**Doing nothing also leaves bookkit wedged — but not for the reason the bug doc gives.**
+`towerkit/docs/bugs/2026-08-14-mcp-occ-cross-server-stale-sha.md` says bookkit "consults a different
+`Programs.seen` dict". It does not. bookkit never imports `towerkit.mcpserver`, never builds a
+`Programs`, and never calls `note()`. **bookkit's OCC token is a persisted SQLite column** —
+`placement.source_sha256` (`sync.py:226` computes it, `sync.py:276` stores it), written by exactly
+one function, `sync._project_impl`.
+
+The wedge is real and its mechanism is this: a towerkit write advances the file's sha,
+`placement.source_sha256` still holds the old one, and `write_through` refuses at `sync.py:1164`
+with "changed on disk since last projection — re-sync and retry". The only thing that re-syncs is
+`sync.project` — reachable from `bookctl sync` (`cli.py:314,329`), the TUI (`account.py:2318`),
+`seed.py:324` and `imports/commit.py:170`, **and from no MCP tool at all**. `program_layer_add`
+(`mcpserver.py:449`) therefore refuses forever, and the refusal names no call an assistant can make.
+
+**So `expect_sha` does not fix this half.** It fixes towerkit's own in-process map going stale when
+we write. Ours is a different bug in the same family and needs a different repair.
+
+Grant's ruling, 19 August: **towerkit's half now, bookkit's half filed, not done.** He was told
+plainly that the deadlock persists until this lands, and chose that over widening the pass into two
+repos with a coordinated landing. This entry is that filing.
+
+What has to change here:
+
+- **A re-projection reachable from MCP.** `_program_layers` (`mcpserver.py:1409-1417`) calls bare
+  `load_program` at `:1415`, and its own docstring already tells the assistant to read it before ANY
+  program write. Make that read project, exactly the way towerkit's `program_read` arms `note()`,
+  and the wedge clears itself on the read the agent was already doing. `sync.layer_details`
+  (`sync.py:1002`) is the wider seam if we want MCP, web and TUI to inherit it at once — note the
+  per-request memo at `web/routes/account.py:556-558`, whose lifetime is exactly right for this.
+- **Set `TOWERKIT_POST_WRITE_CMD='bookctl sync --path {path}'`** (towerkit README:112). Already
+  built, costs nothing, and is NOT sufficient alone: `run_hook` never fails the write when the hook
+  fails, so it is a convenience and not a guarantee.
+- The mirror test, which does not exist in any form: every conflict test here
+  (`test_sync.py:130`, `test_mcp_program.py:98`) simulates a foreign writer in-process and asserts
+  we REFUSE — which is the wedged behaviour itself. What is missing is bookkit reads → towerkit
+  writes → bookkit writes and **succeeds**. Prior art for the shape: `expecting` on `edit_field`
+  (`mcpserver.py:661`), tested over the real wire at `test_mcp_roundtrip.py:119-137`.
+
+**The conflict rate is the practical problem, not the deadlock.** `write_through` refuses on ANY
+byte change — no field-level diff, no merge, by declared design (`sync.py:20-22`). With towerkit
+writing the same fields we do, every interleaved edit becomes a hard refusal. The re-projection
+above is what makes the boundary reversal survivable rather than progressively disabling bookkit.
+Collateral: `program_files.restore` (`:163`) refuses unless the file byte-matches `post_sha256`, so
+`program_revert_file` becomes unusable sooner and the 20-deep prune rolls faster.
+
+One boundary change to know about, because it reverses something both repos were built on.
+towerkit's README:119 said book facts — premiums, market shares, policy dates — belong to bookkit's
+connector, not towerkit's. **That boundary is gone.** towerkit's MCP now writes every field in the
+program file, participants and `premium` and `policyNumber` and the per-layer period included. Two
+connectors writing the same fields is exactly what `expect_sha` exists to make safe, which is the
+other reason this is not optional here.
+
+**And one hard coupling, machine-checked.** `tests/test_conventions.py:151-155` states the old
+boundary by name: *"Participants are deliberately NOT on this list: `towerkit.edit` has no
+participant API, because towerkit's own surfaces never bind markets onto a layer — that is bookkit's
+half of the boundary. If towerkit ever grows `edit.add_participant`, add `.participants.append(`
+here and delegate."* towerkit's Phase 2 grows exactly that. Our hand-rolled append at `sync.py:892`
+must delegate, and the convention test must be extended. It will fail loudly, which is the test
+doing its job — it is not optional to fix, and it is the cleanest evidence we had that the boundary
+was load-bearing.
+
+Two smaller ones to watch: `sync.py:253-257` and `:1029-1034` DERIVE participant premium via
+`towerkit.money.premium_share`, so a per-participant premium stored by towerkit would be silently
+ignored in favour of the derived floor-division value; and `sync._require_dollars` (`sync.py:1119`)
+hard-refuses sub-dollar money, so any sub-dollar premium towerkit writes is unreadable to our edit
+path.
