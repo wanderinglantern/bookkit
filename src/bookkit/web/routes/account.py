@@ -117,7 +117,7 @@ def _org(request: Request, ref: str) -> Org:
 # in relationship.py, thirteen in work.py — and tests/test_web_scoping.py
 # drives every one of them.)
 
-_Owned = TypeVar("_Owned", Contact, Task, RfiRequest, RfiItem, Interaction)
+_Owned = TypeVar("_Owned", Contact, Task, RfiRequest, RfiItem, Interaction, Placement)
 
 
 def _not_here(kind: str, entity_id: str, org: Org) -> HTTPException:
@@ -129,7 +129,8 @@ def _not_here(kind: str, entity_id: str, org: Org) -> HTTPException:
 
 
 def _owner_org_ids(
-    conn: sqlite3.Connection, entity: Contact | Task | RfiRequest | RfiItem | Interaction
+    conn: sqlite3.Connection,
+    entity: Contact | Task | RfiRequest | RfiItem | Interaction | Placement,
 ) -> set[str]:
     """Which account(s) an entity belongs to — the ownership rule itself.
 
@@ -139,7 +140,7 @@ def _owner_org_ids(
     `task.org_id == org.id` alone would 404 rows the same page just rendered.
     An item belongs to whoever its request does — items carry no org of their
     own."""
-    if isinstance(entity, Contact | RfiRequest | Interaction):
+    if isinstance(entity, Contact | RfiRequest | Interaction | Placement):
         return {entity.org_id}
     if isinstance(entity, RfiItem):
         try:
@@ -541,6 +542,27 @@ def _revert_action(org_ref: str, batch_ref: str, tab: str) -> str:
     return f"/accounts/{org_ref}/changes/{batch_ref}/revert?tab={tab}"
 
 
+def layers_for(request: Request, conn: sqlite3.Connection, placement_id: str) -> list[Any]:
+    """`sync.layer_details` for one placement, parsed at most once per render.
+
+    It opens and parses the towerkit JSON, so a second caller is a second disk
+    read of the same bytes. The shell reads the RENEWAL placement's file for
+    the right rail; the Program tab reads every placement's, including that
+    one. Without a memo those two overlap by exactly one file — which
+    test_layer_details_is_read_once_per_page caught, correctly, the first time
+    the Program tab was built (2026-08-19).
+
+    Scoped to the request, not the process: the file on disk can change
+    between renders (towerkit's editor, an MCP call, the web's own writes), so
+    a longer-lived cache would serve a stale tower with nothing to say it had.
+    """
+    cache: dict[str, list[Any]] = getattr(request.state, "layer_details", None) or {}
+    if placement_id not in cache:
+        cache[placement_id] = sync.layer_details(conn, placement_id)
+        request.state.layer_details = cache
+    return cache[placement_id]
+
+
 def _context(
     conn: sqlite3.Connection, org: Org, tab: str, request: Request
 ) -> dict[str, Any]:
@@ -560,7 +582,7 @@ def _context(
     # makes the tower rows omit themselves rather than print zeros.
     renewal_placement = header["renewal_placement"]
     layers = (
-        sync.layer_details(conn, renewal_placement.id)
+        layers_for(request, conn, renewal_placement.id)
         if renewal_placement is not None
         else []
     )

@@ -893,6 +893,89 @@ def add_participant(
     return _mutate(conn, placement_id, mutate)
 
 
+def update_participant(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    carrier: str,
+    share_bps: int | None = None,
+    new_carrier: str | None = None,
+) -> Diagnostics:
+    """Correct a market's seat in place — its share, its name, or both.
+
+    IN PLACE, never remove-then-add. The two writes are separate mutations
+    with a validator run between them: the intermediate state is a layer short
+    of its share, and a refusal on the second half leaves it that way. The same
+    reasoning team assignments are corrected in place rather than re-scoped
+    (CLAUDE.md).
+
+    Renaming onto a carrier already seated here is refused: two rows for one
+    market on one layer double-count its share, and towerkit's validator has
+    no reason to object because the arithmetic still totals correctly.
+    """
+
+    def mutate(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        seat = next((p for p in layer.participants if p.carrier == carrier), None)
+        if seat is None:
+            seated = ", ".join(p.carrier for p in layer.participants) or "nobody"
+            raise ValueError(
+                f"{carrier} is not on {layer.name} — {seated} is"
+            )
+        if new_carrier is not None and new_carrier != carrier:
+            if any(p.carrier == new_carrier for p in layer.participants):
+                raise ValueError(f"{new_carrier} is already on {layer.name}")
+            seat.carrier = new_carrier
+        if share_bps is not None:
+            seat.share_bps = share_bps
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def remove_participant(
+    conn: sqlite3.Connection, placement_id: str, layer_id: str, carrier: str
+) -> Diagnostics:
+    """Take a market off a layer. THE LAYER SURVIVES.
+
+    Removing the last participant leaves the layer unplaced — towerkit's own
+    'To be placed', which is a state and not an absence. Deleting the layer
+    because its last market fell away would destroy the tower's shape, and the
+    shape is the thing the tower exists to record.
+    """
+
+    def mutate(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        seat = next((p for p in layer.participants if p.carrier == carrier), None)
+        if seat is None:
+            seated = ", ".join(p.carrier for p in layer.participants) or "nobody"
+            raise ValueError(f"{carrier} is not on {layer.name} — {seated} is")
+        layer.participants.remove(seat)
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def set_applies_to(
+    conn: sqlite3.Connection, placement_id: str, layer_id: str, line_ids: list[str]
+) -> Diagnostics:
+    """Re-scope a layer onto a different set of lines, through towerkit.edit.
+
+    The KeyError conversion is load-bearing: `edit.set_applies_to` raises
+    KeyError for an unknown line, and `_mutate` folds only ValueError and
+    WriteConflict into diagnostics — so without this the refusal escaped as an
+    unhandled exception and reached the browser as a 500 instead of a message
+    naming the line.
+    """
+    from towerkit.edit import set_applies_to as edit_set_applies_to
+
+    def mutate(program: Program) -> None:
+        try:
+            edit_set_applies_to(program, layer_id, list(line_ids))
+        except KeyError as exc:
+            raise ValueError(str(exc).strip("\"'")) from exc
+
+    return _mutate(conn, placement_id, mutate)
+
+
 def layer_details(conn: sqlite3.Connection, placement_id: str) -> list[dict[str, Any]]:
     """The linked program's layers with everything the edit form needs, plus
     the carrier panel on each; money in cents (bookkit-native).

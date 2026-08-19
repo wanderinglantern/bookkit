@@ -1,0 +1,692 @@
+"""The Program tab: placements, their layers, and the markets on them.
+
+Writes arrive in phase 2 (docs/superpowers/plans/2026-08-19-programs-on-the-web.md).
+What this file asserts first is that the panel stops contradicting the badge
+above it: the stub printed the addable-list empty state unconditionally while
+the tab counted the placements it claimed did not exist, and an account with
+two programs read as an account with none.
+
+The `snapshot_db` fixture seeds a book AND projects real towerkit files, so
+the layers asserted here are read off disk rather than invented.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from bookkit import sync
+from bookkit.money import format_cents
+from bookkit.web.app import create_app
+
+
+@pytest.fixture
+def app_and_org(snapshot_db: Path):
+    """An account that has at least one placement. base_url is loopback
+    because web/origin.py refuses TestClient's default Host of "testserver" —
+    exactly the forged name the guard exists to catch."""
+    app = create_app(snapshot_db)
+    from bookkit.repo import orgs, placements
+
+    conn = app.state.conn
+    org = next(
+        o for o in orgs.list_orgs(conn, kind="client") if placements.for_org(conn, o.id)
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        yield client, org
+
+
+def _linked(conn, org):
+    """This account's placements that actually have a program file."""
+    from bookkit.repo import placements
+
+    return [p for p in placements.for_org(conn, org.id) if p.program_path]
+
+
+# --- the tab tells the truth --------------------------------------------------
+
+
+def test_the_program_tab_lists_the_placements(app_and_org):
+    client, org = app_and_org
+    from bookkit.repo import placements
+
+    page = client.get(f"/accounts/{org.ref}/program")
+
+    assert page.status_code == 200
+    for placement in placements.for_org(client.app.state.conn, org.id):
+        assert placement.program_name in page.text
+        assert placement.ref in page.text
+
+
+def test_the_panel_never_contradicts_the_tab_badge(app_and_org):
+    """The one assertion this whole task exists for."""
+    client, org = app_and_org
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert "empty — add the first row" not in page
+
+
+def test_an_account_with_no_placements_says_so_honestly(snapshot_db: Path):
+    from bookkit.repo import orgs
+
+    app = create_app(snapshot_db)
+    bare = orgs.create(app.state.conn, kind="client", name="No Programs Co")
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        page = client.get(f"/accounts/{bare.ref}/program")
+
+    assert page.status_code == 200
+    assert "no programs on this account" in page.text
+
+
+# --- the layers, which are the surface phase 2 edits ---------------------------
+
+
+def test_every_layer_of_a_linked_program_is_listed(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    linked = _linked(conn, org)
+    assert linked, "the seeded book has no placement with a program file"
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    for placement in linked:
+        for layer in sync.layer_details(conn, placement.id):
+            assert layer["name"] in page, f"{placement.ref} is missing layer {layer['name']}"
+
+
+def test_the_markets_on_a_layer_are_named(app_and_org):
+    """A tower without its carriers is a picture of capacity nobody is on.
+    Phase 2 edits these; phase 1 has to show them."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    seen = 0
+    for placement in _linked(conn, org):
+        for layer in sync.layer_details(conn, placement.id):
+            for participant in layer["participants"]:
+                assert participant["carrier"] in page
+                seen += 1
+    assert seen, "no participants anywhere in the seeded book — test proves nothing"
+
+
+def test_an_unplaced_layer_says_to_be_placed(app_and_org):
+    """towerkit's own word for it. An empty participant list and a missing one
+    are different facts: "nobody is on this layer" is the fact a reader most
+    needs, and a blank cell asserts nothing."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+
+    # ABOVE the existing tower. towerkit refuses an overlapping layer, which
+    # is the validator doing its job — the first draft of this test attached
+    # at $10M, inside the existing Umbrella, and was refused with
+    # "OVERLAP Umbrella→Excess Test Layer at $27,000,000 vs $10,000,000".
+    top = max(
+        layer["attach_cents"] + layer["limit_cents"]
+        for layer in sync.layer_details(conn, placement.id)
+    )
+    added = sync.add_layer(
+        conn, placement.id, "Excess Test Layer", [], top, 5_000_000_00
+    )
+    assert added.ok, [d.message for d in added.errors]
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert "To be placed" in page
+
+
+def test_a_placement_with_no_file_says_so_rather_than_looking_empty(app_and_org):
+    """Three different facts — no file linked, a file with no layers, layers
+    present — and collapsing the first two is how the stub came to lie."""
+    client, org = app_and_org
+    from bookkit.repo import placements
+
+    conn = client.app.state.conn
+    placements.create(
+        conn, org.id, "Unlinked Program", "2026-03-01", "2027-03-01",
+        status="prospective",
+    )
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert "no program file linked" in page
+
+
+# --- money reads as money -----------------------------------------------------
+
+
+def test_layer_money_is_formatted_not_raw_cents(app_and_org):
+    """A layer with a $5M limit must not render as 500000000.
+
+    The first version of this asserted `str(cents) not in page or cents == 0`
+    against the FIRST layer — which attaches at 0 in the seeded book, so the
+    right-hand side was always true and the test passed with the formatter
+    replaced by str(). Review caught it by mutation. It now checks a non-zero
+    figure, in a named cell, and asserts the formatted form is present as well
+    as the raw one absent."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    priced = next(
+        layer for layer in sync.layer_details(conn, placement.id)
+        if layer["limit_cents"]
+    )
+
+    cell = _cell_text(
+        client.get(f"/accounts/{org.ref}/program").text,
+        placement, priced["id"], "limit_cents",
+    )
+
+    assert cell != str(priced["limit_cents"]), "raw cents rendered"
+    assert "," in cell, f"money rendered without thousands separators: {cell!r}"
+    assert cell == format_cents(priced["limit_cents"]).lstrip("$")
+
+
+def test_a_primary_layer_attaching_at_zero_says_zero(app_and_org):
+    """An em dash means UNRECORDED. A primary layer attaches at $0 and that is
+    a fact about the tower — rendering it as a dash tells the reader the
+    attachment is unknown when it is known and is zero.
+
+    The figure is exact rather than compact because these cells are editable
+    and one string serves both the display and the editor's pre-fill: "$50M"
+    parses back as $50,000,000 and would quietly destroy the odd dollars of a
+    layer at $50,123,456."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    primaries = [
+        layer for layer in sync.layer_details(conn, placement.id)
+        if layer["attach_cents"] == 0
+    ]
+    assert primaries, "the seeded book has no ground-up layer — test proves nothing"
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    cell = _cell_text(page, placement, primaries[0]["id"], "attach_cents")
+
+    assert cell == "0", f"a $0 attachment rendered as {cell!r}"
+    assert "—" not in cell, "the attachment cell reads as unrecorded"
+
+
+# --- phase 2: the write seam --------------------------------------------------
+
+
+def test_the_write_wrapper_refuses_with_the_diagnostics_intact():
+    """A flat string is enough for an MCP client and not enough for the web.
+
+    The route has to tell an ordinary validation refusal — re-render the cell
+    with the message, keep the typed value — from a CONFLICT, which offers
+    Reload / Overwrite / Keep editing. Only the diagnostics carry the code
+    that distinguishes them, and `sync._mutate` is what puts it there."""
+    from towerkit.validate import Diagnostics
+
+    from bookkit.services.program_files import ProgramWriteRefused, raise_on_errors
+
+    diags = Diagnostics()
+    diags.error("conflict", "the file moved under this write")
+
+    with pytest.raises(ProgramWriteRefused) as refused:
+        raise_on_errors(diags)
+
+    assert refused.value.diags is diags
+    assert any(d.code == "conflict" for d in refused.value.diags.errors)
+    assert "moved under" in str(refused.value)
+
+
+def test_a_clean_write_returns_its_warnings_rather_than_raising():
+    """Warnings ride along: an unplaced layer is a warning, not a refusal, and
+    a write that refused on one would make a half-built tower unsaveable."""
+    from towerkit.validate import Diagnostics
+
+    from bookkit.services.program_files import raise_on_errors
+
+    diags = Diagnostics()
+    diags.warn("layer-unplaced", "Excess: 0% placed")
+
+    assert raise_on_errors(diags) == ["Excess: 0% placed"]
+
+
+def test_a_refusal_is_still_a_value_error():
+    """The ordinary case has to keep working with no new code: ValueError is
+    what open_batch already rolls back on, and what every web form already
+    renders."""
+    from bookkit.services.program_files import ProgramWriteRefused
+
+    assert issubclass(ProgramWriteRefused, ValueError)
+
+
+# --- phase 2: editing a layer where it is read --------------------------------
+
+
+def _latest_batch(conn):
+    from bookkit.repo import batches as batches_repo
+
+    found = batches_repo.recent(conn, since="", limit=1)
+    return found[0] if found else None
+
+
+def _first_layer(conn, org):
+    placement = _linked(conn, org)[0]
+    return placement, sync.layer_details(conn, placement.id)[0]
+
+
+def _cell_text(page: str, placement, layer_id: str, key: str) -> str:
+    """The rendered text of one layer cell, found by its own action URL rather
+    than by slicing near a name — a fixed-width slice missed the value and
+    failed for the wrong reason once already."""
+    import re
+
+    action = f"/accounts/[^/]+/program/{placement.id}/layers/{layer_id}/cell/{key}"
+    match = re.search(rf'data-cell-action="{action}".*?>(.*?)</td>', page, re.S)
+    assert match, f"no {key} cell rendered for layer {layer_id}"
+    return re.sub(r"<[^>]+>", "", match.group(1)).strip()
+
+
+def _cell(org, placement, layer, key):
+    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer['id']}/cell/{key}"
+
+
+def test_a_layer_cell_offers_an_editor(app_and_org):
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    editor = client.get(_cell(org, placement, layer, "name") + "/edit")
+
+    assert editor.status_code == 200
+    assert layer["name"] in editor.text
+    assert "<input" in editor.text
+
+
+def test_editing_a_layer_writes_the_file_and_leaves_a_revertible_batch(app_and_org):
+    """THE SEAM, not the outcome. A response that merely looks right passes
+    even when the route wrote outside a batch and left no pre-image — which is
+    exactly what makes a program write unrevertible. So: the batch exists, it
+    is this surface's, it carries the MCP server's own tool name, the snapshot
+    is on disk, and the bytes changed."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    saved = client.post(_cell(org, placement, layer, "name"), data={"name": "Primary Casualty"})
+
+    assert saved.status_code == 200
+    assert path.read_bytes() != before, "the file on disk did not change"
+    batch = _latest_batch(conn)
+    assert batch is not None
+    assert batch.source == "web"
+    assert batch.tool == "program_layer_edit"
+    snapshot = path.parent / ".mcp-snapshots" / f"{batch.ref}.json"
+    assert snapshot.exists(), "no pre-image captured — this write cannot be reverted"
+    assert snapshot.read_bytes() == before
+
+
+def test_the_saved_value_comes_back_in_the_cell(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    saved = client.post(_cell(org, placement, layer, "name"), data={"name": "Renamed Layer"})
+
+    assert "Renamed Layer" in saved.text
+    assert sync.layer_details(conn, placement.id)[0]["name"] == "Renamed Layer"
+
+
+def test_a_sub_dollar_premium_is_refused_not_rounded(app_and_org):
+    """towerkit files carry whole dollars. Rounding here silently changes a
+    client's premium; refusing says so, and keeps what was typed."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        _cell(org, placement, layer, "premium_cents"), data={"premium_cents": "1,234.56"}
+    )
+
+    assert refused.status_code == 200
+    assert "1,234.56" in refused.text, "the typed value was not kept for correction"
+    assert path.read_bytes() == before, "the file was written anyway"
+
+
+def test_a_refused_layer_edit_leaves_no_batch_and_no_snapshot(app_and_org):
+    """A refusal that logged an undo unit would offer to revert a write that
+    never happened — and a refusal that left a snapshot would offer to restore
+    a pre-image of nothing.
+
+    The name promised the snapshot half and the body never checked it: moving
+    `capture` above `raise_on_errors` in services/program_files.py left this
+    green while every refused edit wrote a .mcp-snapshots file. Review found
+    it by exactly that mutation."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    snapdir = Path(placement.program_path).parent / ".mcp-snapshots"
+    before_batch = _latest_batch(conn)
+    before_snaps = set(snapdir.glob("*.json")) if snapdir.exists() else set()
+
+    client.post(
+        _cell(org, placement, layer, "premium_cents"), data={"premium_cents": "1,234.56"}
+    )
+
+    after = _latest_batch(conn)
+    assert (after.ref if after else None) == (before_batch.ref if before_batch else None)
+    after_snaps = set(snapdir.glob("*.json")) if snapdir.exists() else set()
+    assert after_snaps == before_snaps, "a refused write left snapshot debris"
+
+
+def test_a_layer_under_another_account_is_not_reachable(app_and_org):
+    """Both ids are checked: the placement is this account's AND the layer is
+    that placement's. Without the second, a layer could be edited under a
+    placement it does not belong to."""
+    client, org = app_and_org
+    from bookkit.repo import orgs, placements
+
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    stranger = orgs.create(conn, kind="client", name="Someone Else Ltd")
+    # POINTED AT THE SAME FILE, so the layer id really does exist under their
+    # placement too. Without that the route 404s because the layer is missing
+    # rather than because it is not ours, and the test passes with the
+    # ownership check deleted — which it did, until a mutation showed it
+    # (2026-08-19). A guard test that cannot fail is not a guard.
+    theirs = placements.create(
+        conn, stranger.id, "Their Program", "2026-01-01", "2027-01-01",
+        program_path=placement.program_path,
+    )
+
+    poked = client.post(
+        f"/accounts/{org.ref}/program/{theirs.id}/layers/{layer['id']}/cell/name",
+        data={"name": "not mine"},
+    )
+
+    assert poked.status_code == 404
+    # and nothing was written to the file they share
+    assert sync.layer_details(conn, placement.id)[0]["name"] != "not mine"
+
+
+def test_a_derived_column_offers_no_editor(app_and_org):
+    """signed_pct is the sum of the participants' shares. A cell that offered
+    to edit it would write nothing and read as broken."""
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    assert client.get(_cell(org, placement, layer, "signed_pct") + "/edit").status_code == 404
+
+
+# --- phase 2: adding a layer, and working the markets on one ------------------
+
+
+def _markets(org, placement, layer_id):
+    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/markets"
+
+
+def test_adding_a_layer_appends_it_pending(app_and_org):
+    """A new layer is created unplaced — markets join as they bind. towerkit's
+    word for that state is 'To be placed'."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    top = max(
+        layer["attach_cents"] + layer["limit_cents"]
+        for layer in sync.layer_details(conn, placement.id)
+    )
+
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={
+            "name": "3rd Excess",
+            "attach_cents": str(top // 100),
+            "limit_cents": "5,000,000",
+            "premium_cents": "",
+        },
+    )
+
+    assert added.status_code == 200
+    names = [layer["name"] for layer in sync.layer_details(conn, placement.id)]
+    assert "3rd Excess" in names
+    fresh = next(
+        layer for layer in sync.layer_details(conn, placement.id)
+        if layer["name"] == "3rd Excess"
+    )
+    assert fresh["participants"] == []
+    batch = _latest_batch(conn)
+    assert batch.source == "web" and batch.tool == "program_layer_add"
+
+
+def test_a_layer_that_would_leave_a_gap_is_refused_and_says_so(app_and_org):
+    """towerkit refuses a gap as firmly as an overlap, and the refusal names
+    the layers it is between — that message is the whole value of not writing
+    it."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={
+            "name": "Floating Excess",
+            "attach_cents": "900,000,000",
+            "limit_cents": "5,000,000",
+            "premium_cents": "",
+        },
+    )
+
+    assert refused.status_code == 200
+    assert "GAP" in refused.text or "gap" in refused.text
+    assert path.read_bytes() == before
+
+
+def test_binding_a_market_onto_a_layer(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    # A layer of our own with nothing on it, so the share is ours to give. The
+    # first seeded layer may be fully signed, and skipping on that would make
+    # this test protect nothing on the day it mattered.
+    top = max(
+        ly["attach_cents"] + ly["limit_cents"]
+        for ly in sync.layer_details(conn, placement.id)
+    )
+    assert sync.add_layer(
+        conn, placement.id, "Bind Target", [], top, 5_000_000_00
+    ).ok
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["name"] == "Bind Target"
+    )
+
+    bound = client.post(
+        _markets(org, placement, layer["id"]),
+        data={"carrier": "Berkshire", "share_pct": "40"},
+    )
+
+    assert bound.status_code == 200
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert "Berkshire" in [p["carrier"] for p in fresh["participants"]]
+    assert _latest_batch(conn).tool == "program_bind"
+
+
+def test_over_signing_a_layer_is_refused_and_the_file_is_untouched(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        _markets(org, placement, layer["id"]),
+        data={"carrier": "Overshare Re", "share_pct": "100"},
+    )
+
+    assert refused.status_code == 200
+    assert path.read_bytes() == before
+    assert "Overshare Re" not in path.read_text()
+
+
+def test_a_markets_share_is_corrected_in_place(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    assert layer["participants"], "the first layer has no market to correct"
+    was = layer["participants"][0]["share_pct"]
+
+    saved = client.post(
+        f"{_markets(org, placement, layer['id'])}/0/cell/share_pct",
+        data={"share_pct": str(was / 2)},
+    )
+
+    assert saved.status_code == 200
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert fresh["participants"][0]["share_pct"] == was / 2
+
+
+def test_a_market_is_taken_off_a_layer_and_the_layer_survives(app_and_org):
+    """Losing a layer because its last market fell away would destroy the
+    tower's shape."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    assert layer["participants"], "the first layer has no market to remove"
+    carrier = layer["participants"][0]["carrier"]
+
+    removed = client.post(f"{_markets(org, placement, layer['id'])}/0/remove")
+
+    assert removed.status_code == 200
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert carrier not in [p["carrier"] for p in fresh["participants"]]
+    assert fresh["name"] == layer["name"], "the layer went with the market"
+
+
+# --- what the review caught -----------------------------------------------
+#
+# Six defects, three of which the tests above were too weak to see. Each one
+# gets an assertion here rather than a comment.
+
+
+def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
+    """The refusal used to be a bare message, and every control that could
+    trigger it swapped the whole <section class="program"> — so a refused add
+    deleted the layers table, the add controls and the panel's own id, leaving
+    the placement unusable until a full page reload."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={
+            "name": "Floating Excess",
+            "attach_cents": "900,000,000",
+            "limit_cents": "5,000,000",
+            "premium_cents": "",
+        },
+    )
+
+    assert refused.status_code == 200
+    assert "<form" in refused.text, "the form did not come back"
+    assert "Floating Excess" in refused.text, "the typed name was thrown away"
+    assert "900,000,000" in refused.text, "the typed attachment was thrown away"
+
+
+def test_the_add_form_posts_into_the_form_host_not_over_the_panel(app_and_org):
+    """The swap target IS the bug. A form that targets the panel replaces the
+    panel with whatever comes back, and a refusal is not a panel."""
+    client, org = app_and_org
+    placement, _ = _first_layer(client.app.state.conn, org)
+
+    form = client.get(f"/accounts/{org.ref}/program/{placement.id}/layers/new").text
+
+    assert 'hx-target="closest .form-host"' in form
+    assert 'hx-swap="innerHTML"' in form
+    assert "closest .program" not in form
+
+
+def test_a_blank_attachment_is_refused_in_the_broker_s_language(app_and_org):
+    """It used to reach sync.add_layer as None and come back as
+    "unsupported operand type(s) for %: 'NoneType' and 'int'"."""
+    client, org = app_and_org
+    placement, _ = _first_layer(client.app.state.conn, org)
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "No Money", "attach_cents": "", "limit_cents": "", "premium_cents": ""},
+    )
+
+    assert "attaches at is required" in refused.text
+    assert "NoneType" not in refused.text
+
+
+def test_a_blank_share_is_refused_in_the_broker_s_language(app_and_org):
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    refused = client.post(
+        _markets(org, placement, layer["id"]), data={"carrier": "Nobody Re", "share_pct": ""}
+    )
+
+    assert "share is required" in refused.text
+
+
+def test_a_placement_with_no_file_says_so_rather_than_an_errno(app_and_org):
+    """Path(str(None)) is the literal path "None", so the first thing a broker
+    saw was "[Errno 2] No such file or directory: 'None'"."""
+    client, org = app_and_org
+    from bookkit.repo import placements
+
+    conn = client.app.state.conn
+    bare = placements.create(
+        conn, org.id, "Unlinked Program", "2026-03-01", "2027-03-01",
+    )
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{bare.id}/layers",
+        data={"name": "Nowhere", "attach_cents": "0", "limit_cents": "1,000,000",
+              "premium_cents": ""},
+    )
+
+    assert "no program file linked" in refused.text
+    assert "Errno" not in refused.text
+
+
+def test_a_market_can_be_reached_for_editing_from_the_page(app_and_org):
+    """market_cell_save existed and nothing rendered a way to it: the share
+    test passed by POSTing the URL directly, which is not evidence a broker
+    can correct a share."""
+    import re
+
+    client, org = app_and_org
+    placement, _ = _first_layer(client.app.state.conn, org)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert re.search(r"markets/\d+/edit/share_pct", page), "no way in from the page"
+    assert re.search(r"markets/\d+/edit/carrier", page)
+
+
+def test_a_layer_edit_refreshes_the_rows_it_moved(app_and_org):
+    """write_through heals follows-underlying layers, so a limit change re-seats
+    OTHER rows. Returning one cell left them showing the pre-write number — a
+    tower on screen that does not exist in the file."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    saved = client.post(
+        _cell(org, placement, layer, "name"), data={"name": "Refreshed Layer"}
+    )
+
+    assert 'hx-swap-oob="true"' in saved.text, "no panel refresh came back with the cell"

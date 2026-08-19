@@ -1313,14 +1313,19 @@ def _resolve_linked_placement(conn: sqlite3.Connection, placement_ref: str) -> A
 
 
 def _raise_on_errors(diags: Any) -> list[str]:
-    """write_through's Diagnostics → tool contract: errors refuse (nothing was
-    written), warnings ride along in the return."""
-    if not diags.ok:
+    """services.program_files.raise_on_errors, with this surface's wording.
+
+    The refusal it raises is a ProgramWriteRefused, which IS a ValueError, so
+    every MCP caller's contract is unchanged — the web is the caller that
+    needs the diagnostics inside it (services/program_files.py)."""
+    from .services.program_files import ProgramWriteRefused, raise_on_errors
+
+    try:
+        return raise_on_errors(diags)
+    except ProgramWriteRefused as refused:
         raise ValueError(
-            "refused by towerkit's validator — nothing written: "
-            + "; ".join(d.message for d in diags.errors)
-        )
-    return [d.message for d in diags.warnings]
+            "refused by towerkit's validator — nothing written: " + str(refused)
+        ) from refused
 
 
 def _program_write(
@@ -1330,23 +1335,25 @@ def _program_write(
     summary: str,
     write: Any,
 ) -> tuple[Any, list[str]]:
-    """One batched program-file write: capture the pre-image, run the sync.*
-    writer, snapshot on success. sync._mutate already folds WriteConflict
-    into the diagnostics ('re-sync and retry'), so _raise_on_errors carries
-    the same re-read contract compare-and-set trained the model on."""
-    from pathlib import Path as _Path
+    """One batched program-file write — services.program_files.write with this
+    surface's batch source and its wording for a refusal.
 
+    The body moved there on 2026-08-19 so the web could be the second caller
+    of the same seam rather than a hand-copied twin of it. Nothing about this
+    tool's contract changed: the refusal is still a ValueError carrying the
+    same sentence.
+    """
     from .services import program_files
 
-    path = _Path(placement.program_path)
-    pre_image = path.read_bytes()
-    with _open_batch(
-        conn, tool=tool, org_id=placement.org_id, summary=summary,
-    ) as batch:
-        diags = write()
-        warnings = _raise_on_errors(diags)   # raising rolls the batch back
-        program_files.capture(path, batch.ref, pre_image)
-    return batch, warnings
+    try:
+        return program_files.write(
+            conn, placement, tool=tool, summary=summary,
+            mutate=write, open_batch=_open_batch,
+        )
+    except program_files.ProgramWriteRefused as refused:
+        raise ValueError(
+            "refused by towerkit's validator — nothing written: " + str(refused)
+        ) from refused
 
 
 def _program_layers(conn: sqlite3.Connection, placement_ref: str) -> dict[str, Any]:

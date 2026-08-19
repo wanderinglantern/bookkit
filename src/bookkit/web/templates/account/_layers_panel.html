@@ -1,0 +1,102 @@
+{# One placement: its header facts, then its layers and the markets on each.
+
+   This table is the surface phase 2 turns into the editor, so its columns are
+   the layer's own fields and nothing invented for display.
+
+   rows-fit + prose: a layer name and a market list are prose, and without
+   them the table sizes itself to the longest unwrapped value and pushes the
+   columns to its right off the panel behind a scrollbar macOS does not draw
+   — the bug found on the request items table on 2026-08-19.
+
+   Three empty states, not one: "no file linked", "a file with no layers" and
+   "layers present" are three different facts, and collapsing the first two is
+   how the stub came to lie. #}
+<section class="program" id="program-{{ placement.id }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="people-head">
+    <h2 class="people-label">{{ placement.program_name }}</h2>
+    <span class="people-count mono">{{ placement.ref }}</span>
+    <span class="people-head-spacer"></span>
+    <span class="program-period mono">{{ placement.period_from }} → {{ placement.period_to }}</span>
+    <span class="status-{{ placement.status }}">{{ placement.status }}</span>
+    {% if linked %}
+      <button type="button" class="people-add"
+              hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/new"
+              hx-target="#program-{{ placement.id }} .form-host"
+              hx-swap="innerHTML">+ Add layer</button>
+    {% endif %}
+  </div>
+  <div class="form-host"></div>
+
+  {% if layers %}
+    <div class="table-scroll">
+      <table class="rows rows-fit">
+        <thead>
+          <tr><th>Layer</th><th>Attaches</th><th>Limit</th><th>Premium</th>
+              <th>Signed</th><th>Markets</th></tr>
+        </thead>
+        <tbody>
+          {% for layer in layers %}
+            {# Each cell is ALREADY a full <td> (render_cell_display) — never
+               wrap one in another. A <td> inside a <td> is invalid HTML: the
+               parser closes the outer one empty and opens a real column for
+               the inner one, so every column after it drifts out from under
+               its header with no visible error (found 2026-08-18). #}
+            <tr>
+              {{ layer.cells.name | safe }}
+              {{ layer.cells.attach_cents | safe }}
+              {% if layer.statutory %}
+                <td class="num">statutory</td>
+              {% else %}
+                {{ layer.cells.limit_cents | safe }}
+              {% endif %}
+              {{ layer.cells.premium_cents | safe }}
+              <td class="num">{{ layer.signed_pct }}%</td>
+              <td class="prose">
+                {% if layer.participants %}
+                  {% for part in layer.participants %}
+                    {# Editable, because a share and a carrier name are both
+                       corrected in practice — and because a route nothing can
+                       reach is a route nobody tests honestly: the share-edit
+                       test passed by POSTing the URL directly while no UI
+                       rendered it (found by review, 2026-08-19). #}
+                    <span class="market"
+                          hx-target="#program-{{ placement.id }} .form-host" hx-swap="innerHTML">
+                      <span class="market-cell" tabindex="0"
+                            hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/{{ loop.index0 }}/edit/carrier"
+                            hx-trigger="click, keyup[key=='Enter']">{{ part.carrier }}</span>
+                      <span class="market-cell market-share" tabindex="0"
+                            hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/{{ loop.index0 }}/edit/share_pct"
+                            hx-trigger="click, keyup[key=='Enter']">{{ part.share_pct }}%</span>
+                      <button type="button" class="row-action-btn"
+                              title="Take {{ part.carrier }} off {{ layer.name }} — the layer stays"
+                              hx-post="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/{{ loop.index0 }}/remove"
+                              hx-target="#program-{{ placement.id }} .form-host"
+                              hx-swap="innerHTML">remove</button>
+                    </span>
+                  {% endfor %}
+                {% else %}
+                  {# towerkit's own word for open capacity. A blank cell would
+                     assert nothing, and "nobody is on this layer" is the fact
+                     a reader most needs to catch. #}
+                  <span class="unplaced">To be placed</span>
+                {% endif %}
+                <button type="button" class="row-action-btn"
+                        hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/new"
+                        hx-target="#program-{{ placement.id }} .form-host"
+                        hx-swap="innerHTML">+ market</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% elif linked %}
+    <div class="panel-empty">
+      <p>the linked file has no layers yet</p>
+    </div>
+  {% else %}
+    <div class="panel-empty">
+      <p>no program file linked — nothing to draw or edit yet</p>
+    </div>
+  {% endif %}
+</section>

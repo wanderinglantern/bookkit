@@ -564,11 +564,24 @@ def test_layer_details_is_read_once_per_page(app_and_org, monkeypatch):
 
     monkeypatch.setattr(account_routes.sync, "layer_details", counting)
 
-    for tab in ("program", "relationship", "work", "pipeline"):
+    for tab in ("relationship", "work", "pipeline"):
         calls.clear()
         response = client.get(f"/accounts/{org.ref}/{tab}")
         assert response.status_code == 200
         assert len(calls) == 1, f"{tab} tab read the program file {len(calls)} times"
+
+    # The Program tab is the exception, and only in one direction: it lists
+    # EVERY placement, so it legitimately opens one file per placement. What it
+    # may never do is open the same file twice — which is exactly what it did
+    # when first built, because the shell had already read the renewal
+    # placement's file for the right rail (fixed with account.layers_for's
+    # per-request memo, 2026-08-19). Counting distinct ids is the invariant;
+    # counting calls was only ever a proxy for it, and on a one-placement
+    # account the two are indistinguishable.
+    calls.clear()
+    assert client.get(f"/accounts/{org.ref}/program").status_code == 200
+    assert calls, "the program tab read no program file at all"
+    assert len(calls) == len(set(calls)), f"a file was parsed twice: {calls}"
 
 
 # --- the two zeros that are lies (review round 1, item B) --------------------

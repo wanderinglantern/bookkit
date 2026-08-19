@@ -1,0 +1,11 @@
+{# A refused write with no form to go back to — the market remove button.
+
+   200, not 4xx: htmx swaps 2xx responses and drops 4xx and 5xx alike, so a
+   refusal returned with an error status vanishes and the page reads as if
+   nothing happened.
+
+   This lands in the placement's .form-host, NEVER over the panel itself. The
+   message is towerkit's own words: it names the layers a gap falls between,
+   or the share that over-signs, and paraphrasing loses the only part a broker
+   can act on. #}
+<p class="form-error" role="alert">{{ message }}</p>

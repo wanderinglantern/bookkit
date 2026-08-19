@@ -13,7 +13,13 @@ from dataclasses import field as dc_field
 from typing import Any
 
 from ..dates import parse_human_date
-from ..money import MoneyParseError, format_cents, parse_money_cents
+from ..money import (
+    MoneyParseError,
+    format_cents,
+    format_share_pct,
+    parse_money_cents,
+    parse_share_bps,
+)
 from ..normalize import (
     clean_domain,
     clean_email,
@@ -29,7 +35,7 @@ from ..normalize import (
 class Field:
     key: str
     label: str
-    # text | textarea | select | date | money | int
+    # text | textarea | select | date | money | int | share
     # + normalised kinds: email | phone | url | domain | linkedin | naics
     kind: str = "text"
     options: tuple[tuple[str, str], ...] = ()  # (label, value) for select
@@ -200,6 +206,15 @@ def parse_value(field: Field, raw: str | None) -> Any:
             return parse_money_cents(text)
         except MoneyParseError as exc:
             raise ValueError(str(exc)) from exc
+    if field.kind == "share":
+        # ONE percent→bps rule, and it is towerkit's (CLAUDE.md). money.py
+        # delegates; nothing here multiplies by 100 itself. A second
+        # conversion is how the same share becomes 3333 bps on one surface
+        # and 333300 on another.
+        try:
+            return parse_share_bps(text)
+        except MoneyParseError as exc:
+            raise ValueError(str(exc)) from exc
     if field.kind == "int":
         try:
             return int(text)
@@ -230,6 +245,11 @@ def initial_text(field: Field, initial: Any) -> str:
         return ""
     if field.kind == "money":
         return format_cents(int(initial)).lstrip("$")
+    if field.kind == "share":
+        # PERCENT, not bps: the editor pre-fills from here and the parser
+        # reads what it is given as a percent, so handing back bps would
+        # multiply the share by a hundred on the next save.
+        return format_share_pct(int(initial)).rstrip("%")
     return str(initial)
 
 

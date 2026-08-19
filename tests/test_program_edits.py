@@ -374,3 +374,154 @@ def test_add_layer_keeps_the_broker_s_name_price_and_seat(linked) -> None:
     assert layer.limit == 5_000_000
     assert layer.premium == 250_000
     assert layer.participants == []  # still 'To be placed'
+
+
+# --- correcting and removing a market, and re-scoping a layer ------------------
+#
+# sync.py could add a market to a layer and could not change or remove one, and
+# nothing wrapped towerkit.edit.set_applies_to. CRUD needs all four; these are
+# the three that were missing (2026-08-19).
+
+
+def _seat(conn, placement, path):
+    """A layer with one market on half of it, so there is something to correct
+    and open capacity left to correct it into.
+
+    The bridge below is not decoration. towerkit refuses a GAP as firmly as an
+    overlap, and a layer may only apply to lines whose towers it actually
+    continues — so re-scoping is testable at all only where the lines top out
+    together. The seeded program has GL running to $2M and Cyber to $5M; the
+    bridge lifts GL to $5M so a layer attaching there can legitimately cover
+    both. Two earlier drafts of this fixture were refused, correctly, for a gap
+    and then for an overlap.
+    """
+    assert sync.add_layer(
+        conn, placement.id, "GL Bridge", ["gl"],
+        attach_cents=2_000_000_00, limit_cents=3_000_000_00,
+    ).ok
+    assert sync.add_layer(
+        conn, placement.id, "2nd Excess", ["gl"],
+        attach_cents=5_000_000_00, limit_cents=10_000_000_00,
+    ).ok
+    assert sync.add_participant(conn, placement.id, "2nd-excess", "Chubb", 5000).ok
+    return "2nd-excess"
+
+
+def test_a_markets_share_is_corrected_in_place(linked) -> None:
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+
+    assert sync.update_participant(
+        conn, placement.id, layer_id, "Chubb", share_bps=6000
+    ).ok
+
+    layer = next(ly for ly in load_program(path).layers if ly.id == layer_id)
+    assert [(p.carrier, p.share_bps) for p in layer.participants] == [("Chubb", 6000)]
+
+
+def test_a_market_is_renamed_without_moving_its_share(linked) -> None:
+    """A carrier corrected to its right name keeps the seat it was on. Doing
+    this as remove-then-add would drop the share on the floor between the two
+    writes, and a refused second half would leave the layer short."""
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+
+    assert sync.update_participant(
+        conn, placement.id, layer_id, "Chubb", new_carrier="Chubb Bermuda"
+    ).ok
+
+    layer = next(ly for ly in load_program(path).layers if ly.id == layer_id)
+    assert [(p.carrier, p.share_bps) for p in layer.participants] == [
+        ("Chubb Bermuda", 5000)
+    ]
+
+
+def test_correcting_a_market_that_is_not_on_the_layer_is_refused(linked) -> None:
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+    before = path.read_text()
+
+    refused = sync.update_participant(
+        conn, placement.id, layer_id, "Zurich", share_bps=1000
+    )
+
+    assert not refused.ok
+    assert "Zurich" in refused.errors[0].message
+    assert path.read_text() == before
+
+
+def test_correcting_a_market_onto_a_name_already_seated_is_refused(linked) -> None:
+    """Two rows for one carrier on one layer is a double-count of its share."""
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+    assert sync.add_participant(conn, placement.id, layer_id, "AXA XL", 2000).ok
+    before = path.read_text()
+
+    refused = sync.update_participant(
+        conn, placement.id, layer_id, "AXA XL", new_carrier="Chubb"
+    )
+
+    assert not refused.ok
+    assert path.read_text() == before
+
+
+def test_removing_the_only_market_leaves_the_layer_unplaced(linked) -> None:
+    """The LAYER survives. Losing a layer because its last market fell away
+    destroys the tower's shape — towerkit's own word for what is left is
+    'To be placed', and that is a state, not an absence."""
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+
+    assert sync.remove_participant(conn, placement.id, layer_id, "Chubb").ok
+
+    layers = load_program(path).layers
+    layer = next(ly for ly in layers if ly.id == layer_id)
+    assert layer.participants == []
+    assert layer.signed_bps == 0
+
+
+def test_removing_a_market_that_is_not_there_is_refused(linked) -> None:
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+    before = path.read_text()
+
+    refused = sync.remove_participant(conn, placement.id, layer_id, "Zurich")
+
+    assert not refused.ok
+    assert path.read_text() == before
+
+
+def test_a_layer_is_re_scoped_to_other_lines(linked) -> None:
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+    # gl and cy both top out at $5M once _seat's bridge is in, which is what
+    # makes a layer attaching there legitimately cover both.
+    assert sync.set_applies_to(conn, placement.id, layer_id, ["gl", "cy"]).ok
+
+    layer = next(ly for ly in load_program(path).layers if ly.id == layer_id)
+    assert layer.applies_to == ["gl", "cy"]
+
+
+def test_re_scoping_onto_a_line_the_program_does_not_have_is_refused(linked) -> None:
+    """towerkit raises KeyError for an unknown line, and KeyError is NOT one of
+    the exceptions sync._mutate folds into diagnostics — so without the
+    wrapper's own guard this reached the browser as a 500 rather than a
+    refusal."""
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+    before = path.read_text()
+
+    refused = sync.set_applies_to(conn, placement.id, layer_id, ["not-a-line"])
+
+    assert not refused.ok
+    assert "not-a-line" in refused.errors[0].message
+    assert path.read_text() == before
+
+
+def test_a_layer_must_apply_to_at_least_one_line(linked) -> None:
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+
+    refused = sync.set_applies_to(conn, placement.id, layer_id, [])
+
+    assert not refused.ok
