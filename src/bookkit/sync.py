@@ -1161,6 +1161,7 @@ def layer_details(conn: sqlite3.Connection, placement_id: str) -> list[dict[str,
                 # cover" from "a layer whose limit happens to be zero" — the two
                 # are opposite facts that arithmetic alone renders identical.
                 "statutory": layer.statutory,
+                "follows_underlying": layer.follows_underlying,
                 "participants": [
                     {
                         "carrier": part.carrier,

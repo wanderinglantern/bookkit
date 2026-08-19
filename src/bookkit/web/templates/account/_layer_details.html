@@ -16,9 +16,41 @@
 <tr class="layer-details">
   <td class="row-expand"></td>
   <td colspan="6" class="prose">
+    {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
     <span class="detail-label">policy no</span>{{ policy_cell | safe }}
     <span class="detail-label">policy effective</span>{{ from_cell | safe }}
     <span class="detail-label">policy expiry</span>{{ to_cell | safe }}
+    <span class="detail-label">applies to</span>
+    {# Toggle chips (phase 3): each POST rescopes the layer to current±line
+       through sync.set_applies_to — dead code until these, its first
+       caller. A move towerkit refuses (last line, an overlap, a stranded
+       gap) re-renders this row with the message. #}
+    {% for line in lines %}
+      <button type="button"
+              class="row-action-btn line-toggle{% if line.on %} is-on{% endif %}"
+              title="{{ 'stop covering' if line.on else 'also cover' }} {{ line.name }}"
+              hx-post="{{ base }}/applies-to" hx-vals='{"line": "{{ line.id }}"}'
+              hx-target="closest tr" hx-swap="outerHTML">{{ line.name }}</button>
+    {% endfor %}
+    <span class="detail-label">structure</span>
+    {% if statutory %}
+      {# leaving statutory NEEDS the replacing dollar limit — the inline form
+         asks for it; a bare toggle would have to invent a number #}
+      <form class="market-add-form" hx-post="{{ base }}/statutory"
+            hx-target="closest tr" hx-swap="outerHTML">
+        <input type="hidden" name="statutory" value="false">
+        <input type="text" name="limit" placeholder="dollar limit to restore" required>
+        <button type="submit" class="row-action-btn">leave statutory</button>
+      </form>
+    {% else %}
+      <button type="button" class="row-action-btn"
+              hx-get="{{ base }}/statutory"
+              hx-target="closest tr" hx-swap="outerHTML">mark statutory</button>
+    {% endif %}
+    <button type="button" class="row-action-btn{% if follows %} is-on{% endif %}"
+            title="{{ 'the attachment is derived from the layers below' if follows else 'derive the attachment from the layers below' }}"
+            hx-post="{{ base }}/follows" hx-vals='{"follows": "{{ 'false' if follows else 'true' }}"}'
+            hx-target="closest tr" hx-swap="outerHTML">follows underlying</button>
     <button type="button" class="row-action-btn" data-row-close>close</button>
     <button type="button" class="row-action-btn row-action-danger"
             hx-get="{{ remove_url }}"

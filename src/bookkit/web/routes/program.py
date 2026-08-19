@@ -849,17 +849,15 @@ def _layer_editor_cell(
     )
 
 
-@router.get(
-    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/details",
-    response_class=HTMLResponse,
-)
-def layer_details_row(
-    request: Request, ref: str, placement_id: str, layer_id: str
+def _details_row(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any],
+    error: str | None = None,
 ) -> HTMLResponse:
-    """The chevron's row: policy number and the policy dates, editable through
-    the same cell routes the table's own columns use."""
-    org = _org(request, ref)
-    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    """The details row's one renderer — the chevron's GET, every structure
+    write's success, and every structure refusal all answer with this, so
+    the row cannot drift between its three producers."""
+    conn = _conn(request)
+    layer_id = str(layer["id"])
 
     def cell(key: str) -> str:
         field = _layer_field(key)
@@ -869,17 +867,189 @@ def layer_details_row(
             tag="span", extra_class=_LAYER_CELL_CLASS.get(key, ""),
         )
 
+    base = f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}"
     return TEMPLATES.TemplateResponse(
         request, "account/_layer_details.html",
         {
             "policy_cell": cell("policy_number"),
             "from_cell": cell("period_from"),
             "to_cell": cell("period_to"),
-            "remove_url": (
-                f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/remove"
-            ),
+            "base": base,
+            "remove_url": f"{base}/remove",
+            "lines": [
+                {"id": lid, "name": name, "on": lid in layer["applies_to"]}
+                for lid, name in sync.program_lines(conn, placement_id)
+            ],
+            "statutory": layer["statutory"],
+            "follows": bool(layer.get("follows_underlying")),
+            "error": error,
         },
     )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/details",
+    response_class=HTMLResponse,
+)
+def layer_details_row(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """The chevron's row: the layer's long tail (policy number, policy dates)
+    plus its STRUCTURE — applies-to chips, statutory, follows-underlying —
+    the writes that used to live only behind the TUI's `o` into towerkit's
+    editor, which a browser does not have (Grant, 2026-08-19)."""
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    return _details_row(request, ref, placement_id, layer)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/applies-to",
+    response_class=HTMLResponse,
+)
+async def layer_applies_to_toggle(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """Toggle ONE line on the layer's applies-to: the server computes
+    current±line and writes the whole set through sync.set_applies_to — its
+    first caller ever. A move towerkit refuses (the last line, an overlap, a
+    stranded gap) re-renders the row with the message, file untouched."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    line = str((await request.form()).get("line", ""))
+    current = list(layer["applies_to"])
+    wanted = (
+        [lid for lid in current if lid != line]
+        if line in current
+        else [*current, line]
+    )
+    if not wanted:
+        return _details_row(
+            request, ref, placement_id, layer,
+            f"{layer['name']} must cover at least one line — add another first",
+        )
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_edit",
+            summary=f"rescoped {layer['name']}",
+            mutate=lambda: sync.set_applies_to(conn, placement_id, layer_id, wanted),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _details_row(request, ref, placement_id, layer, str(exc))
+    request.state.layer_details = {}
+    _, fresh = _owned_layer(request, org, placement_id, layer_id)
+    row = _details_row(request, ref, placement_id, fresh)
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(row) + _text(panel))
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/statutory",
+    response_class=HTMLResponse,
+)
+def statutory_confirm(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """The confirm for MARKING statutory — the write replaces a dollar limit
+    with the word, and the figure being given up is the one thing only a
+    person can decide to lose. Writes nothing."""
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    base = f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}"
+    return TEMPLATES.TemplateResponse(
+        request, "account/_statutory_confirm.html",
+        {
+            "layer": layer,
+            "limit_word": format_cents_compact(int(layer["limit_cents"] or 0)),
+            "base": base,
+            "details_url": f"{base}/details",
+        },
+    )
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/statutory",
+    response_class=HTMLResponse,
+)
+async def statutory_save(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    form = await request.form()
+    on = str(form.get("statutory", "")) == "true"
+    limit_cents: int | None = None
+    if not on:
+        raw = str(form.get("limit", ""))
+        try:
+            parsed = parse_value(_LAYER_CELLS["limit_cents"], raw)
+            if parsed in (None, ""):
+                raise ValueError("leaving statutory needs the dollar limit to restore")
+            limit_cents = int(parsed)
+        except ValueError as exc:
+            return _details_row(request, ref, placement_id, layer, str(exc))
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_edit",
+            summary=(
+                f"marked {layer['name']} statutory"
+                if on
+                else f"{layer['name']} left statutory"
+            ),
+            mutate=lambda: sync.set_statutory(
+                conn, placement_id, layer_id, on, limit_cents=limit_cents
+            ),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _details_row(request, ref, placement_id, layer, str(exc))
+    request.state.layer_details = {}
+    _, fresh = _owned_layer(request, org, placement_id, layer_id)
+    row = _details_row(request, ref, placement_id, fresh)
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(row) + _text(panel))
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/follows",
+    response_class=HTMLResponse,
+)
+async def follows_save(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """One click either way — turning it on hands the attachment to the tower
+    (heal_follows recomputes it on every write), off freezes the last healed
+    figure; neither destroys a number a person typed."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    follows = str((await request.form()).get("follows", "")) == "true"
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_edit",
+            summary=(
+                f"{layer['name']} now follows underlying"
+                if follows
+                else f"{layer['name']} attachment frozen"
+            ),
+            mutate=lambda: sync.set_follows_underlying(
+                conn, placement_id, layer_id, follows
+            ),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _details_row(request, ref, placement_id, layer, str(exc))
+    request.state.layer_details = {}
+    _, fresh = _owned_layer(request, org, placement_id, layer_id)
+    row = _details_row(request, ref, placement_id, fresh)
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(row) + _text(panel))
 
 
 def _layer_remove_confirm(

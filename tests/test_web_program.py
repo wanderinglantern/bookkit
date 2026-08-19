@@ -873,6 +873,173 @@ def test_a_refused_submission_keeps_the_typed_notes(app_and_org):
     assert "required" in refused
 
 
+def _layer_base(org, placement, layer_id):
+    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}"
+
+
+def test_the_details_row_offers_applies_to_chips(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    layer = sync.layer_details(conn, placement.id)[0]
+
+    row = client.get(_details_url(org, placement, layer["id"])).text
+
+    for _line_id, name in sync.program_lines(conn, placement.id):
+        assert name in row, f"line {name} not offered"
+    assert f'hx-post="{_layer_base(org, placement, layer["id"])}/applies-to"' in row
+
+
+def test_toggling_a_line_on_rescopes_the_layer(app_and_org, tmp_path):
+    """First caller ever for sync.set_applies_to — dead code since the sync
+    layer was built. Valid move: an excess spanning both equal-top primaries
+    narrows to one, then widens back."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "Umbrella Both", "line": "__all__", "attach_cents": "2,000,000",
+              "limit_cents": "5,000,000", "premium_cents": ""},
+    )
+    assert added.status_code == 200
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "Umbrella Both"
+    )
+
+    narrowed = client.post(
+        f"{_layer_base(org, placement, layer_id)}/applies-to", data={"line": "cy"}
+    )
+
+    assert narrowed.status_code == 200
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer_id
+    )
+    assert layer["applies_to"] == ["gl"], f"toggle off left {layer['applies_to']}"
+
+    widened = client.post(
+        f"{_layer_base(org, placement, layer_id)}/applies-to", data={"line": "cy"}
+    )
+    assert widened.status_code == 200
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer_id
+    )
+    assert sorted(layer["applies_to"]) == ["cy", "gl"]
+
+
+def test_toggling_off_the_last_line_is_refused_with_the_file_untouched(
+    app_and_org, tmp_path
+):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["applies_to"] == ["gl"]
+    )
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        f"{_layer_base(org, placement, layer['id'])}/applies-to", data={"line": "gl"}
+    )
+
+    assert refused.status_code == 200
+    assert path.read_bytes() == before
+    assert "cover" in refused.text or "line" in refused.text
+
+
+def test_statutory_asks_first_then_replaces_the_limit_with_the_word(
+    app_and_org, tmp_path
+):
+    """Grant, 2026-08-19: statutory was modelled, rendered and never
+    changeable from the browser — 'fully built but not accessible'."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    layer = sync.layer_details(conn, placement.id)[0]
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    row = client.get(_details_url(org, placement, layer["id"])).text
+    assert f'hx-get="{_layer_base(org, placement, layer["id"])}/statutory"' in row
+
+    confirm = client.get(f"{_layer_base(org, placement, layer['id'])}/statutory")
+    assert confirm.status_code == 200
+    assert "statutory" in confirm.text
+    assert path.read_bytes() == before, "the confirm GET wrote"
+
+    marked = client.post(
+        f"{_layer_base(org, placement, layer['id'])}/statutory",
+        data={"statutory": "true"},
+    )
+    assert marked.status_code == 200
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert fresh["statutory"] is True
+    assert ">statutory<" in marked.text, "the limit column does not say the word"
+
+
+def test_leaving_statutory_requires_the_replacing_limit(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    layer = sync.layer_details(conn, placement.id)[0]
+    assert client.post(
+        f"{_layer_base(org, placement, layer['id'])}/statutory",
+        data={"statutory": "true"},
+    ).status_code == 200
+
+    restored = client.post(
+        f"{_layer_base(org, placement, layer['id'])}/statutory",
+        data={"statutory": "false", "limit": "3,000,000"},
+    )
+
+    assert restored.status_code == 200
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert fresh["statutory"] is False
+    assert fresh["limit_cents"] == 3_000_000_00
+
+
+def test_follows_underlying_toggles_from_the_details_row(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "GL Excess", "line": "gl", "attach_cents": "2,000,000",
+              "limit_cents": "3,000,000", "premium_cents": ""},
+    )
+    assert added.status_code == 200
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "GL Excess"
+    )
+
+    row = client.get(_details_url(org, placement, layer_id)).text
+    assert f'hx-post="{_layer_base(org, placement, layer_id)}/follows"' in row
+
+    toggled = client.post(
+        f"{_layer_base(org, placement, layer_id)}/follows", data={"follows": "true"}
+    )
+
+    assert toggled.status_code == 200
+    from towerkit.model import load_program
+
+    layer = next(
+        ly for ly in load_program(Path(placement.program_path)).layers
+        if ly.id == layer_id
+    )
+    assert layer.follows_underlying is True
+    # the returned row must SHOW the state, not just write it — the chip
+    # rendered permanently-off until layer_details carried the flag
+    assert "is-on" in toggled.text
+
+
 def _lines_base(org, placement):
     return f"/accounts/{org.ref}/program/{placement.id}/lines"
 
