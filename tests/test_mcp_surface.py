@@ -173,9 +173,44 @@ def test_a_denied_field_is_refused_with_its_reason(surface_db):
     rw.close()
 
 
-def test_system_columns_are_denied_by_rule():
+def test_system_columns_are_denied_by_rule(monkeypatch):
+    """No form declares one today, so this only means anything against a form
+    that does — which is exactly what the rule is FOR. Asserted on the empty
+    set the rule was a no-op nothing would have noticed the loss of."""
     for fields in mcpsurface.editable().values():
         assert not (set(fields) & mcpsurface.SYSTEM_COLUMNS)
+
+    real = entities.project_form
+
+    def with_bookkeeping(*args, **kwargs):
+        spec = real(*args, **kwargs)
+        for column in sorted(mcpsurface.SYSTEM_COLUMNS):
+            spec.fields.append(Field(column, column, "text"))
+        return spec
+
+    monkeypatch.setitem(mcpsurface.BUILDERS, "project", with_bookkeeping)
+    surface = mcpsurface.editable()["project"]
+    assert not (set(surface) & mcpsurface.SYSTEM_COLUMNS), (
+        f"a form declaring a bookkeeping column made it writable: "
+        f"{sorted(set(surface) & mcpsurface.SYSTEM_COLUMNS)}"
+    )
+
+
+def test_a_form_field_that_is_not_a_column_never_reaches_the_surface(monkeypatch):
+    """The belt behind the denylist. A field can be on a form and stored
+    somewhere else entirely — org.market_type lives on market_profile — and
+    advertising one means edit_field passes its own allowlist check and then
+    fails at the DB layer, which is how opportunity.notes shipped. Deriving
+    against the row model catches the case nobody wrote down."""
+    real = entities.project_form
+
+    def with_a_non_column(*args, **kwargs):
+        spec = real(*args, **kwargs)
+        spec.fields.append(Field("square_footage", "square footage", "int"))
+        return spec
+
+    monkeypatch.setitem(mcpsurface.BUILDERS, "project", with_a_non_column)
+    assert "square_footage" not in mcpsurface.editable()["project"]
 
 
 # --- the point of the whole change -------------------------------------------
