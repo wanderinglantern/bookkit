@@ -1,0 +1,26 @@
+{# The renew confirm, in the placement's own form host. Writes NOTHING —
+   only [renew] does, and it targets the whole programs panel because a
+   renewal ADDS a program to the list (and a refusal therefore answers as
+   the panel too, error slot filled — a fragment answer to a panel-targeted
+   POST deletes the panel, id and all; learned on scaffold, 2026-08-19).
+
+   The copy states exactly what sync.renew does, because "Renew" invites a
+   dozen readings: next period, prospective, expiring premium carried as the
+   indication — and for a linked placement the towerkit file is CLONED as
+   next year's and linked at birth. #}
+<div class="renew-confirm" role="alertdialog" aria-label="Renew {{ placement.program_name }}">
+  <p><strong>Renew {{ placement.program_name }}?</strong></p>
+  <p>
+    This creates a prospective {{ next_from }} → {{ next_to }} program,
+    carrying the expiring premium as its indication
+    {%- if placement.program_path %}, and clones {{ file_name }} as next
+    year's towerkit file, linked from birth{% endif %}.
+    The change list can revert it.
+  </p>
+  <div class="program-form-actions">
+    <button type="button" class="btn-pill btn-pill-primary"
+            hx-post="{{ action }}"
+            hx-target="#programs-panel" hx-swap="outerHTML">renew</button>
+    <button type="button" class="btn-pill" data-form-cancel>Cancel</button>
+  </div>
+</div>

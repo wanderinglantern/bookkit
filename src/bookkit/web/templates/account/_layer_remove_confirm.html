@@ -1,0 +1,24 @@
+{# The layer-removal confirm, swapped over the details row (closest tr,
+   outerHTML) — the question sits where it was asked. GET rendered this and
+   wrote NOTHING; only [remove layer] writes.
+
+   The blast radius is named up front: the seats go with the layer (D2), and
+   that list is the fact a person needs before answering. A refusal (towerkit
+   will not strand the layer above over a gap) re-renders this row with the
+   message. #}
+<tr class="layer-details layer-remove-confirm">
+  <td class="row-expand"></td>
+  <td colspan="6" class="prose" role="alertdialog" aria-label="Remove {{ layer.name }}">
+    {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+    remove {{ layer.name }}
+    {%- if seats %} — {{ seats | join(", ") }} come{{ "s" if seats | length == 1 else "" }} off with it
+    {%- else %} — nobody is on it
+    {%- endif %}? the change list can revert it
+    <button type="button" class="row-action-btn row-action-danger"
+            hx-post="{{ remove_url }}"
+            hx-target="closest tr" hx-swap="outerHTML">remove layer</button>
+    <button type="button" class="row-action-btn"
+            hx-get="{{ details_url }}"
+            hx-target="closest tr" hx-swap="outerHTML">keep</button>
+  </td>
+</tr>

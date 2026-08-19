@@ -4,6 +4,24 @@ All notable changes to bookkit, newest date first.
 
 ## 2026-08-19
 
+### Added
+- Web placement editing: the program section header's name, period, status
+  and commission are inline cells; the file-vs-row ownership rule lives in
+  one service both surfaces call.
+- Renew on the web, placement-scoped and confirm-first; the confirm states
+  exactly what renewing does before anything is written.
+- Layer delete on both surfaces (D2): the web details row and the TUI's D
+  on a placeholder carriers row, confirm naming the seats that go with it.
+- TUI market-seat corrections: e on a carriers row edits the seat, D takes
+  it off (confirm first) — previously a wrong share typed in the terminal
+  could only be corrected in the browser.
+- Web layer add asks which lines the layer covers (previously it silently
+  landed on the first line); the scaffold destination is editable; and
+  submissions send from the program section, landing on the Pipeline tab.
+- A program-verb ledger (web/parity.SYNC_VERBS) discovered from sync.py's
+  own source: a new program mutator turns the suite red until every surface
+  covers or consciously defers it.
+
 ### Changed
 - Rework the web Program tab's editing grammar: a market's carrier and share
   are inline cells on the chip (same contract as layer cells, with tab-hop

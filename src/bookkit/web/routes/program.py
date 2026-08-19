@@ -25,19 +25,20 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ... import sync
-from ...forms.entities import apply_placement, placement_form
-from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS
+from ...forms.entities import apply_placement, apply_submission, placement_form, submission_form
+from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS, PLACEMENT_FIELDS
 from ...forms.spec import Field, initial_text, parse_value
 from ...money import format_cents_compact
 from ...repo import placements as placements_repo
 from ...repo import vocab
 from ...services import batches as batches_svc
-from ...services import program_files
+from ...services import placement_edit, program_files
 from ..app import TEMPLATES
 from ..forms_render import render_cell, render_cell_display, render_form
 from .account import _conn, _context, _org, _owned, _save, layers_for
 
 _LAYER_CELLS: dict[str, Field] = {f.key: f for f in LAYER_FIELDS}
+_PLACEMENT_CELLS: dict[str, Field] = {f.key: f for f in PLACEMENT_FIELDS}
 
 # The column class a layer cell carries, in ONE place. Three literals — the
 # panel's first render, the display route htmx swaps back after a save, and the
@@ -144,6 +145,7 @@ def _programs(request: Request, org: Any) -> list[dict[str, Any]]:
         out.append(
             {
                 "placement": placement,
+                "placement_cells": _placement_cells(request, org.ref, placement),
                 "linked": bool(placement.program_path),
                 "layers": [
                     _layer_row(request, org.ref, placement.id, layer) for layer in layers
@@ -177,6 +179,146 @@ def program_tab(request: Request, ref: str) -> HTMLResponse:
     context = _context(conn, org, "program", request)
     context["programs"] = _programs(request, org)
     return TEMPLATES.TemplateResponse(request, "account/program.html", context)
+
+
+# --- editing the placement's own facts where they are read --------------------
+#
+# The header's name, period, status and commission are cells (phase 2): the
+# web could not edit a placement's own facts at all, while the layer table
+# below them edited in place. WHICH OWNER a field writes to — the towerkit
+# file or the row — is services.placement_edit's call, not this module's.
+
+
+def _placement_field(key: str) -> Field:
+    field = _PLACEMENT_CELLS.get(key)
+    if field is None:
+        raise HTTPException(
+            status_code=404, detail=f"{key} is not an editable placement field"
+        )
+    return field
+
+
+def _placement_cell_action(ref: str, placement_id: str, key: str) -> str:
+    return f"/accounts/{ref}/program/{placement_id}/cell/{key}"
+
+
+def _placement_cell_class(key: str, placement: Any) -> str:
+    if key == "status":
+        # the pill class the static header used — colour stays signal
+        return f"status-{placement.status}"
+    if key in ("period_from", "period_to", "commission_bps"):
+        return "mono"
+    return ""
+
+
+def _placement_display_cell(
+    request: Request, ref: str, placement: Any, key: str
+) -> HTMLResponse:
+    field = _placement_field(key)
+    return HTMLResponse(
+        render_cell_display(
+            request, field, _display_text(field, getattr(placement, key)),
+            _placement_cell_action(ref, placement.id, key),
+            tag="span", extra_class=_placement_cell_class(key, placement),
+        )
+    )
+
+
+def _placement_editor_cell(
+    request: Request, ref: str, placement: Any, key: str,
+    error: str | None = None, typed: str | None = None,
+) -> HTMLResponse:
+    field = _placement_field(key)
+    value = typed if typed is not None else initial_text(field, getattr(placement, key))
+    return HTMLResponse(
+        render_cell(
+            request, field, value, _placement_cell_action(ref, placement.id, key),
+            error=error, tag="span",
+            extra_class=_placement_cell_class(key, placement),
+        )
+    )
+
+
+def _placement_cells(request: Request, ref: str, placement: Any) -> dict[str, str]:
+    return {
+        key: _text(_placement_display_cell(request, ref, placement, key))
+        for key in _PLACEMENT_CELLS
+    }
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/cell/{key}", response_class=HTMLResponse
+)
+def placement_cell(
+    request: Request, ref: str, placement_id: str, key: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return _placement_display_cell(request, ref, placement, key)
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/cell/{key}/edit",
+    response_class=HTMLResponse,
+)
+def placement_cell_edit(
+    request: Request, ref: str, placement_id: str, key: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return _placement_editor_cell(request, ref, placement, key)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/cell/{key}", response_class=HTMLResponse
+)
+async def placement_cell_save(
+    request: Request, ref: str, placement_id: str, key: str
+) -> HTMLResponse:
+    """One header fact, routed to its owner by services.placement_edit.split:
+    a file-owned field rides the snapshot seam (one batch, one pre-image),
+    a book-owned one is a plain batched row write, and an UNCHANGED value
+    writes nothing at all. A write-through conflict answers as a one-line
+    refusal here (like market cells; the three-way stays layer-cell-shaped).
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    field = _placement_field(key)
+    raw = str((await request.form()).get(key, ""))
+    try:
+        value = parse_value(field, raw)
+        if field.required and value in (None, ""):
+            raise ValueError(f"{field.label} is required")
+        file_changes, book_changes = placement_edit.split(placement, {key: value})
+    except ValueError as exc:
+        return _placement_editor_cell(request, ref, placement, key, str(exc), raw)
+
+    try:
+        if file_changes:
+            program_files.write(
+                conn, placement,
+                tool="program_edit",
+                summary=f"edited {placement.ref}: {field.label}",
+                mutate=lambda: placement_edit.write_file_fields(
+                    conn, placement, file_changes
+                ),
+                open_batch=_open_batch_web,
+            )
+        elif book_changes:
+            with _open_batch_web(
+                conn, tool="placement_edit", org_id=placement.org_id,
+                summary=f"edited {placement.ref}: {field.label}",
+            ):
+                placement_edit.write_book_fields(conn, placement, book_changes)
+    except Exception as exc:
+        return _placement_editor_cell(request, ref, placement, key, str(exc), raw)
+
+    request.state.layer_details = {}
+    fresh = placements_repo.get(conn, placement_id)
+    cell = _placement_display_cell(request, ref, fresh, key)
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(cell) + _text(panel))
 
 
 # --- editing a layer where it is read -----------------------------------------
@@ -446,8 +588,68 @@ def layer_details_row(
             "policy_cell": cell("policy_number"),
             "from_cell": cell("period_from"),
             "to_cell": cell("period_to"),
+            "remove_url": (
+                f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/remove"
+            ),
         },
     )
+
+
+def _layer_remove_confirm(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any],
+    error: str | None = None,
+) -> HTMLResponse:
+    base = f"/accounts/{ref}/program/{placement_id}/layers/{layer['id']}"
+    return TEMPLATES.TemplateResponse(
+        request, "account/_layer_remove_confirm.html",
+        {
+            "layer": layer,
+            "seats": [seat["carrier"] for seat in layer["participants"]],
+            "remove_url": f"{base}/remove",
+            "details_url": f"{base}/details",
+            "error": error,
+        },
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/remove",
+    response_class=HTMLResponse,
+)
+def layer_remove_confirm(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """Confirm-first (D2), naming the seats that go with the layer. Writes
+    nothing."""
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    return _layer_remove_confirm(request, ref, placement_id, layer)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/remove",
+    response_class=HTMLResponse,
+)
+def layer_remove(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """The layer goes, its seats with it — one batched, snapshotted write
+    (sync.remove_layer, D2). A refusal — towerkit will not strand the layer
+    above over a gap — re-renders the confirm in place with the message."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_remove",
+            summary=f"removed layer {layer['name']}",
+            mutate=lambda: sync.remove_layer(conn, placement_id, layer_id),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _layer_remove_confirm(request, ref, placement_id, layer, str(exc))
+    return _panel(request, ref, org, placement_id)
 
 
 @router.get(
@@ -549,12 +751,26 @@ async def layer_cell_save(
 # stale by the time it is used.
 
 
-def _layer_add_fields() -> tuple[Field, ...]:
+def _layer_add_fields(
+    conn: sqlite3.Connection, placement_id: str
+) -> tuple[Field, ...]:
     """A new layer's facts. `name`, `attach` and `limit` are required by
     sync.add_layer; premium is optional because a layer is routinely placed
-    before it is priced."""
+    before it is priced.
+
+    `line` is REQUIRED and asked, never guessed (F5): this form used to pass
+    line_ids=[] and towerkit silently defaulted the new layer onto the FIRST
+    line — on a multi-line program the web wrote different data than the TUI
+    for the same intent, invisibly. Empty options means the program has no
+    lines; the caller refuses before rendering a form that cannot succeed.
+    """
+    lines = sync.program_lines(conn, placement_id)
+    options = tuple((name, line_id) for line_id, name in lines)
+    if len(lines) > 1:
+        options = (("all lines", "__all__"), *options)
     return (
         _LAYER_CELLS["name"],
+        Field("line", "applies to", "select", options, required=True),
         _LAYER_CELLS["attach_cents"],
         _LAYER_CELLS["limit_cents"],
         _LAYER_CELLS["premium_cents"],
@@ -588,6 +804,7 @@ def _panel(request: Request, ref: str, org: Any, placement_id: str) -> HTMLRespo
         {
             "header": {"org": org},
             "placement": placement,
+            "placement_cells": _placement_cells(request, ref, placement),
             "linked": bool(placement.program_path),
             "layers": [
                 _layer_row(request, ref, placement_id, layer)
@@ -624,19 +841,38 @@ async def layer_add(request: Request, ref: str, placement_id: str) -> HTMLRespon
     placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
     raw = {k: str(v) for k, v in (await request.form()).items()}
     action = f"/accounts/{ref}/program/{placement_id}/layers"
-    fields = _layer_add_fields()
+    if not placement.program_path:
+        # BEFORE the lines guard: an unlinked placement has no lines either,
+        # and "no lines" would send someone to towerkit to edit a file that
+        # does not exist.
+        return _panel_refusal(
+            request, ref, org, placement_id,
+            f"{placement.ref} has no program file linked — scaffold one first",
+        )
+    all_lines = sync.program_lines(conn, placement_id)
+    if not all_lines:
+        return _panel_refusal(
+            request, ref, org, placement_id,
+            "the program has no lines — build them in towerkit first",
+        )
+    fields = _layer_add_fields(conn, placement_id)
     try:
         values = _parsed(fields, raw)
     except ValueError as exc:
         return _refused_form(request, fields, action, "new layer", str(exc), raw)
 
+    line_ids = (
+        [line_id for line_id, _ in all_lines]
+        if values["line"] == "__all__"
+        else [values["line"]]
+    )
     try:
         program_files.write(
             conn, placement,
             tool="program_layer_add",
             summary=f"added layer {values['name']}",
             mutate=lambda: sync.add_layer(
-                conn, placement_id, values["name"], [],
+                conn, placement_id, values["name"], line_ids,
                 attach_cents=values["attach_cents"],
                 limit_cents=values["limit_cents"],
                 premium_cents=values["premium_cents"],
@@ -1032,6 +1268,14 @@ def market_remove(
 # --- the two ghost-row forms --------------------------------------------------
 
 
+def _panel_refusal(
+    request: Request, ref: str, org: Any, placement_id: str, message: str
+) -> HTMLResponse:
+    """A refusal for a form-host control with no form to re-render — said in
+    the form host itself, never a status code htmx would drop."""
+    return HTMLResponse(f'<p class="form-error" role="alert">{message}</p>')
+
+
 def _mini_form(
     request: Request, fields: tuple[Field, ...], action: str, title: str
 ) -> HTMLResponse:
@@ -1046,9 +1290,20 @@ def _mini_form(
 )
 def layer_add_form(request: Request, ref: str, placement_id: str) -> HTMLResponse:
     org = _org(request, ref)
-    _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    if not placement.program_path:
+        return _panel_refusal(
+            request, ref, org, placement_id,
+            f"{placement.ref} has no program file linked — scaffold one first",
+        )
+    if not sync.program_lines(conn, placement_id):
+        return _panel_refusal(
+            request, ref, org, placement_id,
+            "the program has no lines — build them in towerkit first",
+        )
     return _mini_form(
-        request, _layer_add_fields(),
+        request, _layer_add_fields(conn, placement_id),
         f"/accounts/{ref}/program/{placement_id}/layers", "new layer",
     )
 
@@ -1102,6 +1357,113 @@ def _scaffold_destination(conn: Any, org: Any, placement: Any) -> Any:
     return Path(roots[0]) / f"{slug}-{year}.json"
 
 
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/submissions/new",
+    response_class=HTMLResponse,
+)
+def submission_new_form(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """The TUI's `s`, webside: send this program to a market. The whole-record
+    submission_form (market select, optional underwriter, sent date, notes)
+    renders into the section's form host."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    from ...repo import orgs as orgs_repo
+
+    if not orgs_repo.list_orgs(conn, kind="market"):
+        return _panel_refusal(
+            request, ref, org, placement_id,
+            "no markets on file — create one in the terminal app "
+            "(m, then a) before sending a submission",
+        )
+    spec = submission_form(conn)
+    action = f"/accounts/{ref}/program/{placement_id}/submissions"
+    return HTMLResponse(render_form(request, spec, action))
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/submissions", response_class=HTMLResponse
+)
+async def submission_create(
+    request: Request, ref: str, placement_id: str
+) -> HTMLResponse:
+    """Success answers HX-Redirect to the PIPELINE tab, where the submission
+    is actually visible — landing back on a tab that shows no trace of what
+    was just made is the dishonest option. Refusals re-render the form with
+    the input intact via the shared _save seam."""
+    from fastapi.responses import Response
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    spec = submission_form(conn)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = f"/accounts/{ref}/program/{placement_id}/submissions"
+    refused = _save(
+        request, org, spec, action, raw,
+        lambda values: apply_submission(conn, values, placement_id=placement_id),
+    )
+    if refused is not None:
+        return refused
+    return Response(
+        status_code=204, headers={"HX-Redirect": f"/accounts/{ref}/pipeline"}
+    )  # type: ignore[return-value]
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/renew", response_class=HTMLResponse
+)
+def renew_confirm(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """Confirm-first, stating exactly what sync.renew does. Writes nothing.
+    (The account header's Renew stayed unrendered under D4 — it names no
+    placement; this control is placement-scoped.)"""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    from pathlib import Path
+
+    next_from, next_to = sync.renewal_period(placement)
+    file_name = Path(str(placement.program_path)).name if placement.program_path else ""
+    return TEMPLATES.TemplateResponse(
+        request, "account/_renew_confirm.html",
+        {
+            "placement": placement,
+            "next_from": next_from, "next_to": next_to,
+            "file_name": file_name,
+            "action": f"/accounts/{ref}/program/{placement_id}/renew",
+        },
+    )
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/renew", response_class=HTMLResponse
+)
+def renew_placement(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """sync.renew in one web batch: next period, prospective, the file cloned
+    and linked at birth. Answers with the WHOLE panel either way — a renewal
+    adds a program to the list, and this POST targets the panel, so a
+    refusal must come back as the panel with its error slot filled."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    try:
+        # program_ tool: a plain row revert of a renew would delete the new
+        # placement while the CLONED FILE stayed on disk, and the next sync
+        # would silently recreate it — refuse-first is the honest answer
+        # until a real renew-revert (which must delete the clone) exists.
+        with batches_svc.open_batch(
+            conn, source="web", tool="program_renew", org_id=org.id,
+            summary=f"renewed {placement.ref}",
+        ):
+            new_placement, new_path, diags = sync.renew(conn, placement_id)
+            if new_placement is None or not diags.ok:
+                first = diags.errors[0].message if diags.errors else "unknown error"
+                raise ValueError(f"renew refused: {first}")
+    except Exception as exc:
+        return _programs_panel(request, ref, org, error=str(exc))
+    return _programs_panel(request, ref, org)
+
+
 @router.get("/accounts/{ref}/program/{placement_id}/scaffold", response_class=HTMLResponse)
 def scaffold_confirm(request: Request, ref: str, placement_id: str) -> HTMLResponse:
     """The confirm step. Writes NOTHING — and shows the path, because where a
@@ -1121,7 +1483,7 @@ def scaffold_confirm(request: Request, ref: str, placement_id: str) -> HTMLRespo
 
 
 @router.post("/accounts/{ref}/program/{placement_id}/scaffold", response_class=HTMLResponse)
-def scaffold_create(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+async def scaffold_create(request: Request, ref: str, placement_id: str) -> HTMLResponse:
     """Create the towerkit file and link it.
 
     Every refusal comes back in the page and NAMES what to do: the file that
@@ -1144,7 +1506,12 @@ def scaffold_create(request: Request, ref: str, placement_id: str) -> HTMLRespon
             error=f"{placement.ref} already has a program file: "
             f"{placement.program_path}. Open it in towerkit.",
         )
-    destination = _scaffold_destination(conn, org, placement)
+    from pathlib import Path
+
+    typed = str((await request.form()).get("path", "")).strip()
+    destination = (
+        Path(typed).expanduser() if typed else _scaffold_destination(conn, org, placement)
+    )
     if destination is None:
         return _programs_panel(
             request, ref, org,

@@ -15,6 +15,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import replace
 
+from ..models import PlacementStatus
 from ..repo import assignees, vocab
 from .spec import Field
 
@@ -69,6 +70,23 @@ def task_fields(
         for f in TASK_FIELDS
     )
 
+
+PLACEMENT_FIELDS: tuple[Field, ...] = (
+    Field("program_name", "program", required=True),
+    Field("period_from", "effective", "date", required=True),
+    Field("period_to", "expiry", "date", required=True),
+    Field(
+        "status", "status", "select",
+        tuple((s.value, s.value) for s in PlacementStatus), required=True,
+    ),
+    Field("commission_bps", "commission (bps)", "int"),
+)
+"""A placement's header facts, as cells. KEYS ARE services.placement_edit's
+OWN VOCABULARY (FILE_OWNED + BOOK_OWNED): the cell route hands {key: value}
+to that service's split, so which owner a field writes to is decided in one
+place. `status` is a select over the real statuses — the same tuple the TUI
+form offers — because a status typo would silently fall out of every
+status-filtered view."""
 
 LAYER_FIELDS: tuple[Field, ...] = (
     Field("name", "layer", required=True),

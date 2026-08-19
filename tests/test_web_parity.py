@@ -185,3 +185,38 @@ def test_undo_is_implemented_and_names_its_route():
     hardest to notice: the ledger only ever fails loudly for MISSING keys."""
     assert "undo" not in PENDING
     assert "/changes/" in IMPLEMENTED["undo"] and "revert" in IMPLEMENTED["undo"]
+
+
+# --- the verb ledger is discovered from sync.py itself -------------------------
+
+
+def test_every_sync_program_mutator_is_in_the_verb_ledger():
+    """Both directions: a new sync writer that calls _mutate (or joins the
+    named non-mutate writers) turns this red until SYNC_VERBS covers or
+    defers it; a ledger entry for a deleted verb goes red too."""
+    import re
+    from pathlib import Path
+
+    from bookkit.web.parity import SYNC_VERBS
+
+    source = Path("src/bookkit/sync.py").read_text()
+    chunks = re.split(r"^def ", source, flags=re.M)[1:]
+    mutators = {
+        chunk.split("(", 1)[0]
+        for chunk in chunks
+        if "_mutate(" in chunk and not chunk.startswith("_")
+    }
+    mutators |= {"scaffold_program", "renew"}  # write files without _mutate
+
+    assert mutators == set(SYNC_VERBS), (
+        f"uncovered: {mutators - set(SYNC_VERBS)}; stale: {set(SYNC_VERBS) - mutators}"
+    )
+
+
+def test_every_verb_entry_speaks_for_all_three_surfaces():
+    from bookkit.web.parity import SYNC_VERBS
+
+    for verb, surfaces in SYNC_VERBS.items():
+        assert set(surfaces) == {"web", "tui", "mcp"}, verb
+        for surface, note in surfaces.items():
+            assert note.strip(), f"{verb}/{surface} says nothing"

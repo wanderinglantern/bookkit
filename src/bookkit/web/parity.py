@@ -187,3 +187,70 @@ PENDING: dict[str, str] = {
         "insufficient"
     ),
 }
+
+
+# --- the program-verb ledger (phase 2, 2026-08-19) ----------------------------
+#
+# Every sync.py program mutator, per surface. The action-level dicts above
+# answer "does the web cover this TUI key"; this one answers the question the
+# parity review had to reconstruct by hand — "who can make this WRITE" — and
+# tests/test_web_parity.py discovers the verb set from sync.py's own source
+# (any function that calls _mutate, plus the named non-mutate writers), so a
+# new sync verb turns the suite red until it is covered or consciously
+# deferred here, in both directions.
+
+SYNC_VERBS: dict[str, dict[str, str]] = {
+    "update_program": {
+        "web": "placement header cells (POST /program/{placement_id}/cell/{key})",
+        "tui": "e on a placement, via services.placement_edit",
+        "mcp": "program_edit",
+    },
+    "update_layer": {
+        "web": "layer cells + the details row (POST .../layers/{layer_id}/cell/{key})",
+        "tui": "l on the placements tab",
+        "mcp": "program_layer_edit",
+    },
+    "add_layer": {
+        "web": "+ Add layer, applies-to select required (POST .../layers)",
+        "tui": "L, applies-to select required",
+        "mcp": "program_layer_add",
+    },
+    "remove_layer": {
+        "web": "details row -> remove layer, confirm names the seats (D2)",
+        "tui": "D on a placeholder carriers row, confirm names the seats",
+        "mcp": "DEFERRED — no tool; whether the assistant may remove a layer "
+        "is an mcpparity decision nobody has made",
+    },
+    "add_participant": {
+        "web": "+ market, in the row (POST .../markets)",
+        "tui": "offered when a submission binds (_offer_bind_to_layer) — no "
+        "direct put-a-market-on-a-layer key; DEFERRED as such",
+        "mcp": "program_bind",
+    },
+    "update_participant": {
+        "web": "market cells on the chip (POST .../markets/{index}/cell/{key})",
+        "tui": "e on a carriers-table row",
+        "mcp": "DEFERRED — no tool; same mcpparity decision as remove_layer",
+    },
+    "remove_participant": {
+        "web": "chip remove, confirm in place (POST .../markets/{index}/remove)",
+        "tui": "D on a carriers-table row, confirm first",
+        "mcp": "DEFERRED — no tool; same mcpparity decision as remove_layer",
+    },
+    "set_applies_to": {
+        "web": "DEFERRED — phase 3 (applies-to chips on layer rows)",
+        "tui": "DEFERRED — phase 3; today the whole verb is dead code with tests",
+        "mcp": "DEFERRED — phase 3",
+    },
+    "scaffold_program": {
+        "web": "scaffold confirm, destination editable (POST .../scaffold)",
+        "tui": "t on the placements tab, destination editable",
+        "mcp": "DEFERRED BY DECISION — mcpparity: placements are read-only "
+        "to the assistant",
+    },
+    "renew": {
+        "web": "Renew on the program section, confirm-first (POST .../renew)",
+        "tui": "r on the placements tab (ConfirmRenew)",
+        "mcp": "DEFERRED — renewal from an assistant needs its own decision",
+    },
+}

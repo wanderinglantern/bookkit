@@ -12,18 +12,30 @@
    "layers present" are three different facts, and collapsing the first two is
    how the stub came to lie. #}
 <section class="program" id="program-{{ placement.id }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {# The header facts are CELLS (phase 2): name and period write through the
+     towerkit file, status and commission to the row — services.placement_edit
+     owns that split. Commission was not shown on the web at all before. #}
   <div class="people-head">
-    <h2 class="people-label">{{ placement.program_name }}</h2>
+    <h2 class="people-label">{{ placement_cells.program_name | safe }}</h2>
     <span class="people-count mono">{{ placement.ref }}</span>
     <span class="people-head-spacer"></span>
-    <span class="program-period mono">{{ placement.period_from }} → {{ placement.period_to }}</span>
-    <span class="status-{{ placement.status }}">{{ placement.status }}</span>
+    <span class="program-period">{{ placement_cells.period_from | safe }} → {{ placement_cells.period_to | safe }}</span>
+    {{ placement_cells.status | safe }}
+    <span class="program-commission">{{ placement_cells.commission_bps | safe }}<span class="detail-label">comm bps</span></span>
     {% if linked %}
       <button type="button" class="people-add"
               hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/new"
               hx-target="#program-{{ placement.id }} .form-host"
               hx-swap="innerHTML">+ Add layer</button>
     {% endif %}
+    <button type="button" class="people-add"
+            hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/submissions/new"
+            hx-target="#program-{{ placement.id }} .form-host"
+            hx-swap="innerHTML">+ Submission</button>
+    <button type="button" class="people-add"
+            hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/renew"
+            hx-target="#program-{{ placement.id }} .form-host"
+            hx-swap="innerHTML">Renew</button>
   </div>
   <div class="form-host"></div>
 

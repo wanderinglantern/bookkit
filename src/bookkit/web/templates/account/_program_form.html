@@ -27,9 +27,18 @@
   {% for f in fields %}
     <label class="field">
       <span class="field-label">{{ f.label }}</span>
-      <input type="text" name="{{ f.key }}" placeholder="{{ f.placeholder or '' }}"
-             value="{{ values.get(f.key, '') if values else '' }}"
-             {% if f.required %}required{% endif %}>
+      {% if f.kind == "select" %}
+        <select name="{{ f.key }}" {% if f.required %}required{% endif %}>
+          {% if not f.required %}<option value=""></option>{% endif %}
+          {% for label, val in f.options %}
+            <option value="{{ val }}"{% if values and values.get(f.key) == val %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      {% else %}
+        <input type="text" name="{{ f.key }}" placeholder="{{ f.placeholder or '' }}"
+               value="{{ values.get(f.key, '') if values else '' }}"
+               {% if f.required %}required{% endif %}>
+      {% endif %}
     </label>
   {% endfor %}
   <div class="program-form-actions">

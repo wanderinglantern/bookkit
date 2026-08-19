@@ -525,3 +525,53 @@ def test_a_layer_must_apply_to_at_least_one_line(linked) -> None:
     refused = sync.set_applies_to(conn, placement.id, layer_id, [])
 
     assert not refused.ok
+
+
+def test_remove_layer_takes_its_seats_with_it(linked) -> None:
+    """D2 (2026-08-19): no surface could remove a mis-added layer at all."""
+    conn, _, placement, path = linked
+    assert sync.add_layer(
+        conn, placement.id, "Mistake Layer", ["gl"],
+        attach_cents=2_000_000_00, limit_cents=5_000_000_00,
+    ).ok
+    assert sync.add_participant(
+        conn, placement.id, "mistake-layer", "Oops Re", 5_000
+    ).ok
+
+    diags = sync.remove_layer(conn, placement.id, "mistake-layer")
+
+    assert diags.ok
+    program = load_program(path)
+    assert "mistake-layer" not in [ly.id for ly in program.layers]
+    assert "Oops Re" not in path.read_text()
+
+
+def test_remove_layer_refuses_an_unknown_id(linked) -> None:
+    conn, _, placement, path = linked
+    before = path.read_bytes()
+
+    diags = sync.remove_layer(conn, placement.id, "never-existed")
+
+    assert not diags.ok
+    assert path.read_bytes() == before
+
+
+def test_remove_layer_refuses_to_strand_a_gap(linked) -> None:
+    """Removing a middle layer leaves the one above floating; towerkit's
+    validator refuses and nothing is written — the refusal in towerkit's
+    words is the whole value."""
+    conn, _, placement, path = linked
+    assert sync.add_layer(
+        conn, placement.id, "1st Excess", ["gl"],
+        attach_cents=2_000_000_00, limit_cents=5_000_000_00,
+    ).ok
+    assert sync.add_layer(
+        conn, placement.id, "2nd Excess", ["gl"],
+        attach_cents=7_000_000_00, limit_cents=5_000_000_00,
+    ).ok
+    before = path.read_bytes()
+
+    diags = sync.remove_layer(conn, placement.id, "1st-excess")
+
+    assert not diags.ok
+    assert path.read_bytes() == before

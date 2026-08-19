@@ -14,7 +14,6 @@
     {% if existing %}
       <li>This program already has one: <code>{{ existing }}</code>.</li>
     {% elif destination %}
-      <li>It will be written to <code>{{ destination }}</code>.</li>
       <li>The insured, program name, period and indicated premium carry over,
           so nothing is typed twice.</li>
       <li>It starts with one layer marked "To be placed" — build the tower from
@@ -24,12 +23,24 @@
           first (<code>,</code> on Today in the terminal app).</li>
     {% endif %}
   </ul>
-  <div class="form-actions">
-    {% if destination and not existing %}
-      <button type="button" class="btn-danger"
-              hx-post="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/scaffold"
-              hx-target="#programs-panel" hx-swap="outerHTML">Create the file</button>
-    {% endif %}
-    <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
-  </div>
+  {% if destination and not existing %}
+    {# The path is EDITABLE, matching the TUI's `t` (which asks in a form
+       with the same default) — where a file lands is the one fact only a
+       person can check, so it is theirs to change (phase 2). #}
+    <form hx-post="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/scaffold"
+          hx-target="#programs-panel" hx-swap="outerHTML">
+      <label class="field">
+        <span class="field-label">file path</span>
+        <input type="text" name="path" value="{{ destination }}" required>
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn-danger">Create the file</button>
+        <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+      </div>
+    </form>
+  {% else %}
+    <div class="form-actions">
+      <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+    </div>
+  {% endif %}
 </div>

@@ -384,6 +384,34 @@ class ConfirmRemoveAssignment(ModalScreen):
         self.dismiss(False)
 
 
+class ConfirmProgramRemoval(ModalScreen):
+    """One look before a program-file removal — a market seat, or a layer.
+    The body names the blast radius, the same facts the web's in-place
+    confirms state for the same writes (phase 2, 2026-08-19)."""
+
+    BINDINGS = [
+        Binding("escape,n", "decline", "No"),
+        Binding("y,enter", "accept", "Yes"),
+    ]
+
+    def __init__(self, title: str, body: str) -> None:
+        super().__init__()
+        self._title = title
+        self._body = body
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(classes="modal-box"):
+            yield Static(self._title, classes="modal-title")
+            yield Static(self._body)
+            yield Static("y / enter remove · n / esc cancel · R reverts", classes="hint")
+
+    def action_accept(self) -> None:
+        self.dismiss(True)
+
+    def action_decline(self) -> None:
+        self.dismiss(False)
+
+
 class MergePicker(ModalScreen):
     """Pick which placement a duplicate merges into."""
 
@@ -1283,20 +1311,28 @@ class AccountScreen(Screen):
         carriers.clear(columns=True)
         carriers.add_columns("carrier", "layer", right("share"), right("premium"))
         # rows are keyed "<layer_id>:<n>" so `l` can edit the layer under the
-        # cursor; participant-less layers get a placeholder row to stay reachable
+        # cursor; participant-less layers get a placeholder row to stay reachable.
+        # _carrier_seats resolves a row key back to its SEAT (layer_id, carrier
+        # — None for a placeholder row): a carrier name can carry ":" so the
+        # key alone cannot say who sits there, and e/D on this table act on
+        # the seat, not the string (phase 2).
+        self._carrier_seats = {}
         seen_layers: set[str] = set()
         for index, row in enumerate(projection.participants_for_placement(conn, placement_id)):
             seen_layers.add(str(row["layer_id"]))
+            key = f"{row['layer_id']}:{index}"
+            self._carrier_seats[key] = (str(row["layer_id"]), str(row["carrier"]))
             carriers.add_row(
                 row["carrier"], row["layer_name"],
                 Text(f"{row['share_bps'] / 100:g}%", justify="right"),
                 money_text(row["premium"]),
-                key=f"{row['layer_id']}:{index}",
+                key=key,
             )
         from ... import sync as _sync
 
         for layer in _sync.layer_details(conn, placement_id):
             if str(layer["id"]) not in seen_layers:
+                self._carrier_seats[f"{layer['id']}:x"] = (str(layer["id"]), None)
                 carriers.add_row(
                     Text("— to be placed —", style=theme.DIM), layer["name"], "", "",
                     key=f"{layer['id']}:x",
@@ -1461,6 +1497,10 @@ class AccountScreen(Screen):
             self.notify("task done — u to undo")
             self.refresh_data()
 
+    # row key -> (layer_id, carrier|None) for the carriers table; rebuilt on
+    # every refresh, so a key is never resolved against a stale seating
+    _carrier_seats: dict[str, tuple[str, str | None]] = {}
+
     # which tables D acts on, and what "remove" means for each of them
     DELETABLE = {
         "interactions-table": "interaction",
@@ -1486,6 +1526,16 @@ class AccountScreen(Screen):
         filed against the wrong account. Tasks are DROPPED rather than deleted:
         one field write, so `u` genuinely restores it, and the row stays in
         history instead of vanishing."""
+        seat = self._seat_under_cursor()
+        if seat is not None:
+            key = self._selected_key("placements-table")
+            if key:
+                placement = placements.get(self.app.conn, key)
+                if seat[1] is not None:
+                    self._confirm_remove_seat(placement, seat[0], seat[1])
+                else:
+                    self._confirm_remove_layer(placement, seat[0])
+            return
         for table_id, kind in self.DELETABLE.items():
             table = self.query_one(f"#{table_id}", ListTable)
             if not table.has_focus or table.cursor_row is None or table.row_count == 0:
@@ -1509,7 +1559,8 @@ class AccountScreen(Screen):
         # the screen's own rule is that an inapplicable key says so (r, t, l
         # and x all do). Silence is what made it look broken.
         self.notify(
-            "D removes a task, an interaction or a contact — tab into one of those rows",
+            "D removes a task, an interaction, a contact, a market seat or "
+            "an unplaced layer — tab into one of those rows",
             severity="warning",
         )
 
@@ -1874,9 +1925,23 @@ class AccountScreen(Screen):
         elif tab == "tab-placements":
             key = self._selected_key("placements-table")
             if key:
+                placement = placements.get(conn, key)
+                # e on a carriers-table row corrects THAT SEAT; anywhere else
+                # on the tab it edits the placement, as before
+                seat = self._seat_under_cursor()
+                if seat is not None and seat[1] is not None:
+                    self._edit_seat(placement, seat[0], seat[1])
+                    return
+                if seat is not None:
+                    self.notify(
+                        "an unplaced layer has no seat to correct — l edits "
+                        "the layer, D removes it",
+                        severity="warning",
+                    )
+                    return
                 from ..widgets import entity_actions
 
-                entity_actions.edit_placement(self, placements.get(conn, key))
+                entity_actions.edit_placement(self, placement)
         elif tab == "tab-pipeline":
             focused = self.focused
             if focused is not None and focused.id == "pipeline-subjs":
@@ -2221,6 +2286,170 @@ class AccountScreen(Screen):
             return None
         return placement
 
+    def _seat_under_cursor(self) -> tuple[str, str | None] | None:
+        """The carriers-table row under the cursor as (layer_id, carrier);
+        carrier None for a placeholder row; None when the table lacks focus."""
+        table = self.query_one("#carriers-table", ListTable)
+        if self.focused is not table or not table.row_count or table.cursor_row is None:
+            return None
+        key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+        return self._carrier_seats.get(str(key)) if key else None
+
+    def _edit_seat(self, placement, layer_id: str, carrier: str) -> None:
+        """Correct one seat IN PLACE — carrier name or share — the write the
+        web has had since phase 1 and the TUI could not make at all: a wrong
+        share typed here could only be fixed in the browser."""
+        from ... import sync
+        from ...forms.spec import BatchSpec, Field, FormSpec
+        from ...repo import vocab
+        from ..widgets.forms import FormModal
+
+        conn = self.app.conn
+        layer = next(
+            (ly for ly in sync.layer_details(conn, placement.id)
+             if str(ly["id"]) == layer_id),
+            None,
+        )
+        seat = next(
+            (pt for pt in (layer["participants"] if layer else [])
+             if pt["carrier"] == carrier),
+            None,
+        )
+        if layer is None or seat is None:
+            self.notify("that seat moved — refreshing", severity="warning")
+            self.refresh_data()
+            return
+        # PERCENT -> BPS for the pre-fill: the share Field kind formats BPS,
+        # and the seat dict carries share_pct. Handing it the percent is the
+        # 100x pre-fill bug the web's market editor shipped with (phase 1).
+        current_bps = int(round(seat["share_pct"] * 100))
+        spec = FormSpec(
+            f"correct {carrier} on {layer['name']}",
+            [
+                Field(
+                    "carrier", "market", required=True,
+                    suggestions=tuple(vocab.market_names(conn)),
+                ),
+                Field("share", "share", "share", required=True),
+            ],
+            initial={"carrier": carrier, "share": current_bps},
+        )
+
+        def commit(values: dict) -> str | None:
+            changes: dict = {}
+            if values["carrier"] != carrier:
+                changes["new_carrier"] = values["carrier"]
+            if values["share"] != current_bps:
+                changes["share_bps"] = values["share"]
+            if not changes:
+                return None
+            diags = sync.update_participant(
+                conn, placement.id, layer_id, carrier, **changes
+            )
+            return f"refused: {diags.errors[0]}" if not diags.ok else None
+
+        def done(values: dict | None) -> None:
+            if values is None:
+                return
+            self.notify(f"corrected {carrier} on {layer['name']}")
+            self.refresh_data()
+
+        self.app.push_screen(
+            FormModal(
+                spec, commit=commit,
+                batch=BatchSpec(
+                    "program_layer_edit",
+                    f"corrected {carrier} on {layer['name']}",
+                    org_id=placement.org_id,
+                ),
+            ),
+            done,
+        )
+
+    def _confirm_remove_seat(self, placement, layer_id: str, carrier: str) -> None:
+        from ... import sync
+        from ..widgets import entity_actions
+
+        conn = self.app.conn
+        layer = next(
+            (ly for ly in sync.layer_details(conn, placement.id)
+             if str(ly["id"]) == layer_id),
+            None,
+        )
+        if layer is None:
+            self.refresh_data()
+            return
+
+        def confirmed(answer: bool | None) -> None:
+            if not answer:
+                return
+            try:
+                with entity_actions.batched_write(
+                    self, tool="program_layer_edit",
+                    summary=f"took {carrier} off {layer['name']}",
+                    org_id=placement.org_id,
+                ):
+                    diags = sync.remove_participant(
+                        conn, placement.id, layer_id, carrier
+                    )
+                    if not diags.ok:
+                        # raising rolls the batch row back with the write
+                        raise ValueError(f"refused: {diags.errors[0]}")
+            except ValueError as exc:
+                self.notify(str(exc), severity="error")
+                return
+            self.notify(f"took {carrier} off {layer['name']} — the layer stays")
+            self.refresh_data()
+
+        self.app.push_screen(
+            ConfirmProgramRemoval(
+                "TAKE MARKET OFF LAYER",
+                f"take {carrier} off {layer['name']}? the layer stays, unplaced",
+            ),
+            confirmed,
+        )
+
+    def _confirm_remove_layer(self, placement, layer_id: str) -> None:
+        from ... import sync
+        from ..widgets import entity_actions
+
+        conn = self.app.conn
+        layer = next(
+            (ly for ly in sync.layer_details(conn, placement.id)
+             if str(ly["id"]) == layer_id),
+            None,
+        )
+        if layer is None:
+            self.refresh_data()
+            return
+        seats = [pt["carrier"] for pt in layer["participants"]]
+        blast = f"{', '.join(seats)} come off with it" if seats else "nobody is on it"
+
+        def confirmed(answer: bool | None) -> None:
+            if not answer:
+                return
+            try:
+                with entity_actions.batched_write(
+                    self, tool="program_layer_remove",
+                    summary=f"removed layer {layer['name']}",
+                    org_id=placement.org_id,
+                ):
+                    diags = sync.remove_layer(conn, placement.id, layer_id)
+                    if not diags.ok:
+                        raise ValueError(f"refused: {diags.errors[0]}")
+            except ValueError as exc:
+                self.notify(str(exc), severity="error")
+                return
+            self.notify(f"removed {layer['name']}")
+            self.refresh_data()
+
+        self.app.push_screen(
+            ConfirmProgramRemoval(
+                "REMOVE LAYER", f"remove {layer['name']}? {blast} (D2)"
+            ),
+            confirmed,
+        )
+
     def action_edit_layer(self) -> None:
         from ..widgets import entity_actions
 
@@ -2241,7 +2470,7 @@ class AccountScreen(Screen):
 
     def action_add_layer(self) -> None:
         from ... import sync
-        from ...forms.spec import FormSpec
+        from ...forms.spec import BatchSpec, FormSpec
         from ..widgets.forms import FormModal
 
         placement = self._selected_linked_placement()
@@ -2288,7 +2517,18 @@ class AccountScreen(Screen):
             self.notify(f"added {values['name']} (to be placed)")
             self.refresh_data()
 
-        self.app.push_screen(FormModal(spec, commit=commit), done)
+        # program_ tool, explicitly: this write lands in the towerkit file,
+        # and the title-derived default would let `u` revert the projection
+        # rows under it (see entity_actions.edit_placement's note).
+        self.app.push_screen(
+            FormModal(
+                spec, commit=commit,
+                batch=BatchSpec(
+                    "program_layer_add", "added a layer", org_id=placement.org_id
+                ),
+            ),
+            done,
+        )
 
     def action_open_towerkit(self) -> None:
         """Suspend bookkit, open the linked file in towerkit's editor, and
@@ -2355,7 +2595,7 @@ class AccountScreen(Screen):
     def _offer_bind_to_layer(self, submission_id: str) -> None:
         """A market bound: offer to put them on a layer at their share."""
         from ... import sync
-        from ...forms.spec import FormSpec
+        from ...forms.spec import BatchSpec, FormSpec
         from ...money import MoneyParseError, parse_share_bps
         from ..widgets.forms import FormModal
         from ..widgets.picker import Picker
@@ -2405,7 +2645,17 @@ class AccountScreen(Screen):
                 )
                 self.refresh_data()
 
-            self.app.push_screen(FormModal(spec, commit=commit), done)
+            self.app.push_screen(
+                FormModal(
+                    spec, commit=commit,
+                    batch=BatchSpec(
+                        "program_bind",
+                        f"{market.name} on {layer['name']}",
+                        org_id=placement.org_id,
+                    ),
+                ),
+                done,
+            )
 
         options = [
             (

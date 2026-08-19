@@ -20,5 +20,8 @@
     <span class="detail-label">policy effective</span>{{ from_cell | safe }}
     <span class="detail-label">policy expiry</span>{{ to_cell | safe }}
     <button type="button" class="row-action-btn" data-row-close>close</button>
+    <button type="button" class="row-action-btn row-action-danger"
+            hx-get="{{ remove_url }}"
+            hx-target="closest tr" hx-swap="outerHTML">remove layer</button>
   </td>
 </tr>

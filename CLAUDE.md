@@ -181,3 +181,9 @@
 - Grant reviews long-form work as published artifacts, not terminal
   scrollback — an audit or a multi-phase build gets a report artifact and,
   for ongoing work, a build log kept updated at the same URL.
+- UI WORK SHOWS ITSELF (Grant, 2026-08-19): when a phase changes what a
+  screen looks like, update the artifact with SCREENSHOTS of the running UI
+  (seeded demo data, embedded as data: URIs) and numbered feedback areas
+  (S1-1, S1-2, …) beside each shot, so Grant can paste the labels back with
+  comments. Screenshots land at each phase's end at minimum, mid-phase when
+  a call is being made that a picture would change.

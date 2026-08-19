@@ -81,10 +81,8 @@ def push_form(
 def edit_placement(screen: Screen, placement: Placement) -> None:
     """Dual-owner edit for linked placements (name/dates write through the
     towerkit file), plain form for unlinked ones."""
-    from ... import sync
     from ...forms import entities as ef
-    from ...forms.spec import Field, FormSpec
-    from ...repo import placements
+    from ...forms.spec import BatchSpec, Field, FormSpec
     from .forms import FormModal
 
     conn = _app(screen).conn
@@ -119,23 +117,21 @@ def edit_placement(screen: Screen, placement: Placement) -> None:
     )
 
     def commit(values: dict) -> str | None:
-        file_changes = {
-            key: values[key]
-            for key in ("program_name", "period_from", "period_to")
-            if values.get(key) is not None
-            and values[key] != getattr(placement, key)
-        }
-        if file_changes:
-            diags = sync.update_program(conn, placement.id, **file_changes)
-            if not diags.ok:
-                return f"refused: {diags.errors[0]}"
-        book_changes = {
-            key: values[key]
-            for key in ("status", "commission_bps")
-            if values.get(key) is not None and values[key] != getattr(placement, key)
-        }
-        if book_changes:
-            placements.update(conn, placement.id, **book_changes)
+        # The dual-owner split lives in services/placement_edit (F12: it was
+        # in-lined here, unreachable from the web, and the two surfaces would
+        # have drifted). FormModal's derived batch wraps this commit, which
+        # is what satisfies apply's inside-a-batch guard and keeps a mixed
+        # edit one undo unit.
+        from ...services import placement_edit
+
+        try:
+            placement_edit.apply(
+                conn, placement,
+                {key: values.get(key)
+                 for key in placement_edit.FILE_OWNED + placement_edit.BOOK_OWNED},
+            )
+        except ValueError as exc:
+            return str(exc)
         return None
 
     def done(values: dict | None) -> None:
@@ -144,7 +140,22 @@ def edit_placement(screen: Screen, placement: Placement) -> None:
         screen.notify(f"updated {placement.ref}")
         _refresh(screen)
 
-    _app(screen).push_screen(FormModal(spec, commit=commit), done)
+    # EXPLICIT program_ tool, never the title-derived default: this commit
+    # writes the towerkit FILE, and services.batches.revert string-matches
+    # batch.tool.startswith("program_") to refuse the row-only revert that
+    # would otherwise roll back program_name/source_sha256 on the placement
+    # row while the file kept the change — a silent cache/file split whose
+    # next symptom is a false "file changed on disk" conflict (fresh-eyes
+    # review, phase 2, 2026-08-19).
+    _app(screen).push_screen(
+        FormModal(
+            spec, commit=commit,
+            batch=BatchSpec(
+                "program_edit", f"edited {placement.ref}", org_id=placement.org_id
+            ),
+        ),
+        done,
+    )
 
 
 def renew_placement(screen: Screen, placement: Placement) -> None:
@@ -171,7 +182,7 @@ def edit_layer(screen: Screen, placement: Placement, layer_id: str | None = None
     """Edit one layer of a linked placement through write-through. With no
     layer_id: straight to the form when there's one layer, else the picker."""
     from ... import sync
-    from ...forms.spec import Field, FormSpec
+    from ...forms.spec import BatchSpec, Field, FormSpec
     from ...money import format_cents_compact
     from .forms import FormModal
     from .picker import Picker
@@ -229,7 +240,20 @@ def edit_layer(screen: Screen, placement: Placement, layer_id: str | None = None
             screen.notify(f"updated {layer['name']}")
             _refresh(screen)
 
-        _app(screen).push_screen(FormModal(spec, commit=commit), done)
+        # program_ tool for the same reason edit_placement passes one: a
+        # title-derived tool lets `u` roll back the projection row under an
+        # untouched file. Same name the web and MCP stamp on this write.
+        _app(screen).push_screen(
+            FormModal(
+                spec, commit=commit,
+                batch=BatchSpec(
+                    "program_layer_edit",
+                    f"edited layer {layer['name']}",
+                    org_id=placement.org_id,
+                ),
+            ),
+            done,
+        )
 
     if layer_id is not None and any(str(ly["id"]) == layer_id for ly in layers):
         picked(layer_id)

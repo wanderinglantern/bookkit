@@ -453,15 +453,18 @@ def test_adding_a_layer_appends_it_pending(app_and_org):
     client, org = app_and_org
     conn = client.app.state.conn
     placement, _ = _first_layer(conn, org)
+    line = _first_line(conn, placement)
     top = max(
         layer["attach_cents"] + layer["limit_cents"]
         for layer in sync.layer_details(conn, placement.id)
+        if line in layer["applies_to"]
     )
 
     added = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
         data={
             "name": "3rd Excess",
+            "line": line,
             "attach_cents": str(top // 100),
             "limit_cents": "5,000,000",
             "premium_cents": "",
@@ -494,6 +497,7 @@ def test_a_layer_that_would_leave_a_gap_is_refused_and_says_so(app_and_org):
         f"/accounts/{org.ref}/program/{placement.id}/layers",
         data={
             "name": "Floating Excess",
+            "line": _first_line(conn, placement),
             "attach_cents": "900,000,000",
             "limit_cents": "5,000,000",
             "premium_cents": "",
@@ -669,6 +673,420 @@ def test_market_remove_asks_first_and_the_get_writes_nothing(app_and_org):
     assert path.read_bytes() == before, "the confirm GET wrote to the file"
 
 
+def _first_line(conn, placement):
+    lines = sync.program_lines(conn, placement.id)
+    assert lines, f"{placement.ref} has no lines"
+    return lines[0][0]
+
+
+def _two_line_placement(client, org, tmp_path):
+    """A linked placement whose program has TWO lines (gl + cy), so the
+    applies-to choice is real."""
+    from datetime import date
+
+    from test_linking_flow import write_program
+    from towerkit.model import Layer, Line, Participant, Period, Program
+    from towerkit.model import Placement as TkPlacement
+
+    conn = client.app.state.conn
+    program = Program(
+        insured=org.name,
+        program="Two Line Program",
+        placement=TkPlacement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[
+            Line(id="gl", name="General Liability", abbr="GL"),
+            Line(id="cy", name="Cyber", abbr="CY"),
+        ],
+        # equal tops on purpose: an "__all__" layer attaching at the shared
+        # top is valid on both lines, so the test refuses only for the
+        # reason under test
+        layers=[
+            Layer(id="primary-gl", name="Primary GL", applies_to=["gl"],
+                  attach=0, limit=2_000_000, premium=900_000,
+                  participants=[Participant(carrier="Zurich", share_bps=10_000)]),
+            Layer(id="primary-cy", name="Primary Cyber", applies_to=["cy"],
+                  attach=0, limit=2_000_000, premium=400_000, participants=[]),
+        ],
+    )
+    path = write_program(tmp_path / "two-line.json", program)
+    assert sync.confirm_link(conn, path, org.id).ok
+    from bookkit.repo import placements as placements_repo
+
+    return placements_repo.by_program_path(conn, str(path))
+
+
+def test_the_layer_add_form_asks_which_lines(app_and_org, tmp_path):
+    """The web used to pass line_ids=[] and towerkit silently defaulted to
+    the FIRST line — same keystroke, different data per surface (F5). The
+    TUI asks; now the web does too."""
+    client, org = app_and_org
+    placement = _two_line_placement(client, org, tmp_path)
+
+    form = client.get(f"/accounts/{org.ref}/program/{placement.id}/layers/new").text
+
+    assert "<select" in form
+    assert "General Liability" in form
+    assert "Cyber" in form
+    assert "all lines" in form
+
+
+def test_an_added_layer_lands_on_the_chosen_line(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "1st Excess Cyber", "line": "cy", "attach_cents": "2,000,000",
+              "limit_cents": "5,000,000", "premium_cents": ""},
+    )
+
+    assert added.status_code == 200
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "1st Excess Cyber"
+    )
+    assert layer["applies_to"] == ["cy"], f"landed on {layer['applies_to']}"
+
+
+def test_all_lines_means_all_lines(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "Umbrella Everything", "line": "__all__",
+              "attach_cents": "2,000,000", "limit_cents": "10,000,000",
+              "premium_cents": ""},
+    )
+
+    assert added.status_code == 200
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "Umbrella Everything"
+    )
+    assert sorted(layer["applies_to"]) == ["cy", "gl"]
+
+
+def test_a_made_up_line_is_refused(app_and_org, tmp_path):
+    client, org = app_and_org
+    placement = _two_line_placement(client, org, tmp_path)
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "Nowhere", "line": "marine", "attach_cents": "0",
+              "limit_cents": "1,000,000", "premium_cents": ""},
+    )
+
+    assert refused.status_code == 200
+    assert "Nowhere" not in [
+        ly["name"] for ly in sync.layer_details(client.app.state.conn, placement.id)
+    ]
+
+
+def test_scaffold_honours_a_typed_destination(app_and_org, tmp_path):
+    """The TUI's `t` lets you change where the file lands; the web confirm
+    showed the path and could not (parity gap, phase 2)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+
+    bare = placements_repo.create(
+        conn, org.id, "Scaffold Here", "2026-04-01", "2027-04-01"
+    )
+    custom = tmp_path / "elsewhere" / "custom-name.json"
+
+    made = client.post(
+        f"/accounts/{org.ref}/program/{bare.id}/scaffold", data={"path": str(custom)}
+    )
+
+    assert made.status_code == 200
+    assert custom.exists(), "the typed destination was ignored"
+    assert placements_repo.get(conn, bare.id).program_path == str(custom)
+
+
+def test_the_scaffold_confirm_offers_the_path_as_an_input(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    _configure_roots(conn, tmp_path)
+    from bookkit.repo import placements as placements_repo
+
+    bare = placements_repo.create(
+        conn, org.id, "Input Check", "2026-04-01", "2027-04-01"
+    )
+
+    confirm = client.get(f"/accounts/{org.ref}/program/{bare.id}/scaffold").text
+
+    assert 'name="path"' in confirm
+
+
+def _submission_url(org, placement):
+    return f"/accounts/{org.ref}/program/{placement.id}/submissions"
+
+
+def test_a_submission_is_sent_from_the_program_section(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import submissions as submissions_repo
+
+    market = orgs_repo.list_orgs(conn, kind="market")[0]
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    assert f'hx-get="{_submission_url(org, placement)}/new"' in page
+
+    form = client.get(f"{_submission_url(org, placement)}/new").text
+    assert "<select" in form and market.name in form
+
+    sent = client.post(
+        _submission_url(org, placement),
+        data={"market_org_id": market.id, "underwriter_contact_id": "",
+              "sent_on": "2026-08-19", "notes": ""},
+    )
+
+    # 204 + HX-Redirect, the same shape the revert POST uses: htmx follows
+    # the header; there is no body to swap
+    assert sent.status_code == 204
+    subs = [
+        sub for sub in submissions_repo.for_placement(conn, placement.id)
+        if sub.market_org_id == market.id
+    ]
+    assert subs, "no submission landed on the placement"
+    # success redirects to where the submission is VISIBLE — the pipeline tab
+    assert sent.headers.get("HX-Redirect", "").endswith(f"/accounts/{org.ref}/pipeline")
+
+
+def test_a_refused_submission_keeps_the_typed_notes(app_and_org):
+    client, org = app_and_org
+    placement = _linked(client.app.state.conn, org)[0]
+
+    refused = client.post(
+        _submission_url(org, placement),
+        data={"market_org_id": "", "underwriter_contact_id": "",
+              "sent_on": "2026-08-19", "notes": "half-typed context"},
+    ).text
+
+    assert "half-typed context" in refused
+    assert "required" in refused
+
+
+def _renew_url(org, placement):
+    return f"/accounts/{org.ref}/program/{placement.id}/renew"
+
+
+def test_renew_asks_first_and_names_the_consequences(app_and_org):
+    """The confirm writes nothing and says what renew DOES: next period
+    dates, and for a linked placement the towerkit file cloned and linked at
+    birth. (The account header's Renew button stayed unrendered under D4
+    because it names no target; this control is placement-scoped.)"""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    from bookkit.repo import placements as placements_repo
+
+    count_before = len(placements_repo.for_org(conn, org.id))
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    assert f'hx-get="{_renew_url(org, placement)}"' in page, "no renew control"
+
+    confirm = client.get(_renew_url(org, placement))
+
+    assert confirm.status_code == 200
+    assert "cloned" in confirm.text or "clone" in confirm.text
+    assert len(placements_repo.for_org(conn, org.id)) == count_before, (
+        "the confirm GET created something"
+    )
+
+
+def test_renew_rolls_the_placement_and_clones_the_file(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    from bookkit.repo import placements as placements_repo
+
+    before_ids = {p.id for p in placements_repo.for_org(conn, org.id)}
+
+    renewed = client.post(_renew_url(org, placement))
+
+    assert renewed.status_code == 200
+    new = [p for p in placements_repo.for_org(conn, org.id) if p.id not in before_ids]
+    assert len(new) == 1, "renew created no placement"
+    assert new[0].period_from > placement.period_from
+    assert new[0].program_path, "the renewal was not linked to a cloned file"
+    assert Path(new[0].program_path).exists()
+    assert 'id="programs-panel"' in renewed.text, "the new program is not shown"
+
+
+def test_a_refused_renew_keeps_the_panel(app_and_org):
+    """Renewing twice collides on the cloned file name; the second attempt
+    must refuse with the panel intact and the message in its error slot."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+
+    assert client.post(_renew_url(org, placement)).status_code == 200
+    refused = client.post(_renew_url(org, placement))
+
+    assert refused.status_code == 200
+    assert 'id="programs-panel"' in refused.text
+    assert "already exists" in refused.text
+
+
+def _layer_remove_url(org, placement, layer_id):
+    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/remove"
+
+
+def test_layer_remove_asks_first_naming_the_seats(app_and_org):
+    """D2. The confirm writes nothing and names the markets going with the
+    layer — the blast radius is the fact a person needs before answering."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    details = client.get(_details_url(org, placement, layer["id"])).text
+    assert f'hx-get="{_layer_remove_url(org, placement, layer["id"])}"' in details
+
+    confirm = client.get(_layer_remove_url(org, placement, layer["id"]))
+
+    assert confirm.status_code == 200
+    assert layer["name"] in confirm.text
+    assert seat["carrier"] in confirm.text, "the confirm hides the seats going with it"
+    assert path.read_bytes() == before, "the confirm GET wrote to the file"
+
+
+def test_a_removed_layer_is_gone_seats_and_all(app_and_org):
+    """A seated EXCESS layer: removing a line's only layer is refused by
+    towerkit (line-empty), so the doomed layer must not be a lone primary."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    doomed = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["participants"] and ly["attach_cents"] > 0
+    )
+
+    removed = client.post(_layer_remove_url(org, placement, doomed["id"]))
+
+    assert removed.status_code == 200
+    fresh = sync.layer_details(conn, placement.id)
+    assert doomed["id"] not in [ly["id"] for ly in fresh]
+    assert 'id="programs-panel"' in removed.text or 'hx-swap-oob' in removed.text
+
+
+def test_a_refused_layer_removal_answers_in_place(app_and_org, tmp_path):
+    """Removing a middle layer strands the one above; towerkit refuses and
+    the refusal must land where the question was asked, file untouched."""
+    client, org = app_and_org
+    placement = _two_line_placement(client, org, tmp_path)
+    for name, attach in (("1st Excess", "2,000,000"), ("2nd Excess", "7,000,000")):
+        added = client.post(
+            f"/accounts/{org.ref}/program/{placement.id}/layers",
+            data={"name": name, "line": "gl", "attach_cents": attach,
+                  "limit_cents": "5,000,000", "premium_cents": ""},
+        )
+        assert added.status_code == 200
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(_layer_remove_url(org, placement, "1st-excess"))
+
+    assert refused.status_code == 200
+    assert path.read_bytes() == before
+    assert "gap" in refused.text.lower()
+
+
+def _placement_cell(org, placement, key):
+    return f"/accounts/{org.ref}/program/{placement.id}/cell/{key}"
+
+
+def test_placement_header_facts_are_cells(app_and_org):
+    """Name, period, status and commission were static text beside editable
+    layer cells (the web could not edit a placement's own facts at all —
+    parity gap, phase 2)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    for key in ("program_name", "period_from", "period_to", "status", "commission_bps"):
+        assert f'data-cell-action="{_placement_cell(org, placement, key)}"' in page, key
+
+
+def test_a_placement_name_saves_through_the_file(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    path = Path(placement.program_path)
+
+    saved = client.post(
+        _placement_cell(org, placement, "program_name"),
+        data={"program_name": "Renamed From The Header"},
+    )
+
+    assert saved.status_code == 200
+    assert "Renamed From The Header" in path.read_text()
+    from bookkit.repo import placements as placements_repo
+
+    assert (
+        placements_repo.get(conn, placement.id).program_name
+        == "Renamed From The Header"
+    )
+    assert 'hx-swap-oob="true"' in saved.text, "no panel refresh with the cell"
+
+
+def test_a_placement_status_saves_to_the_row_only(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    path = Path(placement.program_path)
+    sha_before = sync.file_sha256(path)
+    new_status = "quoted" if placement.status != "quoted" else "submitted"
+
+    saved = client.post(
+        _placement_cell(org, placement, "status"), data={"status": new_status}
+    )
+
+    assert saved.status_code == 200
+    from bookkit.repo import placements as placements_repo
+
+    assert placements_repo.get(conn, placement.id).status == new_status
+    assert sync.file_sha256(path) == sha_before, "a book-owned edit wrote the file"
+
+
+def test_a_refused_placement_date_keeps_the_editor_and_the_file(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        _placement_cell(org, placement, "period_to"), data={"period_to": "1999-01-01"}
+    )
+
+    assert refused.status_code == 200
+    assert path.read_bytes() == before
+    assert "cell-editing" in refused.text, "the refusal did not keep the editor open"
+    assert 'value="1999-01-01"' in refused.text
+
+
+def test_the_status_editor_is_a_select_of_the_real_statuses(app_and_org):
+    client, org = app_and_org
+    placement = _linked(client.app.state.conn, org)[0]
+
+    editor = client.get(_placement_cell(org, placement, "status") + "/edit").text
+
+    assert "<select" in editor
+    for status in ("prospective", "submitted", "quoted", "bound", "lapsed"):
+        assert status in editor
+
+
 def _details_url(org, placement, layer_id):
     return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/details"
 
@@ -798,6 +1216,7 @@ def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
         f"/accounts/{org.ref}/program/{placement.id}/layers",
         data={
             "name": "Floating Excess",
+            "line": _first_line(conn, placement),
             "attach_cents": "900,000,000",
             "limit_cents": "5,000,000",
             "premium_cents": "",
@@ -831,7 +1250,8 @@ def test_a_blank_attachment_is_refused_in_the_broker_s_language(app_and_org):
 
     refused = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
-        data={"name": "No Money", "attach_cents": "", "limit_cents": "", "premium_cents": ""},
+        data={"name": "No Money", "line": _first_line(client.app.state.conn, placement),
+              "attach_cents": "", "limit_cents": "", "premium_cents": ""},
     )
 
     assert "attaches at is required" in refused.text
