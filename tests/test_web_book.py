@@ -28,7 +28,7 @@ from bookkit.web.app import create_app
 @pytest.fixture
 def app_and_conn(snapshot_db: Path):
     app = create_app(snapshot_db)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         yield client, app.state.conn
 
 
@@ -96,7 +96,7 @@ def test_the_premium_column_is_the_account_total_not_one_placement(db_path: Path
     conn.close()
 
     app = create_app(db_path)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         response = client.get("/book")
 
     assert response.status_code == 200

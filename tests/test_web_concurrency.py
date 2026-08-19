@@ -44,7 +44,7 @@ WORKERS = 6
 @pytest.fixture
 def app_and_refs(snapshot_db: Path):
     app = create_app(snapshot_db)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         refs = [o.ref for o in orgs.list_orgs(app.state.conn, kind="client")]
         assert len(refs) >= 2, "the seed must supply several accounts to hammer"
         yield app, client, refs
@@ -208,7 +208,7 @@ def test_a_slow_writer_delays_a_save_it_does_not_refuse_it(
     """
     monkeypatch.setattr(db, "BUSY_TIMEOUT_MS", 250)
     app = create_app(snapshot_db)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         conn = app.state.conn
         org = orgs.list_orgs(conn, kind="client")[0]
         people = contacts_repo.for_org(conn, org.id)

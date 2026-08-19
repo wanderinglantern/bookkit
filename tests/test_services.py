@@ -993,8 +993,11 @@ def test_the_scope_line_appears_exactly_once_across_the_whole_workbook(
     conn, tmp_path
 ):
     """Once per export, not once per sheet. Sheet 1 is the only sheet always
-    present, so a line there is a line on every export — and the only sheet
-    carrying tasks, which is what the sentence is about."""
+    present, so a line there is a line on every export. The sentence covers
+    the whole workbook (it says "this report", and every sheet it covers obeys
+    the rule — see test_no_sheet_contradicts_the_scope_note), which is why it
+    is stated once rather than repeated per sheet where two copies could
+    drift."""
     from openpyxl import load_workbook
 
     from bookkit.services.export_open_items import write
@@ -1018,6 +1021,68 @@ def test_the_scope_line_appears_exactly_once_across_the_whole_workbook(
         if c.value == SCOPE_NOTE
     ]
     assert hits == [("Open Items — Four Co", "A2")], hits
+
+
+def test_no_sheet_contradicts_the_scope_note(conn, tmp_path):
+    """THE reviewer's finding, at the level a client reads it. Sheet 1 says
+    "Internal administrative items are not included" and says it about "this
+    report"; sheet 2 shipped an item categorised Internal under a heading
+    naming it. A scope note that is false about the document containing it is
+    worse than either half alone — a reader who checks is told the wrong thing
+    by the document itself. Fixed by extending the rule to sheet 2, not by
+    narrowing the sentence to sheet 1."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Contradiction Co", kind="client")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "audited financials", category="Financials")
+    rfi.add_item(conn, req.id, "pull prior loss runs from our file",
+                 category="Internal")
+
+    wb = load_workbook(write(conn, org.id, tmp_path / "c.xlsx", date(2026, 8, 18)))
+    values = [
+        str(c.value)
+        for name in wb.sheetnames
+        for row in wb[name].iter_rows()
+        for c in row
+        if c.value is not None
+    ]
+
+    assert SCOPE_NOTE in values  # the claim is made
+    assert "audited financials" in values  # the sheet is really there
+    # …and nothing anywhere in the workbook contradicts it
+    assert not any("nternal" in v for v in values if v != SCOPE_NOTE)
+    assert "pull prior loss runs from our file" not in values
+    assert "our own file note" not in values
+
+
+def test_the_operator_line_names_what_sheet_2_withheld(conn, tmp_path):
+    """The other side of extending the rule: a withheld row that nothing
+    announces is the silent deletion the whole design warns against. The
+    client's file still says nothing — this line is ours."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import withheld_note, write
+
+    org = orgs.create(conn, name="Announce Co", kind="client")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "audited financials", category="Financials")
+    rfi.add_item(conn, req.id, "reserve note", category="Internal")
+
+    note = withheld_note(conn, org.id)
+    assert "1 internal request item withheld" in note
+
+    wb = load_workbook(write(conn, org.id, tmp_path / "a.xlsx", date(2026, 8, 18)))
+    values = [
+        str(c.value) for name in wb.sheetnames
+        for row in wb[name].iter_rows() for c in row if c.value is not None
+    ]
+    assert not any("withheld" in v for v in values)
 
 
 def test_the_scope_line_does_not_replace_the_operators_near_miss_line(

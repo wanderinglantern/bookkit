@@ -766,7 +766,7 @@ def test_the_web_pipeline_tab_reads_the_expiry_in_words(
     submissions.add_subjectivity(conn, soon.id, "loss runs through 8/1")
     conn.close()
 
-    with TestClient(create_app(path)) as client:
+    with TestClient(create_app(path), base_url="http://127.0.0.1") as client:
         page = client.get(f"/accounts/{org.ref}/pipeline")
     assert page.status_code == 200
     body = page.text
@@ -1121,7 +1121,7 @@ def test_the_web_tab_tells_an_empty_pipeline_how_a_quote_gets_recorded(
     org = orgs.get(conn, client_id)
     conn.close()
 
-    with TestClient(create_app(path)) as client:
+    with TestClient(create_app(path), base_url="http://127.0.0.1") as client:
         body = client.get(f"/accounts/{org.ref}/pipeline").text
     assert "no quotes in hand" in body
     assert "market-response form" in body

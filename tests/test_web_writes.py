@@ -30,7 +30,7 @@ def app_and_org(snapshot_db: Path):
     from bookkit.repo import orgs
 
     org = orgs.list_orgs(app.state.conn, kind="client")[0]
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         yield client, org
 
 

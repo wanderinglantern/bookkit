@@ -14,7 +14,7 @@ from bookkit.web.app import create_app
 @pytest.fixture
 def client(snapshot_db: Path):
     app = create_app(snapshot_db)
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="http://127.0.0.1") as test_client:
         yield test_client
 
 
@@ -31,7 +31,7 @@ def test_the_connection_closes_on_shutdown(snapshot_db: Path):
     import sqlite3
 
     app = create_app(snapshot_db)
-    with TestClient(app):
+    with TestClient(app, base_url="http://127.0.0.1"):
         app.state.conn.execute("SELECT 1")  # open during the app's life
     with pytest.raises(sqlite3.ProgrammingError):
         app.state.conn.execute("SELECT 1")  # closed after it
@@ -364,3 +364,198 @@ def test_woff2_is_typed_without_the_system_mime_files():
         mimetypes.knownfiles = original
         mimetypes.init()
         app_module._register_font_types()  # init() dropped it; put it back
+
+
+# --- the origin control, beside the network one -------------------------------
+#
+# serve.py binds loopback and the test above pins it. That is a NETWORK
+# control, and the browser is already on the loopback, so it was standing where
+# an origin control belongs: a reviewer drove a cross-origin POST that created
+# a contact and then reverted a real edit — and services.batches.revert writes
+# its restoration WITHOUT a batch_id, so that one cannot be undone. A forged
+# `Host: evil.example` served /book in full. bookkit.web.origin says what the
+# two checks are and what was rejected instead of them (no CSRF token flow).
+
+_EVIL = {"Origin": "https://evil.example", "Referer": "https://evil.example/x"}
+
+
+@pytest.fixture
+def writable(snapshot_db: Path):
+    """A client fixture that also hands back an account to write to."""
+    from bookkit.repo import orgs as orgs_repo
+
+    app = create_app(snapshot_db)
+    org = orgs_repo.list_orgs(app.state.conn, kind="client")[0]
+    with TestClient(app, base_url="http://127.0.0.1") as test_client:
+        yield test_client, org
+
+
+def test_a_cross_origin_write_is_refused_and_writes_nothing(writable):
+    """The reviewer's reproduction: a POST from another site's page."""
+    from bookkit.repo import contacts as contacts_repo
+
+    client, org = writable
+    conn = client.app.state.conn
+    before = len(contacts_repo.for_org(conn, org.id))
+
+    response = client.post(
+        f"/accounts/{org.ref}/contacts/new",
+        data={"first_name": "Mallory", "last_name": "Forged"},
+        headers=_EVIL,
+    )
+
+    assert response.status_code == 403
+    assert len(contacts_repo.for_org(conn, org.id)) == before
+
+
+def test_a_cross_origin_revert_is_refused(writable):
+    """The one that matters most: a revert restores a field with no batch_id
+    of its own, so nothing on either surface can take it back."""
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.services import batches as batches_svc
+
+    client, org = writable
+    conn = client.app.state.conn
+    victim = contacts_repo.for_org(conn, org.id)[0]
+    with batches_svc.open_batch(
+        conn, source="tui", tool="edit_contact",
+        summary=f"set title on {victim.name}", org_id=org.id,
+    ):
+        contacts_repo.update(conn, victim.id, title="Treasurer")
+    batch = batches_repo.recent(conn, since="", limit=1)[0]
+
+    response = client.post(
+        f"/accounts/{org.ref}/changes/{batch.ref}/revert", headers=_EVIL
+    )
+
+    assert response.status_code == 403
+    assert contacts_repo.get(conn, victim.id).title == "Treasurer"
+
+
+def test_a_forged_host_is_refused_even_on_a_read(writable):
+    """The Host check is what makes the loopback binding mean what it says: a
+    DNS-rebinding page resolves its own name to 127.0.0.1 and is then
+    same-origin, so no request header is out of place — only the NAME is."""
+    client, org = writable
+
+    response = client.get("/book", headers={"Host": "evil.example"})
+
+    assert response.status_code == 400
+    assert org.name not in response.text
+
+
+def test_a_same_origin_write_still_goes_through(writable):
+    """The guard has to let the app work: this is what the real page sends."""
+    from bookkit.repo import contacts as contacts_repo
+
+    client, org = writable
+    conn = client.app.state.conn
+    before = len(contacts_repo.for_org(conn, org.id))
+
+    response = client.post(
+        f"/accounts/{org.ref}/contacts/new",
+        data={"first_name": "Rosa", "last_name": "Legitimate"},
+        headers={"Origin": "http://127.0.0.1", "Referer": "http://127.0.0.1/book"},
+    )
+
+    assert response.status_code == 200
+    assert len(contacts_repo.for_org(conn, org.id)) == before + 1
+
+
+def test_another_local_port_is_a_different_origin(writable):
+    """Same host, different port, is not the same origin — and another app on
+    this machine is exactly who else can reach a loopback port."""
+    from bookkit.repo import contacts as contacts_repo
+
+    client, org = writable
+    conn = client.app.state.conn
+    before = len(contacts_repo.for_org(conn, org.id))
+
+    response = client.post(
+        f"/accounts/{org.ref}/contacts/new",
+        data={"first_name": "Mallory", "last_name": "Neighbour"},
+        headers={"Origin": "http://127.0.0.1:9999"},
+    )
+
+    assert response.status_code == 403
+    assert len(contacts_repo.for_org(conn, org.id)) == before
+
+
+def test_a_referer_stands_in_when_origin_is_absent(writable):
+    from bookkit.repo import contacts as contacts_repo
+
+    client, org = writable
+    conn = client.app.state.conn
+    before = len(contacts_repo.for_org(conn, org.id))
+
+    response = client.post(
+        f"/accounts/{org.ref}/contacts/new",
+        data={"first_name": "Mallory", "last_name": "Referred"},
+        headers={"Referer": "https://evil.example/x"},
+    )
+
+    assert response.status_code == 403
+    assert len(contacts_repo.for_org(conn, org.id)) == before
+
+
+def test_a_request_with_neither_header_is_allowed(writable):
+    """Deliberate, and the reason every other test in this file still works
+    unchanged: browsers send Origin on every non-GET, so a request carrying
+    neither header is a script at this machine's own keyboard — the party the
+    loopback binding already trusts. Refusing it breaks local scripting to
+    protect against nothing a browser can do."""
+    from bookkit.repo import contacts as contacts_repo
+
+    client, org = writable
+    conn = client.app.state.conn
+    before = len(contacts_repo.for_org(conn, org.id))
+
+    response = client.post(
+        f"/accounts/{org.ref}/contacts/new",
+        data={"first_name": "Rosa", "last_name": "Scripted"},
+    )
+
+    assert response.status_code == 200
+    assert len(contacts_repo.for_org(conn, org.id)) == before + 1
+
+
+def test_a_cross_origin_read_is_left_to_the_host_check(writable):
+    """GETs are not gated on Origin: they write nothing, and a cross-origin
+    page cannot READ the response without CORS headers this app never sends.
+    Gating them would break a plain link into the app from anywhere."""
+    client, org = writable
+
+    response = client.get(f"/accounts/{org.ref}/work", headers=_EVIL)
+
+    assert response.status_code == 200
+
+
+def test_the_binding_and_the_allowlist_cannot_drift(writable):
+    """The network control and the origin control name the same host, by
+    construction — whatever serve.py binds is a name this server answers to."""
+    from bookkit.web import origin, serve
+
+    assert serve.HOST in origin.LOOPBACK_HOSTS
+
+
+@pytest.mark.parametrize(
+    "authority,loopback",
+    [
+        ("127.0.0.1", True),
+        ("127.0.0.1:8931", True),
+        ("localhost:8931", True),
+        ("[::1]:8931", True),
+        ("::1", True),
+        ("evil.example", False),
+        ("evil.example:8931", False),
+        ("127.0.0.1.evil.example", False),
+        ("", False),
+    ],
+)
+def test_which_names_this_server_answers_to(authority: str, loopback: bool):
+    """`[::1]:8931` is why the port strip is not a plain rsplit: that turns a
+    bare `::1` into `:`."""
+    from bookkit.web.origin import is_loopback
+
+    assert is_loopback(authority) is loopback

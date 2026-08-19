@@ -19,6 +19,7 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from . import origin
 from . import theme_css as theme_css_mod
 
 HERE = Path(__file__).resolve().parent
@@ -165,6 +166,11 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
             connections.close_all()
 
     app = FastAPI(title="bookkit", docs_url=None, redoc_url=None, lifespan=lifespan)
+    # Before any route, and before the static mount: serve.py binds loopback,
+    # but the browser is ALREADY on the loopback, so the binding is a network
+    # control standing where an origin control belongs. web/origin.py says what
+    # the two checks are and what was rejected instead of them.
+    app.add_middleware(origin.OriginGuard)
     # app.state.conn is the connection belonging to whichever thread called
     # create_app — the test process's own, never a request's. Routes take
     # theirs from app.state.connections; see ThreadConnections.

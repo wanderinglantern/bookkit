@@ -129,15 +129,67 @@ def date_refusal(text: str) -> str:
     )
 
 
+def checked_option(field: Field, text: str) -> str:
+    """A select's OWN OPTIONS are the authority on what it may store.
+
+    parse_value had no `select` branch, so every surface that posts a form
+    took whatever arrived in the body, whatever the form had offered. Two
+    different things went wrong through the one hole:
+
+    * `rfi_item.status="NOT_A_STATUS"` was storable. Nothing downstream
+      expects a value outside the vocabulary, so an item that is neither
+      outstanding nor received reads as closed and drops off every attention
+      queue in silence.
+    * a request's `placement_id` could name ANOTHER ACCOUNT's placement.
+      routes/account.py `_owned` checks the url's two claims — this account,
+      and this row of it — for all eighteen route families that carry an
+      entity id, but the url is only half the request. An id in the BODY was
+      never checked by anything, so ACC-0003's placement landed on an
+      ACC-0001 request and rendered on ACC-0001's Work tab.
+
+    ONE CHECK COVERS BOTH, and that is not a coincidence. A vocabulary
+    (`open`/`closed`) is a fixed set; a picker of this account's placements
+    is a QUERY — but both arrive as `Field(kind="select", options=…)`, and
+    both forms are REBUILT SERVER-SIDE on the POST from the same arguments
+    that built them for the GET (routes/work.py rebuilds `request_form(…,
+    org_id=org.id)` before parsing). So `options` on the way in is the
+    account's own list, freshly queried, and membership in it IS the account
+    scope check — there is nothing to compare a scoped select against except
+    the scoped query, and nothing else would be correct if there were. It
+    also refuses a value that has gone stale since the page rendered (a
+    merged market, a soft-deleted placement), which is right: the record it
+    named is gone.
+
+    The TUI cannot trip this — a Textual Select emits one of its own options
+    or Select.NULL — which is the point. The guard belongs where the field is
+    declared, not on the surface that happens to be forgeable today.
+
+    Only the MESSAGE distinguishes the two kinds, and the option pairs say
+    which is which without a new flag: a vocabulary is built as
+    `(s, s)` so label == value and naming the offered set helps, while a
+    picker is built as `(f"{p.ref} — {p.program_name}", p.id)` so the values
+    are opaque ids that would be noise in a refusal and are not ours to
+    print back."""
+    allowed = {value for _, value in field.options}
+    if text in allowed:
+        return text
+    if field.options and all(label == value for label, value in field.options):
+        raise ValueError(f"{text!r} must be one of {sorted(allowed)}")
+    raise ValueError(f"{text!r} is not one of the choices offered")
+
+
 def parse_value(field: Field, raw: str | None) -> Any:
     """One raw widget/form string → the stored representation. Money returns
-    integer cents, dates return ISO strings, everything else is cleaned."""
+    integer cents, dates return ISO strings, a select must name one of its own
+    options, everything else is cleaned."""
     text = (raw or "").strip()
     if field.kind == "textarea":
         # verbatim, but a whitespace-only note is still nothing
         return (raw or "") if (raw or "").strip() else None
     if not text:
         return None
+    if field.kind == "select":
+        return checked_option(field, text)
     if field.kind == "date":
         parsed = parse_human_date(text)
         if parsed is None:

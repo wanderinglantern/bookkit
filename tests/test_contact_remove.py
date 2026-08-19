@@ -253,7 +253,7 @@ async def test_D_on_the_contacts_tab_can_be_declined(snapshot_db: Path) -> None:
 def web(snapshot_db: Path):
     app = create_app(snapshot_db)
     org = orgs_repo.list_orgs(app.state.conn, kind="client")[0]
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         yield client, org
 
 
