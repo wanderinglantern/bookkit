@@ -179,6 +179,66 @@ def test_fts_search_grouped(conn) -> None:
     assert search.search(conn, "atom")
 
 
+def test_a_contact_hit_says_which_org_the_person_belongs_to(conn) -> None:
+    """Five people called Chen render as five identical rows, and the list is
+    unusable the moment two of them share a surname. The org is the one thing
+    that tells them apart, and it was never composed into the hit."""
+    atomic = make_client(conn)
+    borealis = make_client(conn, "Borealis Foods Group")
+    contacts.create(
+        conn, atomic.id, first_name="Sarah", last_name="Chen", title="CFO"
+    )
+    contacts.create(
+        conn, borealis.id, first_name="David", last_name="Chen", title="Controller"
+    )
+    titles = [hit.title for hit in search.search(conn, "chen") if hit.kind == "contact"]
+    assert len(titles) == 2
+    assert any("Atomic Industries, Inc." in title for title in titles), titles
+    assert any("Borealis Foods Group" in title for title in titles), titles
+    # the person still leads — the org identifies, it does not replace
+    assert all(title.startswith(("Sarah Chen", "David Chen")) for title in titles), titles
+
+
+def test_a_contact_is_findable_by_email(conn) -> None:
+    """Typing the address you have in front of you found nothing at all: the
+    contact index carries first/last/title/notes and not email."""
+    org = make_client(conn, "Harborview Utilities")
+    contacts.create(
+        conn, org.id, first_name="Priya", last_name="Raman",
+        email="p.raman@harborview.example",
+    )
+    whole = search.search(conn, "p.raman@harborview.example")
+    assert [hit.kind for hit in whole] == ["contact"], whole
+    # the local part alone, and the domain alone — an address is not one word
+    assert [hit.kind for hit in search.search(conn, "p.raman")] == ["contact"]
+    assert [hit.kind for hit in search.search(conn, "harborview.example")] == ["contact"]
+    # and the matched address is on the row, so the reason it matched is visible
+    assert "p.raman@harborview.example" in whole[0].snippet
+
+
+def test_an_email_hit_is_not_a_second_copy_of_a_name_hit(conn) -> None:
+    """The email pass is a fallback, not a union: a contact whose name AND
+    email both match must appear once."""
+    org = make_client(conn, "Ironwood Timber")
+    contacts.create(
+        conn, org.id, first_name="Nadia", last_name="Ironwood",
+        email="nadia@ironwood.example",
+    )
+    hits = [hit for hit in search.search(conn, "ironwood") if hit.kind == "contact"]
+    assert len(hits) == 1, hits
+
+
+def test_a_removed_contact_stays_out_of_the_email_index(conn) -> None:
+    """The FTS pass filters deleted_at; the email pass has to as well, or a
+    removed person comes back through the other door."""
+    org = make_client(conn, "Quartz Financial")
+    gone = contacts.create(
+        conn, org.id, first_name="Tom", last_name="Quill", email="tom@quartz.example"
+    )
+    base.soft_delete(conn, "contact", gone.id)
+    assert search.search(conn, "tom@quartz.example") == []
+
+
 def test_fts_updates_on_edit(conn) -> None:
     org = make_client(conn)
     orgs.update(conn, org.id, name="Molecular Industries")
