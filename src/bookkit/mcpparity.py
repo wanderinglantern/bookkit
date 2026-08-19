@@ -53,7 +53,10 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         ("edit_field", "enrich_field"),
         "edit_field is compare-and-set over the derived field set "
         "(mcpsurface); enrich_field is the same set, fill-blanks-only. "
-        "org.kind is denied — see mcpsurface.DENIED.",
+        "org.kind is denied — see mcpsurface.DENIED. `name` became writable "
+        "with the derivation and arrived with no duplicate guard, which let "
+        "a rename point _resolve_client at the wrong account; repo/orgs."
+        "guard_name owns that now, so the TUI and the web inherit it too.",
     ),
     # --- contact ---
     ("contact", "create"): (
@@ -72,7 +75,10 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
     ("contact", "update"): (
         ("edit_field", "enrich_field"),
         "first/last name, title, role, email, phone, mobile, linkedin and "
-        "notes. `role` and both names are new with the derivation.",
+        "notes. `role` is the one field the derivation newly made EDITABLE — "
+        "the hand-written table already carried both names. What the names "
+        "newly became is ENRICHABLE, which is nearly moot: they are required "
+        "columns, so fill-blanks-only refuses them in practice.",
     ),
     ("contact", "delete"): (
         ("contact_remove",),
@@ -83,9 +89,12 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
     # --- interaction ---
     ("interaction", "create"): (
         ("log_activity",),
-        "GAP NAMED IN THE AUDIT: it takes neither `type` nor `occurred_on`, "
-        "so the assistant cannot record yesterday's call, and cannot correct "
-        "one afterwards (see interaction/update).",
+        "takes `type` (call|meeting|email|note|site_visit|event) and "
+        "`occurred_on` as a human date, so yesterday's call is recordable — "
+        "the audit's gap, closed 2026-08-18. What is still missing is "
+        "CORRECTING one: there is no interaction kind in edit_field, so the "
+        "only route is activity_delete and log it again (see "
+        "interaction/update).",
     ),
     ("interaction", "read"): (
         ("recent_activity",),
@@ -110,8 +119,15 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
     ),
     ("task", "update"): (
         ("edit_field", "task_complete", "task_reopen"),
-        "status and completed_at move together and belong to the two verbs; "
-        "everything else is a field edit, priority included.",
+        "status and completed_at move together and belong to the two verbs. "
+        "`priority` is a field edit and now actually writes: the form's "
+        "select options are strings and the column is an int, so every write "
+        "was refused with 'holds 2, not what you expected (\'2\')' until "
+        "mcpsurface.IntChoices reconciled the two (2026-08-18). ASSIGNEE IS "
+        "THE REAL GAP: `assignee` is one typed string that becomes three "
+        "columns, repo/assignees.py owns them, and no MCP tool takes it — a "
+        "task can be assigned in the TUI and on the web and not here. That "
+        "needs an assign verb, not a field edit (mcpsurface.NOT_A_COLUMN).",
     ),
     # --- placement ---
     ("placement", "read"): (
@@ -414,11 +430,13 @@ NON_ENTITY_TOOLS: dict[str, str] = {
         "declarations edit_field enforces."
     ),
     "list_batches": (
-        "recent undo units. NB the docstring says 'changes THIS server made' "
-        "and repo/batches.recent applies no source filter, so it returns TUI "
-        "and web batches too — the tool is MORE capable than advertised, "
-        "which is why a model will not reach for it to answer 'what changed "
-        "on this account this week'."
+        "recent undo units, each with the ref revert_batch takes. It returns "
+        "every batched write whatever made it — this assistant, the TUI or "
+        "the web — and its description now says so, having previously "
+        "claimed 'changes THIS server made' while repo/batches.recent "
+        "applied no source filter (fixed 2026-08-18, with `days` and "
+        "`client` added), so a model would not reach for it to answer 'what "
+        "changed on this account this week'."
     ),
     "revert_batch": (
         "all-or-nothing revert, refusing when a field changed since and "

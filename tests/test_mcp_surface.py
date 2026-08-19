@@ -97,14 +97,22 @@ def test_every_editable_field_is_a_real_column(surface_db):
         assert not unreal, f"{kind} advertises non-columns: {sorted(unreal)}"
 
 
-def test_the_market_profile_fields_are_form_fields_that_are_not_columns(surface_db):
-    """NOT_A_COLUMN is documentary, so it has to be checked or it rots."""
-    on_the_form = {f.key for f in entities.org_form().fields}
-    columns = _columns(surface_db, "org")
+def test_every_not_a_column_entry_is_a_form_field_and_not_a_column(surface_db):
+    """NOT_A_COLUMN is documentary, so it has to be checked or it rots. Was
+    hardcoded to org (market_type / am_best_rating) and had to be widened
+    when task.assignee joined it — the roster is per (kind, field), not a
+    list of org's oddities."""
     for (kind, field), reason in mcpsurface.NOT_A_COLUMN.items():
-        assert kind == "org" and field in on_the_form
-        assert field not in columns, f"{field} IS an org column now — delete the entry"
-        assert reason.strip()
+        assert kind in mcpsurface.BUILDERS, f"{kind} is not an editable kind"
+        on_the_form = {f.key for f in mcpsurface.BUILDERS[kind]().fields}
+        assert field in on_the_form, (
+            f"{kind}.{field} is documented as a non-column but no form "
+            "declares it — delete the entry"
+        )
+        assert field not in _columns(surface_db, kind), (
+            f"{kind}.{field} IS a column now — delete the entry"
+        )
+        assert len(reason) > 40, f"{kind}.{field} has no real reason"
 
 
 # --- the denylist itself ------------------------------------------------------
@@ -433,3 +441,422 @@ def test_mcpserver_keeps_no_second_field_table():
     assert "def _editable()" not in source, "the hand-written field table is back"
     assert '_ENRICHABLE_ORG = {' not in source
     assert '_ENRICHABLE_CONTACT = {' not in source
+
+
+# =============================================================================
+# The three defects the derivation shipped with, and the assertions that stop
+# each from coming back. Everything below was reproduced before it was fixed.
+# =============================================================================
+
+
+# --- CRITICAL 1: a rename could point the resolver at the wrong account -------
+
+
+def test_renaming_an_account_onto_a_name_in_use_is_refused(surface_db):
+    """THE REVIEWER'S REPRODUCTION. Rename Acme to "Henderson Group" while a
+    real Henderson Group exists and `_resolve_client("Henderson Group")` came
+    back with ACC-0001 — the renamed Acme — so every later client-scoped tool
+    landed on the wrong account. Verbatim the failure CLAUDE.md records for
+    two colleagues sharing a name."""
+    from bookkit.repo import orgs
+
+    rw = db.connect(surface_db)
+    acme = orgs.create(rw, name="Acme", kind="client")
+    henderson = orgs.create(rw, name="Henderson Group", kind="client")
+
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "org", "Acme", "name", "Henderson Group", expecting="Acme"
+        )
+    assert "already holds that name" in str(err.value)
+
+    # nothing was written, and the resolver still finds the RIGHT account
+    assert orgs.get(rw, acme.id).name == "Acme"
+    assert mcpserver._resolve_client(rw, "Henderson Group").id == henderson.id
+    rw.close()
+
+
+def test_the_rename_guard_is_case_insensitive(surface_db):
+    """The resolver's fallbacks are not case-sensitive to a human reading a
+    list, so neither is the guard."""
+    from bookkit.repo import orgs
+
+    rw = db.connect(surface_db)
+    orgs.create(rw, name="Acme", kind="client")
+    orgs.create(rw, name="Henderson Group", kind="client")
+    with pytest.raises(ValueError, match="already holds that name"):
+        mcpserver._edit_field(
+            rw, "org", "Acme", "name", "henderson group", expecting="Acme"
+        )
+    rw.close()
+
+
+def test_the_guard_lives_in_the_repo_so_the_tui_and_web_inherit_it(surface_db):
+    """WHERE THE GUARD LIVES IS THE POINT. Both other surfaces rename through
+    forms.entities.apply_org -> orgs.update, never through mcpserver, so a
+    guard in _edit_field would have left the same hole open on the terminal
+    and the web. This is repo/team._guard_name's story one table over."""
+    from bookkit.forms import entities
+    from bookkit.repo import orgs
+
+    rw = db.connect(surface_db)
+    acme = orgs.create(rw, name="Acme", kind="client")
+    orgs.create(rw, name="Henderson Group", kind="client")
+
+    with pytest.raises(ValueError, match="already holds that name"):
+        entities.apply_org(
+            rw, {"name": "Henderson Group", "kind": "client"}, existing=acme
+        )
+    with pytest.raises(ValueError, match="already holds that name"):
+        orgs.update(rw, acme.id, name="Henderson Group")
+    rw.close()
+
+
+def test_an_account_can_still_be_renamed_to_a_free_name(surface_db):
+    """The guard refuses a collision, not a rename — renaming an account is
+    one of the two writes the derivation exists to allow."""
+    from bookkit.repo import orgs
+
+    rw = db.connect(surface_db)
+    acme = orgs.create(rw, name="Acme", kind="client")
+    mcpserver._edit_field(
+        rw, "org", "Acme", "name", "Acme Industries", expecting="Acme"
+    )
+    assert orgs.get(rw, acme.id).name == "Acme Industries"
+    # and renaming a row to the name it already holds is not a collision
+    orgs.update(rw, acme.id, name="Acme Industries", owner="Dana")
+    rw.close()
+
+
+def test_creating_a_duplicate_name_is_still_allowed(surface_db):
+    """DELIBERATE ASYMMETRY, asserted so it is not read as a hole. Duplicate
+    orgs arrive from the spreadsheet importer, sync's carrier auto-create and
+    seed; the cure there is services.merge, not an exception half-way through
+    an import. The MCP create door has its own rapidfuzz guard, where a human
+    is on the other end. What is guarded is taking a name AWAY from the row
+    that answers to it."""
+    from bookkit.repo import orgs
+
+    rw = db.connect(surface_db)
+    orgs.create(rw, name="AXA XL", kind="market")
+    orgs.create(rw, name="Axa XL", kind="market")  # merge_markets exists for this
+    rw.close()
+
+
+# --- CRITICAL 2: a form's value type must fit the model's column -------------
+
+
+def test_every_editable_value_type_survives_the_trip_to_its_column():
+    """THE SYSTEMIC ASSERTION. task.priority shipped as a select of strings
+    over an int column: _edit_field compared the stored int 2 against the
+    cleaned str '2' and refused every write with
+
+        task.priority holds 2, not what you expected ('2')
+
+    two values identical to a reader, so a model retries forever. The
+    derivation never checked that a form's value type was compatible with the
+    model's column type. It does now — and when the next mismatch appears
+    this fails by NAME, before anyone tries to write the field."""
+    bad = []
+    for kind, fields in mcpsurface.editable().items():
+        for field, vtype in fields.items():
+            produced = mcpsurface.produced_type(vtype)
+            stored = mcpsurface.column_type(kind, field)
+            if produced is not stored:
+                bad.append(f"{kind}.{field}: cleans to {produced.__name__}, "
+                           f"column stores {stored.__name__} (vtype={vtype!r})")
+    assert not bad, (
+        "the write surface advertises a value type its own column will not "
+        "take — compare-and-set will refuse every write with two values a "
+        "reader cannot tell apart:\n  " + "\n  ".join(bad)
+    )
+
+
+def test_a_select_over_an_int_column_is_reconciled_not_just_priority(monkeypatch):
+    """The fix is on the derivation, not on one field. Any select whose column
+    is an int becomes IntChoices and cleans to an int."""
+    real = entities.opportunity_form
+
+    def with_an_int_select(*args, **kwargs):
+        spec = real(*args, **kwargs)
+        # probability_pct is a real int column that no select declares today
+        spec.fields.append(
+            Field("probability_pct", "probability", "select",
+                  (("25", "25"), ("50", "50"), ("75", "75")))
+        )
+        return spec
+
+    monkeypatch.setitem(mcpsurface.BUILDERS, "opportunity", with_an_int_select)
+    vtype = mcpsurface.editable()["opportunity"]["probability_pct"]
+    assert isinstance(vtype, mcpsurface.IntChoices)
+    assert mcpserver._clean_typed(vtype, "probability_pct", "50") == 50
+
+
+def test_task_priority_is_writable_at_all(surface_db):
+    """THE REVIEWER'S REPRODUCTION. expecting=None was refused as not-blank
+    and every legal expecting was refused as a mismatch, so the field was
+    unreachable in both directions."""
+    from bookkit.repo import orgs
+    from bookkit.repo import tasks as tasks_repo
+
+    rw = db.connect(surface_db)
+    orgs.create(rw, name="Acme", kind="client")
+    created = mcpserver._task_create(rw, "Chase the cert", client="Acme")
+    out = mcpserver._edit_field(
+        rw, "task", created["task_ref"], "priority", "1", expecting="2"
+    )
+    assert out["edited"] is True
+    stored = tasks_repo.get(rw, created["task_ref"]).priority
+    assert stored == 1 and isinstance(stored, int)
+    rw.close()
+
+
+def test_priority_still_refuses_a_value_outside_its_vocabulary(surface_db):
+    """The int coercion must not become a bare int(): the select is still a
+    closed vocabulary, so `9` and `banana` are both refused."""
+    from bookkit.repo import orgs
+
+    rw = db.connect(surface_db)
+    orgs.create(rw, name="Acme", kind="client")
+    created = mcpserver._task_create(rw, "Chase the cert", client="Acme")
+    for junk in ("9", "banana", "2.0"):
+        with pytest.raises(ValueError, match="must be one of"):
+            mcpserver._edit_field(
+                rw, "task", created["task_ref"], "priority", junk, expecting="2"
+            )
+    rw.close()
+
+
+def test_priority_is_still_described_as_a_select_of_the_same_values():
+    """The reconciliation is invisible to a model: it still passes a string
+    from the list describe prints."""
+    described = mcpsurface.describe("task")["kinds"]["task"]["fields"]
+    assert described["priority"] == {"type": "select", "values": ["1", "2", "3"]}
+
+
+# --- CRITICAL 3: one owner for the value rules -------------------------------
+
+
+def test_describe_says_money_is_entered_in_dollars():
+    """describe said "Money is cents" while edit_field's docstring said
+    dollars, and describe is the one a model is told to call FIRST — so a
+    model wanting a $5,000,000 limit passed 500000000 and wrote
+    $500,000,000."""
+    note = mcpsurface.describe()["note"]
+    assert "DOLLARS" in note
+    assert "is cents" not in note
+    # the parser is what the sentence has to be true ABOUT
+    from bookkit.money import parse_money_cents
+
+    assert parse_money_cents("500000") == 50_000_000  # $500,000, in cents
+    assert parse_money_cents("2m") == 200_000_000
+
+
+def test_edit_field_and_describe_cannot_disagree_about_a_value_again(tmp_path):
+    """ONE SOURCE OWNS IT. edit_field is registered with
+    mcpsurface.VALUE_RULES interpolated into its description, and describe
+    serves the same string as its note — so there is no second copy to rot."""
+    server = mcpserver.build_server(tmp_path / "rules.db")
+    tools = {tool.name: (tool.description or "") for tool in
+             server._tool_manager.list_tools()}
+    assert mcpsurface.VALUE_RULES in tools["edit_field"]
+    assert mcpsurface.describe()["note"] == mcpsurface.VALUE_RULES
+    assert "money as dollars, dates as displayed" not in tools["edit_field"], (
+        "the hand-written money clause is back beside the interpolated one"
+    )
+
+
+# --- IMPORTANT 4: the fall-through set, and the move-together columns --------
+
+
+def test_no_form_field_falls_through_the_derivation_undocumented():
+    """A form field that is not a column of its entity is dropped with a bare
+    `continue`. NOT_A_COLUMN documents that case; nothing asserted it was
+    COMPLETE, and exactly one field fell through undocumented — task.assignee,
+    so a task could be assigned in the TUI and on the web but not through MCP,
+    with no denylist line, no ledger cell and no describe output saying so."""
+    stray = mcpsurface.unexplained_non_columns()
+    assert not stray, (
+        f"form fields MCP silently cannot write: {stray} — a capability the "
+        "other two surfaces have and this one does not is a decision. Put "
+        "each in mcpsurface.NOT_A_COLUMN with the reason, and say in "
+        "mcpparity which verb would close it."
+    )
+
+
+def test_the_assignee_is_documented_rather_than_silently_dropped():
+    assert ("task", "assignee") in mcpsurface.NOT_A_COLUMN
+    reason = mcpsurface.denial_reason("task", "assignee")
+    assert "repo/assignees" in reason and "three" in reason.lower()
+    assert "assignee" not in mcpsurface.editable()["task"]
+
+
+def test_describe_says_why_a_field_it_does_not_list_is_missing():
+    """The third place that said nothing. A model reading describe("task")
+    saw no `assignee` and no reason, while both other surfaces offer it —
+    so the answer has to be where it looks, not only in the source."""
+    denied = mcpsurface.describe("task")["denied_fields"]
+    assert "task.assignee" in denied
+    assert "repo/assignees" in denied["task.assignee"]
+    assert "org.am_best_rating" in mcpsurface.describe("org")["denied_fields"]
+    # and every field on a form that MCP will not write is answered for
+    for kind, builder in mcpsurface.BUILDERS.items():
+        answered = mcpsurface.describe(kind)["denied_fields"]
+        surface = mcpsurface.editable()[kind]
+        for field in builder().fields:
+            if field.key in surface:
+                continue
+            assert f"{kind}.{field.key}" in answered or field.key.endswith("_id"), (
+                f"{kind}.{field.key} is on a form, is not writable, and "
+                "describe gives no reason"
+            )
+
+
+def test_the_assignee_triple_is_denied_by_name_not_by_accident(monkeypatch):
+    """models.Task: "never set them field by field, or a stale id can outlive
+    a kind and the pair stops meaning anything". Only assignee_id was denied,
+    and only because it happens to end in `_id`; a single
+    Field("assignee_name", ...) on any form would have made the other two
+    writable and produced exactly that corruption."""
+    for column in ("assignee_kind", "assignee_id", "assignee_name"):
+        reason = mcpsurface.denial_reason("task", column)
+        assert reason is not None, f"task.{column} is not denied"
+        assert "three" in reason.lower(), (
+            f"task.{column} is denied for the wrong reason — it moves with "
+            "the other two, and a caller told the foreign-key story will go "
+            "looking for an unassign/assign pair that does not exist"
+        )
+
+    real = entities.task_form
+
+    def with_the_name_column(*args, **kwargs):
+        spec = real(*args, **kwargs)
+        spec.fields.append(Field("assignee_name", "assignee name", "text"))
+        spec.fields.append(Field("assignee_kind", "assignee kind", "text"))
+        return spec
+
+    monkeypatch.setitem(mcpsurface.BUILDERS, "task", with_the_name_column)
+    surface = mcpsurface.editable()["task"]
+    assert "assignee_name" not in surface and "assignee_kind" not in surface
+
+
+# --- IMPORTANT 5: a refusal names a retry that works -------------------------
+
+
+def test_a_mismatch_refusal_names_an_expecting_that_would_be_accepted(surface_db):
+    """org.status is the surface's only enum-typed column and it became
+    reachable with the derivation. `{current!r}` printed
+    <OrgStatus.PROSPECT: 'prospect'>, and a model following that literally
+    passed the repr and was refused again by the vocabulary check — a refusal
+    that names a way to succeed which does not succeed."""
+    from bookkit.repo import orgs
+
+    rw = db.connect(surface_db)
+    orgs.create(rw, name="Acme", kind="client")
+
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(rw, "org", "Acme", "status", "lost", expecting="active")
+    message = str(err.value)
+    assert "OrgStatus" not in message, f"the refusal leaks an enum repr: {message}"
+    assert "'prospect'" in message
+
+    # and the value it named is one the tool actually accepts
+    mcpserver._edit_field(rw, "org", "Acme", "status", "lost", expecting="prospect")
+    assert orgs.find_by_name(rw, "Acme").status == "lost"
+    rw.close()
+
+
+def test_the_not_blank_refusal_and_enrich_both_name_a_usable_value(surface_db):
+    from bookkit.repo import orgs
+
+    rw = db.connect(surface_db)
+    orgs.create(rw, name="Acme", kind="client")
+
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(rw, "org", "Acme", "status", "lost", expecting=None)
+    assert "OrgStatus" not in str(err.value)
+
+    with pytest.raises(ValueError) as err:
+        mcpserver._enrich_field(rw, "Acme", "status", "lost")
+    assert "OrgStatus" not in str(err.value)
+    assert "expecting='prospect'" in str(err.value)
+    rw.close()
+
+
+def test_a_money_refusal_names_the_amount_in_the_form_it_takes_back(surface_db):
+    """Same rule, the money column: the refusal used to print raw cents
+    (50000000) as the `expecting` to pass, and passing that writes a hundred
+    times the amount."""
+    from bookkit.repo import orgs
+
+    rw = db.connect(surface_db)
+    orgs.create(rw, name="Acme", kind="client")
+    created = mcpserver._opportunity_create(rw, "Acme", "Acme cyber")
+    ref = created["opportunity_ref"]
+    mcpserver._edit_field(rw, "opportunity", ref, "target_premium", "5m",
+                          expecting=None)
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(rw, "opportunity", ref, "target_premium", "6m",
+                              expecting="1")
+    assert "'$5,000,000'" in str(err.value)
+    # the amount it named round-trips
+    mcpserver._edit_field(rw, "opportunity", ref, "target_premium", "6m",
+                          expecting="$5,000,000")
+    rw.close()
+
+
+# --- IMPORTANT 6: prose that describes the surface as it was -----------------
+
+
+def test_no_tool_description_reprints_the_derived_field_table():
+    """test_mcpserver_keeps_no_second_field_table forbids a second table in
+    CODE and permitted an unlimited number in prose. enrich_field's docstring
+    was one: a hand-written copy of the table the refactor deleted, missing
+    five now-enrichable fields and still saying edits "happen in the TUI, not
+    here", which the code's own refusal no longer says."""
+    import re
+
+    surface = mcpsurface.editable()
+    known = {field for fields in surface.values() for field in fields}
+    runs = re.compile(r"\b([a-z_]{3,}(?:\s*,\s*[a-z_]{3,}){2,})\b")
+
+    offenders = []
+    for name in ("edit_field", "enrich_field", "describe"):
+        for run in runs.findall(_tool_prose(name)):
+            items = [word.strip() for word in run.split(",")]
+            named = [item for item in items if item in known]
+            if len(named) >= 3:
+                offenders.append(f"{name}: {named}")
+    assert not offenders, (
+        "a tool description enumerates the derived field set — that is the "
+        "second table again, in prose, and prose is where the first one "
+        f"rotted: {offenders}. Point at `describe` instead."
+    )
+
+
+def _tool_prose(name: str) -> str:
+    """The text a model actually receives for a tool, however it is set."""
+    import tempfile
+    from pathlib import Path as _Path
+
+    server = mcpserver.build_server(_Path(tempfile.mkdtemp()) / "prose.db")
+    for tool in server._tool_manager.list_tools():
+        if tool.name == name:
+            return tool.description or ""
+    raise AssertionError(f"{name} is not registered")
+
+
+def test_enrich_field_no_longer_claims_edits_happen_in_the_tui():
+    prose = _tool_prose("enrich_field")
+    assert "in the TUI, not here" not in prose
+    assert "describe" in prose, "it must name where the field list really is"
+
+
+def test_activity_delete_refuses_by_naming_where_the_ref_comes_from(surface_db):
+    """The fifth bare KeyError, on the path log_activity's docstring names as
+    the ONLY correction route for a mis-logged interaction."""
+    rw = db.connect(surface_db)
+    with pytest.raises(ValueError) as err:
+        mcpserver._activity_delete(rw, "NOPE-1")
+    assert "recent_activity" in str(err.value)
+    rw.close()

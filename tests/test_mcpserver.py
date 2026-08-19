@@ -915,8 +915,13 @@ def test_activity_delete_refuses_an_unknown_ref(server_db):
     orgs.create(conn, name="Acme", kind="client")
     conn.close()
     rw = db.connect(server_db)
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError) as err:
         mcpserver._activity_delete(rw, "not-a-real-id")
+    # and it says where a real ref comes from — this was the fifth bare
+    # KeyError, on the path log_activity names as the ONLY way to correct a
+    # mis-logged interaction, so a raw `interaction <id> not found` left a
+    # model sent here with no next step
+    assert "recent_activity" in str(err.value)
 
 
 def test_activity_delete_refuses_to_delete_twice(server_db):
@@ -927,8 +932,9 @@ def test_activity_delete_refuses_to_delete_twice(server_db):
     rw = db.connect(server_db)
     ref = mcpserver._log_activity(rw, "Acme", "oops")["interaction_ref"]
     mcpserver._activity_delete(rw, ref)
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError) as err:
         mcpserver._activity_delete(rw, ref)
+    assert "recent_activity" in str(err.value)
 
 
 def test_activity_delete_is_registered_as_a_write_tool(server_db):

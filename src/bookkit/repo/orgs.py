@@ -10,6 +10,49 @@ from ..models import Appetite, MarketProfile, Org
 from . import base
 
 
+def guard_name(
+    conn: sqlite3.Connection, name: str, org_id: str | None = None
+) -> None:
+    """Refuse a rename onto a name another live org already holds.
+
+    THIS IS THE `repo/team._guard_name` STORY, ONE TABLE OVER. Every
+    client-scoped MCP tool resolves through `mcpserver._resolve_client`, which
+    falls back to `find_by_name` — a plain `WHERE name = ?` that returns the
+    FIRST match. Rename Acme to "Henderson Group" while a real Henderson Group
+    exists and every later client-scoped call lands on Acme's row instead:
+    the account whose name you typed is now unreachable, and the writes meant
+    for it go somewhere else. That is the failure CLAUDE.md records for two
+    colleagues sharing a name, and it is why the guard belongs HERE rather
+    than in a caller — forms.entities.apply_org (the TUI's edit form and the
+    web's) calls `update` too, so a guard in mcpserver would leave both of
+    those writing straight past it, exactly as the member guard once did.
+
+    NOT case-sensitive, because the resolver's own fallbacks are not: a
+    second "henderson group" is just as ambiguous to a human reading a list.
+
+    NOT ON `create`, deliberately. Duplicate orgs legitimately ARRIVE — the
+    spreadsheet importer, sync's carrier auto-create and seed all mint orgs
+    from data nobody hand-checked — and the cure there is services.merge, not
+    an exception that aborts an import half-way. The MCP create door has its
+    own rapidfuzz guard (mcpserver._client_create) where a human is on the
+    other end to answer it. What is guarded here is the operation that TAKES
+    a name away from the row that answers to it.
+    """
+    row = conn.execute(
+        f"""SELECT id, name FROM org
+             WHERE lower(name) = lower(?) AND id IS NOT ? AND {base.alive()}
+             LIMIT 1""",
+        (name, org_id),
+    ).fetchone()
+    if row is not None:
+        raise ValueError(
+            f"{row['name']} already holds that name — every client-scoped "
+            f"lookup takes the first match, so renaming onto it would send "
+            f"later writes to the wrong account; rename or merge that one "
+            f"first"
+        )
+
+
 def create(conn: sqlite3.Connection, **fields: Any) -> Org:
     fields.setdefault("ref", next_ref(conn, ORG_REF))
     org_id = base.insert(conn, "org", fields)
@@ -70,6 +113,8 @@ def list_orgs(
 
 
 def update(conn: sqlite3.Connection, org_id: str, note: str | None = None, **changes: Any) -> Org:
+    if changes.get("name"):
+        guard_name(conn, str(changes["name"]), org_id)
     base.update(conn, "org", org_id, changes, note)
     return get(conn, org_id)
 
