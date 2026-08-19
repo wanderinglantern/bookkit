@@ -690,3 +690,130 @@ def test_a_layer_edit_refreshes_the_rows_it_moved(app_and_org):
     )
 
     assert 'hx-swap-oob="true"' in saved.text, "no panel refresh came back with the cell"
+
+
+# --- phase 3: creating a program ----------------------------------------------
+
+
+def test_a_new_placement_is_created_from_the_tab(app_and_org):
+    client, org = app_and_org
+    from bookkit.repo import placements
+
+    conn = client.app.state.conn
+    before = {p.id for p in placements.for_org(conn, org.id)}
+
+    created = client.post(
+        f"/accounts/{org.ref}/program/placements",
+        data={
+            "program_name": "2027 Casualty Program",
+            "period_from": "2027-01-01",
+            "period_to": "2028-01-01",
+            "status": "prospective",
+            "total_premium": "",
+            "total_limit": "",
+            "commission_bps": "",
+        },
+    )
+
+    assert created.status_code == 200
+    fresh = [p for p in placements.for_org(conn, org.id) if p.id not in before]
+    assert [p.program_name for p in fresh] == ["2027 Casualty Program"]
+    assert _latest_batch(conn).source == "web"
+
+
+def test_a_placement_with_no_period_is_refused_with_the_form_intact(app_and_org):
+    client, org = app_and_org
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/placements",
+        data={"program_name": "Half Typed", "period_from": "", "period_to": "",
+              "status": "prospective"},
+    )
+
+    assert refused.status_code == 200
+    assert "Half Typed" in refused.text, "the typed name was thrown away"
+    assert "required" in refused.text
+
+
+def test_the_scaffold_confirm_shows_where_the_file_goes_and_writes_nothing(app_and_org, tmp_path):
+    """Creating a file is exactly the kind of thing that gets a plan first."""
+    client, org = app_and_org
+    from bookkit.repo import placements
+
+    conn = client.app.state.conn
+    _configure_roots(conn, tmp_path)
+    bare = placements.create(
+        conn, org.id, "Needs A File", "2026-05-01", "2027-05-01",
+    )
+
+    confirm = client.get(f"/accounts/{org.ref}/program/{bare.id}/scaffold")
+
+    assert confirm.status_code == 200
+    assert ".json" in confirm.text, "the plan does not say where the file goes"
+    assert placements.get(conn, bare.id).program_path is None
+    # the destination NAMED in the plan, not "any json under tmp_path" — the
+    # snapshot_db fixture projects the seeded programs into that same tree, so
+    # the broad glob failed on files this test never touched
+    from bookkit.web.routes.program import _scaffold_destination
+
+    assert not _scaffold_destination(conn, org, bare).exists()
+
+
+def test_scaffolding_writes_the_file_and_links_it(app_and_org, tmp_path):
+    client, org = app_and_org
+    from bookkit.repo import placements
+
+    conn = client.app.state.conn
+    _configure_roots(conn, tmp_path)
+    bare = placements.create(
+        conn, org.id, "Needs A File", "2026-05-01", "2027-05-01",
+    )
+
+    made = client.post(f"/accounts/{org.ref}/program/{bare.id}/scaffold")
+
+    assert made.status_code == 200
+    linked = placements.get(conn, bare.id)
+    assert linked.program_path, "the placement was not linked to its new file"
+    assert Path(linked.program_path).exists()
+    assert sync.layer_details(conn, bare.id), "the scaffold carries no layer"
+
+
+def test_scaffolding_a_placement_that_already_has_a_file_is_refused(app_and_org, tmp_path):
+    """And the refusal NAMES the file, so the answer is actionable rather than
+    'no'."""
+    client, org = app_and_org
+
+    conn = client.app.state.conn
+    _configure_roots(conn, tmp_path)
+    placement, _ = _first_layer(conn, org)
+
+    refused = client.post(f"/accounts/{org.ref}/program/{placement.id}/scaffold")
+
+    assert refused.status_code == 200
+    assert Path(placement.program_path).name in refused.text
+
+
+def test_scaffolding_with_no_program_root_configured_points_at_the_setting(app_and_org):
+    client, org = app_and_org
+    from bookkit.repo import placements, settings
+
+    conn = client.app.state.conn
+    settings.set_program_roots(conn, [])
+    bare = placements.create(
+        conn, org.id, "Needs A File", "2026-05-01", "2027-05-01",
+    )
+
+    refused = client.post(f"/accounts/{org.ref}/program/{bare.id}/scaffold")
+
+    assert refused.status_code == 200
+    assert "program file location" in refused.text
+    assert placements.get(conn, bare.id).program_path is None
+
+
+def _configure_roots(conn, tmp_path):
+    from bookkit.repo import settings
+
+    root = tmp_path / "programs"
+    root.mkdir(exist_ok=True)
+    settings.set_program_roots(conn, [str(root)])
+    return root

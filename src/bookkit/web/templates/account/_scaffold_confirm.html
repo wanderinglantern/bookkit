@@ -1,0 +1,35 @@
+{# The confirm step for scaffolding a towerkit program file (2026-08-19).
+
+   Creating a FILE is the part a person can only check beforehand — where it
+   lands, and under what name. The TUI's `t` asks the same question with the
+   same default path; both come from the same rule so a file scaffolded from
+   either surface ends up in the same place. #}
+<div class="confirm-remove" role="alertdialog"
+     aria-label="Scaffold a program file for {{ placement.ref }}">
+  <p class="confirm-remove-title">
+    Create a program file for <strong>{{ placement.program_name }}</strong>
+    ({{ placement.ref }})?
+  </p>
+  <ul class="confirm-remove-notes">
+    {% if existing %}
+      <li>This placement already has one: <code>{{ existing }}</code>.</li>
+    {% elif destination %}
+      <li>It will be written to <code>{{ destination }}</code>.</li>
+      <li>The insured, program name, period and indicated premium carry over,
+          so nothing is typed twice.</li>
+      <li>It starts with one layer marked "To be placed" — build the tower from
+          there, here or in towerkit.</li>
+    {% else %}
+      <li>No program file location is set yet. Configure the program roots
+          first (<code>,</code> on Today in the terminal app).</li>
+    {% endif %}
+  </ul>
+  <div class="form-actions">
+    {% if destination and not existing %}
+      <button type="button" class="btn-danger"
+              hx-post="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/scaffold"
+              hx-target="#programs-panel" hx-swap="outerHTML">Create the file</button>
+    {% endif %}
+    <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+  </div>
+</div>
