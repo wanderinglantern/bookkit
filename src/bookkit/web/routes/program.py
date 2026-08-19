@@ -588,8 +588,68 @@ def layer_details_row(
             "policy_cell": cell("policy_number"),
             "from_cell": cell("period_from"),
             "to_cell": cell("period_to"),
+            "remove_url": (
+                f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/remove"
+            ),
         },
     )
+
+
+def _layer_remove_confirm(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any],
+    error: str | None = None,
+) -> HTMLResponse:
+    base = f"/accounts/{ref}/program/{placement_id}/layers/{layer['id']}"
+    return TEMPLATES.TemplateResponse(
+        request, "account/_layer_remove_confirm.html",
+        {
+            "layer": layer,
+            "seats": [seat["carrier"] for seat in layer["participants"]],
+            "remove_url": f"{base}/remove",
+            "details_url": f"{base}/details",
+            "error": error,
+        },
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/remove",
+    response_class=HTMLResponse,
+)
+def layer_remove_confirm(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """Confirm-first (D2), naming the seats that go with the layer. Writes
+    nothing."""
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    return _layer_remove_confirm(request, ref, placement_id, layer)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/remove",
+    response_class=HTMLResponse,
+)
+def layer_remove(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """The layer goes, its seats with it — one batched, snapshotted write
+    (sync.remove_layer, D2). A refusal — towerkit will not strand the layer
+    above over a gap — re-renders the confirm in place with the message."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_remove",
+            summary=f"removed layer {layer['name']}",
+            mutate=lambda: sync.remove_layer(conn, placement_id, layer_id),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _layer_remove_confirm(request, ref, placement_id, layer, str(exc))
+    return _panel(request, ref, org, placement_id)
 
 
 @router.get(

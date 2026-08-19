@@ -43,6 +43,7 @@ from rapidfuzz import fuzz, process
 # tests/test_conventions.py::test_sync_delegates_program_structure_to_towerkit.
 from towerkit.edit import add_layer as edit_add_layer
 from towerkit.edit import heal_follows, slugify, unique_id
+from towerkit.edit import remove_layer as edit_remove_layer
 from towerkit.model import SCHEMA_ID, Program, dump_program, load_program
 from towerkit.model import Layer as TkModelLayer
 
@@ -868,6 +869,25 @@ def add_layer(
         layer.attach = attach
         layer.limit = limit
         layer.premium = premium
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def remove_layer(
+    conn: sqlite3.Connection, placement_id: str, layer_id: str
+) -> Diagnostics:
+    """Remove one layer, ITS SEATS WITH IT (D2, 2026-08-19 — before this no
+    bookkit surface could take off a mis-added layer at all).
+
+    towerkit's validator still gates the result: removing a middle layer
+    strands the one above it over a gap, and that refusal — in towerkit's
+    words, with nothing written — is exactly the answer a surface should
+    show. `_find_layer` runs first so an unknown id refuses with the re-sync
+    hint instead of towerkit's KeyError, which _mutate would not catch."""
+
+    def mutate(program: Program) -> None:
+        _find_layer(program, layer_id)
+        edit_remove_layer(program, layer_id)
 
     return _mutate(conn, placement_id, mutate)
 

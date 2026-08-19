@@ -786,6 +786,71 @@ def test_a_made_up_line_is_refused(app_and_org, tmp_path):
     ]
 
 
+def _layer_remove_url(org, placement, layer_id):
+    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/remove"
+
+
+def test_layer_remove_asks_first_naming_the_seats(app_and_org):
+    """D2. The confirm writes nothing and names the markets going with the
+    layer — the blast radius is the fact a person needs before answering."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    details = client.get(_details_url(org, placement, layer["id"])).text
+    assert f'hx-get="{_layer_remove_url(org, placement, layer["id"])}"' in details
+
+    confirm = client.get(_layer_remove_url(org, placement, layer["id"]))
+
+    assert confirm.status_code == 200
+    assert layer["name"] in confirm.text
+    assert seat["carrier"] in confirm.text, "the confirm hides the seats going with it"
+    assert path.read_bytes() == before, "the confirm GET wrote to the file"
+
+
+def test_a_removed_layer_is_gone_seats_and_all(app_and_org):
+    """A seated EXCESS layer: removing a line's only layer is refused by
+    towerkit (line-empty), so the doomed layer must not be a lone primary."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    doomed = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["participants"] and ly["attach_cents"] > 0
+    )
+
+    removed = client.post(_layer_remove_url(org, placement, doomed["id"]))
+
+    assert removed.status_code == 200
+    fresh = sync.layer_details(conn, placement.id)
+    assert doomed["id"] not in [ly["id"] for ly in fresh]
+    assert 'id="programs-panel"' in removed.text or 'hx-swap-oob' in removed.text
+
+
+def test_a_refused_layer_removal_answers_in_place(app_and_org, tmp_path):
+    """Removing a middle layer strands the one above; towerkit refuses and
+    the refusal must land where the question was asked, file untouched."""
+    client, org = app_and_org
+    placement = _two_line_placement(client, org, tmp_path)
+    for name, attach in (("1st Excess", "2,000,000"), ("2nd Excess", "7,000,000")):
+        added = client.post(
+            f"/accounts/{org.ref}/program/{placement.id}/layers",
+            data={"name": name, "line": "gl", "attach_cents": attach,
+                  "limit_cents": "5,000,000", "premium_cents": ""},
+        )
+        assert added.status_code == 200
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(_layer_remove_url(org, placement, "1st-excess"))
+
+    assert refused.status_code == 200
+    assert path.read_bytes() == before
+    assert "gap" in refused.text.lower()
+
+
 def _placement_cell(org, placement, key):
     return f"/accounts/{org.ref}/program/{placement.id}/cell/{key}"
 
