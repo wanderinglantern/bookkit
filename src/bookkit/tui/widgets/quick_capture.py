@@ -1,7 +1,7 @@
-"""Quick capture (n, from anywhere): pick the account, choose type, type the
-note, ctrl-s. Defaults to today and the account you were looking at. Typed
-text survives esc and crashes via the draft table; a follow-up phrase in the
-note OFFERS a task, never silently creates one."""
+"""Quick capture (n, from anywhere): pick the account, choose type, say who
+was there, type the note, ctrl-s. Defaults to today and the account you were
+looking at. Typed text survives esc and crashes via the draft table; a
+follow-up phrase in the note OFFERS a task, never silently creates one."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 import json
 from datetime import date
 
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, utils
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
@@ -24,11 +24,19 @@ from textual.widgets.option_list import Option
 from ...dates import parse_human_date
 from ...models import InteractionType
 from ...normalize import clean_text
-from ...repo import drafts, interactions, orgs
+from ...repo import contacts, drafts, interactions, orgs
 from ...repo import tasks as tasks_repo
+from ...services import batches as batches_svc
 from ...services import capture
 
 DRAFT_KEY = "quick_capture"
+# rapidfuzz WRatio, out of 100, over default_process — which lowercases and
+# strips punctuation. WITHOUT it "rosa" scores 73 against "Rosa Delgado" and
+# 90 with a capital R, so a name typed in a hurry would be refused for its
+# case. "delgado", "Rosa D" and the full name all score >= 85; a name off this
+# account scores 45. High enough that a typo is refused and named rather than
+# resolved into the wrong person's file.
+ATTENDEE_MATCH = 80
 
 
 class QuickCapture(ModalScreen):
@@ -73,6 +81,13 @@ class QuickCapture(ModalScreen):
                 yield Input(value="today", id="qc-date")
                 yield Label("subject", classes="field-label")
                 yield Input(placeholder="what happened", id="qc-subject")
+                yield Label("who was there (optional)", classes="field-label")
+                yield Input(
+                    placeholder="names, comma separated — this account's contacts",
+                    id="qc-who",
+                )
+                # the roster, because you cannot type a name you do not know
+                yield Static(id="qc-who-known", classes="hint")
                 yield Label("note", classes="field-label")
                 yield TextArea(id="qc-note")
             yield Static(
@@ -111,6 +126,58 @@ class QuickCapture(ModalScreen):
             options.add_option(Option(f"{org.name}  [{org.kind}]", id=org.id))
         if scored:
             self.selected_org_id = scored[0][1].id
+        self._refresh_known_contacts()
+
+    def _refresh_known_contacts(self) -> None:
+        """Who `who was there` will match, for the account currently picked."""
+        known = self.query_one("#qc-who-known", Static)
+        roster = self._contacts()
+        known.update(
+            "on this account: " + " · ".join(c.name for c in roster)
+            if roster
+            else "no contacts on this account yet"
+        )
+
+    def _contacts(self) -> list:
+        """Live contacts only. Removing someone takes them off attendee lists
+        while the interaction_contact rows survive for an undelete, so a
+        removed person must not be offerable for a NEW one."""
+        if not self.selected_org_id:
+            return []
+        return contacts.for_org(self.app.conn, self.selected_org_id)
+
+    def _resolve_attendees(self, typed: str) -> tuple[list[str], str | None]:
+        """Names → contact ids, or a sentence saying why not.
+
+        Refuses rather than guesses, twice over: a name that matches nobody is
+        a typo or a person who is not a contact yet, and a name two people
+        answer to would otherwise put the wrong one in the room, in writing,
+        on the client's file. Same rule repo/team.py enforces on member names."""
+        roster = self._contacts()
+        ids: list[str] = []
+        for raw in typed.split(","):
+            name = raw.strip()
+            if not name:
+                continue
+            scored = sorted(
+                (
+                    (fuzz.WRatio(name, c.name, processor=utils.default_process), c)
+                    for c in roster
+                ),
+                key=lambda pair: -pair[0],
+            )
+            best = [(score, c) for score, c in scored if score >= ATTENDEE_MATCH]
+            if not best:
+                return [], (
+                    f"no contact on this account matches {name!r} — "
+                    "add them on the account first, or clear the field"
+                )
+            if len(best) > 1 and best[0][0] == best[1][0]:
+                tied = " and ".join(c.name for _, c in best[:2])
+                return [], f"{name!r} matches {tied} — type more of the name"
+            if best[0][1].id not in ids:
+                ids.append(best[0][1].id)
+        return ids, None
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "qc-org":
@@ -134,6 +201,7 @@ class QuickCapture(ModalScreen):
             "type": self.query_one("#qc-type", Select).value,
             "date": self.query_one("#qc-date", Input).value,
             "subject": self.query_one("#qc-subject", Input).value,
+            "who": self.query_one("#qc-who", Input).value,
             "note": self.query_one("#qc-note", TextArea).text,
         }
 
@@ -158,6 +226,8 @@ class QuickCapture(ModalScreen):
             self.query_one("#qc-date", Input).value = saved["date"]
         if saved.get("subject"):
             self.query_one("#qc-subject", Input).value = saved["subject"]
+        if saved.get("who"):
+            self.query_one("#qc-who", Input).value = saved["who"]
         if saved.get("note"):
             self.query_one("#qc-note", TextArea).text = saved["note"]
         self.notify("draft restored")
@@ -177,16 +247,33 @@ class QuickCapture(ModalScreen):
         if not payload["subject"] and not payload["note"]:
             self.notify("nothing to save", severity="error")
             return
+        attendees, refusal = self._resolve_attendees(payload["who"])
+        if refusal is not None:
+            # commit-in-place: the modal stays open with every field intact.
+            # Dropping the name silently is the bug this field exists to fix;
+            # dropping the whole note would be worse.
+            self.notify(refusal, severity="error")
+            return
         occurred = parse_human_date(payload["date"] or "today") or date.today()
         subject = clean_text(payload["subject"]) or payload["note"].splitlines()[0][:60]
-        interaction = interactions.log(
+        # one writer action, one undo unit: the interaction and its attendee
+        # links land together or not at all
+        with batches_svc.open_batch(
             self.app.conn,
-            payload["org_id"],
-            payload["type"] or "note",
-            subject,
-            occurred.isoformat(),
-            body=payload["note"] or None,
-        )
+            source="tui",
+            tool="log_interaction",
+            summary=f"logged {payload['type'] or 'note'} — {subject}",
+            org_id=payload["org_id"],
+        ):
+            interaction = interactions.log(
+                self.app.conn,
+                payload["org_id"],
+                payload["type"] or "note",
+                subject,
+                occurred.isoformat(),
+                body=payload["note"] or None,
+                contact_ids=attendees,
+            )
         drafts.clear(self.app.conn, DRAFT_KEY)
         self.notify("logged")
         suggestion = capture.suggest_task(f"{payload['subject']} {payload['note']}")
