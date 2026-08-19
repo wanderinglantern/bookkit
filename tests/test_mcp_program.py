@@ -38,6 +38,29 @@ def test_program_layers_reads_ids_for_the_writes(linked):
     assert out["layers"][0]["id"]
 
 
+def test_program_layers_shows_who_is_on_each_layer(linked):
+    """The tool's description says it returns participants; before this it
+    returned none, so an assistant asked "who is on the 2nd excess" would
+    answer from a contract the data did not honour. The description was the
+    honest half — program_summary is the tool that is deliberately slim, and
+    its docstring says so — so the DATA moved."""
+    conn, _, placement, _ = linked
+    mcpserver._program_layer_add(
+        conn, placement.ref, "1st Excess", line_ids=["gl"],
+        attach="2m", limit="10m", premium="300k",
+    )
+    mcpserver._program_bind(conn, placement.ref, "1st-excess", "Chubb", "60%")
+    mcpserver._program_bind(conn, placement.ref, "1st-excess", "AXA XL", "40%")
+
+    layers = {ly["id"]: ly for ly in mcpserver._program_layers(conn, placement.ref)["layers"]}
+    assert [p["carrier"] for p in layers["primary-gl"]["participants"]] == ["Zurich"]
+    assert layers["primary-cy"]["participants"] == []   # 'To be placed', not absent
+    assert layers["1st-excess"]["participants"] == [
+        {"carrier": "Chubb", "share_pct": 60.0, "premium_cents": 180_000_00},
+        {"carrier": "AXA XL", "share_pct": 40.0, "premium_cents": 120_000_00},
+    ]
+
+
 def test_program_layer_add_lands_in_file_and_cache(linked):
     conn, _, placement, path = linked
     out = mcpserver._program_layer_add(

@@ -155,3 +155,81 @@ def test_program_lines_helper(linked) -> None:
     assert sync.program_lines(conn, placement.id) == [
         ("gl", "General Liability"), ("cy", "Cyber"),
     ]
+
+
+# --- the panel a layer is actually placed with -------------------------------
+
+
+def test_layer_details_carries_the_carrier_panel(linked) -> None:
+    """AE review: program_layers' description promised participants and
+    sync.layer_details returned none, so an assistant reading the contract
+    believed it could see who is on the 2nd excess when it could not. The
+    DESCRIPTION was right and the data was thin — program_summary is the tool
+    that is deliberately slim, and says so; this is the tower.
+
+    Three layers on purpose, each a different shape, and every one asserted:
+    a fixture that decorates only the first layer passes a per-layer bug."""
+    conn, _, placement, path = linked
+    assert sync.add_layer(
+        conn, placement.id, "1st Excess", ["gl"],
+        attach_cents=2_000_000_00, limit_cents=10_000_000_00, premium_cents=300_000_00,
+    ).ok
+    assert sync.add_participant(conn, placement.id, "1st-excess", "Chubb", 6000).ok
+    assert sync.add_participant(conn, placement.id, "1st-excess", "AXA XL", 4000).ok
+
+    panels = {d["id"]: d["participants"] for d in sync.layer_details(conn, placement.id)}
+    assert panels["primary-gl"] == [
+        {"carrier": "Zurich", "share_pct": 100.0, "premium_cents": 900_000_00},
+    ]
+    # a layer with no panel is 'To be placed' — an EMPTY list, never absent,
+    # because absent and unplaced are different facts to a reader
+    assert panels["primary-cy"] == []
+    assert panels["1st-excess"] == [
+        {"carrier": "Chubb", "share_pct": 60.0, "premium_cents": 180_000_00},
+        {"carrier": "AXA XL", "share_pct": 40.0, "premium_cents": 120_000_00},
+    ]
+    # the shares add up to the signed figure already on the layer — same units
+    # in the same dict, which is the whole reason share is a percentage here
+    for detail in sync.layer_details(conn, placement.id):
+        assert sum(p["share_pct"] for p in detail["participants"]) == detail["signed_pct"]
+
+
+def test_layer_details_premium_share_is_none_when_the_layer_has_none(linked) -> None:
+    """A share of an unknown premium is unknown, not zero — the same rule the
+    projection already applies (sync.project_file)."""
+    conn, _, placement, _ = linked
+    assert sync.add_layer(
+        conn, placement.id, "2nd Excess", ["gl"],
+        attach_cents=2_000_000_00, limit_cents=5_000_000_00,
+    ).ok
+    assert sync.add_participant(conn, placement.id, "2nd-excess", "Berkley", 10_000).ok
+    detail = next(
+        d for d in sync.layer_details(conn, placement.id) if d["id"] == "2nd-excess"
+    )
+    assert detail["premium_cents"] is None
+    assert detail["participants"] == [
+        {"carrier": "Berkley", "share_pct": 100.0, "premium_cents": None},
+    ]
+
+
+def test_layer_details_still_opens_the_file_once(linked, monkeypatch) -> None:
+    """The panel comes off the program already in memory. layer_details does
+    file I/O per call and the web page was deliberately reduced to ONE call per
+    render; a per-layer load would undo that silently, and three layers is the
+    smallest fixture that can tell one load from several."""
+    conn, _, placement, _ = linked
+    assert sync.add_layer(
+        conn, placement.id, "1st Excess", ["gl"],
+        attach_cents=2_000_000_00, limit_cents=10_000_000_00,
+    ).ok
+    calls = []
+    real = sync.load_program
+
+    def counting(path):
+        calls.append(path)
+        return real(path)
+
+    monkeypatch.setattr(sync, "load_program", counting)
+    details = sync.layer_details(conn, placement.id)
+    assert len(details) == 3
+    assert len(calls) == 1, calls
