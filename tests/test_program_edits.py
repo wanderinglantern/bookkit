@@ -575,3 +575,178 @@ def test_remove_layer_refuses_to_strand_a_gap(linked) -> None:
 
     assert not diags.ok
     assert path.read_bytes() == before
+
+
+# --- phase 3: lines become bookkit-editable (D1) -------------------------------
+
+
+def test_add_line_arrives_with_a_pending_layer(linked) -> None:
+    """towerkit's validator makes an empty line an ERROR (line-empty), so a
+    bare new line could never be written through. add_line therefore creates
+    the line WITH a pending 'To be placed' layer — the same shape scaffold
+    uses — and the whole write is valid in one step."""
+    conn, _, placement, path = linked
+
+    diags = sync.add_line(conn, placement.id, "Marine Cargo")
+
+    assert diags.ok, diags.errors
+    program = load_program(path)
+    line = next(ln for ln in program.lines if ln.name == "Marine Cargo")
+    covering = [ly for ly in program.layers if line.id in ly.applies_to]
+    assert covering, "the new line arrived empty — the validator refuses that"
+    assert covering[0].participants == []
+
+
+def test_rename_line_cascades_applies_to(linked) -> None:
+    conn, _, placement, path = linked
+    program = load_program(path)
+    old_id = program.lines[0].id
+
+    diags = sync.rename_line(conn, placement.id, old_id, "General Casualty")
+
+    assert diags.ok, diags.errors
+    program = load_program(path)
+    line = next(ln for ln in program.lines if ln.name == "General Casualty")
+    assert old_id not in [ln.id for ln in program.lines]
+    for layer in program.layers:
+        assert old_id not in layer.applies_to
+    assert any(line.id in ly.applies_to for ly in program.layers)
+
+
+def test_rename_line_refuses_an_unknown_id(linked) -> None:
+    conn, _, placement, path = linked
+    before = path.read_bytes()
+
+    diags = sync.rename_line(conn, placement.id, "never-was", "Anything")
+
+    assert not diags.ok
+    assert path.read_bytes() == before
+
+
+def test_remove_line_cascades_and_the_validator_still_gates(linked) -> None:
+    """remove_line cascades: the id leaves every appliesTo and anything left
+    empty goes with it. The fixture's cy line has its own primary layer, so
+    removing cy takes that layer along."""
+    conn, _, placement, path = linked
+
+    diags = sync.remove_line(conn, placement.id, "cy")
+
+    assert diags.ok, diags.errors
+    program = load_program(path)
+    assert "cy" not in [ln.id for ln in program.lines]
+    assert all("cy" not in ly.applies_to for ly in program.layers)
+
+
+def test_remove_line_refuses_an_unknown_id(linked) -> None:
+    conn, _, placement, path = linked
+    before = path.read_bytes()
+
+    diags = sync.remove_line(conn, placement.id, "never-was")
+
+    assert not diags.ok
+    assert path.read_bytes() == before
+
+
+def test_set_applies_to_moves_a_layer_between_lines(linked) -> None:
+    """The verb has existed, tested and dead, since the sync layer was built;
+    phase 3 gives it its first caller, so these assertions go load-bearing.
+
+    The move must be geometrically VALID — spanning a primary across a line
+    that already has one is an overlap towerkit refuses (correctly; that
+    refusal has its own test below). A 1st excess on gl narrowing... rather:
+    an excess added across gl at its top, then widened is a gap on cy — so
+    the honest valid move here is narrowing an excess that spans both lines
+    down to one."""
+    conn, _, placement, path = linked
+    # an excess above BOTH primaries needs equal tops; gl tops at 2M and cy
+    # at 5M in this fixture, so raise gl with its own excess first
+    assert sync.add_layer(
+        conn, placement.id, "GL Excess", ["gl"],
+        attach_cents=2_000_000_00, limit_cents=3_000_000_00,
+    ).ok
+    assert sync.add_layer(
+        conn, placement.id, "Umbrella Both", ["gl", "cy"],
+        attach_cents=5_000_000_00, limit_cents=5_000_000_00,
+    ).ok
+
+    diags = sync.set_applies_to(conn, placement.id, "umbrella-both", ["gl"])
+
+    assert diags.ok, diags.errors
+    program = load_program(path)
+    layer = next(ly for ly in program.layers if ly.id == "umbrella-both")
+    assert layer.applies_to == ["gl"]
+
+
+def test_set_applies_to_refuses_a_move_that_overlaps(linked) -> None:
+    """Spanning the gl primary across cy overlaps cy's own primary — the
+    refusal, in towerkit's words with nothing written, is the point."""
+    conn, _, placement, path = linked
+    before = path.read_bytes()
+
+    diags = sync.set_applies_to(conn, placement.id, "primary-gl", ["gl", "cy"])
+
+    assert not diags.ok
+    assert any("OVERLAP" in d.message for d in diags.errors)
+    assert path.read_bytes() == before
+
+
+def test_set_applies_to_refuses_an_empty_set(linked) -> None:
+    conn, _, placement, path = linked
+    before = path.read_bytes()
+
+    diags = sync.set_applies_to(conn, placement.id, "primary-gl", [])
+
+    assert not diags.ok
+    assert path.read_bytes() == before
+
+
+def test_statutory_on_forces_the_limit_to_zero(linked) -> None:
+    """'Fully built but not accessible' (Grant, 2026-08-19): statutory was
+    modelled, projected, rendered and never writable outside towerkit's own
+    editor. On: benefits, no dollar limit — the model's own rule."""
+    conn, _, placement, path = linked
+
+    diags = sync.set_statutory(conn, placement.id, "primary-cy", True)
+
+    assert diags.ok, diags.errors
+    layer = next(ly for ly in load_program(path).layers if ly.id == "primary-cy")
+    assert layer.statutory is True
+    assert layer.limit == 0
+
+
+def test_statutory_off_requires_the_replacing_limit(linked) -> None:
+    conn, _, placement, path = linked
+    assert sync.set_statutory(conn, placement.id, "primary-cy", True).ok
+    before = path.read_bytes()
+
+    refused = sync.set_statutory(conn, placement.id, "primary-cy", False)
+
+    assert not refused.ok
+    assert path.read_bytes() == before
+
+    diags = sync.set_statutory(
+        conn, placement.id, "primary-cy", False, limit_cents=5_000_000_00
+    )
+    assert diags.ok, diags.errors
+    layer = next(ly for ly in load_program(path).layers if ly.id == "primary-cy")
+    assert layer.statutory is False
+    assert layer.limit == 5_000_000
+
+
+def test_follows_underlying_hands_the_attachment_to_the_tower(linked) -> None:
+    conn, _, placement, path = linked
+    assert sync.add_layer(
+        conn, placement.id, "GL Excess", ["gl"],
+        attach_cents=2_000_000_00, limit_cents=3_000_000_00,
+    ).ok
+
+    diags = sync.set_follows_underlying(conn, placement.id, "gl-excess", True)
+
+    assert diags.ok, diags.errors
+    # raise the primary; the excess must follow on the next write's heal
+    assert sync.update_layer(
+        conn, placement.id, "primary-gl", limit_cents=3_000_000_00
+    ).ok
+    layer = next(ly for ly in load_program(path).layers if ly.id == "gl-excess")
+    assert layer.follows_underlying is True
+    assert layer.attach == 3_000_000, "heal_follows did not re-seat the follower"

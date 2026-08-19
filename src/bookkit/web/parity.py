@@ -253,4 +253,100 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "tui": "r on the placements tab (ConfirmRenew)",
         "mcp": "DEFERRED — renewal from an assistant needs its own decision",
     },
+    # --- phase 3: structure (D1) — routes land later in the same branch ---
+    "add_line": {
+        "web": "the lines strip, + line in-row (phase 3 task 2)",
+        "tui": "via o -> towerkit's editor (the terminal's structure surface)",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
+    "rename_line": {
+        "web": "the lines strip, name as an inline cell (phase 3 task 2)",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
+    "remove_line": {
+        "web": "the lines strip, confirm names the cascade (phase 3 task 2)",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
+    "set_statutory": {
+        "web": "the details row's statutory toggle (phase 3 task 3)",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
+    "set_follows_underlying": {
+        "web": "the details row's follows toggle (phase 3 task 3)",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
+}
+
+
+# --- the towerkit-editor capability ledger (Grant, 2026-08-19) -----------------
+#
+# "Fully built but not accessible": statutory handling was modelled, projected
+# and rendered everywhere, and no browser control could change it — because
+# the parity work enumerated BOOKKIT's surfaces and treated towerkit's editor
+# as out of scope behind the TUI's `o`. A daily-driver web UI has no `o`, so
+# the honest parity universe is EVERYTHING THE TERMINAL WORKFLOW CAN REACH,
+# towerkit's editor included. This ledger enumerates towerkit.edit's public
+# operations — introspected at runtime by tests/test_web_parity.py, so an op
+# towerkit GROWS turns the suite red until bookkit covers it or defers it
+# here by name, with a reason. (The current towerkit checkout is the
+# in-flight feat/mcp-hardening branch; its branch-only ops are marked as
+# such and must be re-decided when the branch merges.)
+
+TOWERKIT_EDIT_OPS: dict[str, str] = {
+    # utilities consumed by bookkit's own wrappers — not user capabilities
+    "slugify": "utility — id naming; consumed by sync.add_layer",
+    "unique_id": "utility — id collision rule; consumed by sync.add_layer",
+    "ordinal": "utility — layer auto-naming inside edit.add_layer",
+    "suggested_attach": "utility — default attachment inside edit.add_layer",
+    "heal_follows": "utility — run by sync.write_through on every write",
+    "parse_states": "utility (BRANCH-ONLY) — state-list parsing for set_states",
+    "adopt": "internal — towerkit's line-transfer flow; no bookkit use",
+    # covered — a sync wrapper exists and a surface reaches it
+    "add_line": "sync.add_line (phase 3); see SYNC_VERBS",
+    "rename_line": "sync.rename_line (phase 3); see SYNC_VERBS",
+    "remove_line": "sync.remove_line (phase 3); see SYNC_VERBS",
+    "add_layer": "sync.add_layer; see SYNC_VERBS",
+    "remove_layer": "sync.remove_layer (D2); see SYNC_VERBS",
+    "set_applies_to": "sync.set_applies_to; chips land phase 3 task 3",
+    "set_follows_underlying": "sync.set_follows_underlying (phase 3); see SYNC_VERBS",
+    # deferred BY NAME, with the reason
+    "set_line_group": (
+        "DEFERRED — line grouping is diagram cosmetics (Line.group is not "
+        "even projected, see NOTES.md); joins the Towers page work (phase 4)"
+    ),
+    "move_line": (
+        "DEFERRED — column order in the drawing; joins the Towers page work "
+        "(phase 4) where the drawing is the point"
+    ),
+    "restack": (
+        "DEFERRED — a bulk re-seat of every layer is a wide blast radius for "
+        "one click; needs its own confirm design showing the before/after"
+    ),
+    "add_retention": (
+        "DEFERRED — retentions render in the tower and the SOI; their editor "
+        "is phase 4 (the drawing surface), not a table row"
+    ),
+    "edit_retention": "DEFERRED — with add_retention (phase 4)",
+    "remove_retention": "DEFERRED — with add_retention (phase 4)",
+    "add_sublimit": "DEFERRED — with add_retention (phase 4)",
+    "edit_sublimit": "DEFERRED — with add_retention (phase 4)",
+    "remove_sublimit": "DEFERRED — with add_retention (phase 4)",
+    # branch-only (feat/mcp-hardening): not on towerkit main — do not depend;
+    # re-decide each when the branch merges
+    "set_statutory": (
+        "BRANCH-ONLY in towerkit; bookkit's sync.set_statutory writes the "
+        "field directly (established field-write practice) so the web toggle "
+        "does not depend on the in-flight branch"
+    ),
+    "set_states": "BRANCH-ONLY — SOI prose field; decide when the branch merges",
+    "set_premium_detail": "BRANCH-ONLY — SOI prose field; decide when the branch merges",
+    "add_named_limit": "BRANCH-ONLY — decide when the branch merges",
+    "edit_named_limit": "BRANCH-ONLY — decide when the branch merges",
+    "remove_named_limit": "BRANCH-ONLY — decide when the branch merges",
+    "set_field": "BRANCH-ONLY — the MCP field-write seam; decide when the branch merges",
+    "set_container": "BRANCH-ONLY — the MCP container seam; decide when the branch merges",
 }
