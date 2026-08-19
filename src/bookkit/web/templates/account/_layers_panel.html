@@ -73,7 +73,7 @@
                parser closes the outer one empty and opens a real column for
                the inner one, so every column after it drifts out from under
                its header with no visible error (found 2026-08-18). #}
-            <tr>
+            <tr data-layer-row="{{ layer.id }}">
               {# The chevron opens the layer's long tail (policy no + dates)
                  as a row below — [data-row-expand] in form-host.js makes it
                  a toggle by swallowing the second click before htmx sees

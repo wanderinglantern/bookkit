@@ -873,6 +873,38 @@ def test_a_refused_submission_keeps_the_typed_notes(app_and_org):
     assert "required" in refused
 
 
+def test_every_drawn_layer_lands_on_its_row(app_and_org):
+    """The tower is a SURFACE now (F11): a drawn block carries its layer id
+    and the table row carries the matching anchor, so a click scrolls and
+    flashes the row. Attributes only — every string and rect still comes off
+    the renderer, so the agreement rule is untouched."""
+    import re
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    drawn = set(re.findall(r'data-layer-id="([^"]+)"', page))
+    rows = set(re.findall(r'data-layer-row="([^"]+)"', page))
+    assert drawn, "the tower carries no hit targets"
+    missing = drawn - rows
+    assert not missing, f"drawn layers with no row to land on: {missing}"
+
+
+def test_the_tower_click_handler_and_motion_guard_exist(app_and_org):
+    client, org = app_and_org
+
+    js = client.get("/static/form-host.js").text
+    css = client.get("/static/app.css").text
+
+    assert "data-layer-id" in js, "no click handler for the tower"
+    assert "data-layer-row" in js
+    assert "row-flash" in css
+    assert "prefers-reduced-motion" in css, "the flash animation has no motion guard"
+
+
 def _layer_base(org, placement, layer_id):
     return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}"
 
