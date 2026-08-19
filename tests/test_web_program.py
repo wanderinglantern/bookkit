@@ -817,3 +817,76 @@ def _configure_roots(conn, tmp_path):
     root.mkdir(exist_ok=True)
     settings.set_program_roots(conn, [str(root)])
     return root
+
+
+# --- phase 4: the drawn tower -------------------------------------------------
+
+
+def test_the_page_prints_no_tower_string_the_renderer_did_not_choose(app_and_org):
+    """R66 at the bookkit end.
+
+    towerkit's own suite proves the renderer quotes labels.py and composes
+    nothing. This proves bookkit PRINTS what the renderer handed it — the other
+    half of the same rule, at the other side of the seam. What it deliberately
+    does NOT do is compare the panel to the export: they are allowed to fit
+    text differently, and a test that compared them would fail on a legitimate
+    wrap and teach everyone to weaken it."""
+    from pathlib import Path as _Path
+
+    from towerkit.model import load_program
+
+    from bookkit.web.tower import panel
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    built = panel(load_program(_Path(placement.program_path)))
+    assert built["blocks"], "the seeded program draws no blocks — test proves nothing"
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    for block in built["blocks"]:
+        for line in block["lines"]:
+            assert line in page, f"the panel dropped a line the renderer chose: {line!r}"
+
+
+def test_the_tower_is_drawn_for_a_linked_placement(app_and_org):
+    client, org = app_and_org
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert "tower-chart" in page
+    assert "tower-block" in page
+
+
+def test_a_placement_with_no_file_draws_no_tower(app_and_org):
+    """None and an empty tower are different facts."""
+    client, org = app_and_org
+    from bookkit.repo import placements
+
+    conn = client.app.state.conn
+    placements.create(conn, org.id, "Unlinked", "2026-03-01", "2027-03-01")
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    after = page.split("Unlinked", 1)[1]
+
+    assert "no program file linked" in after
+
+
+def test_the_not_to_scale_caveat_is_printed(app_and_org):
+    """The vertical scale is compressed so a $2M primary and a $50M excess can
+    share one picture. Dropping the caveat leaves the drawing asserting a
+    linear scale it does not have."""
+    from pathlib import Path as _Path
+
+    from towerkit.model import load_program
+
+    from bookkit.web.tower import panel
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    caveat = panel(load_program(_Path(placement.program_path)))["caveat"]
+    assert caveat, "the seeded program is drawn to scale — test proves nothing"
+
+    assert caveat in client.get(f"/accounts/{org.ref}/program").text
