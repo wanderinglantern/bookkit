@@ -20,7 +20,10 @@
             hx-get="/accounts/{{ header.org.ref }}/tasks/new"
             hx-target="#tasks-panel .form-host" hx-swap="innerHTML">+ Add task</button>
   </div>
-  <div class="form-host"></div>
+  {# open_form arrives only from work_tab's ?add=task (the header's + Task
+     link) — the panel's own OOB re-renders never pass it, so a save or
+     refusal cannot resurrect the form. #}
+  <div class="form-host">{% if open_form %}{{ open_form | safe }}{% endif %}</div>
   {% if task_rows %}
     <div class="table-scroll">
       <table class="rows rows-fit">

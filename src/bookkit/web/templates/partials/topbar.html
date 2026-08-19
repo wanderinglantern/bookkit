@@ -3,24 +3,21 @@
 
    Extracted from account/page.html by Task 18 (the way in — /book is the
    app's front door and needed the same top bar without forking a second
-   copy that could drift). "Book" is the one real link — the rest of the
-   nav has nowhere to go yet, so they stay inert placeholders (no other web
-   route exists outside /book and the account page). `last_undo` is
+   copy that could drift). "Book" is the one real link and the only nav
+   item rendered (see the note on the nav below). `last_undo` is
    org-scoped and only present on the account page; a bare `{% if %}` on an
    undefined value is falsy, so /book simply never renders the pill. #}
 <div class="topbar">
   <span class="topbar-wordmark">BookKit</span>
+  {# ROUTED SECTIONS ONLY (D4, 2026-08-19): six sibling labels — Today,
+     Navigator, Pipeline, Calendar, Markets, Towers — rendered here as inert
+     spans for two days and read as a broken app. A section joins this nav
+     when its route lands, not before; the parity ledger is the roadmap, not
+     the UI. The Search pill went for the same reason. #}
   <nav class="topbar-nav">
-    {% for label in ("Today", "Navigator", "Book", "Pipeline", "Calendar", "Markets", "Towers") %}
-      {% if label == "Book" %}
-        <a href="/book" class="topbar-nav-item is-current-section">Book</a>
-      {% else %}
-        <span class="topbar-nav-item">{{ label }}</span>
-      {% endif %}
-    {% endfor %}
+    <a href="/book" class="topbar-nav-item is-current-section">Book</a>
   </nav>
   <span class="topbar-spacer"></span>
-  <div class="search-pill"><span>Search</span></div>
   {% if last_undo and undo_action %}
     {# Wired as of Task 15b: the same POST the rail's per-change Revert
        makes, against the newest unreverted batch on this account

@@ -833,11 +833,12 @@ def test_undo_pill_and_recent_change_appear_after_a_batch_and_revert_is_wired(ap
         assert "cannot be undone" in confirm.group(1), confirm.group(1)
 
 
-# Every control that isn't wired to anything yet must say so: no href/hx-*
-# attribute WITHOUT aria-disabled="true" (looks live, is dead — the bug),
-# and no href/hx-* attribute WITH aria-disabled="true" either (a control
-# that's actually wired must drop the disabled marker — this is what forces
-# the next task that wires one to remove it, or this test breaks).
+# D4 (Grant, 2026-08-19) SUPERSEDES the aria-disabled "pending treatment":
+# never draw an inert control — wire it or don't render it. Every control
+# marker below must carry a real action verb, and aria-disabled must not
+# appear on one at all. (The old XOR rule allowed drawn-but-pending chrome;
+# five header buttons and six nav items accumulated behind it, and the
+# account header read as a broken app — review finding F3.)
 #
 # `row-action-btn` is in the set as of review round 2 (G): it is the class on
 # the wired row controls in _requests_panel, _items_panel and _tasks_panel,
@@ -867,17 +868,16 @@ def _assert_inert_controls_are_consistently_marked(html: str) -> int:
     for tag in matched:
         has_action = any(attr in tag for attr in _ACTION_ATTRS)
         has_disabled = 'aria-disabled="true"' in tag
-        assert has_action != has_disabled, (
-            f"control is neither clearly pending nor clearly wired: {tag}"
-        )
+        assert not has_disabled, f"inert control rendered (D4 forbids): {tag}"
+        assert has_action, f"control with no action rendered (D4 forbids): {tag}"
     return len(matched)
 
 
-def test_inert_controls_carry_aria_disabled_xor_a_real_action(app_and_org):
+def test_every_rendered_control_is_wired(app_and_org):
     client, org = app_and_org
     response = client.get(f"/accounts/{org.ref}/relationship")
     matched = _assert_inert_controls_are_consistently_marked(response.text)
-    assert matched >= 5, "expected at least the four header pills plus the Assign link"
+    assert matched >= 3, "the control sweep matched suspiciously little"
 
 
 def test_inert_controls_stay_marked_with_a_recent_change_present(app_and_org):

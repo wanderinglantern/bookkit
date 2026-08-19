@@ -20,15 +20,12 @@
       {% endif %}
       <span class="header-spacer"></span>
       <div class="header-actions">
-        {# Inert this task: none of these write yet (log interaction, add
-           task, renew, the overflow menu all land in later tasks).
-           aria-disabled + title on each — a pending treatment, not a live
-           one, per Grant's bar: a control that looks live and is dead is
-           worse than one that looks pending. #}
-        <span class="btn-pill btn-pill-primary" aria-disabled="true" title="Not wired yet — logging an interaction is a later task">+ Log interaction</span>
-        <span class="btn-pill" aria-disabled="true" title="Not wired yet — adding a task is a later task">+ Task</span>
-        <span class="btn-pill" aria-disabled="true" title="Not wired yet — renewing is a later task">Renew</span>
-        <span class="btn-pill btn-pill-icon" aria-disabled="true" title="Not wired yet — the overflow menu is a later task">···</span>
+        {# D4 (Grant, 2026-08-19) superseded the pending treatment: never draw an
+           inert control — wire it or don't render it. + Task is a real link
+           into the Work tab with its add form already open; Renew joins when
+           phase 2 wires sync.renew, and interaction logging is quick
+           capture's job by decision, so neither renders here. #}
+        <a class="btn-pill btn-pill-primary" href="/accounts/{{ header.org.ref }}/work?add=task">+ Task</a>
       </div>
     </div>
   </header>
@@ -104,8 +101,6 @@
       <section class="rail-section">
         <div class="rail-section-head">
           <h2 class="rail-label">Team</h2>
-          {# Not wired yet — a pending treatment, same as the header pills. #}
-          <span class="rail-action" aria-disabled="true" title="Not wired yet — assigning team members is a later task">Assign</span>
         </div>
         {% if team %}
           {% for a in team %}

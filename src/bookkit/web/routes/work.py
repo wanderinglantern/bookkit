@@ -708,10 +708,20 @@ def request_detail(request: Request, ref: str, request_id: str) -> HTMLResponse:
 
 
 @router.get("/accounts/{ref}/work", response_class=HTMLResponse)
-def work_tab(request: Request, ref: str) -> HTMLResponse:
+def work_tab(request: Request, ref: str, add: str | None = None) -> HTMLResponse:
+    """?add=task lands with the new-task form already open in the tasks
+    panel's form host — it is what the account header's + Task links to
+    (D4: that button had to be wired or unrendered, and its form lives on
+    this tab). Any other value is ignored rather than refused: a stale
+    bookmark should still show the tab."""
     conn = _conn(request)
     org = _org(request, ref)
     context = _context(conn, org, "work", request)
     context["task_rows"] = _task_rows(request, org)
     context["request_rows"] = _request_rows(request, org)
+    if add == "task":
+        spec = task_form(conn=conn, default_org_id=org.id)
+        context["open_form"] = render_form(
+            request, spec, f"/accounts/{ref}/tasks/new"
+        )
     return TEMPLATES.TemplateResponse(request, "account/work.html", context)

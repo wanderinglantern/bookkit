@@ -120,29 +120,17 @@ def test_a_row_links_to_that_account(app_and_conn):
     assert followed.headers["location"].endswith("/relationship")
 
 
-def test_new_account_and_export_workbook_are_marked_pending(app_and_conn):
+def test_unbuilt_book_controls_are_not_rendered(app_and_conn):
+    """D4: New account, Export workbook and the filter were drawn as pending
+    pills; unbuilt means unrendered now — the parity ledger is the roadmap,
+    not the UI. A dead filter <input> stays banned for the same reason."""
     client, _ = app_and_conn
     html = client.get("/book").text
-    for label in ("New account", "Export workbook"):
-        tag = re.search(rf'<span class="btn-pill[^"]*"[^>]*>{re.escape(label)}</span>', html)
-        assert tag, f"{label!r} pill not found"
-        assert 'aria-disabled="true"' in tag.group(0)
-        assert "title=" in tag.group(0)
-        assert "href=" not in tag.group(0)
-        assert "hx-" not in tag.group(0)
-
-
-def test_filter_field_is_marked_pending_not_a_dead_input(app_and_conn):
-    """A text <input> that accepts typing and silently does nothing is worse
-    than a static pill that says so — the filter isn't wired this task, so
-    it must not render as a live-looking input."""
-    client, _ = app_and_conn
-    html = client.get("/book").text
+    assert "New account" not in html
+    assert "Export workbook" not in html
+    assert "book-filter-pill" not in html
     assert "<input" not in html
-    tag = re.search(r'<span class="book-filter-pill"[^>]*>', html)
-    assert tag, "filter pill not found"
-    assert 'aria-disabled="true"' in tag.group(0)
-    assert "title=" in tag.group(0)
+    assert 'aria-disabled' not in html
 
 
 def test_book_nav_item_is_a_real_link(app_and_conn):
