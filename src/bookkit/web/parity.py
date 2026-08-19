@@ -238,9 +238,10 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "mcp": "DEFERRED — no tool; same mcpparity decision as remove_layer",
     },
     "set_applies_to": {
-        "web": "DEFERRED — phase 3 (applies-to chips on layer rows)",
-        "tui": "DEFERRED — phase 3; today the whole verb is dead code with tests",
-        "mcp": "DEFERRED — phase 3",
+        "web": "the details row's applies-to chips — the verb's first caller "
+        "ever (POST .../layers/{layer_id}/applies-to)",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
     },
     "scaffold_program": {
         "web": "scaffold confirm, destination editable (POST .../scaffold)",
@@ -255,27 +256,27 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
     },
     # --- phase 3: structure (D1) — routes land later in the same branch ---
     "add_line": {
-        "web": "the lines strip, + line in-row (phase 3 task 2)",
+        "web": "the lines strip: + line, in row (POST .../lines)",
         "tui": "via o -> towerkit's editor (the terminal's structure surface)",
         "mcp": "DEFERRED — structure from an assistant is undecided",
     },
     "rename_line": {
-        "web": "the lines strip, name as an inline cell (phase 3 task 2)",
+        "web": "the lines strip: the name is an inline cell (POST .../lines/{line_id}/cell/name)",
         "tui": "via o -> towerkit's editor",
         "mcp": "DEFERRED — structure from an assistant is undecided",
     },
     "remove_line": {
-        "web": "the lines strip, confirm names the cascade (phase 3 task 2)",
+        "web": "the lines strip: remove, confirm naming both grades of blast (POST .../lines/{line_id}/remove)",
         "tui": "via o -> towerkit's editor",
         "mcp": "DEFERRED — structure from an assistant is undecided",
     },
     "set_statutory": {
-        "web": "the details row's statutory toggle (phase 3 task 3)",
+        "web": "the details row: mark statutory (confirm names the limit given up), leave asks the figure (POST .../layers/{layer_id}/statutory)",
         "tui": "via o -> towerkit's editor",
         "mcp": "DEFERRED — structure from an assistant is undecided",
     },
     "set_follows_underlying": {
-        "web": "the details row's follows toggle (phase 3 task 3)",
+        "web": "the details row: one-click follows toggle (POST .../layers/{layer_id}/follows)",
         "tui": "via o -> towerkit's editor",
         "mcp": "DEFERRED — structure from an assistant is undecided",
     },
@@ -311,7 +312,7 @@ TOWERKIT_EDIT_OPS: dict[str, str] = {
     "remove_line": "sync.remove_line (phase 3); see SYNC_VERBS",
     "add_layer": "sync.add_layer; see SYNC_VERBS",
     "remove_layer": "sync.remove_layer (D2); see SYNC_VERBS",
-    "set_applies_to": "sync.set_applies_to; chips land phase 3 task 3",
+    "set_applies_to": "sync.set_applies_to — the details row's chips; see SYNC_VERBS",
     "set_follows_underlying": "sync.set_follows_underlying (phase 3); see SYNC_VERBS",
     # deferred BY NAME, with the reason
     "set_line_group": (
