@@ -81,10 +81,8 @@ def push_form(
 def edit_placement(screen: Screen, placement: Placement) -> None:
     """Dual-owner edit for linked placements (name/dates write through the
     towerkit file), plain form for unlinked ones."""
-    from ... import sync
     from ...forms import entities as ef
     from ...forms.spec import Field, FormSpec
-    from ...repo import placements
     from .forms import FormModal
 
     conn = _app(screen).conn
@@ -119,23 +117,21 @@ def edit_placement(screen: Screen, placement: Placement) -> None:
     )
 
     def commit(values: dict) -> str | None:
-        file_changes = {
-            key: values[key]
-            for key in ("program_name", "period_from", "period_to")
-            if values.get(key) is not None
-            and values[key] != getattr(placement, key)
-        }
-        if file_changes:
-            diags = sync.update_program(conn, placement.id, **file_changes)
-            if not diags.ok:
-                return f"refused: {diags.errors[0]}"
-        book_changes = {
-            key: values[key]
-            for key in ("status", "commission_bps")
-            if values.get(key) is not None and values[key] != getattr(placement, key)
-        }
-        if book_changes:
-            placements.update(conn, placement.id, **book_changes)
+        # The dual-owner split lives in services/placement_edit (F12: it was
+        # in-lined here, unreachable from the web, and the two surfaces would
+        # have drifted). FormModal's derived batch wraps this commit, which
+        # is what satisfies apply's inside-a-batch guard and keeps a mixed
+        # edit one undo unit.
+        from ...services import placement_edit
+
+        try:
+            placement_edit.apply(
+                conn, placement,
+                {key: values.get(key)
+                 for key in placement_edit.FILE_OWNED + placement_edit.BOOK_OWNED},
+            )
+        except ValueError as exc:
+            return str(exc)
         return None
 
     def done(values: dict | None) -> None:
