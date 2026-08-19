@@ -453,15 +453,18 @@ def test_adding_a_layer_appends_it_pending(app_and_org):
     client, org = app_and_org
     conn = client.app.state.conn
     placement, _ = _first_layer(conn, org)
+    line = _first_line(conn, placement)
     top = max(
         layer["attach_cents"] + layer["limit_cents"]
         for layer in sync.layer_details(conn, placement.id)
+        if line in layer["applies_to"]
     )
 
     added = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
         data={
             "name": "3rd Excess",
+            "line": line,
             "attach_cents": str(top // 100),
             "limit_cents": "5,000,000",
             "premium_cents": "",
@@ -494,6 +497,7 @@ def test_a_layer_that_would_leave_a_gap_is_refused_and_says_so(app_and_org):
         f"/accounts/{org.ref}/program/{placement.id}/layers",
         data={
             "name": "Floating Excess",
+            "line": _first_line(conn, placement),
             "attach_cents": "900,000,000",
             "limit_cents": "5,000,000",
             "premium_cents": "",
@@ -667,6 +671,119 @@ def test_market_remove_asks_first_and_the_get_writes_nothing(app_and_org):
     assert seat["carrier"] in confirm.text
     assert "the layer stays" in confirm.text
     assert path.read_bytes() == before, "the confirm GET wrote to the file"
+
+
+def _first_line(conn, placement):
+    lines = sync.program_lines(conn, placement.id)
+    assert lines, f"{placement.ref} has no lines"
+    return lines[0][0]
+
+
+def _two_line_placement(client, org, tmp_path):
+    """A linked placement whose program has TWO lines (gl + cy), so the
+    applies-to choice is real."""
+    from datetime import date
+
+    from test_linking_flow import write_program
+    from towerkit.model import Layer, Line, Participant, Period, Program
+    from towerkit.model import Placement as TkPlacement
+
+    conn = client.app.state.conn
+    program = Program(
+        insured=org.name,
+        program="Two Line Program",
+        placement=TkPlacement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[
+            Line(id="gl", name="General Liability", abbr="GL"),
+            Line(id="cy", name="Cyber", abbr="CY"),
+        ],
+        # equal tops on purpose: an "__all__" layer attaching at the shared
+        # top is valid on both lines, so the test refuses only for the
+        # reason under test
+        layers=[
+            Layer(id="primary-gl", name="Primary GL", applies_to=["gl"],
+                  attach=0, limit=2_000_000, premium=900_000,
+                  participants=[Participant(carrier="Zurich", share_bps=10_000)]),
+            Layer(id="primary-cy", name="Primary Cyber", applies_to=["cy"],
+                  attach=0, limit=2_000_000, premium=400_000, participants=[]),
+        ],
+    )
+    path = write_program(tmp_path / "two-line.json", program)
+    assert sync.confirm_link(conn, path, org.id).ok
+    from bookkit.repo import placements as placements_repo
+
+    return placements_repo.by_program_path(conn, str(path))
+
+
+def test_the_layer_add_form_asks_which_lines(app_and_org, tmp_path):
+    """The web used to pass line_ids=[] and towerkit silently defaulted to
+    the FIRST line — same keystroke, different data per surface (F5). The
+    TUI asks; now the web does too."""
+    client, org = app_and_org
+    placement = _two_line_placement(client, org, tmp_path)
+
+    form = client.get(f"/accounts/{org.ref}/program/{placement.id}/layers/new").text
+
+    assert "<select" in form
+    assert "General Liability" in form
+    assert "Cyber" in form
+    assert "all lines" in form
+
+
+def test_an_added_layer_lands_on_the_chosen_line(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "1st Excess Cyber", "line": "cy", "attach_cents": "2,000,000",
+              "limit_cents": "5,000,000", "premium_cents": ""},
+    )
+
+    assert added.status_code == 200
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "1st Excess Cyber"
+    )
+    assert layer["applies_to"] == ["cy"], f"landed on {layer['applies_to']}"
+
+
+def test_all_lines_means_all_lines(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "Umbrella Everything", "line": "__all__",
+              "attach_cents": "2,000,000", "limit_cents": "10,000,000",
+              "premium_cents": ""},
+    )
+
+    assert added.status_code == 200
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "Umbrella Everything"
+    )
+    assert sorted(layer["applies_to"]) == ["cy", "gl"]
+
+
+def test_a_made_up_line_is_refused(app_and_org, tmp_path):
+    client, org = app_and_org
+    placement = _two_line_placement(client, org, tmp_path)
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "Nowhere", "line": "marine", "attach_cents": "0",
+              "limit_cents": "1,000,000", "premium_cents": ""},
+    )
+
+    assert refused.status_code == 200
+    assert "Nowhere" not in [
+        ly["name"] for ly in sync.layer_details(client.app.state.conn, placement.id)
+    ]
 
 
 def _placement_cell(org, placement, key):
@@ -885,6 +1002,7 @@ def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
         f"/accounts/{org.ref}/program/{placement.id}/layers",
         data={
             "name": "Floating Excess",
+            "line": _first_line(conn, placement),
             "attach_cents": "900,000,000",
             "limit_cents": "5,000,000",
             "premium_cents": "",
@@ -918,7 +1036,8 @@ def test_a_blank_attachment_is_refused_in_the_broker_s_language(app_and_org):
 
     refused = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
-        data={"name": "No Money", "attach_cents": "", "limit_cents": "", "premium_cents": ""},
+        data={"name": "No Money", "line": _first_line(client.app.state.conn, placement),
+              "attach_cents": "", "limit_cents": "", "premium_cents": ""},
     )
 
     assert "attaches at is required" in refused.text

@@ -691,12 +691,26 @@ async def layer_cell_save(
 # stale by the time it is used.
 
 
-def _layer_add_fields() -> tuple[Field, ...]:
+def _layer_add_fields(
+    conn: sqlite3.Connection, placement_id: str
+) -> tuple[Field, ...]:
     """A new layer's facts. `name`, `attach` and `limit` are required by
     sync.add_layer; premium is optional because a layer is routinely placed
-    before it is priced."""
+    before it is priced.
+
+    `line` is REQUIRED and asked, never guessed (F5): this form used to pass
+    line_ids=[] and towerkit silently defaulted the new layer onto the FIRST
+    line — on a multi-line program the web wrote different data than the TUI
+    for the same intent, invisibly. Empty options means the program has no
+    lines; the caller refuses before rendering a form that cannot succeed.
+    """
+    lines = sync.program_lines(conn, placement_id)
+    options = tuple((name, line_id) for line_id, name in lines)
+    if len(lines) > 1:
+        options = (("all lines", "__all__"), *options)
     return (
         _LAYER_CELLS["name"],
+        Field("line", "applies to", "select", options, required=True),
         _LAYER_CELLS["attach_cents"],
         _LAYER_CELLS["limit_cents"],
         _LAYER_CELLS["premium_cents"],
@@ -767,19 +781,38 @@ async def layer_add(request: Request, ref: str, placement_id: str) -> HTMLRespon
     placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
     raw = {k: str(v) for k, v in (await request.form()).items()}
     action = f"/accounts/{ref}/program/{placement_id}/layers"
-    fields = _layer_add_fields()
+    if not placement.program_path:
+        # BEFORE the lines guard: an unlinked placement has no lines either,
+        # and "no lines" would send someone to towerkit to edit a file that
+        # does not exist.
+        return _panel_refusal(
+            request, ref, org, placement_id,
+            f"{placement.ref} has no program file linked — scaffold one first",
+        )
+    all_lines = sync.program_lines(conn, placement_id)
+    if not all_lines:
+        return _panel_refusal(
+            request, ref, org, placement_id,
+            "the program has no lines — build them in towerkit first",
+        )
+    fields = _layer_add_fields(conn, placement_id)
     try:
         values = _parsed(fields, raw)
     except ValueError as exc:
         return _refused_form(request, fields, action, "new layer", str(exc), raw)
 
+    line_ids = (
+        [line_id for line_id, _ in all_lines]
+        if values["line"] == "__all__"
+        else [values["line"]]
+    )
     try:
         program_files.write(
             conn, placement,
             tool="program_layer_add",
             summary=f"added layer {values['name']}",
             mutate=lambda: sync.add_layer(
-                conn, placement_id, values["name"], [],
+                conn, placement_id, values["name"], line_ids,
                 attach_cents=values["attach_cents"],
                 limit_cents=values["limit_cents"],
                 premium_cents=values["premium_cents"],
@@ -1175,6 +1208,14 @@ def market_remove(
 # --- the two ghost-row forms --------------------------------------------------
 
 
+def _panel_refusal(
+    request: Request, ref: str, org: Any, placement_id: str, message: str
+) -> HTMLResponse:
+    """A refusal for a form-host control with no form to re-render — said in
+    the form host itself, never a status code htmx would drop."""
+    return HTMLResponse(f'<p class="form-error" role="alert">{message}</p>')
+
+
 def _mini_form(
     request: Request, fields: tuple[Field, ...], action: str, title: str
 ) -> HTMLResponse:
@@ -1189,9 +1230,20 @@ def _mini_form(
 )
 def layer_add_form(request: Request, ref: str, placement_id: str) -> HTMLResponse:
     org = _org(request, ref)
-    _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    if not placement.program_path:
+        return _panel_refusal(
+            request, ref, org, placement_id,
+            f"{placement.ref} has no program file linked — scaffold one first",
+        )
+    if not sync.program_lines(conn, placement_id):
+        return _panel_refusal(
+            request, ref, org, placement_id,
+            "the program has no lines — build them in towerkit first",
+        )
     return _mini_form(
-        request, _layer_add_fields(),
+        request, _layer_add_fields(conn, placement_id),
         f"/accounts/{ref}/program/{placement_id}/layers", "new layer",
     )
 
