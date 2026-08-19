@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from ..db import transaction
 from ..models import Contact
 from . import base
 
@@ -79,12 +80,24 @@ def reassign_org(conn: sqlite3.Connection, from_org_id: str, to_org_id: str) -> 
 
 
 def set_primary(conn: sqlite3.Connection, contact_id: str) -> None:
-    """Exactly one primary per org."""
+    """Exactly one primary per org — ALL OR NOTHING.
+
+    This clears every other primary and then sets one, and the connection is
+    AUTOCOMMIT, so without a transaction each of those writes landed on its
+    own: a failure between the clear and the set left the org with ZERO
+    primary contacts, which is not a state the invariant this function exists
+    to hold allows, and no surface shows it as wrong — the primary simply
+    vanishes from every header and every export (2026-08-18).
+
+    db.transaction NESTS BY JOINING, so a caller that has already opened a
+    batch keeps owning the undo unit; this only guarantees the writes cannot
+    be torn apart."""
     contact = get(conn, contact_id)
-    for other in for_org(conn, contact.org_id, active_only=False):
-        if other.is_primary and other.id != contact_id:
-            base.update(conn, "contact", other.id, {"is_primary": 0})
-    base.update(conn, "contact", contact_id, {"is_primary": 1})
+    with transaction(conn):
+        for other in for_org(conn, contact.org_id, active_only=False):
+            if other.is_primary and other.id != contact_id:
+                base.update(conn, "contact", other.id, {"is_primary": 0})
+        base.update(conn, "contact", contact_id, {"is_primary": 1})
 
 
 def delete(conn: sqlite3.Connection, contact_id: str) -> None:

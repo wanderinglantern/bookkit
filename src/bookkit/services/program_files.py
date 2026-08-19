@@ -14,8 +14,9 @@ existing is rewritten. The last SNAPSHOT_KEEP per directory are retained."""
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
+
+from towerkit.atomicio import atomic_write_bytes
 
 from ..sync import file_sha256
 
@@ -61,7 +62,16 @@ def restore(program_path: Path, batch_ref: str) -> None:
             f"(TUI, towerkit, or a later batch) would be lost; revert newer "
             f"changes first or fix it in towerkit"
         )
-    shutil.copyfile(image, program_path)
+    # ATOMIC, not shutil.copyfile. copyfile truncates the destination before
+    # the first byte lands, so a crash, a full disk or a dropped mount between
+    # those two moments destroyed the very file this function exists to
+    # protect — and left the pre-image in .mcp-snapshots with nothing to say
+    # which of the two was the real one. towerkit routes every program write
+    # through atomicio (same-directory temp, fsync, os.replace) for exactly
+    # this reason, and its JSON is the declared source of truth for program
+    # structure; the undo path had no business being the one write that was
+    # not durable (2026-08-18).
+    atomic_write_bytes(program_path, image.read_bytes())
 
 
 def _prune(snapdir: Path) -> None:

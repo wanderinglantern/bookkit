@@ -168,3 +168,62 @@ def test_cross_book_exposure(synced) -> None:
     # window actually filters
     beyond = exposure.carrier_exposure(conn, "Swiss Re", days=5, today=TODAY)
     assert len(beyond) <= len(rows)
+
+
+def test_seed_projects_its_program_files_it_does_not_just_point_at_them(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """seed was the ONE writer that set `program_path` without going through
+    `sync.project` (every other path sets path and sha together), so every
+    seeded book carried three placements whose `source_sha256` was NULL
+    forever — and an empty proj_* cache under a program file that exists.
+
+    Both halves are asserted here because they are the same omission: the sha
+    is what the write-conflict guard compares against, and the proj_ rows are
+    what every tower surface reads."""
+    programs = tmp_path / "programs"
+    seed.seed(conn, today=TODAY, programs_dir=programs)
+
+    linked = conn.execute(
+        "SELECT ref, program_path, source_sha256, synced_at FROM placement"
+        " WHERE program_path IS NOT NULL"
+    ).fetchall()
+    assert len(linked) == 3
+    for row in linked:
+        assert row["source_sha256"] == sync.file_sha256(Path(row["program_path"])), (
+            f"{row['ref']} was linked to a file bookkit never verified"
+        )
+        assert row["synced_at"]
+
+    for table in ("proj_layer", "proj_participant", "proj_retention"):
+        count = conn.execute(f"SELECT count(*) AS c FROM {table}").fetchone()["c"]
+        assert count > 0, f"{table} is empty — the seeded book has no tower under it"
+
+
+def test_a_placement_bookkit_never_verified_is_refused_not_waved_through(
+    synced,
+) -> None:
+    """A NULL `source_sha256` USED TO SHORT-CIRCUIT THE GUARD ENTIRELY —
+    `if placement.source_sha256 and file_sha256(path) != ...` — so a placement
+    bookkit had never verified was the one placement it would write through
+    without a single check.
+
+    That is the guard inverted. A mismatched sha means "bookkit saw this file
+    and it has moved on"; a missing one means "bookkit has never seen this
+    file at all", which is strictly less knowledge and therefore the case to
+    refuse hardest. The file here is UNTOUCHED on disk: there is nothing wrong
+    with it except that nothing can vouch for it, and that alone must refuse."""
+    conn, programs = synced
+    path = programs / "atomic-casualty.json"
+    placement = placements.by_program_path(conn, str(path))
+    conn.execute(
+        "UPDATE placement SET source_sha256 = NULL WHERE id = ?", (placement.id,)
+    )
+    before = path.read_text()
+
+    def bump(program) -> None:
+        program.layers[0].premium = 123_456
+
+    with pytest.raises(sync.WriteConflict, match="never verified"):
+        sync.write_through(conn, placement.id, bump)
+    assert path.read_text() == before, "an unverifiable placement was written anyway"

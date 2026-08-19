@@ -232,3 +232,96 @@ async def test_closing_a_deal_from_the_board_is_undoable_end_to_end(
         assert back.stage == old_stage
         assert back.probability_pct == old_prob    # not left at 0
         assert back.closed_at is None
+
+
+# --- the alias half of a market merge ---------------------------------------
+
+
+def _two_markets(conn: sqlite3.Connection) -> tuple[str, str]:
+    source = orgs.create(conn, kind="market", name="Axa XL", status="active")
+    target = orgs.create(conn, kind="market", name="AXA XL", status="active")
+    return source.id, target.id
+
+
+def test_reverting_a_market_merge_brings_the_aliases_back_too(
+    conn: sqlite3.Connection,
+) -> None:
+    """`aliases.reassign_market` was a bulk UPDATE with NO event log — the one
+    sub-write of a market merge that left no trace at all. Every one of its
+    seven siblings is row-by-row through base.update "or the merge cannot be
+    reverted", and this was the proof: reverting brought the duplicate market
+    back to life with every alias still pointing at the survivor, so a towerkit
+    file spelling the carrier that way went on resolving to the wrong org and
+    the resurrected record answered to nothing (2026-08-18).
+
+    Three aliases with three different fates in one revert: the duplicate's own
+    two go home, the one the merge INVENTED from its name is removed, and the
+    survivor's own is not touched."""
+    from bookkit.repo import aliases
+
+    source_id, target_id = _two_markets(conn)
+    aliases.set_alias(conn, "AXA XL Insurance Co", source_id)
+    aliases.set_alias(conn, "Axa-XL", source_id)
+    aliases.set_alias(conn, "AXA XL Corp", target_id)      # the survivor's own
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="merge_markets", summary="merged Axa XL"
+    ) as batch:
+        merge.merge_markets(conn, source_id, target_id)
+    assert aliases.for_market(conn, source_id) == []
+
+    result = batches_svc.revert(conn, batch.ref, now=NOW)
+    assert result.applied, result.refused
+
+    assert aliases.for_market(conn, source_id) == ["AXA XL Insurance Co", "Axa-XL"]
+    assert aliases.for_market(conn, target_id) == ["AXA XL Corp"], (
+        "the alias the merge invented from the duplicate's name outlived it"
+    )
+    assert aliases.resolve(conn, "Axa-XL") == source_id, (
+        "a towerkit file spelling the carrier that way still resolves to the "
+        "org the merge folded it into"
+    )
+
+
+def test_an_alias_moved_since_the_merge_refuses_the_whole_revert(
+    conn: sqlite3.Connection,
+) -> None:
+    """'Surface, don't guess', the same rule every other lane follows: if the
+    alias no longer points where this batch left it, someone moved it since and
+    putting it back would discard their change silently."""
+    from bookkit.repo import aliases
+
+    source_id, target_id = _two_markets(conn)
+    elsewhere = orgs.create(conn, kind="market", name="Somewhere Else", status="active")
+    aliases.set_alias(conn, "Axa-XL", source_id)
+
+    with batches_svc.open_batch(
+        conn, source="tui", tool="merge_markets", summary="merged Axa XL"
+    ) as batch:
+        merge.merge_markets(conn, source_id, target_id)
+
+    aliases.set_alias(conn, "Axa-XL", elsewhere.id)        # moved again, by hand
+
+    result = batches_svc.revert(conn, batch.ref, now=NOW)
+    assert not result.applied
+    assert [c.change.new_value for c in result.refused] == ["Axa-XL"]
+    assert aliases.resolve(conn, "Axa-XL") == elsewhere.id, "the later move was lost"
+
+
+def test_the_alias_move_is_in_the_event_log_at_all(conn: sqlite3.Connection) -> None:
+    """The narrow fact underneath both tests above: the bulk UPDATE wrote ZERO
+    event_log rows, so nothing downstream could even see that it happened."""
+    from bookkit.repo import aliases
+
+    source_id, target_id = _two_markets(conn)
+    aliases.set_alias(conn, "Axa-XL", source_id)
+    before = conn.execute("SELECT MAX(rowid) AS r FROM event_log").fetchone()["r"] or 0
+
+    merge.merge_markets(conn, source_id, target_id)
+
+    moved = conn.execute(
+        "SELECT entity_id, old_value, new_value FROM event_log"
+        " WHERE rowid > ? AND field = 'carrier_alias' AND old_value IS NOT NULL",
+        (before,),
+    ).fetchall()
+    assert [tuple(r) for r in moved] == [(target_id, source_id, "Axa-XL")]

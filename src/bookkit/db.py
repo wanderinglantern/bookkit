@@ -346,6 +346,78 @@ def pending_migrations(conn: sqlite3.Connection) -> list[tuple[int, Path]]:
     return found
 
 
+TRANSACTION_CONTROL = frozenset(
+    {"BEGIN", "COMMIT", "END", "ROLLBACK", "SAVEPOINT", "RELEASE"}
+)
+"""Statements a migration file may not contain. See `check_migration`."""
+
+
+class MigrationRefused(Exception):
+    """A migration file this runner will not execute."""
+
+
+def _statements(sql: str) -> Iterator[str]:
+    """Split a script into top-level statements.
+
+    `sqlite3.complete_statement` is the sqlite shell's own splitter, so it
+    already knows that the `BEGIN`/`END` inside `CREATE TRIGGER ... BEGIN ...
+    END;` do not terminate anything — which a naive split on ';' or a keyword
+    grep does not, and 001_initial.sql has eight such triggers."""
+    buf = ""
+    for line in sql.splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            yield buf
+            buf = ""
+    if buf.strip():
+        yield buf
+
+
+def _first_keyword(statement: str) -> str:
+    """The leading keyword, with comments and whitespace stripped off the
+    front, uppercased. Empty for a comment-only chunk."""
+    rest = statement
+    while True:
+        rest = rest.lstrip()
+        if rest.startswith("--"):
+            _, _, rest = rest.partition("\n")
+        elif rest.startswith("/*"):
+            _, _, rest = rest.partition("*/")
+        else:
+            break
+    return rest.split(maxsplit=1)[0].upper().rstrip(";") if rest.split() else ""
+
+
+def check_migration(path: Path, sql: str) -> None:
+    """Refuse a migration that takes its own transaction control.
+
+    A MIGRATION MAY NOT COMMIT. `apply_migrations` wraps each file in
+    BEGIN/COMMIT so a failure rolls the whole file back; a file containing its
+    own `COMMIT;` ends that transaction early, so every statement after it
+    lands unconditionally and cannot be rolled back by anything. Reproduced
+    2026-08-18: a migration that committed and then failed left its tables
+    behind while schema_version never advanced, the runner's `ROLLBACK` raised
+    "cannot rollback - no transaction is active" and MASKED the real error, and
+    every later connect() died on "table already exists" — the book unopenable
+    on all four surfaces, permanently, with no message naming the cause.
+
+    Refusing is the only honest option: once a migration has committed DDL of
+    its own, the runner has nothing left to undo it with. SQLite cannot roll
+    back a committed CREATE TABLE, and the runner does not know which
+    statements landed. So the check runs BEFORE the first file is executed and
+    nothing is applied if any pending file is malformed."""
+    for statement in _statements(sql):
+        keyword = _first_keyword(statement)
+        if keyword in TRANSACTION_CONTROL:
+            raise MigrationRefused(
+                f"{path.name}: migrations may not contain their own "
+                f"transaction control (found {keyword!r}). apply_migrations "
+                f"wraps every file in BEGIN/COMMIT so a failure rolls the whole "
+                f"file back; a file that commits mid-way leaves changes nothing "
+                f"can undo and can wedge the database unopenable."
+            )
+
+
 def apply_migrations(conn: sqlite3.Connection) -> list[int]:
     """Apply every pending migration, each in its own transaction. Returns the
     versions applied."""
@@ -353,8 +425,14 @@ def apply_migrations(conn: sqlite3.Connection) -> list[int]:
         "CREATE TABLE IF NOT EXISTS schema_version"
         " (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
     )
+    pending = pending_migrations(conn)
+    # every file is checked before ANY of them runs: a bad file at version 14
+    # must not leave 12 and 13 half-applied behind it
+    for _version, path in pending:
+        check_migration(path, path.read_text(encoding="utf-8"))
+
     applied: list[int] = []
-    for version, path in pending_migrations(conn):
+    for version, path in pending:
         sql = path.read_text(encoding="utf-8")
         script = (
             "BEGIN;\n"
@@ -365,7 +443,12 @@ def apply_migrations(conn: sqlite3.Connection) -> list[int]:
         try:
             conn.executescript(script)
         except sqlite3.Error:
-            conn.execute("ROLLBACK")
+            # ONLY IF THERE IS ONE. An unconditional ROLLBACK raises "cannot
+            # rollback - no transaction is active" out of the except block,
+            # which REPLACES the real error with a message about the cleanup —
+            # the failure that actually broke the book never reaches the user.
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
             raise
         applied.append(version)
     return applied
@@ -401,20 +484,44 @@ def backup(conn: sqlite3.Connection, dest: Path) -> Path:
     person who comes looking for a rollback weeks later finds a file that
     looks exactly like a good one. Nothing distinguishes a torn VACUUM from a
     finished one at the filesystem level, so the only honest state is absence
-    — and the caller already knows, because this raises."""
+    — and the caller already knows, because this raises.
+
+    REAL CORRUPTION RAISES; IT DOES NOT RETURN FALSE. `PRAGMA integrity_check`
+    on a torn copy comes back as `sqlite3.DatabaseError: database disk image
+    is malformed`, so a cleanup written as `if not ok:` alone is never reached
+    on the failure it exists for — the exception propagates straight past it
+    and a 216-byte file stays on disk under an ordinary backup name
+    (2026-08-18). Every path out of here that is not a finished, verified copy
+    now removes `dest` first, because this is the rollback for every migration
+    and every `seed --force`.
+
+    The two stages are caught separately so the VACUUM's own error keeps its
+    type: a backups directory that is not writable must still surface as the
+    `sqlite3.Error` the caller (and `test_a_failed_snapshot_aborts_the_migration`)
+    expects, not as a RuntimeError about an integrity check that never ran."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         raise FileExistsError(f"refusing to overwrite existing backup {dest}")
-    conn.execute("VACUUM INTO ?", (str(dest),))
-    os.chmod(dest, 0o600)
-    check = sqlite3.connect(dest)
     try:
-        ok = integrity_check(check)
-    finally:
-        check.close()
+        conn.execute("VACUUM INTO ?", (str(dest),))
+        os.chmod(dest, 0o600)
+    except BaseException:
+        # a VACUUM that raised part-way still leaves whatever it managed to
+        # write; dest did not exist a moment ago, so removing it is safe
+        dest.unlink(missing_ok=True)
+        raise
+    try:
+        check = sqlite3.connect(dest)
+        try:
+            ok = integrity_check(check)
+        finally:
+            # closed before any unlink, so Windows and a locked file cannot
+            # turn a failed backup into a failed cleanup on top of it
+            check.close()
+    except Exception as exc:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError(f"backup {dest} failed integrity check: {exc}") from exc
     if not ok:
-        # after close(), so Windows and a locked file cannot turn a failed
-        # backup into a failed cleanup on top of it
         dest.unlink(missing_ok=True)
         raise RuntimeError(f"backup {dest} failed integrity check")
     return dest

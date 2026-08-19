@@ -51,12 +51,35 @@ def alias_map(conn: sqlite3.Connection) -> dict[str, str]:
 
 
 def reassign_market(conn: sqlite3.Connection, from_org_id: str, to_org_id: str) -> int:
-    """Bulk move for market merges; the service logs the event."""
-    cur = conn.execute(
-        "UPDATE carrier_alias SET market_org_id = ? WHERE market_org_id = ?",
-        (to_org_id, from_org_id),
-    )
-    return cur.rowcount
+    """Move every alias to the survivor on a market merge."""
+    # Row by row WITH AN EVENT EACH, not one bulk UPDATE: this was the single
+    # sub-write of a market merge that left no trace at all — zero event_log
+    # rows — so reverting the merge brought the duplicate market back to life
+    # with every one of its aliases still pointing at the survivor, and any
+    # towerkit file spelling the carrier that way went on resolving to the
+    # wrong org (2026-08-18). Its seven siblings (contacts, submissions,
+    # tasks, documents, interactions, orgs, rfi) all say the same thing: the
+    # move is a change like any other, or the merge cannot be reverted.
+    #
+    # The event is shaped exactly like set_alias's — entity is the org that
+    # NOW owns the alias, field 'carrier_alias', new_value the alias string —
+    # with old_value carrying the org it came from instead of None. That one
+    # difference is what services/batches reads to put it back: an old_value
+    # means "return it", None means "it did not exist before, remove it".
+    rows = conn.execute(
+        "SELECT alias FROM carrier_alias WHERE market_org_id = ? ORDER BY alias",
+        (from_org_id,),
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "UPDATE carrier_alias SET market_org_id = ? WHERE alias = ?",
+            (to_org_id, row["alias"]),
+        )
+        base.log_event(
+            conn, "org", to_org_id, "carrier_alias", from_org_id, row["alias"],
+            note="market merged",
+        )
+    return len(rows)
 
 
 def unresolved_carriers(conn: sqlite3.Connection) -> list[str]:

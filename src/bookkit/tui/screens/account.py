@@ -1309,7 +1309,12 @@ class AccountScreen(Screen):
             state.update(f"{header}\n✗ file missing: {path}")
             preview.show_placeholder()
             return
-        if placement.source_sha256 and sync.file_sha256(path) != placement.source_sha256:
+        if not placement.source_sha256:
+            # "✓ in sync" claimed a verification that never happened: with no
+            # recorded sha there is nothing to compare the file against. Same
+            # inverted guard as sync.write_through had (2026-08-18).
+            state.update(f"{header}\n⚠ never projected — run sync to verify")
+        elif sync.file_sha256(path) != placement.source_sha256:
             state.update(f"{header}\n⚠ file changed on disk — re-sync to update")
         else:
             state.update(f"{header}\n✓ in sync ({path.name})")
@@ -1415,8 +1420,16 @@ class AccountScreen(Screen):
             return
         key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
         if key:
-            contacts.set_primary(self.app.conn, key)
-            self.notify("primary contact set")
+            # batched like every other direct keystroke write on this screen:
+            # set_primary clears one contact's flag and sets another's, so `u`
+            # has to put BOTH back or it puts the org in a state neither
+            # contact was ever in
+            with _batched(
+                self, tool="contact_set_primary", summary="set the primary contact",
+                org_id=self.current_org_id,
+            ):
+                contacts.set_primary(self.app.conn, key)
+            self.notify("primary contact set — u to undo")
             self.refresh_data()
 
     def action_task_done(self) -> None:

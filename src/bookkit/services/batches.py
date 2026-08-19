@@ -8,13 +8,15 @@ neither the before nor the after of any single action."""
 
 from __future__ import annotations
 
+import dataclasses
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
-from ..models import EventBatch
+from ..models import EventBatch, EventLogEntry
+from ..repo import aliases as aliases_repo
 from ..repo import base
 from ..repo import batches as batches_repo
 from ..repo import events as events_repo
@@ -167,6 +169,8 @@ class RevertPlan:
     deletes: list[Change]
     updates: list[Change]
     conflicts: list[Conflict]
+    aliases: list[Change] = dataclasses.field(default_factory=list)
+    """carrier_alias moves — their own lane; see `_plan_alias_moves`."""
 
     @property
     def clean(self) -> bool:
@@ -275,13 +279,61 @@ def plan_revert(conn: sqlite3.Connection, batch: EventBatch) -> RevertPlan:
                 Conflict(change, f"({edits} change(s) since it was created)")
             )
 
+    alias_moves, alias_conflicts = _plan_alias_moves(conn, events)
+    conflicts.extend(alias_conflicts)
+
     return RevertPlan(
         batch=batch,
         creates=list(created.values()),
         deletes=list(deleted.values()),
         updates=updates,
+        aliases=alias_moves,
         conflicts=conflicts,
     )
+
+
+def _plan_alias_moves(
+    conn: sqlite3.Connection, events: list[EventLogEntry]
+) -> tuple[list[Change], list[Conflict]]:
+    """carrier_alias rows in their OWN lane, because they are not entities.
+
+    The table is keyed by the alias string — no id, no updated_at, no
+    deleted_at — so `base.raw_row` cannot read one and `base.update` cannot
+    write one, which is why 'carrier_alias' is in NON_MUTATION_FIELDS and the
+    generic planner above skips it. Skipping it in the PLANNER is right;
+    skipping it in the REVERT was the bug: a market merge moved every alias to
+    the survivor and reverting the merge brought the duplicate back with none
+    of them (2026-08-18).
+
+    The event says where the alias ended up (entity_id) and where it came from
+    (old_value, None if it was created outright). Same 'surface, don't guess'
+    rule as every other lane: if the alias points somewhere other than where
+    this batch left it, someone moved it since and the revert is refused."""
+    from ..repo import aliases
+
+    net: dict[str, Change] = {}                    # alias -> the batch's net move
+    for event in events:
+        if event.field != "carrier_alias" or event.new_value is None:
+            continue
+        alias = event.new_value
+        first = net.get(alias)
+        net[alias] = Change(
+            "org", event.entity_id, "carrier_alias",
+            first.old_value if first else event.old_value,   # earliest origin
+            alias,
+        )
+    if not net:
+        return [], []
+
+    current = aliases.alias_map(conn)
+    moves, conflicts = [], []
+    for alias, change in net.items():
+        now_owned_by = current.get(alias)
+        if now_owned_by != change.entity_id:
+            conflicts.append(Conflict(change, now_owned_by))
+        else:
+            moves.append(change)
+    return moves, conflicts
 
 
 class AlreadyReverted(Exception):
@@ -352,8 +404,9 @@ def revert(
     deletes = [c for c in plan.deletes if clean(c)]
     updates = [c for c in plan.updates if clean(c)]
     creates = [c for c in plan.creates if clean(c)]
+    alias_moves = [c for c in plan.aliases if clean(c)]
 
-    reverted = [*updates, *creates, *deletes]
+    reverted = [*updates, *creates, *deletes, *alias_moves]
     if not reverted:
         # force on a fully conflicted batch: nothing to apply. Marking it
         # reverted here would report success for a no-op AND burn the batch,
@@ -376,6 +429,14 @@ def revert(
                 base.soft_delete(
                     conn, change.entity_type, change.entity_id, note="revert"
                 )
+        for change in alias_moves:
+            # new_value is the alias, old_value the org it came from — None
+            # when the batch created it, in which case putting it back means
+            # removing it
+            if change.old_value is None:
+                aliases_repo.remove(conn, str(change.new_value))
+            else:
+                aliases_repo.set_alias(conn, str(change.new_value), change.old_value)
         batches_repo.mark_reverted(conn, batch.id, now)
 
     return RevertResult(

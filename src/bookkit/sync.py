@@ -1057,7 +1057,21 @@ def write_through(
     if not path.exists():
         diags.error("io", f"{path}: file is gone")
         return diags
-    if placement.source_sha256 and file_sha256(path) != placement.source_sha256:
+    if not placement.source_sha256:
+        # A NULL sha USED TO SHORT-CIRCUIT THE WHOLE GUARD, which inverted it:
+        # a mismatched sha means "bookkit saw this file once and it has moved
+        # on", a missing one means "bookkit has never verified this file at
+        # all". The second is strictly less knowledge than the first, so it is
+        # the case to refuse hardest, not the case to wave through. Seeded
+        # books linked a path without projecting and every one of them wrote
+        # through with no conflict and no diagnostic (2026-08-18). Re-projecting
+        # is one non-destructive command; the alternative is an unverified
+        # overwrite of a user's irreplaceable program file.
+        raise WriteConflict(
+            f"{path} was linked without a projection, so bookkit has never "
+            f"verified its contents — run `bookctl sync` before editing it here"
+        )
+    if file_sha256(path) != placement.source_sha256:
         raise WriteConflict(
             f"{path} changed on disk since last projection — re-sync and retry"
         )
