@@ -117,8 +117,12 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
     ("placement", "read"): (
         ("renewals_due", "list_programs", "program_summary", "program_layers"),
         "renewals_due counts to the earliest LINE end and names the lines of "
-        "cover. program_layers' description promises participants and "
-        "sync.layer_details returns none (AE review).",
+        "cover. program_layers now carries the carrier panel per layer, which "
+        "its description had promised and sync.layer_details did not return "
+        "(AE review, fixed 2026-08-18): the data moved, not the description, "
+        "because program_summary is the tool that is deliberately slim and "
+        "says so, and 'who is on the 2nd excess' is a real question. "
+        "program_summary stays posture-and-counts, no structure, no shares.",
     ),
     ("placement", "update"): (
         (

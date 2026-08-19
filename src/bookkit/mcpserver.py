@@ -415,7 +415,11 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
     async def program_layers(placement_ref: str) -> dict[str, Any]:
         """A linked program's tower: lines (with the exact line ids the write
         tools take), every layer with its id, attach/limit/premium in cents,
-        and participants. Read this before ANY program write."""
+        and the carrier panel on each layer — carrier, share as a PERCENT
+        (matching the layer's own signed_pct, and the form program_bind
+        takes), and that carrier's share of the layer premium in cents. A
+        layer nobody is on has an empty panel, which is towerkit's 'To be
+        placed'. Read this before ANY program write."""
         return _program_layers(rw, placement_ref)
 
     @server.tool()

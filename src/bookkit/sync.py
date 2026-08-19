@@ -877,8 +877,24 @@ def add_participant(
 
 
 def layer_details(conn: sqlite3.Connection, placement_id: str) -> list[dict[str, Any]]:
-    """The linked program's layers with everything the edit form needs,
-    money in cents (bookkit-native)."""
+    """The linked program's layers with everything the edit form needs, plus
+    the carrier panel on each; money in cents (bookkit-native).
+
+    THE PANEL IS NOT AN EXTRA READ. It comes off the `program` already loaded
+    here, so this stays ONE file open per call — which matters, because the
+    account page was deliberately reduced to a single layer_details call per
+    render (web/routes/account.py) and a per-layer load would undo that
+    silently.
+
+    Participants carry `share_pct`, not bps, on purpose: `signed_pct` sits in
+    the same dict, and two share units in one payload is the cents-vs-dollars
+    mistake in miniature — a reader comparing a participant to the layer total
+    would be off by a hundred. A share of an unknown premium is None, never
+    zero, the same rule the projection applies.
+
+    An unplaced layer is an EMPTY list, never a missing key: "nobody is on it"
+    and "we did not look" are different facts and towerkit prints the first as
+    'To be placed'."""
     placement = placements.get(conn, placement_id)
     if not placement.program_path:
         return []
@@ -908,6 +924,18 @@ def layer_details(conn: sqlite3.Connection, placement_id: str) -> list[dict[str,
                 # cover" from "a layer whose limit happens to be zero" — the two
                 # are opposite facts that arithmetic alone renders identical.
                 "statutory": layer.statutory,
+                "participants": [
+                    {
+                        "carrier": part.carrier,
+                        "share_pct": part.share_bps / 100,
+                        "premium_cents": (
+                            dollars_to_cents(premium_share(layer.premium, part.share_bps))
+                            if layer.premium is not None
+                            else None
+                        ),
+                    }
+                    for part in layer.participants
+                ],
             }
         )
     return out
