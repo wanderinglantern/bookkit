@@ -227,3 +227,18 @@ def subjectivity_text(open_count: int, total: int) -> Text:
 def right(label: str) -> Text:
     """A right-aligned column header, to sit over numeric columns."""
     return Text(label, justify="right")
+
+
+def assignee_text(name: str) -> Text:
+    """Who is chasing this — or the em dash that says nobody is.
+
+    An empty cell reads as a rendering fault; the dash says the field is
+    empty on purpose, which here is a real and common state (unassigned work
+    is ours until someone says otherwise). Same rule the renewals pane
+    learned when a placement with no program name painted a blank.
+
+    Deliberately UNCOLOURED. Colour is signal on this build, and there is no
+    signal in a name — an assignee is not good or bad news, it is context.
+    The one thing that could be signal (whose side they are on) is the
+    client's column on the client's workbook and does not belong on ours."""
+    return Text(name, style=FG) if name else Text("—", style=DIM)

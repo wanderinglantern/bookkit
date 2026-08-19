@@ -167,3 +167,95 @@ async def test_the_overview_hint_still_says_empty_when_it_really_is(
         app.open_account(fresh.id)
         await pilot.pause()
         assert "adds the first row" in _painted(app)
+
+
+# --- the assignee: on the surfaces that can carry it, and only those --------
+
+
+async def test_the_open_items_tab_paints_the_assignee(snapshot_db: Path) -> None:
+    """The account screen's Open Items tab is where tasks are worked in the
+    TUI, so the assignee has to be visible AND painted there — a column
+    declared past the pane's right edge is not narrow, it is absent."""
+    from bookkit.repo import assignees, contacts
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import tasks as tasks_repo
+
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=WIDE) as pilot:
+        await pilot.pause()
+        conn = app.conn
+        org = next(
+            o for o in orgs_repo.list_orgs(conn, kind="client")
+            if tasks_repo.open_tasks_for_client(conn, o.id) and contacts.for_org(conn, o.id)
+        )
+        task = tasks_repo.open_tasks_for_client(conn, org.id)[0]
+        person = contacts.for_org(conn, org.id)[0]
+        assignees.set_on_task(
+            conn, task.id, f"{person.name} — {org.name}", org_id=org.id
+        )
+
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("8")
+        await pilot.pause()
+
+        table = app.screen.query_one("#open-items-table", ListTable)
+        assert "assignee" in [str(c.label) for c in table.columns.values()]
+        assert table.virtual_size.width <= table.container_size.width, (
+            f"the Open Items table needs {table.virtual_size.width} columns and "
+            f"has {table.container_size.width} — the assignee is off the screen"
+        )
+        assert person.name in _painted(app), (
+            "the assignee is in the table and not on the screen"
+        )
+
+
+async def test_the_navigators_cross_account_task_pane_refuses_the_column(
+    snapshot_db: Path,
+) -> None:
+    """A WIDTH REFUSAL, PINNED — not an oversight, and not a column silently
+    truncated into a pane that cannot hold it.
+
+    The navigator's attention-tasks pane is ~94 cells and its SIX columns
+    already need ~99: it overflows before this feature exists (the same class
+    of defect as Today's renewals above, still open on this pane). A seventh
+    needs ~109. So the assignee is not declared there, and — the half that
+    would otherwise rot silently — `i` must not map an editor onto a column
+    index that pane does not have, or the key opens nothing and tab hops into
+    silence.
+
+    When this test fails because somebody fitted the column, delete it and
+    add the pane to the painted assertion above. Do not widen the pane."""
+    from bookkit.tui.screens.navigator import ASSIGNEE_COLUMN, task_inline
+    from bookkit.tui.widgets.inline_edit import InlineTable
+
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=WIDE) as pilot:
+        await pilot.pause()
+        nav = app.screen
+        table = nav.query_one("#nav-table", InlineTable)
+
+        nav._current = ("att", "tasks")
+        nav._render_pane()
+        await pilot.pause()
+        headers = [str(c.label) for c in table.columns.values()]
+        assert "assignee" not in headers, headers
+        assert ASSIGNEE_COLUMN not in table.inline_fields, (
+            "`i` would open an editor over a column this pane does not have"
+        )
+        # every editable index names a column that actually exists
+        assert max(table.inline_fields) < len(headers)
+
+        # and the per-account pane, which DOES fit it, carries both halves
+        org_id = next(iter(nav._row_org.values()), None)
+        assert org_id, "no attention task names an account — fixture drifted"
+        nav._current = ("group", ("tasks", org_id))
+        nav._render_pane()
+        await pilot.pause()
+        assert "assignee" in [str(c.label) for c in table.columns.values()]
+        assert table.inline_fields[ASSIGNEE_COLUMN].key == "assignee"
+        assert table.virtual_size.width <= table.container_size.width, (
+            f"the per-account task pane needs {table.virtual_size.width} "
+            f"columns and has {table.container_size.width}"
+        )
+        assert task_inline(app.conn, org_id, assignee_at=None).keys() == {0, 1, 2, 3}

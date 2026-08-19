@@ -36,6 +36,7 @@ from ..models import (
     TeamMember,
 )
 from ..repo import (
+    assignees,
     contacts,
     interactions,
     opportunities,
@@ -182,6 +183,21 @@ def task_form(
     initial = existing.model_dump() if existing else {"priority": "2"}
     if existing:
         initial["priority"] = str(existing.priority)
+    # WHOSE ACCOUNT THE PEOPLE COME FROM. An existing task's own account
+    # wins over the screen's default: editing a task from a list that spans
+    # accounts (the navigator's attention pane) must offer the contacts of
+    # the account the TASK belongs to, not the one the cursor last sat on.
+    people_org_id = (existing.org_id if existing else None) or default_org_id
+    # `assignee` is not a Task column — it is one typed string that
+    # repo.assignees turns into three (kind + id, or a freeform name). The
+    # form pre-fills the QUALIFIED label, because what a form pre-fills has
+    # to be a value its own resolver accepts back unchanged.
+    assignee_pool = (
+        tuple(c.label for c in assignees.candidates(conn, people_org_id))
+        if conn else ()
+    )
+    if conn is not None and existing is not None:
+        initial["assignee"] = assignees.label_of(conn, existing)
     # most tasks are title + due — the detail textarea goes last
     fields = [
         Field("title", "title", required=True),
@@ -189,6 +205,8 @@ def task_form(
         Field("category", "category",
               suggestions=tuple(vocab.task_categories(conn)) if conn else ()),
         Field("due_on", "due", "date"),
+        Field("assignee", "assignee", suggestions=assignee_pool,
+              placeholder="who is chasing this — a name, or anyone"),
         Field("priority", "priority", "select", _PRIORITY),
     ]
     if conn is not None:
@@ -218,6 +236,18 @@ def apply_task(
     core = dropped(values)  # org_id present only when the form chose an account
     if "priority" in core:
         core["priority"] = int(core["priority"])
+    # `assignee` never reaches the task table under that name: repo.assignees
+    # owns the three columns it becomes, and is the only thing that writes
+    # them. Popped BEFORE dropped()'s survivors are handed to the repo — and
+    # popped from `values`, not `core`, so that clearing the field (which
+    # dropped() strips as a None) still nulls what was there.
+    typed = values.get("assignee") if "assignee" in values else None
+    core.pop("assignee", None)
+    people_org_id = (
+        core.get("org_id") or (existing.org_id if existing else None) or org_id
+    )
+    if "assignee" in values:
+        core.update(assignees.columns(conn, typed, org_id=people_org_id))
     if existing:
         return tasks_repo.update(conn, existing.id, **core)
     title = core.pop("title")

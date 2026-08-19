@@ -29,6 +29,7 @@ from ...forms import inline as forms_inline
 from ...forms.spec import Field
 from ...money import format_cents_compact
 from ...repo import (
+    assignees,
     contacts,
     documents,
     interactions,
@@ -763,8 +764,11 @@ class AccountScreen(Screen):
 
         table = self.query_one("#open-items-table", InlineTable)
         table.clear(columns=True)
-        table.add_columns("due", "task", "category", "description", "detail", "status")
-        table.inline_fields = task_inline(conn)
+        table.add_columns(
+            "due", "task", "category", "description", "detail", "status",
+            "assignee",
+        )
+        table.inline_fields = task_inline(conn, org_id)
         for t in grouped_by_category(tasks_repo.open_tasks_for_client(conn, org_id)):
             due = (
                 date_text(t.due_on, days_until(t.due_on, today))
@@ -774,7 +778,8 @@ class AccountScreen(Screen):
                 due, t.title,
                 theme.category_text(t.category),
                 t.description or dash(),
-                task_detail_cell(t), status_text(t.status), key=t.id,
+                task_detail_cell(t), status_text(t.status),
+                theme.assignee_text(assignees.name_of(conn, t)), key=t.id,
             )
 
         context = self.query_one("#open-items-context", ListTable)
@@ -1344,9 +1349,15 @@ class AccountScreen(Screen):
 
     def _open_items_inline_initial(self, row_key: str, field_key: str) -> str:
         try:
-            return getattr(tasks_repo.get(self.app.conn, row_key), field_key) or ""
+            task = tasks_repo.get(self.app.conn, row_key)
         except KeyError:
             return ""
+        if field_key == "assignee":
+            # three columns, one editor — and the QUALIFIED label, so that
+            # opening the cell and pressing enter resolves back to the same
+            # person instead of quietly downgrading them to freeform
+            return assignees.label_of(self.app.conn, task)
+        return getattr(task, field_key, None) or ""
 
     def on_inline_table_cell_edited(self, event: InlineTable.CellEdited) -> None:
         conn = self.app.conn
@@ -1354,9 +1365,18 @@ class AccountScreen(Screen):
             with _batched(
                 self, tool="inline_edit", summary=f"edited task {event.field.key}"
             ):
-                tasks_repo.update(
-                    conn, event.row_key, **{event.field.key: event.value}
-                )
+                if event.field.key == "assignee":
+                    # repo.assignees owns all three assignee columns
+                    # together; the generic one-key update below would try
+                    # to write a column that does not exist.
+                    assignees.set_on_task(
+                        conn, event.row_key, event.value,
+                        org_id=self.current_org_id,
+                    )
+                else:
+                    tasks_repo.update(
+                        conn, event.row_key, **{event.field.key: event.value}
+                    )
         elif event.table.id == "rfi-items":
             with _batched(
                 self, tool="inline_edit", summary=f"edited request item {event.field.key}"

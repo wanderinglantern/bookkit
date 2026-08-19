@@ -518,3 +518,73 @@ def test_marking_an_item_received_stamps_the_date_in_one_batch_and_reverts(app_a
     restored = rfi_repo.get_item(conn, item.id)
     assert restored.status == "outstanding"
     assert not restored.received_on, "revert left a stale received date"
+
+
+# --- the assignee cell ------------------------------------------------------
+
+
+def test_the_work_tab_shows_and_saves_an_assignee(app_and_org) -> None:
+    """The Work tab is where tasks are worked on the web, so the assignee has
+    to be editable there — and it is the one cell whose save is not the
+    generic single-column update every other cell uses (three columns hold
+    the answer). A route that forgot that would 500 or, worse, write a name
+    into a column that does not exist."""
+    from bookkit.repo import assignees, contacts
+    from bookkit.repo import tasks as tasks_repo
+
+    client, org, _ = app_and_org
+    conn = client.app.state.conn
+    task = tasks_repo.open_tasks_for_client(conn, org.id)[0]
+    person = contacts.for_org(conn, org.id)[0]
+
+    page = client.get(f"/accounts/{org.ref}/work")
+    assert page.status_code == 200
+    assert "<th>Assignee</th>" in page.text
+
+    # the editor offers the account's own people, qualified
+    editor = client.get(f"/accounts/{org.ref}/tasks/{task.id}/cell/assignee/edit")
+    assert editor.status_code == 200
+    label = f"{person.name} — {org.name}"
+    assert label in editor.text, editor.text[:800]
+
+    saved = client.post(
+        f"/accounts/{org.ref}/tasks/{task.id}/cell/assignee", data={"assignee": label}
+    )
+    assert saved.status_code == 200
+    stored = tasks_repo.get(conn, task.id)
+    assert stored.assignee_kind == "contact"
+    assert stored.assignee_id == person.id
+    assert stored.assignee_name is None
+    # and the cell that came back shows them
+    assert person.name in saved.text
+
+    # one writer action, one undo unit — and all three columns inside it
+    batch = _latest_batch(conn)
+    assert batch is not None and batch.source == "web"
+    fields = {
+        row["field"]
+        for row in conn.execute(
+            "SELECT field FROM event_log WHERE batch_id = ?", (batch.id,)
+        )
+    }
+    assert fields == {"assignee_kind", "assignee_id"}, fields
+    assert assignees.label_of(conn, stored) == label
+
+
+def test_an_unresolvable_assignee_is_kept_as_typed(app_and_org) -> None:
+    """Freeform is the requirement, not the fallback: the AE has to be able
+    to name somebody the book has never heard of. It is stored where nothing
+    can read it as an identity, so the client's Owner column cannot move."""
+    from bookkit.repo import tasks as tasks_repo
+
+    client, org, _ = app_and_org
+    conn = client.app.state.conn
+    task = tasks_repo.open_tasks_for_client(conn, org.id)[0]
+
+    client.post(
+        f"/accounts/{org.ref}/tasks/{task.id}/cell/assignee",
+        data={"assignee": "Marisa at Lockton"},
+    )
+    stored = tasks_repo.get(conn, task.id)
+    assert stored.assignee_kind is None and stored.assignee_id is None
+    assert stored.assignee_name == "Marisa at Lockton"

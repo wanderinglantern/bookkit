@@ -25,7 +25,7 @@
     <div class="table-scroll">
       <table class="rows">
         <thead>
-          <tr><th>Due</th><th>Task</th><th>Category</th><th>Description</th><th></th></tr>
+          <tr><th>Due</th><th>Task</th><th>Category</th><th>Assignee</th><th>Description</th><th></th></tr>
         </thead>
         <tbody>
           {# Each *_cell value is ALREADY a full <td> (render_cell_display,
@@ -41,6 +41,7 @@
               {{ row.due_cell | safe }}
               {{ row.title_cell | safe }}
               {{ row.category_cell | safe }}
+              {{ row.assignee_cell | safe }}
               {{ row.description_cell | safe }}
               <td>
                 <button type="button" class="row-action-btn"

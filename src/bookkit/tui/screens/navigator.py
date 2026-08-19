@@ -28,8 +28,8 @@ from ...dates import days_until
 from ...forms import inline as forms_inline
 from ...forms.spec import Field
 from ...money import format_cents_compact
+from ...repo import assignees, contacts, opportunities, orgs, placements
 from ...repo import batches as batches_repo
-from ...repo import contacts, opportunities, orgs, placements
 from ...repo import projects as projects_repo
 from ...repo import rfi as rfi_repo
 from ...repo import tasks as tasks_repo
@@ -83,17 +83,41 @@ ADDABLE = ("placements", "contacts", "opportunities", "tasks", "projects", "requ
 # itself lives in forms/inline.py: which fields are inline-editable is not a
 # per-surface choice, only the column position is.
 CONTACT_INLINE = dict(zip((2, 3, 4, 5), forms_inline.CONTACT_FIELDS, strict=True))
-TASK_COLUMNS = (0, 1, 2, 3)
+TASK_COLUMNS = (0, 1, 2, 3)  # due, task, category, description
+# Assignee sits at column 6 on the task tables WIDE ENOUGH TO CARRY IT, after
+# the four above and the two (detail, status/account) that were already laid
+# out — renumbering those would silently re-point four editors at four wrong
+# cells. `assignee_at=None` is not a smaller version of the feature, it is
+# the honest answer for a pane that cannot fit the column: a Field mapped to
+# a column index that does not exist makes `i` open nothing and tab hop into
+# silence, which is the dead-key failure tests/test_dead_keys.py exists for.
+ASSIGNEE_COLUMN = 6
 
 
-def task_inline(conn: sqlite3.Connection) -> dict[int, Field]:
-    """The task column map, with the category cell carrying the book's own
-    category vocabulary. Built per fill, not once at import: the vocabulary is
-    data and the suggestions must include a category typed a minute ago. Both
-    task tables on this screen and the account screen's Open Items tab use it
-    — the inline cell is the primary edit path, so the completion that makes
-    "Internal" discoverable has to be there and not only in the modal."""
-    return dict(zip(TASK_COLUMNS, forms_inline.task_fields(conn), strict=True))
+def task_inline(
+    conn: sqlite3.Connection,
+    org_id: str | None = None,
+    assignee_at: int | None = ASSIGNEE_COLUMN,
+) -> dict[int, Field]:
+    """The task column map, with the category and assignee cells carrying the
+    book's own vocabularies. Built per fill, not once at import: a vocabulary
+    is data and the suggestions must include a category typed a minute ago.
+    Both task tables on this screen and the account screen's Open Items tab
+    use it — the inline cell is the primary edit path, so the completion that
+    makes "Internal" discoverable has to be there and not only in the modal,
+    and the same goes for the people an assignee can name.
+
+    `org_id` scopes the assignee list to one account's own contacts; a table
+    spanning accounts passes None and offers the team and the market
+    contacts, which are the same everywhere."""
+    fields = forms_inline.task_fields(conn, org_id)
+    by_key = {f.key: f for f in fields}
+    columns = dict(
+        zip(TASK_COLUMNS, [f for f in fields if f.key != "assignee"], strict=True)
+    )
+    if assignee_at is not None:
+        columns[assignee_at] = by_key["assignee"]
+    return columns
 
 
 def _section(label: str, count: int | None = None) -> str:
@@ -732,8 +756,21 @@ class NavigatorScreen(Screen):
                     status_text(need["status"]), key=key,
                 )
         elif which == "tasks":
-            table.add_columns("due", "task", "category", "description", "detail", "account")
-            table.inline_fields = task_inline(conn)
+            # NO ASSIGNEE COLUMN HERE, AND THIS IS A WIDTH REFUSAL, NOT AN
+            # OVERSIGHT. This pane is ~94 cells inside a 140-column terminal
+            # and its six columns already need 99 — it overflows on main,
+            # before this feature, in exactly the way CLAUDE.md describes
+            # ("a column declared past the pane's right edge is not narrow,
+            # it is absent"). A seventh needs 109. The assignee lives on the
+            # two task surfaces that measured under their container: the
+            # per-account group table below, and the account screen's Open
+            # Items tab. Adding it here means dropping one of `account`,
+            # `detail` or `description` first, which is Grant's call and not
+            # this branch's.
+            table.add_columns(
+                "due", "task", "category", "description", "detail", "account",
+            )
+            table.inline_fields = task_inline(conn, assignee_at=None)
             for task in grouped_by_category(self._attention["tasks"]):
                 key = f"task:{task.id}"
                 name = ""
@@ -872,8 +909,11 @@ class NavigatorScreen(Screen):
                     Text(f"{o.probability_pct}%", justify="right"), key=key,
                 )
         elif group == "tasks":
-            table.add_columns("due", "task", "category", "description", "detail", "status")
-            table.inline_fields = task_inline(conn)
+            table.add_columns(
+                "due", "task", "category", "description", "detail", "status",
+                "assignee",
+            )
+            table.inline_fields = task_inline(conn, org_id)
             today = date.today()
             for task in grouped_by_category(tasks_repo.open_tasks(conn, org_id=org_id)):
                 key = f"task:{task.id}"
@@ -886,7 +926,8 @@ class NavigatorScreen(Screen):
                     due, task.title,
                     theme.category_text(task.category),
                     task.description or dash(),
-                    task_detail_cell(task), status_text(task.status), key=key,
+                    task_detail_cell(task), status_text(task.status),
+                    theme.assignee_text(assignees.name_of(conn, task)), key=key,
                 )
         elif group == "projects":
             table.add_columns("ref", "project", "status", "start", "end")
@@ -1056,7 +1097,12 @@ class NavigatorScreen(Screen):
             if kind == "contact":
                 return getattr(contacts.get(conn, entity_id), field_key) or ""
             if kind == "task":
-                return getattr(tasks_repo.get(conn, entity_id), field_key) or ""
+                task = tasks_repo.get(conn, entity_id)
+                if field_key == "assignee":
+                    # the QUALIFIED label, so enter on an untouched cell
+                    # resolves back to the same person (see assignees.label_of)
+                    return assignees.label_of(conn, task)
+                return getattr(task, field_key, None) or ""
         except KeyError:
             pass
         return ""
@@ -1075,9 +1121,20 @@ class NavigatorScreen(Screen):
             with _batched(
                 self, tool="inline_edit", summary=f"edited task {event.field.key}"
             ):
-                tasks_repo.update(
-                    conn, entity_id, **{event.field.key: event.value}
-                )
+                if event.field.key == "assignee":
+                    # repo.assignees owns all three assignee columns
+                    # together; the generic one-key update below would try
+                    # to write a column that does not exist. The account is
+                    # the TASK's, not the tree cursor's — this table spans
+                    # accounts.
+                    assignees.set_on_task(
+                        conn, entity_id, event.value,
+                        org_id=self._row_org.get(event.row_key),
+                    )
+                else:
+                    tasks_repo.update(
+                        conn, entity_id, **{event.field.key: event.value}
+                    )
         else:
             return
         self.notify(f"{event.field.label} saved — u undoes")

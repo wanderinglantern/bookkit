@@ -91,6 +91,16 @@ def test_migration_012_is_additive_only() -> None:
     assert "CREATE TABLE SUBMISSION_SUBJECTIVITY" in body
 
 
+def _newest_migration() -> int:
+    """The highest migration on disk. Every assertion below is about the
+    snapshot's ORDER, never about which version happens to be newest."""
+    conn = db.connect(":memory:", migrate=False)
+    try:
+        return max(v for v, _ in db.pending_migrations(conn))
+    finally:
+        conn.close()
+
+
 def test_an_existing_book_is_snapshotted_before_a_migration_runs(
     tmp_path: Path,
 ) -> None:
@@ -118,7 +128,10 @@ def test_an_existing_book_is_snapshotted_before_a_migration_runs(
     assert db.schema_version(db.connect(path, migrate=False)) == 11
 
     conn = db.connect(path)          # this is the call that migrates
-    assert db.schema_version(conn) == 12
+    # the NEWEST migration, not a literal: this test is about the snapshot,
+    # and pinning 012 here made it fail the day 013 was written — which reads
+    # as the snapshot breaking rather than as the number moving.
+    assert db.schema_version(conn) == _newest_migration()
     conn.close()
 
     backups = sorted((tmp_path / "backups").glob("book.db.*.bak"))
@@ -220,7 +233,7 @@ def test_the_snapshot_is_taken_before_the_migration_not_after(
     _book_at_schema_11(path)
 
     conn = db.connect(path)
-    assert db.schema_version(conn) == 12
+    assert db.schema_version(conn) == _newest_migration()
     conn.close()
 
     backups = sorted((tmp_path / "backups").glob("book.db.*.bak"))
