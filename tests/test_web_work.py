@@ -808,3 +808,119 @@ def _items(client, request):
     from bookkit.repo import rfi as rfi_repo
 
     return rfi_repo.items_for_request(client.app.state.conn, request.id)
+
+
+# --- taking back an ask filed in error (2026-08-19) ---------------------------
+#
+# The web half of what MCP got the same day. rfi_repo.delete_request and
+# delete_item had no caller anywhere, which is why an RFI the MCP filed by
+# mistake could not be taken off Grant's book from any surface at all.
+
+
+def test_the_confirm_step_writes_nothing(app_and_org):
+    """A step, not a browser confirm(): removing a request takes its items with
+    it, and the plan for that has to be visible before it happens."""
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+
+    confirm = client.get(f"/accounts/{org.ref}/requests/{request.id}/remove")
+
+    assert confirm.status_code == 200
+    assert request.title in confirm.text
+    assert rfi_repo.find_request(client.app.state.conn, request.id) is not None
+
+
+def test_the_confirm_step_says_how_many_items_go_with_it(app_and_org):
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+
+    count = len(rfi_repo.items_for_request(client.app.state.conn, request.id))
+    assert count, "the fixture request has no items — the plan would say nothing"
+
+    confirm = client.get(f"/accounts/{org.ref}/requests/{request.id}/remove").text
+
+    assert str(count) in confirm
+
+
+def test_removing_a_request_takes_its_items_and_is_revertible(app_and_org):
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+    from bookkit.services import batches as batches_svc
+
+    conn = client.app.state.conn
+    removed = client.post(f"/accounts/{org.ref}/requests/{request.id}/remove")
+
+    assert removed.status_code == 200
+    assert rfi_repo.find_request(conn, request.id) is None
+    batch = _latest_batch(conn)
+    assert batch.source == "web" and batch.tool == "request_remove"
+
+    batches_svc.revert(conn, batch.ref, now=db.utc_now())
+    assert rfi_repo.find_request(conn, request.id) is not None
+    assert rfi_repo.items_for_request(conn, request.id)
+
+
+def test_removing_an_answered_request_is_refused_in_the_page(app_and_org):
+    """A refusal SAYS SOMETHING. htmx drops 4xx, so a destructive control that
+    refuses with a status code produces no swap, no message and no change."""
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+
+    conn = client.app.state.conn
+    item = rfi_repo.items_for_request(conn, request.id)[0]
+    with db.transaction(conn):
+        rfi_repo.update_item(conn, item.id, response="sent 12 Aug")
+
+    refused = client.post(f"/accounts/{org.ref}/requests/{request.id}/remove")
+
+    assert refused.status_code == 200
+    assert "answered" in refused.text
+    assert rfi_repo.find_request(conn, request.id) is not None
+
+
+def test_one_item_can_be_taken_off_a_request(app_and_org):
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+
+    conn = client.app.state.conn
+    item = rfi_repo.items_for_request(conn, request.id)[0]
+
+    removed = client.post(
+        f"/accounts/{org.ref}/requests/{request.id}/items/{item.id}/remove"
+    )
+
+    assert removed.status_code == 200
+    left = [i.id for i in rfi_repo.items_for_request(conn, request.id)]
+    assert item.id not in left
+    assert rfi_repo.find_request(conn, request.id) is not None, "the request went too"
+    assert _latest_batch(conn).tool == "request_item_remove"
+
+
+def test_removing_an_answered_item_is_refused_in_the_page(app_and_org):
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+
+    conn = client.app.state.conn
+    item = rfi_repo.items_for_request(conn, request.id)[0]
+    with db.transaction(conn):
+        rfi_repo.update_item(conn, item.id, response="sent 12 Aug")
+
+    refused = client.post(
+        f"/accounts/{org.ref}/requests/{request.id}/items/{item.id}/remove"
+    )
+
+    assert refused.status_code == 200
+    assert "answered" in refused.text
+    assert item.id in [i.id for i in rfi_repo.items_for_request(conn, request.id)]
+
+
+def test_the_page_offers_both_removals(app_and_org):
+    """A route nothing renders is a route nobody can use — the lesson from the
+    market cell editor earlier the same day."""
+    client, org, request = app_and_org
+
+    work = client.get(f"/accounts/{org.ref}/work").text
+    items = client.get(f"/accounts/{org.ref}/requests/{request.id}").text
+
+    assert f"/requests/{request.id}/remove" in work
+    assert "/remove" in items and "items/" in items

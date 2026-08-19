@@ -1,0 +1,32 @@
+{# The confirm step for removing an information request (2026-08-19).
+
+   A step, not an hx-confirm. This removal takes the request's ITEMS with it,
+   and the browser's own confirm() shows no plan — the same objection
+   web/parity.py records against using it for revert. The plan here is the
+   count: how many asks disappear alongside the heading.
+
+   It renders into the panel's own .form-host, so Cancel is the delegated
+   [data-form-cancel] listener inline-cell.js already owns.
+
+   Remove targets #requests-panel with outerHTML: this fragment lives inside
+   that panel, so returning the panel is a straight replace rather than the
+   self-nesting the add form had to solve with an OOB swap. #}
+<div class="confirm-remove" role="alertdialog"
+     aria-label="Remove {{ rfi_request.title }}">
+  <p class="confirm-remove-title">
+    Remove <strong>{{ rfi_request.title }}</strong> ({{ rfi_request.ref }})
+    from {{ header.org.name }}?
+  </p>
+  <ul class="confirm-remove-notes">
+    <li>{{ items | length }} item(s) go with it.</li>
+    <li>This is for a request filed in error. A request you asked for and no
+        longer need is withdrawn instead, and stays in the book.</li>
+    <li>Undoable — it lands as one change you can revert.</li>
+  </ul>
+  <div class="form-actions">
+    <button type="button" class="btn-danger"
+            hx-post="/accounts/{{ header.org.ref }}/requests/{{ rfi_request.id }}/remove"
+            hx-target="#requests-panel" hx-swap="outerHTML">Remove request</button>
+    <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+  </div>
+</div>

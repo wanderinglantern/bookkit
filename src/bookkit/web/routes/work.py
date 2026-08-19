@@ -314,8 +314,16 @@ def _request_rows(request: Request, org: Org) -> list[dict[str, Any]]:
     return rows
 
 
-def _requests_panel(request: Request, org: Org, *, oob: bool = False) -> HTMLResponse:
-    context = {"header": {"org": org}, "oob": oob, "request_rows": _request_rows(request, org)}
+def _requests_panel(
+    request: Request, org: Org, *, oob: bool = False, error: str | None = None
+) -> HTMLResponse:
+    """`error` is how a refused destructive write says so IN THE PAGE. htmx
+    does not swap 4xx and nothing listens for htmx:responseError, so a refusal
+    carried by a status code is no swap, no message and no change."""
+    context = {
+        "header": {"org": org}, "oob": oob, "error": error,
+        "request_rows": _request_rows(request, org),
+    }
     return TEMPLATES.TemplateResponse(request, "account/_requests_panel.html", context)
 
 
@@ -437,8 +445,14 @@ def _items_context(request: Request, org: Org, request_id: str) -> dict[str, Any
     }
 
 
-def _items_panel(request: Request, org: Org, request_id: str, *, oob: bool = False) -> HTMLResponse:
-    context = {"header": {"org": org}, "oob": oob, **_items_context(request, org, request_id)}
+def _items_panel(
+    request: Request, org: Org, request_id: str, *, oob: bool = False,
+    error: str | None = None,
+) -> HTMLResponse:
+    context = {
+        "header": {"org": org}, "oob": oob, "error": error,
+        **_items_context(request, org, request_id),
+    }
     return TEMPLATES.TemplateResponse(request, "account/_items_panel.html", context)
 
 
@@ -611,6 +625,72 @@ def item_received(request: Request, ref: str, request_id: str, item_id: str) -> 
         summary=f"received {existing.prompt}", org_id=org.id,
     ):
         rfi_svc.mark_received(conn, item_id, date.today().isoformat())
+    return _items_panel(request, org, request_id)
+
+
+# --- taking back an ask filed in error ----------------------------------------
+#
+# A record filed in ERROR is not a record WITHDRAWN. Withdrawing is
+# `cancelled_at`: a real ask we have since dropped, which stays in the book
+# with a date on it. This is the other one — it was never true, and it goes.
+# services.rfi owns both rules; these routes are the doors.
+#
+# Confirm-then-POST, not hx-confirm: removing a request takes its items with
+# it, and the browser's own confirm() shows no plan. Same objection
+# web/parity.py already records against using confirm() for revert.
+
+
+@router.get("/accounts/{ref}/requests/{request_id}/remove", response_class=HTMLResponse)
+def request_remove_confirm(request: Request, ref: str, request_id: str) -> HTMLResponse:
+    """The confirm step. Writes NOTHING."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    existing = _owned(conn, org, "request", request_id, rfi_repo.get_request)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_request_confirm_remove.html",
+        {
+            "header": {"org": org},
+            "rfi_request": existing,
+            "items": rfi_repo.items_for_request(conn, request_id),
+        },
+    )
+
+
+@router.post("/accounts/{ref}/requests/{request_id}/remove", response_class=HTMLResponse)
+def request_remove(request: Request, ref: str, request_id: str) -> HTMLResponse:
+    """The confirmed removal — the request and its items, one batch.
+
+    A refusal comes back as the refreshed panel carrying the service's own
+    sentence: htmx does not swap 4xx and nothing listens for
+    htmx:responseError, so a destructive control that refuses with a status
+    code produces no swap, no message and no change at all."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "request", request_id, rfi_repo.get_request)
+    try:
+        rfi_svc.remove_request(conn, request_id, source="web")
+    except ValueError as exc:
+        return _requests_panel(request, org, error=str(exc))
+    return _requests_panel(request, org)
+
+
+@router.post(
+    "/accounts/{ref}/requests/{request_id}/items/{item_id}/remove",
+    response_class=HTMLResponse,
+)
+def request_item_remove(
+    request: Request, ref: str, request_id: str, item_id: str
+) -> HTMLResponse:
+    """One ask off a request. The REQUEST survives even if this was its last
+    item — a request with no items is an ask not yet written down, which is not
+    the same as a withdrawn one."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned_item(conn, org, request_id, item_id)
+    try:
+        rfi_svc.remove_item(conn, item_id, source="web")
+    except ValueError as exc:
+        return _items_panel(request, org, request_id, error=str(exc))
     return _items_panel(request, org, request_id)
 
 
