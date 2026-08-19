@@ -1764,8 +1764,16 @@ def _panel_refusal(
     request: Request, ref: str, org: Any, placement_id: str, message: str
 ) -> HTMLResponse:
     """A refusal for a form-host control with no form to re-render — said in
-    the form host itself, never a status code htmx would drop."""
-    return HTMLResponse(f'<p class="form-error" role="alert">{message}</p>')
+    the form host itself, never a status code htmx would drop.
+
+    ESCAPED BY HAND because this is a hand-built response, not a template:
+    Jinja's autoescape never sees it, and a refusal message can carry
+    user-controlled text (a line id from the URL path, quoted verbatim by
+    sync's refusals) — htmx re-executes swapped script tags (fresh-eyes
+    review, phase 4)."""
+    from markupsafe import escape
+
+    return HTMLResponse(f'<p class="form-error" role="alert">{escape(message)}</p>')
 
 
 def _mini_form(
@@ -2135,8 +2143,12 @@ def compare_page(request: Request, ref: str, placement_id: str) -> HTMLResponse:
         _loaded_program(expiring), _loaded_program(proposed)
     )
 
+    from ...money import dollars_to_cents
+
     def money(dollars: int | None) -> str:
-        return format_cents_compact(dollars * 100) if dollars else "—"
+        # towerkit's delta speaks dollars; the ONE conversion rule applies
+        # even for display (CLAUDE.md: conversion only in sync.py / money.py)
+        return format_cents_compact(dollars_to_cents(dollars)) if dollars else "—"
 
     def share(bps: int | None) -> str:
         return f"{bps / 100:g}%" if bps else "—"
@@ -2179,10 +2191,13 @@ def compare_page(request: Request, ref: str, placement_id: str) -> HTMLResponse:
 
 def _refusal_page(request: Request, message: str, back: str) -> HTMLResponse:
     """A download link's refusal is a NAVIGATION, not a swap — answer with a
-    small readable page and a way back, never a bare status code."""
+    small readable page and a way back, never a bare status code. Escaped by
+    hand: no template, no autoescape (same rule as _panel_refusal)."""
+    from markupsafe import escape
+
     return HTMLResponse(
-        f'<p class="form-error" role="alert">{message}</p>'
-        f'<p><a href="{back}">back to the program tab</a></p>'
+        f'<p class="form-error" role="alert">{escape(message)}</p>'
+        f'<p><a href="{escape(back)}">back to the program tab</a></p>'
     )
 
 
@@ -2317,11 +2332,12 @@ def export_open_items_workbook(request: Request, ref: str) -> Any:
 #
 # One route family serves both kinds through a {kind} path parameter,
 # REGISTERED LAST ON PURPOSE: Starlette matches /program/{placement_id}/{kind}
-# before FastAPI validates the enum, so every literal sibling
-# (/renew, /merge, /scaffold, /layers, /lines, /submissions, /cell) must be
-# registered FIRST to win. Appending anything after this block that shares
-# the /program/{placement_id}/<one-segment> shape will be shadowed — add such
-# routes ABOVE this comment.
+# before FastAPI validates the enum, so EVERY literal sibling — today:
+# /renew, /merge, /scaffold, /compare, /layers, /lines, /submissions, /cell,
+# /export/... — must be registered FIRST to win. This list is the invariant's
+# one home: when you add a /program/{placement_id}/<one-segment> route, add
+# it ABOVE this block AND name it here, or a future reorder will shadow it
+# into 422s.
 
 from enum import StrEnum as _StrEnum  # noqa: E402
 

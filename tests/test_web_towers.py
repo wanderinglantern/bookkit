@@ -57,3 +57,21 @@ def test_the_nav_reaches_towers_from_everywhere(client):
     for page_url in ("/book", f"/accounts/{org.ref}/program"):
         page = client.get(page_url).text
         assert 'href="/towers"' in page
+
+
+def test_a_deleted_account_does_not_500_the_towers_page(client):
+    """Org deletion is a soft delete with no cascade to placements, so a
+    linked placement can outlive its account — the page renders it unlinked
+    as "(deleted account)" instead of 500ing every other tower (fresh-eyes
+    review, phase 4)."""
+    from bookkit.repo import base, placements
+
+    conn = client.app.state.conn
+    victim = placements.all_linked(conn)[0]
+    base.soft_delete(conn, "org", victim.org_id, note="review regression")
+
+    page = client.get("/towers")
+
+    assert page.status_code == 200
+    assert "(deleted account)" in page.text
+    assert victim.ref in page.text

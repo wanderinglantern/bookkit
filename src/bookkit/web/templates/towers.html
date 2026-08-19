@@ -15,7 +15,11 @@
         <section class="towers-entry">
           <div class="people-head">
             <h2 class="people-label">
-              <a href="/accounts/{{ entry.org_ref }}/program">{{ entry.account }}</a>
+              {% if entry.org_ref %}
+                <a href="/accounts/{{ entry.org_ref }}/program">{{ entry.account }}</a>
+              {% else %}
+                {{ entry.account }}
+              {% endif %}
               — {{ entry.placement.program_name }}
             </h2>
             <span class="people-count mono">{{ entry.placement.ref }}</span>

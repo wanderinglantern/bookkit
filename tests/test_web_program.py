@@ -978,6 +978,28 @@ def test_a_bad_terms_amount_refuses_in_place(app_and_org, tmp_path):
     assert "amount" in refused.text or "dollar" in refused.text
 
 
+def test_hand_built_refusals_never_reflect_markup(app_and_org):
+    """_panel_refusal and _refusal_page are hand-built HTML — no template,
+    no autoescape — and refusal messages can quote user-typed content
+    (towerkit diagnostics quote line and layer names verbatim). htmx
+    re-executes swapped script tags, so an unescaped message is reflected
+    XSS (fresh-eyes review, phase 4). The unknown-line URL vector the review
+    named is pre-empted by _line_name's 404, but the seam itself must
+    escape: any future caller inherits the safety, not the hole."""
+    from bookkit.web.routes.program import _panel_refusal, _refusal_page
+
+    client, org = app_and_org
+    payload = "<script>alert(1)</script>"
+
+    for response in (
+        _panel_refusal(None, org.ref, org, "x", payload),
+        _refusal_page(None, payload, "/accounts/x/program"),
+    ):
+        body = bytes(response.body).decode()
+        assert "<script>" not in body
+        assert "&lt;script&gt;" in body
+
+
 def test_line_chips_reorder_the_columns(app_and_org, tmp_path):
     client, org = app_and_org
     conn = client.app.state.conn

@@ -34,6 +34,18 @@ def _entries(request: Request) -> list[dict[str, Any]]:
     conn = _conn(request)
     linked = placements.all_linked(conn)
     names = orgs.names_for(conn, {p.org_id for p in linked})
+    # One guarded fetch per unique org, not one per placement — and GUARDED:
+    # org deletion is a soft delete with no cascade to placements, so a
+    # linked placement can outlive its account. names_for already knows this
+    # (a missing key renders "(deleted account)"); the ref lookup gets the
+    # same tolerance, or one merged-away account 500s the whole book's
+    # towers (fresh-eyes review, phase 4).
+    refs: dict[str, str | None] = {}
+    for org_id in {p.org_id for p in linked}:
+        try:
+            refs[org_id] = str(orgs.get(conn, org_id).ref)
+        except KeyError:
+            refs[org_id] = None
     entries: list[dict[str, Any]] = []
     for placement in sorted(
         linked, key=lambda p: (names.get(p.org_id, ""), p.period_from)
@@ -52,7 +64,7 @@ def _entries(request: Request) -> list[dict[str, Any]]:
             {
                 "placement": placement,
                 "account": names.get(placement.org_id, "(deleted account)"),
-                "org_ref": _org_ref(conn, placement.org_id),
+                "org_ref": refs.get(placement.org_id),
                 "badge": badge,
                 "badge_kind": (
                     "ok" if diags.ok and not diags.warnings
@@ -63,10 +75,6 @@ def _entries(request: Request) -> list[dict[str, Any]]:
             }
         )
     return entries
-
-
-def _org_ref(conn: Any, org_id: str) -> str:
-    return str(orgs.get(conn, org_id).ref)
 
 
 @router.get("/towers", response_class=HTMLResponse)
