@@ -1,0 +1,27 @@
+{# Merge a duplicate into a sibling. The rule is stated, not discovered:
+   children (submissions, tasks, documents) move to the target, the source
+   is retired into it (soft-deleted, revertible), a file link carries when
+   exactly ONE side has it, and two file-backed placements refuse — two
+   sources of truth cannot merge. The POST targets the whole programs panel
+   because a merge shrinks the list. #}
+<div class="renew-confirm" role="alertdialog" aria-label="Merge {{ source.program_name }}">
+  <p><strong>Merge {{ source.program_name }} ({{ source.ref }}) into…</strong></p>
+  <form hx-post="{{ action }}" hx-target="#programs-panel" hx-swap="outerHTML">
+    <label class="field">
+      <span class="field-label">surviving program</span>
+      <select name="target_id" required>
+        <option value=""></option>
+        {% for sibling in siblings %}
+          <option value="{{ sibling.id }}">{{ sibling.program_name }} ({{ sibling.ref }}, {{ sibling.period_from }} → {{ sibling.period_to }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <p>Submissions, tasks and documents move to the survivor; {{ source.ref }} is
+      retired into it (the change list can revert). A program file carries over
+      when exactly one side has one; two file-backed programs refuse.</p>
+    <div class="program-form-actions">
+      <button type="submit" class="btn-pill btn-pill-primary">merge</button>
+      <button type="button" class="btn-pill" data-form-cancel>Cancel</button>
+    </div>
+  </form>
+</div>

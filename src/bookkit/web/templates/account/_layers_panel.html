@@ -36,6 +36,10 @@
             hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/renew"
             hx-target="#program-{{ placement.id }} .form-host"
             hx-swap="innerHTML">Renew</button>
+    <button type="button" class="people-add"
+            hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/merge"
+            hx-target="#program-{{ placement.id }} .form-host"
+            hx-swap="innerHTML">Merge</button>
   </div>
   <div class="form-host"></div>
 

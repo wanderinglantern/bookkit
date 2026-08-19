@@ -873,6 +873,82 @@ def test_a_refused_submission_keeps_the_typed_notes(app_and_org):
     assert "required" in refused
 
 
+def _merge_url(org, placement):
+    return f"/accounts/{org.ref}/program/{placement.id}/merge"
+
+
+def test_the_merge_form_offers_only_same_account_siblings(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import placements as placements_repo
+
+    mine = placements_repo.for_org(conn, org.id)
+    source = mine[0]
+    other_org = next(
+        o for o in orgs_repo.list_orgs(conn, kind="client") if o.id != org.id
+    )
+    foreign = placements_repo.for_org(conn, other_org.id)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    assert f'hx-get="{_merge_url(org, source)}"' in page, "no merge control"
+
+    form = client.get(_merge_url(org, source)).text
+
+    assert f'value="{source.id}"' not in form, "the form offers merging into itself"
+    for sibling in mine[1:]:
+        assert f'value="{sibling.id}"' in form
+    for stranger in foreign:
+        assert f'value="{stranger.id}"' not in form, "a foreign placement is offered"
+
+
+def test_a_merge_moves_the_children_and_retires_the_source(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+    from bookkit.repo import submissions as submissions_repo
+
+    mine = placements_repo.for_org(conn, org.id)
+    # merge the UNLINKED duplicate into the linked one — two file-backed refuse
+    source = next(p for p in mine if not p.program_path)
+    target = next(p for p in mine if p.program_path)
+    from bookkit.repo import orgs as orgs_repo
+
+    market = orgs_repo.list_orgs(conn, kind="market")[0]
+    moved = submissions_repo.create(
+        conn, market.id, "2026-08-01", placement_id=source.id
+    )
+
+    merged = client.post(_merge_url(org, source), data={"target_id": target.id})
+
+    assert merged.status_code == 200
+    assert source.ref not in merged.text, "the retired source still shows"
+    fresh = submissions_repo.get(conn, moved.id)
+    assert fresh.placement_id == target.id, "the submission did not move"
+
+
+def test_merging_two_file_backed_placements_refuses_with_the_panel_intact(
+    app_and_org, tmp_path
+):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+
+    linked_one = next(
+        p for p in placements_repo.for_org(conn, org.id) if p.program_path
+    )
+    linked_two = _two_line_placement(client, org, tmp_path)
+
+    refused = client.post(
+        _merge_url(org, linked_one), data={"target_id": linked_two.id}
+    )
+
+    assert refused.status_code == 200
+    assert 'id="programs-panel"' in refused.text
+    assert "two sources of truth" in refused.text
+    assert placements_repo.get(conn, linked_one.id).deleted_at is None
+
+
 def test_every_drawn_layer_lands_on_its_row(app_and_org):
     """The tower is a SURFACE now (F11): a drawn block carries its layer id
     and the table row carries the matching anchor, so a click scrolls and
@@ -881,8 +957,6 @@ def test_every_drawn_layer_lands_on_its_row(app_and_org):
     import re
 
     client, org = app_and_org
-    conn = client.app.state.conn
-    placement = _linked(conn, org)[0]
 
     page = client.get(f"/accounts/{org.ref}/program").text
 

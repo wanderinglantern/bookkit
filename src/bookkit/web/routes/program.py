@@ -1922,6 +1922,66 @@ def renew_placement(request: Request, ref: str, placement_id: str) -> HTMLRespon
     return _programs_panel(request, ref, org)
 
 
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/merge", response_class=HTMLResponse
+)
+def merge_form(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """The TUI's `x`, webside: pick which same-account sibling survives.
+    Writes nothing; the rule (children move, source retires, one file link
+    carries, two file-backed refuse) is stated in the form."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    source = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    siblings = [
+        p for p in placements_repo.for_org(conn, org.id) if p.id != source.id
+    ]
+    if not siblings:
+        return _panel_refusal(
+            request, ref, org, placement_id,
+            f"{source.ref} is this account's only program — nothing to merge into",
+        )
+    return TEMPLATES.TemplateResponse(
+        request, "account/_merge_confirm.html",
+        {
+            "source": source, "siblings": siblings,
+            "action": f"/accounts/{ref}/program/{placement_id}/merge",
+        },
+    )
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/merge", response_class=HTMLResponse
+)
+async def merge_placement(
+    request: Request, ref: str, placement_id: str
+) -> HTMLResponse:
+    """services.merge.merge_placements in one web batch — the same call and
+    tool the TUI's `x` makes, so the changes list reads identically. Panel
+    answers both ways: this POST targets #programs-panel (the list shrinks),
+    so a refusal must come back panel-shaped with the error slot filled."""
+    from ...services.merge import MergeError, merge_placements
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    source = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    target_id = str((await request.form()).get("target_id", ""))
+    if not target_id:
+        return _programs_panel(
+            request, ref, org, error="pick the program that survives the merge"
+        )
+    try:
+        target = _owned(conn, org, "placement", target_id, placements_repo.get)
+        with batches_svc.open_batch(
+            conn, source="web", tool="merge_placements", org_id=org.id,
+            summary=f"merged {source.ref} into {target.ref}",
+        ):
+            merge_placements(conn, source.id, target.id)
+    except (MergeError, HTTPException) as exc:
+        message = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        return _programs_panel(request, ref, org, error=str(message))
+    return _programs_panel(request, ref, org)
+
+
 @router.get("/accounts/{ref}/program/{placement_id}/scaffold", response_class=HTMLResponse)
 def scaffold_confirm(request: Request, ref: str, placement_id: str) -> HTMLResponse:
     """The confirm step. Writes NOTHING — and shows the path, because where a
