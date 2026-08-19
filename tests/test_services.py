@@ -913,7 +913,8 @@ def test_write_open_items_deterministic_and_styled(conn, tmp_path):
     from openpyxl import load_workbook  # test-only import; src never imports it
     ws = load_workbook(a).active
     assert [c.value for c in ws[1]] == [
-        "Item", "Description", "Detail", "Type", "Due / Needed by", "Status"]
+        "Item", "Description", "Detail", "Type", "Due / Needed by", "Status",
+        "Owner"]
     # the placement-only task (org_id NULL) must actually be in the workbook,
     # not silently dropped by an org_id-only fetch
     values = [cell.value for row in ws.iter_rows() for cell in row]

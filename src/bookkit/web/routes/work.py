@@ -26,6 +26,7 @@ contact_create's OOB swap does."""
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import date
 from typing import Any
 
@@ -44,6 +45,7 @@ from ...forms.entities import (
 from ...forms.inline import RFI_ITEM_FIELDS, TASK_FIELDS, task_fields
 from ...forms.spec import Field, initial_text, parse_value
 from ...models import Org, RfiRequest, Task, is_internal_category
+from ...repo import assignees as assignees_repo
 from ...repo import rfi as rfi_repo
 from ...repo import tasks as tasks_repo
 from ...services import batches as batches_svc
@@ -74,7 +76,7 @@ def _task_field(key: str) -> Field:
     return field
 
 
-def _task_editor_field(request: Request, key: str) -> Field:
+def _task_editor_field(request: Request, key: str, org_id: str | None = None) -> Field:
     """The same field, carrying the book's category vocabulary — the cell
     macro renders it as a <datalist>. Only the EDITOR needs it (a display cell
     has nothing to complete), so the vocabulary query runs once per opened
@@ -82,7 +84,7 @@ def _task_editor_field(request: Request, key: str) -> Field:
     vocabulary is forms.inline.task_fields' call, not this route's: the TUI's
     inline cell reads the identical list."""
     _task_field(key)  # the editable-set guard, before any query runs
-    return {f.key: f for f in task_fields(_conn(request))}[key]
+    return {f.key: f for f in task_fields(_conn(request), org_id)}[key]
 
 
 def _task_due_suffix(task: Task) -> str:
@@ -104,10 +106,22 @@ def _task_category_suffix(task: Task) -> str:
             if is_internal_category(task.category) else "")
 
 
+def _task_cell_value(conn: sqlite3.Connection, task: Task, key: str) -> str:
+    """The raw text a task cell shows — and pre-fills its editor with.
+
+    `assignee` is the one cell whose value is not an attribute of the row:
+    three columns hold it and repo.assignees renders them, as the QUALIFIED
+    label ("Sam Garcia — Atomic Industries"), because the editor pre-fills
+    from here and what a form pre-fills has to survive its own resolver."""
+    if key == "assignee":
+        return assignees_repo.label_of(conn, task)
+    return initial_text(_TASK_CELLS[key], getattr(task, key, None))
+
+
 def _task_row(request: Request, ref: str, task: Task) -> dict[str, Any]:
     def cell(key: str, *, extra_class: str = "", suffix: str = "") -> str:
         field = _TASK_CELLS[key]
-        value = initial_text(field, getattr(task, key, None))
+        value = _task_cell_value(_conn(request), task, key)
         action = _task_cell_action(ref, task.id, key)
         return render_cell_display(
             request, field, value, action, extra_class=extra_class, suffix=suffix
@@ -118,6 +132,7 @@ def _task_row(request: Request, ref: str, task: Task) -> dict[str, Any]:
         "due_cell": cell("due_on", extra_class="num", suffix=_task_due_suffix(task)),
         "title_cell": cell("title"),
         "category_cell": cell("category", suffix=_task_category_suffix(task)),
+        "assignee_cell": cell("assignee", extra_class="assignee"),
         "description_cell": cell("description"),
     }
 
@@ -160,9 +175,9 @@ async def task_create(request: Request, ref: str) -> HTMLResponse:
 def _task_display_cell(request: Request, ref: str, task_id: str, key: str) -> HTMLResponse:
     field = _task_field(key)
     existing = tasks_repo.get(_conn(request), task_id)
-    value = initial_text(field, getattr(existing, key, None))
+    value = _task_cell_value(_conn(request), existing, key)
     action = _task_cell_action(ref, task_id, key)
-    extra_class = "num" if key == "due_on" else ""
+    extra_class = {"due_on": "num", "assignee": "assignee"}.get(key, "")
     # the badge has to come back with the saved cell, or flagging a task
     # Internal inline leaves the row looking exactly as it did before
     suffix = {
@@ -177,11 +192,16 @@ def _task_editor_cell(
     request: Request, ref: str, task_id: str, key: str,
     error: str | None = None, typed: str | None = None,
 ) -> HTMLResponse:
-    field = _task_editor_field(request, key)
     existing = tasks_repo.get(_conn(request), task_id)
-    value = typed if typed is not None else initial_text(field, getattr(existing, key, None))
+    # the assignee vocabulary is scoped to THIS task's account, so the
+    # dropdown offers the client's own people and not only ours
+    field = _task_editor_field(request, key, existing.org_id)
+    value = (
+        typed if typed is not None
+        else _task_cell_value(_conn(request), existing, key)
+    )
     action = _task_cell_action(ref, task_id, key)
-    extra_class = "num" if key == "due_on" else ""
+    extra_class = {"due_on": "num", "assignee": "assignee"}.get(key, "")
     return HTMLResponse(
         render_cell(request, field, value, action, error=error, extra_class=extra_class)
     )
@@ -223,7 +243,13 @@ async def task_cell_save(request: Request, ref: str, task_id: str, key: str) -> 
             conn, source="web", tool="edit_task",
             summary=f"set {field.label} on {existing.title}", org_id=org.id,
         ):
-            tasks_repo.update(conn, task_id, **{key: value})
+            if key == "assignee":
+                # THREE columns, one action. repo.assignees owns them
+                # together — the generic one-key update below would write
+                # a name into a column that does not exist.
+                assignees_repo.set_on_task(conn, task_id, raw, org_id=org.id)
+            else:
+                tasks_repo.update(conn, task_id, **{key: value})
     except Exception as exc:  # a refused save is a message, never a 500
         return _task_editor_cell(request, ref, task_id, key, error=str(exc), typed=raw)
     return _task_display_cell(request, ref, task_id, key)

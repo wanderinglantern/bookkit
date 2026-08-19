@@ -58,6 +58,21 @@ class TaskStatus(StrEnum):
     DROPPED = "dropped"
 
 
+class AssigneeKind(StrEnum):
+    """WHICH TABLE `task.assignee_id` points at — and, downstream, which side
+    of the client's Owner column the row lands on.
+
+    Two values, not three. A contact is a contact whether they sit at the
+    client, at a carrier or at a wholesaler; which of those they are is a
+    property of their ORG, read at the moment the question is asked, never
+    copied onto the task. Storing "client_contact" would go stale the first
+    time contacts.reassign_org moved somebody on a market merge, and the
+    client's workbook would then disagree with the book it was made from."""
+
+    TEAM = "team"
+    CONTACT = "contact"
+
+
 class PlacementStatus(StrEnum):
     PROSPECTIVE = "prospective"
     SUBMITTED = "submitted"
@@ -202,6 +217,14 @@ class Task(Row):
     source_interaction_id: str | None = None
     placement_id: str | None = None
     completed_at: str | None = None
+    # WHO IS CHASING THIS. Exactly one of (kind + id) or name is ever set;
+    # all three NULL means unassigned. repo/assignees.py owns writing them —
+    # never set them field by field, or a stale id can outlive a kind and the
+    # pair stops meaning anything. See migration 013 for why the resolved
+    # case stores an identity rather than a name.
+    assignee_kind: AssigneeKind | None = None
+    assignee_id: str | None = None
+    assignee_name: str | None = None
     created_at: str
     updated_at: str
     deleted_at: str | None = None

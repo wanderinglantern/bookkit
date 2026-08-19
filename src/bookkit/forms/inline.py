@@ -15,7 +15,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import replace
 
-from ..repo import vocab
+from ..repo import assignees, vocab
 from .spec import Field
 
 CONTACT_FIELDS: tuple[Field, ...] = (
@@ -30,11 +30,18 @@ TASK_FIELDS: tuple[Field, ...] = (
     Field("title", "task", required=True),
     Field("category", "category"),
     Field("description", "description"),
+    # NOT a column on `task`. One typed string that repo.assignees turns
+    # into three columns — which is why every surface routes an assignee
+    # save through assignees.set_on_task rather than the generic one-key
+    # update the other four cells use.
+    Field("assignee", "assignee"),
 )
 
 
-def task_fields(conn: sqlite3.Connection) -> tuple[Field, ...]:
-    """TASK_FIELDS with the category cell's vocabulary filled in.
+def task_fields(
+    conn: sqlite3.Connection, org_id: str | None = None
+) -> tuple[Field, ...]:
+    """TASK_FIELDS with the category and assignee cells' vocabularies filled in.
 
     The inline cell is the PRIMARY edit path on both surfaces (`i` on the Open
     Items tab, click-the-cell on the web); the add/edit modal is the secondary
@@ -46,10 +53,19 @@ def task_fields(conn: sqlite3.Connection) -> tuple[Field, ...]:
     A function, not a constant, because the vocabulary is DATA: it grows as
     the book does. The column positions stay static (they are layout, and each
     screen maps them itself), which is why this returns the same fields in the
-    same order TASK_FIELDS declares them."""
+    same order TASK_FIELDS declares them.
+
+    `org_id` scopes the assignee suggestions to one account's own contacts,
+    on top of the team and the market contacts that are offered everywhere.
+    A table spanning accounts (the navigator's attention pane) passes None
+    and offers the two unscoped sources — the account's own people are still
+    typeable, they just land as freeform, which is the safe side of the
+    export."""
     categories = tuple(vocab.task_categories(conn))
+    people = tuple(c.label for c in assignees.candidates(conn, org_id))
+    vocabs = {"category": categories, "assignee": people}
     return tuple(
-        replace(f, suggestions=categories) if f.key == "category" else f
+        replace(f, suggestions=vocabs[f.key]) if f.key in vocabs else f
         for f in TASK_FIELDS
     )
 

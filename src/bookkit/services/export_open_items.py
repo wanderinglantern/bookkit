@@ -38,6 +38,7 @@ from towerkit.soi import SoiRow, SoiSection, SoiStatus, build_soi
 
 from ..models import (
     INTERNAL_CATEGORY,
+    AssigneeKind,
     Placement,
     PlacementStatus,
     Project,
@@ -45,9 +46,20 @@ from ..models import (
     is_internal_category,
 )
 from ..money import MoneyParseError, cents_to_dollars, format_cents
-from ..repo import orgs, placements, submissions
+from ..repo import contacts, orgs, placements, submissions
 from ..repo import projects as projects_repo
 from ..repo import tasks as tasks_repo
+
+CLIENT_OWNER = "You"
+OUR_OWNER = "Us"
+"""C4, Grant 2026-08-18 — the two words in the client's Owner column.
+
+The CFO asked for one column saying which open items are theirs and which
+are ours, and rated it above every formatting fix on the list, because
+"Return signed TRIA form" and "Chase Zurich on the loss run" render
+identically today. The AE then reframed it: the internal fact worth holding
+is a NAMED assignee, and You / Us is its projection onto the client's copy.
+So this is the projection, and nothing stores it."""
 
 
 @dataclass(frozen=True)
@@ -67,6 +79,11 @@ class ExportRow:
     # the flag itself can never print. ExportRow has no `category` field, so
     # without this an Internal task shown to an MCP caller under a PLACEMENT
     # section — which is labelled by program name — would carry no sign of it.
+    owner: str = OUR_OWNER  # C4 — "You" or "Us", and DERIVED, never stored.
+    # Defaulted to ours: every row shape that cannot carry an assignee at all
+    # (a submission out at market, an unmet project need) is ours by nature,
+    # and so is a task nobody has claimed. The wrong-direction failure here is
+    # asymmetric — see owner_of.
 
 
 @dataclass(frozen=True)
@@ -101,7 +118,36 @@ def _status_label(status: str) -> str:
     return text[:1].upper() + text[1:] if text else text
 
 
-def _task_row(task: Task, today: date) -> ExportRow:
+def owner_of(conn: sqlite3.Connection, task: Task, org_id: str) -> str:
+    """WHICH SIDE OF THE TABLE this task sits on, derived from the assignee's
+    KIND and identity — never from their name.
+
+    A contact at the account being exported is the client's own person, so
+    the row is theirs. Everyone else is ours: our team by definition, an
+    underwriter or wholesaler because chasing them is our job and not the
+    client's, and a freeform third party because a name we could not resolve
+    is a name we cannot make a claim about.
+
+    NO NAME IS COMPARED ANYWHERE IN HERE. Matching "Sam" against "Sam Garcia"
+    would flip a column a client reads, silently, in the one direction that
+    cannot be recovered — the failure models.is_internal_category spends
+    fourteen lines refusing on the neighbouring column. The comparison is
+    between two org ids.
+
+    Unassigned is `Us`: unassigned work is ours until someone says otherwise
+    (Grant, 2026-08-18). So is an assignment whose contact row has since been
+    removed — `contacts.get` raises and the answer falls to the safe side
+    rather than to a stale claim."""
+    if task.assignee_kind is not AssigneeKind.CONTACT or not task.assignee_id:
+        return OUR_OWNER
+    try:
+        contact = contacts.get(conn, task.assignee_id)
+    except KeyError:
+        return OUR_OWNER
+    return CLIENT_OWNER if contact.org_id == org_id else OUR_OWNER
+
+
+def _task_row(conn: sqlite3.Connection, task: Task, today: date, org_id: str) -> ExportRow:
     overdue = task.due_on is not None and task.due_on < today.isoformat()
     return ExportRow(
         item=task.title,
@@ -111,6 +157,7 @@ def _task_row(task: Task, today: date) -> ExportRow:
         status="Overdue" if overdue else "Open",
         ref=task.id,
         internal=is_internal_category(task.category),
+        owner=owner_of(conn, task, org_id),
     )
 
 
@@ -214,10 +261,10 @@ def compose(
     for category in sorted(by_category, key=str.lower):
         sections.append(ExportSection(
             f"{category} — {org.name}",
-            tuple(_task_row(t, today) for t in by_category[category]),
+            tuple(_task_row(conn, t, today, org.id) for t in by_category[category]),
         ))
 
-    general_rows = [_task_row(t, today) for t in uncategorized] + [
+    general_rows = [_task_row(conn, t, today, org.id) for t in uncategorized] + [
         ExportRow(
             item=f"Submission to {row['market_name']}",
             description=row["about"] or "", detail="", kind="Submission", due="",
@@ -231,7 +278,7 @@ def compose(
     from .. import sync  # line labels for section headers, matching attention tables
 
     for placement in placements.for_org(conn, org.id):
-        rows = [_task_row(t, today) for t in by_placement.get(placement.id, [])]
+        rows = [_task_row(conn, t, today, org.id) for t in by_placement.get(placement.id, [])]
         rows += [
             ExportRow(
                 item=f"Submission to {row['market_name']}",
@@ -563,8 +610,13 @@ def compose_soi(conn: sqlite3.Connection, org_id: str, today: date) -> list[SoiS
 
 _COLUMNS: tuple[tuple[str, float], ...] = (
     ("Item", 30.0), ("Description", 50.0), ("Detail", 75.0), ("Type", 12.0),
-    ("Due / Needed by", 16.0), ("Status", 14.0),
+    ("Due / Needed by", 16.0), ("Status", 14.0), ("Owner", 10.0),
 )
+# Owner is LAST and narrow on purpose: it is a two-letter answer, and putting
+# it first would push the item it describes off the first screen of a sheet
+# whose whole job is the list. There is no viewport to overflow here — a
+# spreadsheet scrolls — so unlike the TUI panes nothing had to be dropped to
+# make room for it.
 
 _PROJECT_COLUMNS: tuple[tuple[str, float], ...] = (
     ("Line", 28.0), ("Notes", 50.0), ("Needed by", 16.0),
@@ -662,12 +714,12 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
     body = [
         TableSection(
             s.label,
-            tuple((r.item, r.description, r.detail, r.kind, r.due, r.status)
+            tuple((r.item, r.description, r.detail, r.kind, r.due, r.status, r.owner)
                   for r in s.rows),
         )
         for s in compose(conn, org_id, today)
     ] or [TableSection(None, ((f"No open items as of {today.isoformat()}",
-                               "", "", "", "", ""),))]
+                               "", "", "", "", "", ""),))]
     sections = [TableSection(SCOPE_NOTE, ())] + body
     ws = wb.active
     assert ws is not None
