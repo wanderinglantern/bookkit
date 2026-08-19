@@ -141,6 +141,87 @@ def test_program_revert_file_restores_the_pre_image(linked):
     assert batches_repo.get_by_ref(conn, out["batch"]).reverted_at is not None
 
 
+def test_a_revert_never_opens_the_program_file_for_writing(
+    linked, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The undo path must not be able to destroy the file it exists to protect.
+
+    `shutil.copyfile` OPENS THE DESTINATION "wb" — truncating it — before the
+    first byte lands, so a crash, a full disk or a dropped network mount
+    between those two moments left the broker's program file empty or
+    half-written, with the pre-image still in .mcp-snapshots and nothing to say
+    which of the two was real. Injecting ENOSPC part-way through that copy left
+    a 64-byte program file where a 1,367-byte one had been (2026-08-18).
+
+    This asserts the property, not the call: whatever writes the pre-image
+    back, the destination itself is never opened for writing. towerkit's
+    `atomicio` writes a same-directory temp, fsyncs it and `os.replace`s it
+    into position, and towerkit's JSON is the declared source of truth for
+    program structure — its undo path has no business being the one program
+    write that is not durable. The revert here SUCCEEDS; there is no failure to
+    inject, because a write that cannot half-happen needs none."""
+    import builtins
+
+    conn, _, placement, path = linked
+    before = path.read_bytes()
+    out = mcpserver._program_layer_add(
+        conn, placement.ref, "Excess GL", line_ids=["gl"], attach="2m", limit="5m",
+    )
+    assert path.read_bytes() != before
+
+    opened_for_writing: list[str] = []
+    real_open = builtins.open
+
+    def watch_open(file, mode="r", *args, **kwargs):
+        try:
+            same = Path(file) == path
+        except TypeError:                 # a file descriptor, not a path
+            same = False
+        if same and any(c in mode for c in "wa+"):
+            opened_for_writing.append(mode)
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", watch_open)
+    mcpserver._program_revert_file(conn, out["batch"])
+    monkeypatch.undo()
+
+    assert not opened_for_writing, (
+        f"the program file itself was opened {opened_for_writing} — every "
+        f"failure between that open and the last byte destroys it"
+    )
+    assert path.read_bytes() == before    # and the revert still did its job
+
+
+def test_a_revert_that_fails_at_the_last_moment_leaves_the_file_untouched(
+    linked, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of atomic: the failure lands on the swap, the last thing
+    that can go wrong, and the file is byte-identical to what the batch wrote —
+    neither empty, nor half a pre-image, nor a mixture."""
+    import errno
+
+    conn, _, placement, path = linked
+    out = mcpserver._program_layer_add(
+        conn, placement.ref, "Excess GL", line_ids=["gl"], attach="2m", limit="5m",
+    )
+    after_write = path.read_bytes()
+
+    def no_space(*_args, **_kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr("os.replace", no_space)
+    with pytest.raises(OSError):
+        mcpserver._program_revert_file(conn, out["batch"])
+    monkeypatch.undo()
+
+    now = path.read_bytes()
+    assert now == after_write, (
+        f"a failed revert changed the program file: {len(now)} bytes, not the "
+        f"{len(after_write)} the batch wrote"
+    )
+    load_program(path)                    # and it is still a loadable program
+
+
 def test_program_revert_file_refuses_if_the_file_moved_since(linked):
     conn, _, placement, path = linked
     out = mcpserver._program_layer_add(

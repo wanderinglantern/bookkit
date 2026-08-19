@@ -1420,8 +1420,16 @@ class AccountScreen(Screen):
             return
         key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
         if key:
-            contacts.set_primary(self.app.conn, key)
-            self.notify("primary contact set")
+            # batched like every other direct keystroke write on this screen:
+            # set_primary clears one contact's flag and sets another's, so `u`
+            # has to put BOTH back or it puts the org in a state neither
+            # contact was ever in
+            with _batched(
+                self, tool="contact_set_primary", summary="set the primary contact",
+                org_id=self.current_org_id,
+            ):
+                contacts.set_primary(self.app.conn, key)
+            self.notify("primary contact set — u to undo")
             self.refresh_data()
 
     def action_task_done(self) -> None:

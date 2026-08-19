@@ -118,6 +118,72 @@ async def test_a_placement_with_no_recorded_sha_does_not_claim_to_be_in_sync(
         assert "never projected" in state
 
 
+async def test_todays_d_is_undone_by_u_not_the_action_before_it(
+    seeded_db: Path,
+) -> None:
+    """Today's `d` toasted "task done — u to undo" while calling
+    tasks_repo.complete with no batch at all. `undo.undo_last` resolves the
+    most recent BATCH, so `u` reached past the task to the previous action:
+    a contact edit, then Today's `d`, then `u` reported "undid edited Dana
+    Reed", the task was still done, and the contact's title was silently
+    rolled back (2026-08-18).
+
+    Pressed on the real screen, because the bug was that the code showing the
+    toast was not the code opening the batch."""
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.services import batches as batches_svc
+    from bookkit.services import undo
+
+    app = BookkitApp(seeded_db)
+    org = orgs.list_orgs(app.conn, kind="client")[0]
+    contact = contacts_repo.create(
+        app.conn, org_id=org.id, first_name="Dana", last_name="Reed",
+        title="Risk Manager",
+    )
+    task = tasks_repo.create(
+        app.conn, "call the carrier", due_on=date.today().isoformat(), org_id=org.id
+    )
+    # the earlier, properly batched action `u` used to reach instead
+    with batches_svc.open_batch(
+        app.conn, source="tui", tool="contact_edit", summary="edited Dana Reed",
+        org_id=org.id,
+    ):
+        from bookkit.repo import base
+
+        base.update(app.conn, "contact", contact.id, {"title": "VP Risk"})
+
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, TodayScreen)
+        table = screen.query_one("#tasks-table", ListTable)
+        table.focus()
+        row = next(
+            i for i in range(table.row_count)
+            if (table.coordinate_to_cell_key(Coordinate(i, 0)).row_key.value or "")
+            .startswith(f"task:{task.id}:")
+        )
+        table.move_cursor(row=row)
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        assert tasks_repo.get(app.conn, task.id).status == "done"
+
+        result = undo.undo_last(app.conn)
+        assert result is not None and result.applied
+        assert "task" in result.summary, (
+            f"`u` reached past Today's `d` and undid {result.summary!r}"
+        )
+        assert tasks_repo.get(app.conn, task.id).status != "done", (
+            "the task is still done"
+        )
+        assert contacts_repo.get(app.conn, contact.id).title == "VP Risk", (
+            "`u` silently rolled back an earlier, unrelated action"
+        )
+
+
 async def test_quick_capture_end_to_end(seeded_db: Path) -> None:
     app = BookkitApp(seeded_db)
     async with app.run_test(size=(120, 40)) as pilot:

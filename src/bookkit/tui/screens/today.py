@@ -23,6 +23,7 @@ from ...repo import tasks as tasks_repo
 from ...services import book, renewals, sla, staleness
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right
+from ..widgets.entity_actions import batched_write as _batched
 from ..widgets.tables import ListTable
 
 # Below this width the 2x2 grid gives each pane ~36 cells for up to seven
@@ -256,7 +257,16 @@ class TodayScreen(Screen):
         key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value or ""
         kind, task_id, _ = key.split(":", 2)
         if kind == "task":
-            tasks_repo.complete(self.app.conn, task_id)
+            # BATCHED, exactly as the account screen's identical action is
+            # (account.py action_task_done). Written bare, this wrote outside
+            # every batch while the toast still promised `u` — and undo_last
+            # resolves the most recent BATCH, so `u` reverted whatever the
+            # previous action was: a contact edit here reported "undid edited
+            # Dana Reed", rolled that contact's title back, and left the task
+            # done (2026-08-18). A promise of undo the writer cannot keep is
+            # worse than no undo at all.
+            with _batched(self, tool="task_done", summary="completed a task"):
+                tasks_repo.complete(self.app.conn, task_id)
             self.notify("task done — u to undo")
             self.refresh_data()
 
