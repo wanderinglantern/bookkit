@@ -1063,3 +1063,37 @@ renewals. A seventh needs 109. `task_inline(..., assignee_at=None)` keeps the in
 the column that pane does not have, so `i` cannot open an editor into nothing.
 **Open, and Grant's call:** fitting it means dropping one of `account`, `detail` or
 `description` from that pane first — and that pane is over its edge either way.
+
+## Handover: expect_sha, or the deadlock stays open (2026-08-19)
+
+towerkit's MCP hardening pass (`towerkit/docs/superpowers/specs/2026-08-19-mcp-hardening-design.md`)
+adds an optional `expect_sha` to every write tool. Supplied, it is authoritative; omitted, the
+in-session `Programs.seen` map is used exactly as before, so nothing here breaks by doing nothing.
+
+**Doing nothing also leaves bookkit wedged.** The bug is
+`towerkit/docs/bugs/2026-08-14-mcp-occ-cross-server-stale-sha.md`, filed high severity on 14 August
+and still unfixed on bookkit's side: bookkit runs towerkit as a library in its own process, so it
+holds a SECOND, independent `Programs.seen`. Every towerkit MCP write advances the file's sha and
+updates only towerkit's map, and no bookkit read-only call reaches `note()`. `program_layer_add`
+then refuses forever, and the refusal names no call that would unwedge it.
+
+Grant's ruling, 19 August: **towerkit's half now, bookkit's half filed, not done.** He was told
+plainly that the deadlock persists until this lands, and chose that over widening the pass into two
+repos with a coordinated landing. This entry is that filing.
+
+What has to change here:
+
+- Pass `expect_sha` on every write that goes through towerkit's connector, taking the sha from the
+  read that armed bookkit's own map rather than from towerkit's.
+- Stop relying on `Programs.seen` across the process boundary at all. It is per-process state and
+  bookkit is a second process; treating it as shared is the whole bug.
+- The regression test towerkit's spec specifies is being written THERE
+  (`test_a_stale_second_reader_can_write_with_expect_sha`). The mirror test belongs here: bookkit
+  reads, towerkit writes, bookkit writes and SUCCEEDS.
+
+One boundary change to know about, because it reverses something both repos were built on.
+towerkit's README:119 said book facts — premiums, market shares, policy dates — belong to bookkit's
+connector, not towerkit's. **That boundary is gone.** towerkit's MCP now writes every field in the
+program file, participants and `premium` and `policyNumber` and the per-layer period included. Two
+connectors writing the same fields is exactly what `expect_sha` exists to make safe, which is the
+other reason this is not optional here.
