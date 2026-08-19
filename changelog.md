@@ -5,6 +5,20 @@ All notable changes to bookkit, newest date first.
 ## 2026-08-19
 
 ### Added
+- Web downloads: tower SVG and PDF, the schematic workbook, and the client
+  open-items workbook — plain links, rendered through towerkit's own
+  renderers, closing the file-download gap the web spec deferred.
+- The Towers page: every drawn tower across the book with validation
+  badges, linking into each account's Program tab; the nav item goes live.
+- Compare: the renewal delta table (NEW/RENEWED/LAPSED per seat, share,
+  line and premium old→new), pair auto-detected by renewal adjacency with
+  a picker fallback.
+- The terms strip: retentions and sublimits editable where they are read
+  (in-row forms, applies-to as checkboxes, confirm-first removes), and
+  line reorder arrows on the lines strip.
+- restack is deliberately NOT surfaced: through bookkit's guarded write
+  seam it is a provable no-op (valid towers have nothing to heal), and a
+  control that provably does nothing would be dead chrome.
 - Lines of cover are editable from the browser (D1): rename in place (ids
   cascade), remove behind a confirm naming what dies vs what narrows, add
   in row (arriving with a pending layer — towerkit refuses an empty line).
