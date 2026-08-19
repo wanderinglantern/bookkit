@@ -6,6 +6,35 @@ cold. Dated on the day he raised it.
 
 ---
 
+## Two more attention tables paint past their own right edge (2026-08-18)
+
+Deliberately left out of the `tui-quiet-bugs` fix so that change stayed one
+screen and one test. Both are the same class as Today's renewals pane — a
+table whose declared columns need more cells than its container has, so
+whatever sits on the right is painted off the screen rather than truncated —
+and both are LESSER cases, which is why they wait.
+
+- **The navigator's attention table overflows.** Unlike the pre-fix Today
+  pane it does paint the mandatory lines of cover, so what is lost is context
+  rather than the field CLAUDE.md makes non-optional. Different screen,
+  different columns; fix it on its own terms rather than by copying Today's
+  column list across.
+- **Today's tasks pane: container 65 / virtual 79.** Measured. Account names
+  are truncated in a pane where the account is how you know which task it is.
+
+What makes it one change rather than three: `tests/test_reachable.py` already
+asserts `table.virtual_size.width <= table.container_size.width` for the
+renewals pane, and that assertion is the general form of the bug. Extend it
+to the navigator's attention table and to Today's tasks pane, watch both
+fail, then drop a column from each — the rule from the renewals fix applies
+unchanged: **when it fails, drop a column, do not widen the pane.**
+
+Related and already done, for the record: the footer has the same guard per
+screen in `tests/test_layout.py`, and QuickCapture joined the modal-chrome
+parametrisation there on 2026-08-18.
+
+---
+
 ## Internal-only tasks, excluded from the client export (2026-08-18) — SHIPPED
 
 Built on branch `internal-tasks-export`, 2026-08-18. No schema change, no
