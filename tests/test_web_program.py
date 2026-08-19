@@ -570,6 +570,9 @@ def test_a_markets_share_is_corrected_in_place(app_and_org):
         ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
     )
     assert fresh["participants"][0]["share_pct"] == was / 2
+    # a share moves the layer's signed % and can re-seat other rows, so the
+    # cell comes back WITH the panel out of band, like a layer cell save
+    assert 'hx-swap-oob="true"' in saved.text
 
 
 def test_a_market_is_taken_off_a_layer_and_the_layer_survives(app_and_org):
@@ -589,6 +592,95 @@ def test_a_market_is_taken_off_a_layer_and_the_layer_survives(app_and_org):
     )
     assert carrier not in [p["carrier"] for p in fresh["participants"]]
     assert fresh["name"] == layer["name"], "the layer went with the market"
+
+
+def _first_seat(conn, org):
+    """A (placement, layer, index, seat) with at least one market bound."""
+    for placement in _linked(conn, org):
+        for layer in sync.layer_details(conn, placement.id):
+            if layer["participants"]:
+                return placement, layer, 0, layer["participants"][0]
+    raise AssertionError("the seeded book has no bound market anywhere")
+
+
+def _market_cell(org, placement, layer_id, index, key):
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/layers/{layer_id}/markets/{index}/cell/{key}"
+    )
+
+
+def test_share_editor_prefills_the_actual_percent(app_and_org):
+    """40% must pre-fill '40', not '0.4'. The old mini-form fed the seat's
+    PERCENT into initial_text, whose share kind formats BPS — so a 40% seat
+    pre-filled 0.4 and an unedited save would have cut the share 100x. The
+    same silent-destruction class as the cents rule in CLAUDE.md."""
+    client, org = app_and_org
+    placement, layer, index, seat = _first_seat(client.app.state.conn, org)
+
+    editor = client.get(
+        _market_cell(org, placement, layer["id"], index, "share_pct") + "/edit"
+    ).text
+
+    assert f'value="{seat["share_pct"]:g}"' in editor
+
+
+def test_carrier_editor_offers_existing_market_names(app_and_org):
+    """Vocabulary completes from existing records (CLAUDE.md): freehand
+    carrier spelling is how 'Zurich Insurance Group' vs 'Zurich' drift
+    starts, and the TUI already wires Field.suggestions for this."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+    from bookkit.repo import vocab
+
+    editor = client.get(
+        _market_cell(org, placement, layer["id"], index, "carrier") + "/edit"
+    ).text
+
+    names = vocab.market_names(conn)
+    assert names, "the seeded book names no markets — test proves nothing"
+    assert "<datalist" in editor
+    assert names[0] in editor
+
+
+def test_market_remove_asks_first_and_the_get_writes_nothing(app_and_org):
+    """The remove control fetches an IN-PLACE confirm; only the confirm's
+    POST writes. Contacts and interactions already confirm — a market seat
+    is the same severity of removal."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    base = _market_cell(org, placement, layer["id"], index, "carrier").rsplit(
+        "/cell", 1
+    )[0]
+    assert f'hx-get="{base}/remove"' in page, "remove is not a confirm fetch"
+    assert f'hx-post="{base}/remove"' not in page, "remove still writes on one click"
+
+    confirm = client.get(f"{base}/remove")
+
+    assert confirm.status_code == 200
+    assert seat["carrier"] in confirm.text
+    assert "the layer stays" in confirm.text
+    assert path.read_bytes() == before, "the confirm GET wrote to the file"
+
+
+def test_market_keep_restores_the_chip(app_and_org):
+    client, org = app_and_org
+    placement, layer, index, seat = _first_seat(client.app.state.conn, org)
+    base = _market_cell(org, placement, layer["id"], index, "carrier").rsplit(
+        "/cell", 1
+    )[0]
+
+    chip = client.get(base)
+
+    assert chip.status_code == 200
+    assert seat["carrier"] in chip.text
+    assert f'data-cell-action="{base}/cell/carrier"' in chip.text
 
 
 # --- what the review caught -----------------------------------------------
@@ -685,7 +777,8 @@ def test_a_placement_with_no_file_says_so_rather_than_an_errno(app_and_org):
 def test_a_market_can_be_reached_for_editing_from_the_page(app_and_org):
     """market_cell_save existed and nothing rendered a way to it: the share
     test passed by POSTing the URL directly, which is not evidence a broker
-    can correct a share."""
+    can correct a share. Markets ride the CELL contract now (F1): the way in
+    is a data-cell-action on the chip itself, same as a layer cell."""
     import re
 
     client, org = app_and_org
@@ -693,8 +786,10 @@ def test_a_market_can_be_reached_for_editing_from_the_page(app_and_org):
 
     page = client.get(f"/accounts/{org.ref}/program").text
 
-    assert re.search(r"markets/\d+/edit/share_pct", page), "no way in from the page"
-    assert re.search(r"markets/\d+/edit/carrier", page)
+    assert re.search(
+        r'data-cell-action="[^"]*markets/\d+/cell/share_pct"', page
+    ), "no way in from the page"
+    assert re.search(r'data-cell-action="[^"]*markets/\d+/cell/carrier"', page)
 
 
 def test_a_layer_edit_refreshes_the_rows_it_moved(app_and_org):

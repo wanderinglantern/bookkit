@@ -30,6 +30,7 @@ from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS
 from ...forms.spec import Field, initial_text, parse_value
 from ...money import format_cents_compact
 from ...repo import placements as placements_repo
+from ...repo import vocab
 from ...services import batches as batches_svc
 from ...services import program_files
 from ..app import TEMPLATES
@@ -95,6 +96,10 @@ def _layer_row(
         "statutory": layer["statutory"],
         "signed_pct": layer["signed_pct"],
         "participants": layer["participants"],
+        "market_chips": [
+            _market_chip_html(request, ref, placement_id, layer, i, seat)
+            for i, seat in enumerate(layer["participants"])
+        ],
     }
 
 
@@ -649,6 +654,101 @@ def _market_field(key: str) -> Field:
     return field
 
 
+def _market_field_for_editor(conn: sqlite3.Connection, key: str) -> Field:
+    """The editor's copy of a market field: the carrier input completes from
+    the book's existing market names (Field.suggestions -> datalist), the
+    same vocabulary rule the TUI's forms follow — freehand carrier spelling
+    is how 'Zurich Insurance Group' vs 'Zurich' drift starts."""
+    import dataclasses
+
+    field = _market_field(key)
+    if key == "carrier":
+        return dataclasses.replace(field, suggestions=tuple(vocab.market_names(conn)))
+    return field
+
+
+def _market_base(ref: str, placement_id: str, layer_id: str, index: int) -> str:
+    return f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/{index}"
+
+
+def _market_cell_action(
+    ref: str, placement_id: str, layer_id: str, index: int, key: str
+) -> str:
+    return _market_base(ref, placement_id, layer_id, index) + f"/cell/{key}"
+
+
+def _market_display_value(key: str, seat: dict[str, Any]) -> str:
+    """What the chip SHOWS. The share prints with its % because the cell sits
+    beside a Signed column that does too — a bare number would read as money."""
+    if key == "carrier":
+        return str(seat["carrier"])
+    return f"{seat['share_pct']:g}%"
+
+
+def _market_prefill(key: str, seat: dict[str, Any]) -> str:
+    """What the EDITOR pre-fills. The seat carries share_pct as a PERCENT and
+    the share parser reads a percent, so the number passes through verbatim.
+    The old mini-form fed this percent into initial_text, whose share kind
+    formats BPS — a 40% seat pre-filled '0.4', and an unedited save would
+    have cut the share 100x. Never route a percent through a bps formatter."""
+    if key == "carrier":
+        return str(seat["carrier"])
+    return f"{seat['share_pct']:g}"
+
+
+_MARKET_CELL_CLASS = {"carrier": "market-cell", "share_pct": "market-cell market-share"}
+
+
+def _market_chip_html(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any],
+    index: int, seat: dict[str, Any],
+) -> str:
+    """One market as a chip of two inline cells plus its remove control — the
+    same editing grammar as the layer cells beside it (F1)."""
+    def cell(key: str) -> str:
+        return render_cell_display(
+            request, _market_field(key), _market_display_value(key, seat),
+            _market_cell_action(ref, placement_id, layer["id"], index, key),
+            tag="span", extra_class=_MARKET_CELL_CLASS[key],
+        )
+
+    template = TEMPLATES.env.get_template("account/_market_chip.html")
+    return template.render(
+        base=_market_base(ref, placement_id, layer["id"], index),
+        seat=seat, layer_name=layer["name"],
+        carrier_cell=cell("carrier"), share_cell=cell("share_pct"),
+    )
+
+
+def _market_display_cell(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any],
+    index: int, seat: dict[str, Any], key: str,
+) -> HTMLResponse:
+    return HTMLResponse(
+        render_cell_display(
+            request, _market_field(key), _market_display_value(key, seat),
+            _market_cell_action(ref, placement_id, layer["id"], index, key),
+            tag="span", extra_class=_MARKET_CELL_CLASS[key],
+        )
+    )
+
+
+def _market_editor_cell(
+    request: Request, conn: sqlite3.Connection, ref: str, placement_id: str,
+    layer: dict[str, Any], index: int, seat: dict[str, Any], key: str,
+    error: str | None = None, typed: str | None = None,
+) -> HTMLResponse:
+    field = _market_field_for_editor(conn, key)
+    value = typed if typed is not None else _market_prefill(key, seat)
+    return HTMLResponse(
+        render_cell(
+            request, field, value,
+            _market_cell_action(ref, placement_id, layer["id"], index, key),
+            error=error, tag="span", extra_class=_MARKET_CELL_CLASS[key],
+        )
+    )
+
+
 def _seated(layer: dict[str, Any], index: int) -> dict[str, Any]:
     try:
         seat: dict[str, Any] = layer["participants"][index]
@@ -660,32 +760,50 @@ def _seated(layer: dict[str, Any], index: int) -> dict[str, Any]:
 
 
 @router.get(
-    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/{index}/edit/{key}",
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/{index}",
+    response_class=HTMLResponse,
+)
+def market_chip(
+    request: Request, ref: str, placement_id: str, layer_id: str, index: int
+) -> HTMLResponse:
+    """The whole chip — what the remove confirm's [keep] restores."""
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    seat = _seated(layer, index)
+    return HTMLResponse(_market_chip_html(request, ref, placement_id, layer, index, seat))
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/{index}/cell/{key}",
+    response_class=HTMLResponse,
+)
+def market_cell(
+    request: Request, ref: str, placement_id: str, layer_id: str, index: int, key: str
+) -> HTMLResponse:
+    """The display half of the contract — also what Escape and blur revert to."""
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    seat = _seated(layer, index)
+    return _market_display_cell(request, ref, placement_id, layer, index, seat, key)
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/{index}/cell/{key}/edit",
     response_class=HTMLResponse,
 )
 def market_cell_edit(
     request: Request, ref: str, placement_id: str, layer_id: str, index: int, key: str
 ) -> HTMLResponse:
-    """One market field, in a form. Not the inline-cell macro: a market is
-    addressed by its index rather than an id, and its edit re-renders the whole
-    panel (a share changes the layer's signed percentage), so it rides the same
-    form-host contract the adds do rather than the cell contract."""
+    """Markets ride the SAME inline-cell contract as the layer cells beside
+    them (F1, 2026-08-19). A market is addressed by its index within its
+    layer — an id would have to be minted for a (carrier, share) pair the
+    file stores as a list entry — and every write re-renders the whole panel,
+    so an index is never stale by the time it is used."""
     org = _org(request, ref)
+    conn = _conn(request)
     _, layer = _owned_layer(request, org, placement_id, layer_id)
     seat = _seated(layer, index)
-    field = _market_field(key)
-    return TEMPLATES.TemplateResponse(
-        request, "account/_program_form.html",
-        {
-            "fields": (field,),
-            "action": (
-                f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}"
-                f"/markets/{index}/cell/{key}"
-            ),
-            "title": f"{seat['carrier']} on {layer['name']}",
-            "values": {key: initial_text(field, seat.get(key))},
-        },
-    )
+    return _market_editor_cell(request, conn, ref, placement_id, layer, index, seat, key)
 
 
 @router.post(
@@ -698,7 +816,14 @@ async def market_cell_save(
     """Corrected IN PLACE — never removed and re-added. The two writes are
     separate mutations with a validator run between them, so the intermediate
     state is a layer short of its share and a refusal on the second half
-    leaves it that way (sync.update_participant carries the same note)."""
+    leaves it that way (sync.update_participant carries the same note).
+
+    Cell grammar throughout: a refusal (bad value, towerkit no, or the file
+    moved) re-renders the EDITOR with the message and the typed value —
+    never a fragment somewhere else on the page. A conflict gets the same
+    one-line treatment rather than the layer cells' three-way for now: the
+    three-way's forms are built around a layer id and re-deriving them for
+    an index-addressed seat is its own reviewed change, not a rider."""
     org = _org(request, ref)
     conn = _conn(request)
     placement, layer = _owned_layer(request, org, placement_id, layer_id)
@@ -710,7 +835,9 @@ async def market_cell_save(
         if field.required and value in (None, ""):
             raise ValueError(f"{field.label} is required")
     except ValueError as exc:
-        return _refusal(request, str(exc))
+        return _market_editor_cell(
+            request, conn, ref, placement_id, layer, index, seat, key, str(exc), raw
+        )
 
     changes: dict[str, Any] = (
         {"share_bps": value} if key == "share_pct" else {"new_carrier": value}
@@ -726,8 +853,48 @@ async def market_cell_save(
             open_batch=_open_batch_web,
         )
     except Exception as exc:
-        return _refusal(request, str(exc))
-    return _panel(request, ref, org, placement_id)
+        return _market_editor_cell(
+            request, conn, ref, placement_id, layer, index, seat, key, str(exc), raw
+        )
+
+    # Re-read: the memo is per request and this one has just written.
+    request.state.layer_details = {}
+    _, fresh_layer = _owned_layer(request, org, placement_id, layer_id)
+    fresh_seat = _seated(fresh_layer, index)
+    cell = _market_display_cell(
+        request, ref, placement_id, fresh_layer, index, fresh_seat, key
+    )
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(cell) + _text(panel))
+
+
+def _market_confirm(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any],
+    index: int, seat: dict[str, Any], error: str | None = None,
+) -> HTMLResponse:
+    return TEMPLATES.TemplateResponse(
+        request, "account/_market_confirm.html",
+        {
+            "base": _market_base(ref, placement_id, layer["id"], index),
+            "seat": seat, "layer_name": layer["name"], "error": error,
+        },
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/{index}/remove",
+    response_class=HTMLResponse,
+)
+def market_remove_confirm(
+    request: Request, ref: str, placement_id: str, layer_id: str, index: int
+) -> HTMLResponse:
+    """The confirm, IN PLACE over the chip. Writes nothing — contacts and
+    interactions already ask before a removal, and a market seat is the same
+    severity; a one-click file write with no question was the odd one out."""
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    seat = _seated(layer, index)
+    return _market_confirm(request, ref, placement_id, layer, index, seat)
 
 
 @router.post(
@@ -737,7 +904,14 @@ async def market_cell_save(
 def market_remove(
     request: Request, ref: str, placement_id: str, layer_id: str, index: int
 ) -> HTMLResponse:
-    """The LAYER survives, unplaced. See sync.remove_participant."""
+    """The LAYER survives, unplaced. See sync.remove_participant.
+
+    Success returns the panel alone: htmx lifts the hx-swap-oob section out,
+    the (empty) remainder lands where the chip was, and the OOB panel then
+    replaces the whole section — the same one-write-one-panel shape every
+    other market response has. A refusal re-renders the confirm with the
+    message, still in place; the old answer put it in the section's form
+    host, which is nowhere near the control that asked."""
     org = _org(request, ref)
     conn = _conn(request)
     placement, layer = _owned_layer(request, org, placement_id, layer_id)
@@ -753,7 +927,7 @@ def market_remove(
             open_batch=_open_batch_web,
         )
     except Exception as exc:
-        return _refusal(request, str(exc))
+        return _market_confirm(request, ref, placement_id, layer, index, seat, str(exc))
     return _panel(request, ref, org, placement_id)
 
 
