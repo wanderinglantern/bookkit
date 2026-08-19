@@ -88,6 +88,15 @@ def parse_share_bps(text: str) -> int:
     return parse_share(text)
 
 
+def format_share_pct(bps: int) -> str:
+    """Basis points → the display form, '3500' → '35%'. Delegated for the same
+    reason parse_share_bps is: towerkit owns the percent↔bps grammar, and two
+    formatters is how the same share reads differently on two surfaces."""
+    from towerkit.money import format_share
+
+    return format_share(bps)
+
+
 def commission_cents(premium_cents: int, commission_bps: int) -> int:
     """Commission on a premium, floor-divided so money stays integer."""
     return premium_cents * commission_bps // BPS_SCALE

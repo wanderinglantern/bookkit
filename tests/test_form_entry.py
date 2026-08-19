@@ -129,3 +129,47 @@ def test_renaming_a_member_to_its_own_name_is_not_a_duplicate(
 
 def test_format_cents_is_unchanged_for_whole_dollars() -> None:
     assert format_cents(200_000_000) == "$2,000,000"
+
+
+# --- the share kind (D6) ------------------------------------------------------
+
+
+def test_a_share_parses_through_towerkits_one_rule():
+    """CLAUDE.md: one percent→bps rule, owned by towerkit money.parse_share;
+    bookkit delegates. A second conversion here is how 33.33% becomes 3333 bps
+    in one place and 333300 in another."""
+    from bookkit.forms.spec import Field, parse_value
+
+    field = Field("share_pct", "share", "share")
+
+    assert parse_value(field, "33.33%") == parse_value(field, "33.33") == 3333
+    assert parse_value(field, "100%") == 10_000
+
+
+def test_a_share_over_one_hundred_percent_is_refused():
+    """towerkit's rule, verified rather than assumed: parse_share bounds bps
+    to 0 < bps <= 10_000. A layer cannot be more than fully signed, and the
+    over-sign the validator catches later should not have got this far."""
+    from bookkit.forms.spec import Field, parse_value
+
+    with pytest.raises(ValueError):
+        parse_value(Field("share_pct", "share", "share"), "140%")
+
+
+def test_a_share_with_sub_basis_point_precision_is_refused_not_rounded():
+    """Rounding a share silently changes who owns what."""
+    from bookkit.forms.spec import Field, parse_value
+
+    with pytest.raises(ValueError):
+        parse_value(Field("share_pct", "share", "share"), "33.333")
+
+
+def test_a_share_pre_fills_as_the_percent_it_was_typed_as():
+    """The editor pre-fills from initial_text, and what a form pre-fills has
+    to survive its own parser: bps in the box would be read back as a percent
+    and multiply the share by a hundred."""
+    from bookkit.forms.spec import Field, initial_text, parse_value
+
+    field = Field("share_pct", "share", "share")
+
+    assert parse_value(field, initial_text(field, 3333)) == 3333

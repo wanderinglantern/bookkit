@@ -70,6 +70,42 @@ def task_fields(
     )
 
 
+LAYER_FIELDS: tuple[Field, ...] = (
+    Field("name", "layer", required=True),
+    Field("policy_number", "policy no"),
+    Field("attach_cents", "attaches at", "money"),
+    Field("limit_cents", "limit", "money"),
+    Field("premium_cents", "premium", "money"),
+    Field("period_from", "from", "date"),
+    Field("period_to", "to", "date"),
+)
+"""A towerkit layer's editable facts.
+
+KEYS ARE `sync.update_layer`'S OWN KEYWORD NAMES, so a cell route passes
+`**{key: value}` straight through and no translation table can drift from the
+writer it feeds.
+
+`signed_pct` and `statutory` are NOT here, and must not be: signed is the sum
+of the participants' shares and statutory is a towerkit model rule, so both are
+DERIVED. A cell that offers to edit a derived value writes nothing and reads as
+broken — the same reason `status` is kept out of RFI_ITEM_FIELDS.
+
+Money is cents on the wire and dollars in the file: `sync._require_dollars`
+REFUSES a sub-dollar amount rather than rounding it, and that refusal is meant
+to reach the field as its error text."""
+
+PARTICIPANT_FIELDS: tuple[Field, ...] = (
+    Field("carrier", "market", required=True),
+    Field("share_pct", "share", "share"),
+)
+"""A market's seat on a layer.
+
+`share_pct` is the "share" kind, which delegates to towerkit's one percent→bps
+rule. The key says pct and the stored value is bps on purpose — the same
+distinction layer_details already draws, so nobody compares a participant's
+share to a layer total and lands a hundred out."""
+
+
 RFI_ITEM_FIELDS: tuple[Field, ...] = (
     Field("prompt", "item", required=True),
     Field("category", "group"),
