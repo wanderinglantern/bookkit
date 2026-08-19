@@ -890,3 +890,190 @@ def test_the_not_to_scale_caveat_is_printed(app_and_org):
     assert caveat, "the seeded program is drawn to scale — test proves nothing"
 
     assert caveat in client.get(f"/accounts/{org.ref}/program").text
+
+
+# --- phase 5: the file moved under this write ---------------------------------
+
+
+def _touch_out_of_band(placement) -> str:
+    """Simulate towerkit's editor (or an MCP call) writing the file while a
+    browser tab is open on it. Returns the new layer name so a test can prove
+    it SURVIVED an overwrite rather than being clobbered."""
+    path = Path(placement.program_path)
+    text = path.read_text()
+    marker = "Touched Elsewhere"
+    layers = sync.layer_details.__module__  # keep the import honest
+    del layers
+    import json
+
+    data = json.loads(text)
+    data["layers"][-1]["name"] = marker
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    return marker
+
+
+def test_a_conflict_offers_three_ways_out_rather_than_an_error(app_and_org):
+    """The file moved under this write. That is not the same as a value the
+    validator refused, and answering it with the same one-line message leaves
+    the user with no way forward except retyping into a form that will refuse
+    again."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    _touch_out_of_band(placement)
+
+    refused = client.post(
+        _cell(org, placement, layer, "name"), data={"name": "My Edit"}
+    )
+
+    assert refused.status_code == 200
+    body = refused.text.lower()
+    assert "reload" in body
+    assert "overwrite" in body
+    assert "keep editing" in body
+
+
+def test_a_conflict_writes_nothing(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    _touch_out_of_band(placement)
+    before = Path(placement.program_path).read_bytes()
+
+    client.post(_cell(org, placement, layer, "name"), data={"name": "My Edit"})
+
+    assert Path(placement.program_path).read_bytes() == before
+
+
+def test_reload_catches_the_projection_up_and_shows_what_is_there_now(app_and_org):
+    """Reload discards MY draft and takes THEIR file. After it, the page shows
+    the out-of-band change."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    theirs = _touch_out_of_band(placement)
+
+    reloaded = client.post(
+        _cell(org, placement, layer, "name") + "/reload", data={"name": "My Edit"}
+    )
+
+    assert reloaded.status_code == 200
+    names = [ly["name"] for ly in sync.layer_details(conn, placement.id)]
+    assert theirs in names
+    assert "My Edit" not in names
+
+
+def test_overwrite_lands_my_edit_on_top_without_losing_theirs(app_and_org):
+    """THE claim this whole design rests on. Overwrite is a RETRY, not a
+    clobber: it re-projects and re-applies the ONE field I changed, so a
+    structural change somebody else made survives underneath it. Reusing the
+    towerkit TUI's force-write — which pushes a whole in-memory program — would
+    discard their change instead."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    theirs = _touch_out_of_band(placement)
+
+    written = client.post(
+        _cell(org, placement, layer, "name") + "/overwrite", data={"name": "My Edit"}
+    )
+
+    assert written.status_code == 200
+    names = [ly["name"] for ly in sync.layer_details(conn, placement.id)]
+    assert "My Edit" in names, "my edit did not land"
+    assert theirs in names, "their change was clobbered — this is a retry, not a force"
+
+
+def test_keep_editing_leaves_the_field_open_with_what_was_typed(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    _touch_out_of_band(placement)
+
+    still = client.post(
+        _cell(org, placement, layer, "name") + "/keep", data={"name": "My Edit"}
+    )
+
+    assert still.status_code == 200
+    assert "My Edit" in still.text
+    assert "<input" in still.text
+
+
+def test_an_ordinary_refusal_is_not_dressed_as_a_conflict(app_and_org):
+    """The two are handled differently and must be told apart by the CODE, not
+    by the fact that something went wrong."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    refused = client.post(
+        _cell(org, placement, layer, "premium_cents"), data={"premium_cents": "1,234.56"}
+    )
+
+    assert "reload" not in refused.text.lower()
+    assert "overwrite" not in refused.text.lower()
+
+
+# --- phase 5: putting a program write back from the rail ----------------------
+
+
+def test_a_program_write_is_reverted_from_the_rail(app_and_org):
+    """File contents are not event_log rows, so batch undo cannot restore a
+    program file — it refuses those batches outright. The rail used to stop
+    there and say so, which is honest and useless. It now calls the file-side
+    revert the MCP server has had all along."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    was = layer["name"]
+
+    client.post(_cell(org, placement, layer, "name"), data={"name": "Renamed By Web"})
+    batch = _latest_batch(conn)
+    assert batch.tool == "program_layer_edit"
+
+    reverted = client.post(
+        f"/accounts/{org.ref}/changes/{batch.ref}/revert?tab=program"
+    )
+
+    assert reverted.status_code in (200, 204)
+    names = [ly["name"] for ly in sync.layer_details(conn, placement.id)]
+    assert was in names, "the pre-image was not put back"
+    assert "Renamed By Web" not in names
+
+
+def test_reverting_a_program_write_is_refused_once_the_file_moved_on(app_and_org):
+    """The snapshot records the sha the write left behind. Anything newer —
+    towerkit's editor, an MCP call, a later web edit — and putting the
+    pre-image back would silently discard it."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    client.post(_cell(org, placement, layer, "name"), data={"name": "Renamed By Web"})
+    batch = _latest_batch(conn)
+    _touch_out_of_band(placement)
+    after_theirs = Path(placement.program_path).read_bytes()
+
+    refused = client.post(
+        f"/accounts/{org.ref}/changes/{batch.ref}/revert?tab=program"
+    )
+
+    assert refused.status_code in (200, 204)
+    assert Path(placement.program_path).read_bytes() == after_theirs, "their edit was lost"
+
+
+def test_the_rail_says_which_of_the_two_happened(app_and_org):
+    """A revert that reports nothing is indistinguishable from one that did
+    nothing."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    client.post(_cell(org, placement, layer, "name"), data={"name": "Renamed By Web"})
+    batch = _latest_batch(conn)
+    done = client.post(f"/accounts/{org.ref}/changes/{batch.ref}/revert?tab=program")
+
+    landing = done.headers.get("HX-Redirect")
+    assert landing, "no redirect to carry the outcome"
+    page = client.get(landing).text
+    assert "put back" in page.lower() or "reverted" in page.lower()

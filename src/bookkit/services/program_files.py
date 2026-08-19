@@ -74,6 +74,62 @@ def raise_on_errors(diags: Any) -> list[str]:
     return [d.message for d in diags.warnings]
 
 
+def revert_file(conn: Any, batch: Any) -> dict[str, Any]:
+    """Put back the pre-image of ONE program write — the file-side revert that
+    batch undo cannot provide, because file contents are not event_log rows.
+
+    THE ONE SEAM, TWO CALLERS, same as `write` above: the MCP server has done
+    this since program writes shipped, and the web's Recent Changes rail is the
+    second caller. A rail that reimplemented it would be a second answer to
+    "has anything touched this file since", which is the whole question.
+
+    Refuses if anything touched the file after that write — the snapshot's
+    post-write sha is checked by `restore`. Which of the account's files the
+    batch wrote is not recorded on the batch, so each linked file is tried and
+    the ones that answer "not this file" or "no snapshot" are passed over; a
+    sha mismatch is a real refusal and surfaces.
+    """
+    from pathlib import Path as _Path
+
+    from .. import db as db_mod
+    from .. import sync as sync_mod
+    from ..repo import batches as batches_repo
+    from ..repo import placements as placements_repo
+
+    if not batch.tool.startswith("program_"):
+        raise ValueError(f"{batch.ref} is not a program-file write — use revert_batch")
+    if batch.reverted_at is not None:
+        raise ValueError(f"{batch.ref} was already reverted at {batch.reverted_at}")
+    if batch.org_id is None:
+        raise ValueError(f"{batch.ref} names no account — cannot locate its file")
+
+    target = None
+    for placement in placements_repo.for_org(conn, batch.org_id):
+        if not placement.program_path:
+            continue
+        try:
+            restore(_Path(str(placement.program_path)), batch.ref)
+            target = placement
+            break
+        except ValueError as exc:
+            if "was a write to" not in str(exc) and "no snapshot" not in str(exc):
+                raise  # a sha mismatch is the refusal this exists for
+    if target is None:
+        raise ValueError(f"no snapshot for {batch.ref} on any of this account's files")
+
+    with db_mod.transaction(conn):  # unbatched, like revert_batch
+        diags = sync_mod.project(
+            conn, _Path(str(target.program_path)), placement_id=target.id
+        )
+        batches_repo.mark_reverted(conn, batch.id, db_mod.utc_now())
+    return {
+        "reverted": True,
+        "batch": batch.ref,
+        "file": target.program_path,
+        "warnings": [d.message for d in diags.warnings],
+    }
+
+
 def write(
     conn: Any,
     placement: Any,

@@ -60,6 +60,31 @@ IMPLEMENTED: dict[str, str] = {
         "cell: both write two fields together (status+completed_at, "
         "status+received_on) and a cell edit only ever writes one column."
     ),
+    "edit_layer": (
+        "BUILT 2026-08-19. The Program tab's layer table edits in place through "
+        "the same inline-cell contract contacts, tasks and request items use — "
+        "GET/POST .../program/{placement_id}/layers/{layer_id}/cell/{key}, "
+        "keyed by forms.inline.LAYER_FIELDS whose names ARE sync.update_layer's "
+        "keywords. The write goes through services.program_files.write, so it "
+        "is one batch with a pre-image, and a CONFLICT (the file moved under "
+        "the edit) renders a three-way — Reload / Overwrite / Keep editing — "
+        "rather than the same one-line refusal an invalid value gets. "
+        "Correcting or removing a market rides the same seam."
+    ),
+    "add_layer": (
+        "BUILT 2026-08-19. POST .../program/{placement_id}/layers appends a "
+        "pending layer, and .../layers/{layer_id}/markets binds a market to "
+        "one — both through services.program_files.write, both refusing in the "
+        "page with towerkit's own words when the validator says no (a gap, an "
+        "overlap, an over-sign)."
+    ),
+    "scaffold_tower": (
+        "BUILT 2026-08-19. A confirm step shows the DESTINATION PATH and then "
+        "POST .../program/{placement_id}/scaffold writes the file and links it. "
+        "The default path is the TUI's own rule — first configured root, "
+        "<two-word-slug>-<period year>.json — mirrored rather than reinvented, "
+        "so a file scaffolded from either surface lands in the same place."
+    ),
 }
 
 # action name -> why it is not covered yet
@@ -67,8 +92,9 @@ PENDING: dict[str, str] = {
     "add_here": (
         "generic per-tab add ('a') — contacts, tasks, requests and request "
         "items now have one each (POST .../contacts/new, .../tasks/new, "
-        ".../requests/new, .../requests/{id}/items/new); placements/pipeline/"
-        "projects tabs don't yet, and the action covers all of them, so it "
+        ".../requests/new, .../requests/{id}/items/new), and the placements "
+        "tab has one as of 2026-08-19 (POST .../program/placements); pipeline "
+        "and projects do not yet, and the action covers all of them, so it "
         "stays PENDING as a whole"
     ),
     "edit_here": (
@@ -95,8 +121,6 @@ PENDING: dict[str, str] = {
         "not built on the web yet"
     ),
     "renew_placement": "placements tab — later slice, needs towerkit writes (sync.renew)",
-    "edit_layer": "placements tab — later slice, needs towerkit writes (sync.update_layer)",
-    "add_layer": "placements tab — later slice, needs towerkit writes (sync.add_layer)",
     "open_towerkit": (
         "two flows behind one key. Opening a program in towerkit is a later "
         "slice; on the projects tab this same key runs _need_to_opportunity "
@@ -104,9 +128,6 @@ PENDING: dict[str, str] = {
         "opportunity, with no towerkit involvement."
     ),
     "assign_team": "team assignment editing not built on the web yet",
-    "scaffold_tower": (
-        "placements tab — later slice, needs towerkit writes (sync.scaffold_program)"
-    ),
     "export_open_items": (
         "two flows behind one key. The XLSX export is deferred by decision "
         "(needs a file-download response the web spec does not cover — see "
