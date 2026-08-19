@@ -2282,16 +2282,16 @@ def export_schematic(request: Request, ref: str, placement_id: str) -> Any:
             f"{placement.ref} has no program file linked — nothing to draw yet",
             f"/accounts/{ref}/program",
         )
-    from openpyxl import Workbook
+    # new_workbook, never the spreadsheet library directly: workbook I/O
+    # stays behind towerkit's helpers (the conventions suite greps for the
+    # library's name outside imports/), the same seam
+    # services/export_open_items composes through
     from towerkit.render.schematic_xlsx import add_schematic_sheet
-    from towerkit.render.table_xlsx import finalize_workbook
+    from towerkit.render.table_xlsx import finalize_workbook, new_workbook
     from towerkit.theme import load_theme
 
     program = _loaded_program(placement)
-    wb = Workbook()
-    default = wb.active
-    if default is not None:
-        wb.remove(default)
+    wb = new_workbook()
     add_schematic_sheet(wb, program, load_theme())
     with tempfile.TemporaryDirectory() as tmp:
         out = _Path(tmp) / "schematic.xlsx"
