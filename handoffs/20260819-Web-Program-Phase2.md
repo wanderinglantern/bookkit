@@ -38,6 +38,23 @@ Written 2026-08-19, after `20260819-Web-Program-Phase1.md`. Assumes `CLAUDE.md`.
   discovered from sync.py source (`_mutate` callers + scaffold/renew) — red
   in both directions on drift.
 
+## What the fresh-eyes review caught (fixed before merge)
+
+FormModal's title-derived batch tools ("edit_plc-0001", "correct_chubb_on")
+sailed past `services.batches.revert`'s `program_` guard, so `u` after a TUI
+placement/layer/seat edit rolled back `program_name`/`source_sha256` on the
+ROW while the towerkit file kept the change — a silent cache/file split whose
+next symptom is a false "file changed on disk" conflict. Every file-writing
+TUI form now stamps an explicit `program_*` BatchSpec (same names the web and
+MCP use), web renew's tool is `program_renew` (a plain row revert would
+orphan the clone for the next sync to re-adopt), and
+`test_a_file_writing_batch_refuses_the_row_only_revert` +
+`test_every_file_writing_tui_form_stamps_a_program_tool` hold it. NOTE: the
+TUI's `scaffold_tower` form keeps its non-program tool on purpose (matching
+the web's `scaffold_tower`) — reverting a scaffold un-links rows and orphans
+a NEW file, which sync can re-adopt; same class as renew, smaller blast, its
+own decision when someone hits it.
+
 ## Deferred, with reasons (do not silently resurrect)
 
 - **unlink** — `project_all` over configured roots would re-adopt the file
