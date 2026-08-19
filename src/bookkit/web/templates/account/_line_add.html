@@ -1,0 +1,18 @@
+{# The in-row line add — the market-add pattern: the + line control swapped
+   itself for this form; cancel restores it from {lines_base}/button. The new
+   line arrives WITH a pending "To be placed" layer, because towerkit's
+   validator makes an empty line an error — the form says so, since the
+   surprise extra row would otherwise read as a bug. #}
+<span class="line-add">
+  <form class="market-add-form" hx-post="{{ lines_base }}"
+        hx-target="closest .line-add" hx-swap="outerHTML">
+    {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+    <input type="text" name="name" aria-label="line of cover" placeholder="line of cover"
+           value="{{ values.get('name', '') if values else '' }}" required autofocus>
+    <button type="submit" class="row-action-btn">add line</button>
+    <button type="button" class="row-action-btn"
+            hx-get="{{ lines_base }}/button"
+            hx-target="closest .line-add" hx-swap="outerHTML">cancel</button>
+  </form>
+  <span class="detail-label">arrives with a pending layer</span>
+</span>

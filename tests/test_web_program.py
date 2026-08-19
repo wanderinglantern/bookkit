@@ -873,6 +873,109 @@ def test_a_refused_submission_keeps_the_typed_notes(app_and_org):
     assert "required" in refused
 
 
+def _lines_base(org, placement):
+    return f"/accounts/{org.ref}/program/{placement.id}/lines"
+
+
+def test_the_lines_strip_renders_every_line_as_a_cell(app_and_org, tmp_path):
+    """D1: the browser can finally NAME the cover. A scaffolded program was
+    stuck on 'Coverage TBD' forever because no web control could touch a
+    line (review finding F4)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    for line_id, name in sync.program_lines(conn, placement.id):
+        assert (
+            f'data-cell-action="{_lines_base(org, placement)}/{line_id}/cell/name"'
+            in page
+        ), f"line {name} is not an editable cell"
+    assert f'hx-get="{_lines_base(org, placement)}/new"' in page, "no + line control"
+
+
+def test_renaming_a_line_cascades_and_rerenders_the_panel(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+
+    saved = client.post(
+        f"{_lines_base(org, placement)}/cy/cell/name", data={"name": "Cyber Liability"}
+    )
+
+    assert saved.status_code == 200
+    lines = dict(sync.program_lines(conn, placement.id))
+    assert "Cyber Liability" in lines.values()
+    assert "cy" not in lines, "the id did not follow the name"
+    new_id = next(lid for lid, nm in lines.items() if nm == "Cyber Liability")
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "Primary Cyber"
+    )
+    assert new_id in layer["applies_to"], "the cascade left the layer stranded"
+    assert 'hx-swap-oob="true"' in saved.text or 'id="program-' in saved.text
+
+
+def test_line_remove_asks_first_naming_what_dies_with_it(app_and_org, tmp_path):
+    client, org = app_and_org
+    placement = _two_line_placement(client, org, tmp_path)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    confirm = client.get(f"{_lines_base(org, placement)}/cy/remove")
+
+    assert confirm.status_code == 200
+    assert "Primary Cyber" in confirm.text, "the confirm hides the dying layer"
+    assert path.read_bytes() == before, "the confirm GET wrote"
+
+    removed = client.post(f"{_lines_base(org, placement)}/cy/remove")
+
+    assert removed.status_code == 200
+    conn = client.app.state.conn
+    assert "cy" not in dict(sync.program_lines(conn, placement.id))
+    assert "Primary Cyber" not in [
+        ly["name"] for ly in sync.layer_details(conn, placement.id)
+    ]
+
+
+def test_removing_the_last_line_is_refused_in_place(app_and_org, tmp_path):
+    client, org = app_and_org
+    placement = _two_line_placement(client, org, tmp_path)
+    assert client.post(f"{_lines_base(org, placement)}/cy/remove").status_code == 200
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(f"{_lines_base(org, placement)}/gl/remove")
+
+    assert refused.status_code == 200
+    assert "only line" in refused.text
+    assert path.read_bytes() == before
+
+
+def test_adding_a_line_lands_with_a_pending_layer(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+
+    form = client.get(f"{_lines_base(org, placement)}/new").text
+    assert 'name="name"' in form
+
+    added = client.post(
+        f"{_lines_base(org, placement)}", data={"name": "Marine Cargo"}
+    )
+
+    assert added.status_code == 200
+    lines = dict(sync.program_lines(conn, placement.id))
+    assert "Marine Cargo" in lines.values()
+    new_id = next(lid for lid, nm in lines.items() if nm == "Marine Cargo")
+    covering = [
+        ly for ly in sync.layer_details(conn, placement.id)
+        if new_id in ly["applies_to"]
+    ]
+    assert covering, "the new line arrived empty — the validator forbids that"
+
+
 def _renew_url(org, placement):
     return f"/accounts/{org.ref}/program/{placement.id}/renew"
 

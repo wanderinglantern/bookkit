@@ -1,0 +1,7 @@
+{# The collapsed "+ line" control — one file, two renderers (first paint and
+   the add form's cancel), same rule as _market_add_button.html. #}
+<span class="line-add">
+  <button type="button" class="row-action-btn"
+          hx-get="{{ lines_base }}/new"
+          hx-target="closest .line-add" hx-swap="outerHTML">+ line</button>
+</span>

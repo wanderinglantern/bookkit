@@ -146,6 +146,7 @@ def _programs(request: Request, org: Any) -> list[dict[str, Any]]:
             {
                 "placement": placement,
                 "placement_cells": _placement_cells(request, org.ref, placement),
+                "line_chips": _line_chips(request, org.ref, placement),
                 "linked": bool(placement.program_path),
                 "layers": [
                     _layer_row(request, org.ref, placement.id, layer) for layer in layers
@@ -319,6 +320,292 @@ async def placement_cell_save(
     cell = _placement_display_cell(request, ref, fresh, key)
     panel = _panel(request, ref, org, placement_id)
     return HTMLResponse(_text(cell) + _text(panel))
+
+
+# --- the lines strip (phase 3, D1) ---------------------------------------------
+#
+# Lines are the axis a scaffolded program could never escape from the browser:
+# "Coverage TBD" stayed TBD forever (F4). Rename rides the cell contract; the
+# ID FOLLOWS THE NAME and cascades through every appliesTo, so every rename
+# success answers with the whole panel — the cell's own action URL is stale
+# the moment the write lands.
+
+_LINE_NAME_FIELD = Field("name", "line of cover", required=True)
+
+
+def _line_name(conn: sqlite3.Connection, placement_id: str, line_id: str) -> str:
+    for lid, name in sync.program_lines(conn, placement_id):
+        if lid == line_id:
+            return str(name)
+    raise HTTPException(status_code=404, detail=f"no line {line_id!r} on this program")
+
+
+def _lines_base(ref: str, placement_id: str) -> str:
+    return f"/accounts/{ref}/program/{placement_id}/lines"
+
+
+def _line_cell_action(ref: str, placement_id: str, line_id: str) -> str:
+    return f"{_lines_base(ref, placement_id)}/{line_id}/cell/name"
+
+
+def _line_chip_html(
+    request: Request, ref: str, placement_id: str, line_id: str, name: str
+) -> str:
+    cell = render_cell_display(
+        request, _LINE_NAME_FIELD, name,
+        _line_cell_action(ref, placement_id, line_id),
+        tag="span", extra_class="line-name",
+    )
+    template = TEMPLATES.env.get_template("account/_line_chip.html")
+    return template.render(
+        base=f"{_lines_base(ref, placement_id)}/{line_id}", name=name, name_cell=cell
+    )
+
+
+def _line_chips(request: Request, ref: str, placement: Any) -> list[str] | None:
+    """None for an unlinked placement — no file, no lines, and the strip
+    saying 'no lines' about a file that does not exist would mislead."""
+    if not placement.program_path:
+        return None
+    conn = _conn(request)
+    return [
+        _line_chip_html(request, ref, placement.id, lid, name)
+        for lid, name in sync.program_lines(conn, placement.id)
+    ]
+
+
+def _line_blast(
+    conn: sqlite3.Connection, placement_id: str, line_id: str
+) -> tuple[list[str], list[str]]:
+    """(dying, narrowing): layers covering ONLY this line die with it; layers
+    spanning several merely stop covering it."""
+    dying: list[str] = []
+    narrowing: list[str] = []
+    for layer in layers_for_conn(conn, placement_id):
+        if line_id in layer["applies_to"]:
+            (dying if layer["applies_to"] == [line_id] else narrowing).append(
+                str(layer["name"])
+            )
+    return dying, narrowing
+
+
+def layers_for_conn(conn: sqlite3.Connection, placement_id: str) -> list[dict[str, Any]]:
+    return sync.layer_details(conn, placement_id)
+
+
+# LITERAL SEGMENTS BEFORE {line_id} — the same registration-order rule the
+# markets routes carry.
+@router.get("/accounts/{ref}/program/{placement_id}/lines/new", response_class=HTMLResponse)
+def line_add_form(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    org = _org(request, ref)
+    _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_line_add.html",
+        {"lines_base": _lines_base(ref, placement_id)},
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/lines/button", response_class=HTMLResponse
+)
+def line_add_button(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    org = _org(request, ref)
+    _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_line_add_button.html",
+        {"lines_base": _lines_base(ref, placement_id)},
+    )
+
+
+@router.post("/accounts/{ref}/program/{placement_id}/lines", response_class=HTMLResponse)
+async def line_add(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    name = str((await request.form()).get("name", "")).strip()
+
+    def refused(message: str) -> HTMLResponse:
+        return TEMPLATES.TemplateResponse(
+            request, "account/_line_add.html",
+            {"lines_base": _lines_base(ref, placement_id), "error": message,
+             "values": {"name": name}},
+        )
+
+    if not name:
+        return refused("the line needs a name")
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_line_add",
+            summary=f"added line {name}",
+            mutate=lambda: sync.add_line(conn, placement_id, name),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return refused(str(exc))
+    button = TEMPLATES.TemplateResponse(
+        request, "account/_line_add_button.html",
+        {"lines_base": _lines_base(ref, placement_id)},
+    )
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(button) + _text(panel))
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/lines/{line_id}/chip",
+    response_class=HTMLResponse,
+)
+def line_chip(
+    request: Request, ref: str, placement_id: str, line_id: str
+) -> HTMLResponse:
+    """What the remove confirm's [keep] restores."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    name = _line_name(conn, placement_id, line_id)
+    return HTMLResponse(_line_chip_html(request, ref, placement_id, line_id, name))
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/lines/{line_id}/cell/name",
+    response_class=HTMLResponse,
+)
+def line_cell(
+    request: Request, ref: str, placement_id: str, line_id: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    name = _line_name(conn, placement_id, line_id)
+    return HTMLResponse(
+        render_cell_display(
+            request, _LINE_NAME_FIELD, name,
+            _line_cell_action(ref, placement_id, line_id),
+            tag="span", extra_class="line-name",
+        )
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/lines/{line_id}/cell/name/edit",
+    response_class=HTMLResponse,
+)
+def line_cell_edit(
+    request: Request, ref: str, placement_id: str, line_id: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    name = _line_name(conn, placement_id, line_id)
+    return HTMLResponse(
+        render_cell(
+            request, _LINE_NAME_FIELD, name,
+            _line_cell_action(ref, placement_id, line_id),
+            tag="span", extra_class="line-name",
+        )
+    )
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/lines/{line_id}/cell/name",
+    response_class=HTMLResponse,
+)
+async def line_cell_save(
+    request: Request, ref: str, placement_id: str, line_id: str
+) -> HTMLResponse:
+    """Rename. Success answers with the PANEL ALONE (htmx lifts the OOB
+    section out and swaps the empty remainder over the editor): the id
+    follows the name, so a returned display cell would carry a dead action
+    URL the moment the write lands."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    current = _line_name(conn, placement_id, line_id)
+    typed = str((await request.form()).get("name", "")).strip()
+
+    def editor(error: str) -> HTMLResponse:
+        return HTMLResponse(
+            render_cell(
+                request, _LINE_NAME_FIELD, typed,
+                _line_cell_action(ref, placement_id, line_id),
+                error=error, tag="span", extra_class="line-name",
+            )
+        )
+
+    if not typed:
+        return editor("the line needs a name")
+    if typed == current:
+        return HTMLResponse(
+            _line_chip_html(request, ref, placement_id, line_id, current)
+        )
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_line_edit",
+            summary=f"renamed line {current} to {typed}",
+            mutate=lambda: sync.rename_line(conn, placement_id, line_id, typed),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return editor(str(exc))
+    request.state.layer_details = {}
+    return _panel(request, ref, org, placement_id)
+
+
+def _line_remove_confirm(
+    request: Request, ref: str, placement_id: str, line_id: str, name: str,
+    error: str | None = None,
+) -> HTMLResponse:
+    conn = _conn(request)
+    dying, narrowing = _line_blast(conn, placement_id, line_id)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_line_remove_confirm.html",
+        {
+            "base": f"{_lines_base(ref, placement_id)}/{line_id}",
+            "name": name, "dying": dying, "narrowing": narrowing, "error": error,
+        },
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/lines/{line_id}/remove",
+    response_class=HTMLResponse,
+)
+def line_remove_confirm(
+    request: Request, ref: str, placement_id: str, line_id: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    name = _line_name(conn, placement_id, line_id)
+    return _line_remove_confirm(request, ref, placement_id, line_id, name)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/lines/{line_id}/remove",
+    response_class=HTMLResponse,
+)
+def line_remove(
+    request: Request, ref: str, placement_id: str, line_id: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    name = _line_name(conn, placement_id, line_id)
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_line_remove",
+            summary=f"removed line {name}",
+            mutate=lambda: sync.remove_line(conn, placement_id, line_id),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _line_remove_confirm(
+            request, ref, placement_id, line_id, name, str(exc)
+        )
+    request.state.layer_details = {}
+    return _panel(request, ref, org, placement_id)
 
 
 # --- editing a layer where it is read -----------------------------------------
@@ -805,6 +1092,7 @@ def _panel(request: Request, ref: str, org: Any, placement_id: str) -> HTMLRespo
             "header": {"org": org},
             "placement": placement,
             "placement_cells": _placement_cells(request, ref, placement),
+            "line_chips": _line_chips(request, ref, placement),
             "linked": bool(placement.program_path),
             "layers": [
                 _layer_row(request, ref, placement_id, layer)

@@ -39,6 +39,19 @@
   </div>
   <div class="form-host"></div>
 
+  {% if line_chips is not none %}
+    {# The lines strip (phase 3, D1): rename in place (the id follows the
+       name, cascading), remove behind a blast-naming confirm, add in row.
+       This is where a scaffold's "Coverage TBD" stops being forever. #}
+    <div class="lines-strip">
+      <span class="detail-label">lines</span>
+      {% for chip in line_chips %}{{ chip | safe }}{% endfor %}
+      {% with lines_base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/lines" %}
+        {% include "account/_line_add_button.html" %}
+      {% endwith %}
+    </div>
+  {% endif %}
+
   {% if tower %}
     {% with caption = placement.program_name ~ " · " ~ placement.ref %}
       {% include "account/_tower_panel.html" %}
