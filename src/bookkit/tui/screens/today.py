@@ -20,9 +20,9 @@ from textual.widgets import Footer, Header, Static
 
 from ...dates import days_until
 from ...repo import tasks as tasks_repo
-from ...services import renewals, sla, staleness
+from ...services import book, renewals, sla, staleness
 from .. import theme
-from ..theme import dash, date_text, days_text, money_text, right, status_text
+from ..theme import dash, date_text, days_text, money_text, right
 from ..widgets.tables import ListTable
 
 # Below this width the 2x2 grid gives each pane ~36 cells for up to seven
@@ -31,6 +31,33 @@ from ..widgets.tables import ListTable
 TWO_COLUMN_MIN_WIDTH = 100
 # rows per pane when stacked: title, header, and ~9 rows of work
 PANE_HEIGHT = 12
+
+
+def _cover(item: renewals.RenewalItem) -> Text:
+    """What renews, in one cell: the lines of cover when the placement is
+    linked to a program file, else the program standing in for them.
+
+    The lines lead, always. The cell is the last column of a pane narrower
+    than its content, so whatever is clipped is clipped off the END — and the
+    field that must never be clipped is the one CLAUDE.md makes mandatory.
+
+    The stand-in is the program label with a trailing "Program" dropped:
+    _program_label already takes the year off so renewals of the same cover
+    read alike, and under a `cover` header the word "Program" is the header's
+    job, not the cell's. "2025 Casualty Program" → "Casualty", which sits in
+    the same register as "GL, AL, IM" instead of a file title. It is DIM, so
+    a stand-in never reads as projected data.
+
+    With neither — no projected lines and no program name — the cell is an em
+    dash, not blank. The pre-fix code said `item.lines or dash()` and that half
+    of it was right: an empty last column reads as a rendering fault, while a
+    dash says "this row has nothing to put here", and the dash is free."""
+    if item.lines:
+        return Text(item.lines)
+    label = book._program_label(item.placement.program_name)
+    head = label[: -len("program")].strip() if label.lower().endswith("program") else label
+    stand_in = head or label
+    return Text(stand_in, style=theme.DIM) if stand_in else dash()
 
 
 class TodayScreen(Screen):
@@ -111,10 +138,25 @@ class TodayScreen(Screen):
 
         renewals_table = self.query_one("#renewals-table", ListTable)
         renewals_table.clear(columns=True)
-        renewals_table.add_columns(
-            "renews", right("due in"), "account", "program", "lines", "status",
-            right("premium"),
-        )
+        # FOUR columns, not seven. This pane is 66 cells wide at the 140-column
+        # floor and seven columns need 105, so three of them were painted past
+        # the right-hand edge — and `lines` was one of them, the single field
+        # CLAUDE.md calls mandatory here ("program name alone is not enough
+        # context"). Something had to give, and the footer's precedent is
+        # demote one, don't raise the ceiling:
+        #   premium goes first. renewals.upcoming() returns every non-lapsed
+        #   placement, so this cell is the EXPIRING placement's premium whatever
+        #   its status — and the status column that would qualify it does not
+        #   fit either. Money that cannot say whether it exists is the exact
+        #   column the book screen already had taken off it.
+        #   status goes with it: every row here is by definition a live renewal;
+        #   where it sits in its lifecycle is the account screen's answer.
+        #   program is not deleted, it is DEMOTED into `cover` — the navigator
+        #   card's own rule, "without projected lines the programme has to stand
+        #   in for it, and then it must not ALSO be printed as its own column".
+        # Anything cut off the right of `cover` is therefore the stand-in's
+        # tail, never a line of cover.
+        renewals_table.add_columns("renews", right("due in"), "account", "cover")
         for item in renewals.upcoming(conn, today, days=120):
             renewals_table.add_row(
                 # renewal_on, NOT period_to: days_remaining counts to the
@@ -125,10 +167,7 @@ class TodayScreen(Screen):
                           item.days_remaining),
                 days_text(item.days_remaining),
                 item.org.name,
-                item.placement.program_name,
-                item.lines or dash(),
-                status_text(item.placement.status),
-                money_text(item.placement.total_premium),
+                _cover(item),
                 key=f"renewal:{item.placement.id}:{item.org.id}",
             )
         from ...repo import projects as projects_repo
@@ -140,10 +179,10 @@ class TodayScreen(Screen):
                 date_text(need["needed_by"], days),
                 days_text(days),
                 need["org_name"],
-                f"{need['project_name']} (need)",
-                need["line"],
-                status_text(need["status"]),
-                money_text(need["limit_cents"]),
+                # the line first, the project after it — same order as the
+                # navigator's needs table, and the same reason: the line of
+                # cover is what the date belongs to
+                f"{need['line']} — {need['project_name']} (need)",
                 key=f"need:{need['id']}:{need['org_id']}",
             )
 

@@ -140,9 +140,22 @@ async def test_the_footer_fits_on_screens_reached_by_selecting_a_row(
 # --- modals keep their own chrome on screen ---------------------------------
 
 
+# every capped modal in the app and the key that opens it, because the bug is
+# in the CSS PATTERN, not in one screen: QuickCapture carried the same
+# `max-height: 55vh` inside a capped box long after FormModal was fixed, and a
+# test parametrised over one of them said nothing about the other
+CAPPED_MODALS = [
+    ("form", "ctrl+t", "#form-save"),        # new task: a long-ish form
+    ("quick_capture", "n", "#qc-save"),      # log interaction: the longest
+]
+
+
 @pytest.mark.parametrize("size", [WIDE, SMALL], ids=["140x45", "80x24"])
+@pytest.mark.parametrize(
+    "name,key,save", CAPPED_MODALS, ids=[m[0] for m in CAPPED_MODALS]
+)
 async def test_a_long_form_keeps_its_save_button_inside_the_box(
-    snapshot_db: Path, size: tuple[int, int]
+    snapshot_db: Path, size: tuple[int, int], name: str, key: str, save: str
 ) -> None:
     """`.modal-box max-height: 80%` and `.modal-fields max-height: 55vh` add
     up past the box, so below ~34 rows the hint and Save button landed
@@ -153,18 +166,49 @@ async def test_a_long_form_keeps_its_save_button_inside_the_box(
     app = BookkitApp(snapshot_db)
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
-        await pilot.press("ctrl+t")           # new task: a long-ish form
+        await pilot.press(key)
         await pilot.pause()
 
         box = app.screen.query_one(".modal-box")
-        button = app.screen.query_one("#form-save", Button)
-        assert button.region.height > 0, f"{size}: Save button not rendered"
+        button = app.screen.query_one(save, Button)
+        assert button.region.height > 0, f"{name} {size}: Save button not rendered"
         bottom = button.region.y + button.region.height
         assert bottom <= box.region.y + box.region.height, (
-            f"{size}: Save button at y={button.region.y}..{bottom} sits below "
-            f"the box ending at {box.region.y + box.region.height}"
+            f"{name} {size}: Save button at y={button.region.y}..{bottom} sits "
+            f"below the box ending at {box.region.y + box.region.height}"
         )
         assert button.region.y >= box.region.y
+
+
+async def test_quick_capture_paints_every_field_at_the_reference_size(
+    snapshot_db: Path,
+) -> None:
+    """A field that exists, is wired, is tested and is below the fold of a
+    scroller nobody knows to scroll is not a feature yet — and `who was there`
+    shipped that way, together with the roster whose entire job is that you
+    cannot type a name you do not know.
+
+    140x45 is the size the rest of this file treats as the app's reference
+    terminal, and at that size the modal has 26 rows of field viewport. Its
+    content was 41 rows and is 33: only `note` and its TextArea now sit below
+    the fold, and that is the field nobody has to be told about. When this
+    fails, take rows off the CHROME — the label margins and the account
+    picker's height are what paid for it last time — not off the fields."""
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=WIDE) as pilot:
+        await pilot.pause()
+        await pilot.press("n")
+        await pilot.pause()
+        painted = "\n".join(_screen_rows(app, WIDE))
+
+        assert "who was there" in painted, "the attendee field is below the fold"
+        assert "on this account" in painted or "no contacts on this account" in painted, (
+            "the roster is below the fold — the field it captions asks for names "
+            "from a list the user cannot see"
+        )
+        # not an accident of the account picker: the field ABOVE it has to have
+        # made it too, or the modal is just scrolled to a different place
+        assert "what happened" in painted, "the subject field is below the fold"
 
 
 # --- the import preview can show its own verdict ----------------------------

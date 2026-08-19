@@ -3040,6 +3040,51 @@ async def test_the_palette_offers_the_screens(seeded_db: Path) -> None:
         assert any("Calendar" in t for t in offered if t)
 
 
+async def test_the_palette_ranks_a_name_match_above_an_address_match(
+    seeded_db: Path,
+) -> None:
+    """`/` and the CLI put email hits last; ctrl+p put them FIRST.
+
+    Two scales pointing opposite ways. SearchHit.rank is bm25 — negative, and
+    lower sorts first. Hit.score is a Textual match strength — 0..1, and the
+    palette sorts it DESCENDING. The provider handed one straight to the other
+    as `min(1.0, hit.rank) if hit.rank else 0.5`, which reversed every FTS hit
+    (the best match, being the most negative, scored lowest) and floated the
+    unranked email hits, whose 0.0 rank is falsy, to the top on the fallback.
+    Measured: a contact matched only on an email substring outscored the
+    account whose name was typed."""
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.tui.commands import RecordCommands
+
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        named = orgs_repo.create(
+            app.conn, kind="client", name="Zephyr Marine Holdings", status="active"
+        )
+        elsewhere = orgs_repo.create(
+            app.conn, kind="client", name="Unrelated Holdings Co", status="active"
+        )
+        contacts_repo.create(
+            app.conn, elsewhere.id, first_name="Bill", last_name="Smith",
+            email="bill@zephyr.example",
+        )
+
+        provider = RecordCommands(app.screen)
+        await provider.startup()
+        hits = [hit async for hit in provider.search("zephyr")]
+        assert len(hits) >= 2, hits
+        # the palette sorts on score, DESCENDING — so assert on the order it
+        # will actually paint, not on the order they were yielded
+        order = [h.text for h in sorted(hits, key=lambda h: -h.score)]
+        by_name = next(i for i, t in enumerate(order) if "Zephyr Marine" in (t or ""))
+        by_address = next(i for i, t in enumerate(order) if "Bill Smith" in (t or ""))
+        assert by_name < by_address, order
+        assert all(0.0 <= h.score <= 1.0 for h in hits), [h.score for h in hits]
+        assert named.id  # the account exists; the assertion above is about order
+
+
 async def test_the_palette_jumps_to_the_account(seeded_db: Path) -> None:
     """A hit that does not open the record is a search box, not a jump."""
     from bookkit.tui.commands import RecordCommands

@@ -179,6 +179,194 @@ def test_fts_search_grouped(conn) -> None:
     assert search.search(conn, "atom")
 
 
+def test_a_contact_hit_says_which_org_the_person_belongs_to(conn) -> None:
+    """Five people called Chen render as five identical rows, and the list is
+    unusable the moment two of them share a surname. The org is the one thing
+    that tells them apart, and it was never composed into the hit."""
+    atomic = make_client(conn)
+    borealis = make_client(conn, "Borealis Foods Group")
+    contacts.create(
+        conn, atomic.id, first_name="Sarah", last_name="Chen", title="CFO"
+    )
+    contacts.create(
+        conn, borealis.id, first_name="David", last_name="Chen", title="Controller"
+    )
+    titles = [hit.title for hit in search.search(conn, "chen") if hit.kind == "contact"]
+    assert len(titles) == 2
+    assert any("Atomic Industries, Inc." in title for title in titles), titles
+    assert any("Borealis Foods Group" in title for title in titles), titles
+    # the person still leads — the org identifies, it does not replace
+    assert all(title.startswith(("Sarah Chen", "David Chen")) for title in titles), titles
+
+
+def test_a_contact_is_findable_by_email(conn) -> None:
+    """Typing the address you have in front of you found nothing at all: the
+    contact index carries first/last/title/notes and not email."""
+    org = make_client(conn, "Harborview Utilities")
+    contacts.create(
+        conn, org.id, first_name="Priya", last_name="Raman",
+        email="p.raman@harborview.example",
+    )
+    whole = search.search(conn, "p.raman@harborview.example")
+    assert [hit.kind for hit in whole] == ["contact"], whole
+    # the local part alone, and the domain alone — an address is not one word
+    assert [hit.kind for hit in search.search(conn, "p.raman")] == ["contact"]
+    assert [hit.kind for hit in search.search(conn, "harborview.example")] == ["contact"]
+    # and the matched address is on the row, so the reason it matched is visible
+    assert "p.raman@harborview.example" in whole[0].snippet
+
+
+def test_an_email_hit_is_not_a_second_copy_of_a_name_hit(conn) -> None:
+    """The email pass is a fallback, not a union: a contact whose name AND
+    email both match must appear once."""
+    org = make_client(conn, "Ironwood Timber")
+    contacts.create(
+        conn, org.id, first_name="Nadia", last_name="Ironwood",
+        email="nadia@ironwood.example",
+    )
+    hits = [hit for hit in search.search(conn, "ironwood") if hit.kind == "contact"]
+    assert len(hits) == 1, hits
+
+
+def test_a_removed_contact_stays_out_of_the_email_index(conn) -> None:
+    """The FTS pass filters deleted_at; the email pass has to as well, or a
+    removed person comes back through the other door."""
+    org = make_client(conn, "Quartz Financial")
+    gone = contacts.create(
+        conn, org.id, first_name="Tom", last_name="Quill", email="tom@quartz.example"
+    )
+    base.soft_delete(conn, "contact", gone.id)
+    assert search.search(conn, "tom@quartz.example") == []
+
+
+def test_an_email_hit_ranks_AFTER_every_fts_hit_and_says_so_in_the_rank(
+    conn,
+) -> None:
+    """The email pass is unranked, and unranked must sort last — bm25 and "the
+    string is in there" are not the same scale.
+
+    The rank it carries must also be TRUTHY. It was 0.0, and tui/commands.py
+    read it as `min(1.0, hit.rank) if hit.rank else 0.5`: 0.0 is falsy, so an
+    address match took the 0.5 default and outranked every name match in the
+    command palette. A sentinel meaning "unranked" that also reads as "no
+    value" is a landmine for every consumer, not just that one."""
+    org = make_client(conn, "Zephyr Marine Holdings")
+    contacts.create(
+        conn, org.id, first_name="Zephyr", last_name="Nakamura", title="CFO"
+    )
+    other = make_client(conn, "Other Co")
+    contacts.create(
+        conn, other.id, first_name="Bill", last_name="Smith",
+        email="bill@zephyr.example",
+    )
+    interactions.log(conn, org.id, "note", "Zephyr kickoff call", "2026-08-01")
+
+    hits = search.search(conn, "zephyr")
+    email_hit = next(h for h in hits if h.snippet == "bill@zephyr.example")
+    assert email_hit.rank, "the unranked sentinel is falsy — `or default` will fire"
+    fts = [h for h in hits if h is not email_hit]
+    assert fts, "fixture drifted: nothing matched the index"
+    assert all(h.rank < email_hit.rank for h in fts), [h.rank for h in hits]
+    # last of the contacts, not last of the list — the hits are grouped by
+    # kind, so "after every FTS hit" is a statement about the section it
+    # belongs to. Within CONTACTS, the ranked hits come first and the address
+    # match brings up the rear.
+    contacts_section = [h for h in hits if h.kind == "contact"]
+    assert contacts_section[-1] is email_hit, [h.title for h in contacts_section]
+
+
+def test_hits_of_one_kind_arrive_together(conn) -> None:
+    """Both readers — the search screen and the CLI — print a header the
+    moment the kind changes, so the hit list has to be grouped by kind or a
+    query prints the same header twice. A flat sort on rank does not group:
+    an org scoring between a contact and an unranked email hit produced
+    CONTACTS, ORGS, CONTACTS, and the reader has no way to tell that is one
+    list rather than two."""
+    # the shapes matter: bm25 favours the shorter document, so the long org
+    # name ranks BETWEEN the contact matched by name and the one matched only
+    # by address — which is exactly the arrangement a flat sort splits
+    org = make_client(
+        conn, "Zephyr Marine Holdings International Group Limited Partnership"
+    )
+    contacts.create(conn, org.id, first_name="Zephyr", last_name="Nakamura")
+    other = make_client(conn, "Other Co")
+    contacts.create(
+        conn, other.id, first_name="Bill", last_name="Smith",
+        email="bill@zephyr.example",
+    )
+    interactions.log(
+        conn, org.id, "note",
+        "Zephyr kickoff call with the whole account team present", "2026-08-01",
+    )
+    ranks = {h.kind: h.rank for h in sorted(search.search(conn, "zephyr"), key=lambda h: h.rank)}
+    assert ranks, "fixture drifted"
+
+    kinds = [h.kind for h in search.search(conn, "zephyr")]
+    assert set(kinds) == {"org", "contact", "interaction"}, kinds
+    assert kinds.count("contact") == 2, kinds  # one by name, one by address
+    # each kind occupies one contiguous run, so one header is printed per kind
+    runs = [k for i, k in enumerate(kinds) if i == 0 or kinds[i - 1] != k]
+    assert len(runs) == len(set(runs)), f"{kinds} — a kind is split in two"
+
+
+def test_a_wildcard_typed_into_the_search_box_is_a_literal(conn) -> None:
+    """LIKE has its own metacharacters and a search box is user input: without
+    ESCAPE, "%" matches every stored address and "_" matches any character, so
+    a typo turns a precise lookup into the whole book. Nothing asserted this,
+    so the next edit to that WHERE clause would have dropped it in silence."""
+    org = make_client(conn, "Percentile Analytics")
+    literal = contacts.create(
+        conn, org.id, first_name="Ada", last_name="Percy", email="a%b@percentile.test",
+    )
+    contacts.create(
+        conn, org.id, first_name="Bo", last_name="Quist", email="axb@percentile.test",
+    )
+    contacts.create(
+        conn, org.id, first_name="Cy", last_name="Rand", email="ab@percentile.test",
+    )
+
+    # '%' is the character typed, not "anything at all"
+    found = [h.entity_id for h in search.search(conn, "a%b@percentile.test")]
+    assert found == [literal.id], found
+    # and a query made only of wildcards matches the addresses that contain
+    # them, which is none of these — it does not return the book, and it does
+    # not raise
+    assert search.search(conn, "%%%") == []
+    # '_' is a literal too, or "a_b" would answer for "axb"
+    assert [h.entity_id for h in search.search(conn, "a_b@percentile.test")] == []
+
+
+def test_the_email_pass_declines_a_query_made_entirely_of_noise(conn) -> None:
+    """EMAIL_MIN_TERM's whole job. It was 3, and reasoned about "co" and "io"
+    — while "com", "net" and "org" are three characters each and sit in almost
+    every address ever stored, so `_by_email("com")` came back with the entire
+    limit. No length can make this a guarantee (a book sharing one domain
+    matches on any term), which is why the floor is documented as a floor."""
+    org = make_client(conn, "Kettleburn Logistics")
+    contacts.create(
+        conn, org.id, first_name="Ada", last_name="Kettle", email="ada@kettleburn.com",
+    )
+    assert search.search(conn, "com") == []
+    assert search.search(conn, "org") == []
+    # a distinctive fragment still answers
+    assert [h.kind for h in search.search(conn, "kettleburn.com")] == ["contact"]
+
+
+def test_every_term_has_to_be_in_the_address_not_just_the_long_ones(conn) -> None:
+    """The conjunction dropped short terms instead of requiring them, so
+    "zz p.raman" fell back to "p.raman" alone and returned an address with no
+    "zz" anywhere in it — a hit the FTS pass, which ANDs its terms, would
+    never have produced. The floor decides whether the pass RUNS; it does not
+    decide which terms count."""
+    org = make_client(conn, "Trellis Growers")
+    contacts.create(
+        conn, org.id, first_name="Ada", last_name="Trellis", email="ada@trellis.example",
+    )
+    assert search.search(conn, "zz ada@trellis.example") == []
+    # ...and the same query without the term nobody's address contains works
+    assert [h.kind for h in search.search(conn, "ada@trellis.example")] == ["contact"]
+
+
 def test_fts_updates_on_edit(conn) -> None:
     org = make_client(conn)
     orgs.update(conn, org.id, name="Molecular Industries")

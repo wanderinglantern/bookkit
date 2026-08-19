@@ -180,7 +180,9 @@ ADDABLE_TABS = frozenset(
     }
 )
 
-# where the cursor lands when a tab opens — j/k and the row keys work at once
+# where the cursor lands when a tab opens — j/k and the row keys work at once.
+# This is a FOCUS map and nothing else: see TAB_EMPTY_TABLES for what decides
+# whether a tab is empty.
 TAB_TABLES: dict[str, str] = {
     "tab-overview": "ov-tasks",
     "tab-contacts": "contacts-table",
@@ -191,6 +193,23 @@ TAB_TABLES: dict[str, str] = {
     "tab-documents": "documents-table",
     "tab-open-items": "open-items-table",
     "tab-requests": "rfi-requests",
+}
+
+# every table a tab actually shows — what the empty state has to be derived
+# from. Five tabs stack more than one, and the hint used TAB_TABLES, which
+# names only the table the CURSOR lands on: the Overview tab printed
+# "empty — a adds the first row" over a team, a contact list, an interaction
+# log and an opportunity list, because the account happened to have no open
+# task. A tab is empty when everything on it is; a tab with anything on it is
+# not empty, whatever the cursor is sitting in.
+TAB_EMPTY_TABLES: dict[str, tuple[str, ...]] = {
+    "tab-overview": (
+        "ov-team", "ov-contacts", "ov-interactions", "ov-tasks", "ov-opps",
+    ),
+    "tab-projects": ("projects-table", "needs-table"),
+    "tab-pipeline": ("pipeline-opps", "pipeline-subs"),
+    "tab-open-items": ("open-items-table", "open-items-context"),
+    "tab-requests": ("rfi-requests", "rfi-items"),
 }
 
 
@@ -1177,23 +1196,32 @@ class AccountScreen(Screen):
             self.query_one(f"#{table_id}", ListTable).focus()
 
     def _render_tab_hint(self) -> None:
-        """The hint line, or an empty state when the tab's table has no rows.
+        """The hint line, or an empty state when the tab has no rows anywhere.
 
         An empty DataTable is a header over blank space: 'nothing here' and
         'it failed to load' look identical. The Navigator has said so since it
         was built; this is the same two phrasings on the account screen
-        (review F12)."""
+        (review F12).
+
+        "Anywhere" is TAB_EMPTY_TABLES, not TAB_TABLES: the label has to
+        describe the thing under it, and five tabs put more than one table
+        there."""
         tab = self._active_tab()
         hint = TAB_HINTS.get(tab, "")
-        table_id = TAB_TABLES.get(tab)
-        if table_id is not None:
-            table = self.query_one(f"#{table_id}", ListTable)
-            if table.row_count == 0:
-                hint = (
-                    "empty — [b]a[/b] adds the first row"
-                    if tab in ADDABLE_TABS
-                    else "nothing here — that's good"
-                )
+        # every table the tab SHOWS, not the one the cursor lands in
+        table_ids = TAB_EMPTY_TABLES.get(tab)
+        if table_ids is None:
+            landing = TAB_TABLES.get(tab)
+            table_ids = (landing,) if landing else ()
+        if table_ids and not any(
+            self.query_one(f"#{table_id}", ListTable).row_count
+            for table_id in table_ids
+        ):
+            hint = (
+                "empty — [b]a[/b] adds the first row"
+                if tab in ADDABLE_TABS
+                else "nothing here — that's good"
+            )
         self.query_one("#tab-hint", Static).update(f"[{theme.DIM}]{hint}[/]")
 
     def on_data_table_row_highlighted(self, event: ListTable.RowHighlighted) -> None:

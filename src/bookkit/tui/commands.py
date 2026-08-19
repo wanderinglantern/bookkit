@@ -27,6 +27,26 @@ _KIND_LABEL = {
 }
 
 
+_PALETTE_LIMIT = 30
+
+
+def _score(position: int) -> float:
+    """Where a hit sits in the palette, from where the repo already put it.
+
+    Two scales, pointing opposite ways. `SearchHit.rank` is bm25: NEGATIVE,
+    and lower sorts first. `Hit.score` is a Textual match strength: 0..1, and
+    the palette sorts it DESCENDING. Handing one to the other reversed the
+    list — the best FTS hit, being the most negative, scored lowest of all —
+    and the `or 0.5` fallback guarding the unranked email hits put them at
+    the very top, above every name match.
+
+    repo.search has already ranked and grouped these. The palette's job is to
+    keep that order, so the position IS the score, and any future change to
+    how the repo ranks is inherited rather than re-derived here.
+    """
+    return 1.0 - position / (_PALETTE_LIMIT + 1)
+
+
 class RecordCommands(Provider):
     """Every account, contact and interaction, by name, from anywhere."""
 
@@ -44,7 +64,8 @@ class RecordCommands(Provider):
             return
         app = self._book
         seen: set[str] = set()
-        for hit in search_repo.search(app.conn, query, limit=30):
+        hits = search_repo.search(app.conn, query, limit=_PALETTE_LIMIT)
+        for position, hit in enumerate(hits):
             # one row per ACCOUNT: three contacts at the same client are one
             # destination, and three near-identical rows is not a shortlist
             if hit.org_id in seen:
@@ -53,7 +74,7 @@ class RecordCommands(Provider):
             kind = _KIND_LABEL.get(hit.kind, hit.kind)
             label = f"{hit.title}  ({kind})"
             yield Hit(
-                min(1.0, hit.rank) if hit.rank else 0.5,
+                _score(position),
                 label,
                 self._opener(hit.org_id),
                 text=label,
