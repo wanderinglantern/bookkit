@@ -297,6 +297,27 @@ DEFERRED: dict[tuple[str, str], str] = {
         "Audit rank 10. The body in particular had no way to be corrected on "
         "ANY surface until the TUI's interaction_form was added (review F33)."
     ),
+    ("submission_subjectivity", "create"): (
+        "Not built on purpose: the quote work that created this table was told "
+        "to add no MCP tool, because the surface was being restructured in a "
+        "parallel branch. add_subjectivity is the shape, and it is a thin call "
+        "over services already on main."
+    ),
+    ("submission_subjectivity", "read"): (
+        "Reachable only through the account's Pipeline tab today. quotes_expiring "
+        "is the read that would carry these, since a subjectivity matters when "
+        "the quote under it is running out."
+    ),
+    ("submission_subjectivity", "update"): (
+        "Settling one writes status and satisfied_on together — a transition, "
+        "not a field edit, so it wants its own verb (settle_subjectivity) "
+        "rather than an edit_field kind. Same rule as rfi_item.status."
+    ),
+    ("submission_subjectivity", "delete"): (
+        "No path anywhere, including the TUI, which offers 'waived' instead — "
+        "a subjectivity that stopped applying is a fact worth keeping, not a "
+        "row to remove."
+    ),
     ("rfi_item", "create"): (
         "REAL GAP. request_create takes its items at creation and nothing "
         "adds an item to a request that already exists — so an underwriter's "

@@ -125,6 +125,16 @@ MODELS: dict[str, type[Row]] = {
 # builder is neither, so a new entity form cannot land silently editable OR
 # silently unreachable.
 UNMAPPED_BUILDERS: dict[str, str] = {
+    "subjectivity_form": (
+        "A subjectivity hangs off a submission, and submissions are not an "
+        "edit_field kind — there is no _edit_target resolver for one, so a ref "
+        "would advertise a kind and then refuse every id given for it. It is "
+        "also the wrong primitive: settling a subjectivity moves status and "
+        "satisfied_on together, which is a transition rather than a field "
+        "edit, the same reason rfi_item.status is denied. The shape when it "
+        "arrives is add_subjectivity / settle_subjectivity beside the quote "
+        "tools — see ROADMAP's quotes entry."
+    ),
     "placement_form": (
         "Placements are read-only to the assistant by design (see mcpserver's "
         "module docstring). Program structure lives in towerkit JSON files and "
