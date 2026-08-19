@@ -267,7 +267,12 @@ def test_an_email_hit_ranks_AFTER_every_fts_hit_and_says_so_in_the_rank(
     fts = [h for h in hits if h is not email_hit]
     assert fts, "fixture drifted: nothing matched the index"
     assert all(h.rank < email_hit.rank for h in fts), [h.rank for h in hits]
-    assert hits[-1] is email_hit, [h.title for h in hits]
+    # last of the contacts, not last of the list — the hits are grouped by
+    # kind, so "after every FTS hit" is a statement about the section it
+    # belongs to. Within CONTACTS, the ranked hits come first and the address
+    # match brings up the rear.
+    contacts_section = [h for h in hits if h.kind == "contact"]
+    assert contacts_section[-1] is email_hit, [h.title for h in contacts_section]
 
 
 def test_hits_of_one_kind_arrive_together(conn) -> None:
@@ -277,16 +282,24 @@ def test_hits_of_one_kind_arrive_together(conn) -> None:
     an org scoring between a contact and an unranked email hit produced
     CONTACTS, ORGS, CONTACTS, and the reader has no way to tell that is one
     list rather than two."""
-    org = make_client(conn, "Zephyr Marine Holdings")
-    contacts.create(
-        conn, org.id, first_name="Zephyr", last_name="Nakamura", title="CFO"
+    # the shapes matter: bm25 favours the shorter document, so the long org
+    # name ranks BETWEEN the contact matched by name and the one matched only
+    # by address — which is exactly the arrangement a flat sort splits
+    org = make_client(
+        conn, "Zephyr Marine Holdings International Group Limited Partnership"
     )
+    contacts.create(conn, org.id, first_name="Zephyr", last_name="Nakamura")
     other = make_client(conn, "Other Co")
     contacts.create(
         conn, other.id, first_name="Bill", last_name="Smith",
         email="bill@zephyr.example",
     )
-    interactions.log(conn, org.id, "note", "Zephyr kickoff call", "2026-08-01")
+    interactions.log(
+        conn, org.id, "note",
+        "Zephyr kickoff call with the whole account team present", "2026-08-01",
+    )
+    ranks = {h.kind: h.rank for h in sorted(search.search(conn, "zephyr"), key=lambda h: h.rank)}
+    assert ranks, "fixture drifted"
 
     kinds = [h.kind for h in search.search(conn, "zephyr")]
     assert set(kinds) == {"org", "contact", "interaction"}, kinds

@@ -177,9 +177,19 @@ def search(conn: sqlite3.Connection, text: str, limit: int = 40) -> list[SearchH
     # matching an org BETWEEN two contact hits printed two CONTACTS sections.
     # The groups themselves are ordered by their own best hit, so the kind
     # that answered the query best still leads.
+    # NB the primary key is the kind's POSITION, not its best rank. Sorting on
+    # (best_rank, rank) looks equivalent and is not: two kinds whose best hits
+    # tie — which the tiny bm25 spreads on a short query do constantly — fall
+    # through to the secondary key and interleave again.
     best_of_kind: dict[str, float] = {}
     for hit in hits:
         if hit.rank < best_of_kind.get(hit.kind, float("inf")):
             best_of_kind[hit.kind] = hit.rank
-    hits.sort(key=lambda h: (best_of_kind[h.kind], h.rank))
+    order = {
+        kind: position
+        for position, kind in enumerate(
+            sorted(best_of_kind, key=lambda k: (best_of_kind[k], k))
+        )
+    }
+    hits.sort(key=lambda h: (order[h.kind], h.rank))
     return hits[:limit]
