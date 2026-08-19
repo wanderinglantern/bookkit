@@ -233,3 +233,144 @@ def test_layer_details_still_opens_the_file_once(linked, monkeypatch) -> None:
     details = sync.layer_details(conn, placement.id)
     assert len(details) == 3
     assert len(calls) == 1, calls
+
+
+# --- the follows-underlying boundary -----------------------------------------
+#
+# towerkit's other two write paths (mcpserver._write, tui EditSession.mutate)
+# heal derived state between the mutation and the check. bookkit's
+# write_through did not, so the SAME mutation was refused here and accepted
+# there — and the refusal named an attachment the broker never set.
+
+
+def _follows_program(insured: str = "Test Client, Inc."):
+    """A primary and a follows-underlying umbrella seated on top of it."""
+    from datetime import date as _date
+
+    from towerkit.model import Layer, Line, Participant, Period, Program, Retention, RetentionType
+    from towerkit.model import Placement as TkPlacement
+
+    return Program(
+        insured=insured,
+        program="Casualty Program",
+        placement=TkPlacement.BOUND,
+        period=Period(start=_date(2026, 1, 1), end=_date(2027, 1, 1)),
+        lines=[Line(id="gl", name="General Liability", abbr="GL")],
+        layers=[
+            Layer(
+                id="primary-gl", name="Primary GL", applies_to=["gl"],
+                attach=0, limit=2_000_000, premium=900_000,
+                participants=[Participant(carrier="Zurich", share_bps=10_000)],
+            ),
+            Layer(
+                id="umbrella", name="Umbrella", applies_to=["gl"],
+                attach=2_000_000, limit=5_000_000, premium=300_000,
+                follows_underlying=True,
+                participants=[Participant(carrier="AIG", share_bps=10_000)],
+            ),
+        ],
+        retentions=[
+            Retention(applies_to=["gl"], type=RetentionType.DEDUCTIBLE, amount=100_000)
+        ],
+    )
+
+
+@pytest.fixture
+def follows(conn: sqlite3.Connection, tmp_path: Path):
+    client = orgs.create(conn, kind="client", name="Test Client, Inc.", status="active")
+    path = write_program(tmp_path / "p" / "follows.json", _follows_program())
+    assert sync.confirm_link(conn, path, client.id).ok
+    return conn, placements.by_program_path(conn, str(path)), path
+
+
+def test_raising_a_primary_limit_under_a_follows_layer_is_accepted(follows) -> None:
+    """The reviewer's reproduction: identical mutation, both cycles, same
+    answer. Before the fix bookkit returned ok=False with
+    `layer-follows-attach` while towerkit returned ok=True."""
+    from towerkit import edit
+    from towerkit.validate import validate_program
+
+    conn, placement, path = follows
+
+    # towerkit's cycle: mutate → heal → validate
+    tk = _follows_program()
+    tk.layers[0].limit = 3_000_000
+    edit.heal_follows(tk)
+    assert validate_program(tk).ok
+
+    # bookkit's cycle, same mutation
+    diags = sync.update_layer(conn, placement.id, "primary-gl", limit_cents=3_000_000_00)
+    assert diags.ok, [(d.code, d.message) for d in diags.errors]
+
+    on_disk = load_program(path)
+    assert on_disk.layers[0].limit == 3_000_000
+    # the healed attachment is what was WRITTEN, not merely what was validated
+    assert on_disk.layers[1].attach == 3_000_000
+
+
+def test_healing_happens_before_validation_not_after(follows) -> None:
+    """Position in the cycle, asserted directly. If heal_follows ran after
+    validate_program the edit above would still be refused; if it ran after
+    dump_program the file would keep the stale attachment. Both are checked by
+    reading the file the write actually produced."""
+    conn, placement, path = follows
+    assert sync.update_layer(conn, placement.id, "primary-gl", limit_cents=4_000_000_00).ok
+    on_disk = load_program(path)
+    assert on_disk.layers[1].attach == 4_000_000, "healed after the dump — file is stale"
+    # and the healed file is itself valid, i.e. validation saw the healed state
+    from towerkit.validate import validate_program
+
+    assert validate_program(on_disk).ok
+
+
+def test_lowering_a_primary_limit_reseats_the_follows_layer_too(follows) -> None:
+    """Healing is not a one-directional patch: dropping the underlying limit
+    pulls the umbrella DOWN, which is the case that used to strand it above a
+    gap rather than below an overlap."""
+    conn, placement, path = follows
+    assert sync.update_layer(conn, placement.id, "primary-gl", limit_cents=1_000_000_00).ok
+    assert load_program(path).layers[1].attach == 1_000_000
+
+
+def test_a_new_layer_id_cannot_collide_with_a_line_id(linked) -> None:
+    """`sync._slug` considered only LAYER ids taken, so naming a layer after a
+    line handed it that line's id — and the validator does not catch it,
+    because nothing looks across the two collections. towerkit.edit.unique_id
+    takes the union, which is the rule towerkit's own surfaces obey."""
+    from towerkit.validate import validate_program
+
+    conn, _, placement, path = linked
+    before = load_program(path)
+    assert "cy" in {ln.id for ln in before.lines}
+
+    diags = sync.add_layer(
+        conn, placement.id, "CY", ["cy"], 5_000_000_00, 5_000_000_00
+    )
+    assert diags.ok, [(d.code, d.message) for d in diags.errors]
+
+    after = load_program(path)
+    line_ids = {ln.id for ln in after.lines}
+    layer_ids = [ly.id for ly in after.layers]
+    assert len(layer_ids) == len(set(layer_ids)), "layer ids collided with each other"
+    assert not (set(layer_ids) & line_ids), (
+        f"a layer took a line's id: layers={layer_ids} lines={sorted(line_ids)}"
+    )
+    # the collision is invisible to the validator — this test is the only guard
+    assert validate_program(after).ok
+
+
+def test_add_layer_keeps_the_broker_s_name_price_and_seat(linked) -> None:
+    """Delegating the append to towerkit.edit.add_layer must not let towerkit's
+    auto-name ('2nd Excess') or its suggested attachment leak through: bookkit
+    is placing a layer the broker has already named, seated and priced."""
+    conn, _, placement, path = linked
+    assert sync.add_layer(
+        conn, placement.id, "First Excess GL", ["gl"],
+        2_000_000_00, 5_000_000_00, premium_cents=250_000_00,
+    ).ok
+    layer = next(ly for ly in load_program(path).layers if ly.name == "First Excess GL")
+    assert layer.id == "first-excess-gl"
+    assert layer.attach == 2_000_000
+    assert layer.limit == 5_000_000
+    assert layer.premium == 250_000
+    assert layer.participants == []  # still 'To be placed'

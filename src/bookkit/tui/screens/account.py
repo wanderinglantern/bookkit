@@ -615,20 +615,24 @@ class AccountScreen(Screen):
         nxt_item = renewals_service.next_for_org(conn, org.id, today)
         if nxt_item is None:
             renewal = f"renewal [{theme.DIM}]none scheduled[/]"
-        elif nxt_item.days_remaining < 0:
-            renewal = (
-                f"renewal [b {theme.RED}]◆ {nxt_item.placement.period_to} · "
-                f"{-nxt_item.days_remaining}d over · "
-                f"{nxt_item.placement.program_name}[/]"
-            )
         else:
-            style = theme.AMBER if nxt_item.days_remaining <= 60 else theme.FG
-            renewal = (
-                # renewal_on, not period_to — see today.py
-                f"renewal [{style}]"
-                f"{nxt_item.renewal_on or nxt_item.placement.period_to} · "
-                f"{nxt_item.days_remaining}d[/]"
-            )
+            # PRINT THE DATE YOU COUNT TO, on BOTH branches. days_remaining is
+            # counted to renewal_on (the earliest live LINE end); period_to is
+            # the program period's end, which can be months later. This branch
+            # was fixed once and the overdue one above it was not, so a
+            # renewal 83 days in the FUTURE rendered red as "7d over" — the
+            # louder half of the same bug, on the path where a wrong date is
+            # most alarming. One expression now serves both.
+            renews = nxt_item.renewal_on or nxt_item.placement.period_to
+            if nxt_item.days_remaining < 0:
+                renewal = (
+                    f"renewal [b {theme.RED}]◆ {renews} · "
+                    f"{-nxt_item.days_remaining}d over · "
+                    f"{nxt_item.placement.program_name}[/]"
+                )
+            else:
+                style = theme.AMBER if nxt_item.days_remaining <= 60 else theme.FG
+                renewal = f"renewal [{style}]{renews} · {nxt_item.days_remaining}d[/]"
         bound = [p for p in placements.for_org(conn, org.id) if p.status == "bound"]
         bound_premium = book.bound_premium_for_org(conn, org.id)
         status_style = theme.STATUS_STYLES.get(org.status, theme.FG)
@@ -692,7 +696,9 @@ class AccountScreen(Screen):
                 )
         self._show_interaction(str(self._selected_key("interactions-table") or ""))
 
-        open_tasks = grouped_by_category(tasks_repo.open_tasks(conn, org_id=org.id))
+        # open_tasks_for_client: the overview tab and the open-items tab below
+        # are the SAME account's tasks and must not count differently
+        open_tasks = grouped_by_category(tasks_repo.open_tasks_for_client(conn, org.id))
         table = self.query_one("#ov-tasks", ListTable)
         table.clear(columns=True)
         # the long notes wrap down the row here instead of being clipped to

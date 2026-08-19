@@ -3400,3 +3400,96 @@ async def test_an_underwriter_can_be_edited_from_the_market_screen(
         await pilot.pause()
         assert isinstance(app.screen, ModalScreen)
         assert "contact" in app.screen.spec.title
+
+
+# --- one rule for "how many open tasks does this account have" ---------------
+
+
+def _account_with_a_placement_only_task(path: Path) -> tuple[str, str, int]:
+    """Attach one open task to a PLACEMENT with org_id left NULL — legal (see
+    repo/tasks.open_tasks_for_client), and the shape `open_tasks(org_id=...)`
+    silently drops. Returns (org_id, org_name, expected open-task count).
+    """
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import placements as placements_repo
+    from bookkit.repo import tasks as tasks_repo
+
+    conn = db.connect(path)
+    org = next(
+        o for o in orgs_repo.list_orgs(conn, kind="client")
+        if placements_repo.for_org(conn, o.id)
+    )
+    placement = placements_repo.for_org(conn, org.id)[0]
+    tasks_repo.create(
+        conn, "Chase the binder", placement_id=placement.id, status="open"
+    )
+    direct = len(tasks_repo.open_tasks(conn, org_id=org.id))
+    expected = len(tasks_repo.open_tasks_for_client(conn, org.id))
+    assert expected == direct + 1, (
+        "fixture failed to build the divergent case — open_tasks(org_id=) must "
+        "drop the placement-attached task"
+    )
+    conn.close()
+    return org.id, org.name, expected
+
+
+async def test_navigator_counts_an_accounts_open_tasks_the_way_everyone_else_does(
+    seeded_db: Path,
+) -> None:
+    """The navigator's account card, its tree leaf and its tasks table all
+    used `open_tasks(org_id=...)`, which drops a task attached to a placement
+    with org_id NULL — so the card undercounted against the web app, the MCP
+    server, onboarding and the account screen's own open-items tab.
+
+    Pinned against the number, not against the call: a later edit that reaches
+    for the org_id filter again fails here as well as in
+    tests/test_conventions.py::test_client_task_counts_go_through_one_rule.
+    """
+    from bookkit.tui.screens.navigator import NavigatorScreen
+
+    org_id, org_name, expected = _account_with_a_placement_only_task(seeded_db)
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        nav = app.screen
+        assert isinstance(nav, NavigatorScreen)
+
+        card = nav._account_card(org_id)
+        assert f"{expected} open tasks" in card, card
+
+        tree, node = await _open_account_group(pilot, nav, org_id, "tasks")
+        leaf = next(n for n in node.children if n.data[1][0] == "tasks")
+        assert f"tasks ({expected})" in str(leaf.label)
+
+        from bookkit.tui.widgets.inline_edit import InlineTable
+
+        table = nav.query_one("#nav-table", InlineTable)
+        assert table.row_count == expected
+
+
+def test_the_web_work_tab_lists_the_task_the_navigator_now_counts(
+    seeded_db: Path,
+) -> None:
+    """The other half of the agreement, on the surface that was already right:
+    web/routes/work.py lists the placement-attached task. If the navigator
+    ever goes back to `open_tasks(org_id=...)` its card will disagree with the
+    page a broker can open side by side."""
+    from fastapi.testclient import TestClient
+
+    from bookkit.web.app import create_app
+
+    org_id, _name, expected = _account_with_a_placement_only_task(seeded_db)
+    conn = db.connect(seeded_db)
+    from bookkit.repo import orgs as orgs_repo
+
+    ref = orgs_repo.get(conn, org_id).ref
+    conn.close()
+
+    client = TestClient(create_app(seeded_db))
+    html = client.get(f"/accounts/{ref}/work").text
+    assert "Chase the binder" in html, "the web dropped the placement-only task"
+    # the panel prints its own count beside the heading — the same number the
+    # navigator's card and tree leaf must show
+    assert f'<span class="people-count">{expected}</span>' in html, (
+        "the web panel's open-task count disagrees with open_tasks_for_client"
+    )

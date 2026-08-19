@@ -160,3 +160,135 @@ async def test_book_premium_is_the_accounts_bound_premium(
         names = [_cell(table, r, 1) for r in range(table.row_count)]
         row = names.index(org.name)
         assert _cell(table, row, 6) == format_cents_compact(expected)
+
+
+# --- the overdue branch, which the seed cannot reach -------------------------
+#
+# Every test above walks the SEED. `_drifting_next_for_org` returns the first
+# account whose next renewal drifts from its period end — and on the seed no
+# such account is also OVERDUE, so the account header's `days_remaining < 0`
+# branch was never entered by any of them. It kept printing period_to for four
+# reviews after the `else` branch beside it was fixed, and the overdue branch
+# is the one that renders in red.
+#
+# So the case is built, not found: a program period ending months from now,
+# with a LINE whose policy already ran out.
+
+
+def _overdue_and_drifting(tmp_path: Path):
+    """A book with one account whose next renewal is OVERDUE by 7 days while
+    its program period still has 131 days to run.
+
+    Pre-fix this renders `renewal ◆ 2026-12-23 · 7d over` — a date four months
+    in the FUTURE, in red, labelled overdue. That is the whole bug.
+    """
+    from towerkit.model import (
+        Layer,
+        Line,
+        Participant,
+        Period,
+        Program,
+        Retention,
+        RetentionType,
+        dump_program,
+    )
+    from towerkit.model import Placement as TkPlacement
+
+    from bookkit import db as db_mod
+    from bookkit import sync
+
+    period_to = date(2026, 12, 23)      # 131 days AFTER TODAY
+    line_end = date(2026, 8, 7)         # 7 days BEFORE TODAY
+    assert line_end < TODAY < period_to
+
+    program = Program(
+        insured="Delta Marine Logistics, LLC",
+        program="Marine Program",
+        placement=TkPlacement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=period_to),
+        lines=[Line(id="im", name="Inland Marine", abbr="IM")],
+        layers=[
+            Layer(
+                id="primary-im", name="Primary IM", applies_to=["im"],
+                attach=0, limit=5_000_000, premium=250_000,
+                # the policy on this line expired while the PROGRAM runs on
+                period=Period(start=date(2026, 1, 1), end=line_end),
+                participants=[Participant(carrier="Zurich", share_bps=10_000)],
+            )
+        ],
+        retentions=[
+            Retention(applies_to=["im"], type=RetentionType.DEDUCTIBLE, amount=50_000)
+        ],
+    )
+    programs = tmp_path / "programs"
+    programs.mkdir(parents=True, exist_ok=True)
+    dump_program(program, programs / "delta.json")
+
+    path = tmp_path / "overdue.db"
+    conn = db_mod.connect(path)
+    org = orgs.create(
+        conn, kind="client", name="Delta Marine Logistics, LLC", status="active"
+    )
+    diags = sync.confirm_link(conn, programs / "delta.json", org.id)
+    assert diags.ok, [(d.code, d.message) for d in diags.errors]
+
+    item = renewals.next_for_org(conn, org.id, TODAY)
+    assert item is not None
+    assert item.days_remaining < 0, "fixture must reach the OVERDUE branch"
+    assert item.renewal_on == line_end.isoformat()
+    assert item.placement.period_to == period_to.isoformat()
+    assert item.renewal_on != item.placement.period_to, "fixture must also drift"
+    conn.close()
+    return path, org.id, item.renewal_on, item.placement.period_to
+
+
+async def test_the_account_header_overdue_branch_prints_the_date_it_counts_to(
+    tmp_path: Path, frozen_clock: date,
+) -> None:
+    """The survivor. tui/screens/account.py printed
+    `placement.period_to · {-days_remaining}d over`, so a date 131 days in the
+    future rendered red as '7d over'."""
+    path, org_id, renewal_on, period_to = _overdue_and_drifting(tmp_path)
+    app = BookkitApp(path)
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        app.open_account(org_id)
+        await pilot.pause()
+        header = str(app.screen.query_one("#account-header").render())
+        assert "d over" in header, "fixture did not reach the overdue branch"
+        assert renewal_on in header
+        assert period_to not in header, (
+            f"the overdue header printed the program period end {period_to} "
+            f"beside a countdown measured to {renewal_on}"
+        )
+
+
+def test_bookctl_renewals_prints_the_date_it_counts_to(
+    tmp_path: Path, frozen_clock: date, monkeypatch, capsys,
+) -> None:
+    """`bookctl renewals` — the fifth surface, and it was never swept."""
+    from bookkit.cli import main
+
+    path, _org_id, renewal_on, period_to = _overdue_and_drifting(tmp_path)
+    monkeypatch.setenv("BOOKKIT_DB", str(path))
+    assert main(["renewals", "--days", "120"]) == 0
+    out = capsys.readouterr().out
+    assert "Delta Marine" in out
+    assert renewal_on in out
+    assert period_to not in out
+
+
+def test_bookctl_today_prints_the_date_it_counts_to(
+    tmp_path: Path, frozen_clock: date, monkeypatch, capsys,
+) -> None:
+    """`bookctl today` — the sixth."""
+    from bookkit.cli import main
+
+    path, _org_id, renewal_on, period_to = _overdue_and_drifting(tmp_path)
+    monkeypatch.setenv("BOOKKIT_DB", str(path))
+    assert main(["today"]) == 0
+    out = capsys.readouterr().out
+    renewals_block = out.split("RENEWALS NEXT 120 DAYS", 1)[1].split("\n\n", 1)[0]
+    assert "Delta Marine" in renewals_block
+    assert renewal_on in renewals_block
+    assert period_to not in renewals_block

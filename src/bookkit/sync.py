@@ -34,6 +34,15 @@ from pathlib import Path
 from typing import Any
 
 from rapidfuzz import fuzz, process
+
+# towerkit.edit is the ONE definition of a structural mutation and of the id
+# rule that names what it creates. bookkit used to keep private copies of both
+# (a `_slug` that saw only layer ids, and no healing at all); towerkit's own
+# tests/test_conventions.py bans reaching past this module, but scans only
+# src/towerkit/tui, so the rule was invisible here. See
+# tests/test_conventions.py::test_sync_delegates_program_structure_to_towerkit.
+from towerkit.edit import add_layer as edit_add_layer
+from towerkit.edit import heal_follows, slugify, unique_id
 from towerkit.model import SCHEMA_ID, Program, dump_program, load_program
 from towerkit.model import Layer as TkModelLayer
 
@@ -831,26 +840,34 @@ def add_layer(
     premium_cents: int | None = None,
 ) -> Diagnostics:
     """Append a pending ('To be placed') layer — participants join as markets
-    bind."""
-    from towerkit.model import Layer as TkLayer
+    bind.
+
+    THE APPEND AND THE ID BOTH BELONG TO towerkit.edit. The private `_slug`
+    this used to call considered only LAYER ids taken, so a new layer named
+    after an existing line ("Cyber" beside line `cy`... or line `cyber`) got
+    that line's id — and no validator catches an id shared across the two
+    collections, because nothing looks. `edit.unique_id` takes the union of
+    layer and line ids, which is the rule towerkit's own two surfaces obey.
+    """
 
     def mutate(program: Program) -> None:
-        layer_id = _slug(name, {ly.id for ly in program.layers})
-        program.layers.append(
-            TkLayer(
-                id=layer_id,
-                name=name,
-                applies_to=line_ids,
-                attach=_require_dollars(attach_cents, "attach"),
-                limit=_require_dollars(limit_cents, "limit"),
-                premium=(
-                    _require_dollars(premium_cents, "premium")
-                    if premium_cents is not None
-                    else None
-                ),
-                participants=[],
-            )
+        attach = _require_dollars(attach_cents, "attach")
+        limit = _require_dollars(limit_cents, "limit")
+        premium = (
+            _require_dollars(premium_cents, "premium") if premium_cents is not None else None
         )
+        layer = edit_add_layer(program, line_ids)
+        # edit.add_layer names and seats the layer the way towerkit's editor
+        # would (auto ordinal, suggested attach); bookkit is placing a layer
+        # the broker has already named and priced, so the facts are overwritten
+        # here — through the object edit.add_layer returned, never a second
+        # append. `exclude=layer.id` keeps unique_id from colliding the new
+        # layer with the placeholder id it is replacing.
+        layer.id = unique_id(program, slugify(name), exclude=layer.id)
+        layer.name = name
+        layer.attach = attach
+        layer.limit = limit
+        layer.premium = premium
 
     return _mutate(conn, placement_id, mutate)
 
@@ -1023,16 +1040,6 @@ def _require_dollars(cents: int, label: str) -> int:
         raise ValueError(f"{label}: {exc}") from exc
 
 
-def _slug(name: str, taken: set[str]) -> str:
-    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "layer"
-    slug = base
-    counter = 2
-    while slug in taken:
-        slug = f"{base}-{counter}"
-        counter += 1
-    return slug
-
-
 # --- write-through ------------------------------------------------------------
 
 
@@ -1078,6 +1085,21 @@ def write_through(
 
     program = load_program(path)
     mutation(program)
+    # HEAL BEFORE VALIDATE, and before the dump that follows it. A
+    # follows-underlying attachment is DERIVED state (towerkit.edit.heal_follows,
+    # the highest underlying top), and towerkit's other two write paths —
+    # mcpserver._write and tui EditSession.mutate — both heal here, between the
+    # mutation and the check. bookkit did not, so raising a primary layer's
+    # limit on any program carrying an excess layer was refused by
+    # `layer-follows-attach`/`layer-follows-overlap`, naming an attachment the
+    # broker never set, for a mutation towerkit itself accepts.
+    #
+    # The position is the whole fix. Heal AFTER validate and the same edit is
+    # still refused; heal after the dump and the file on disk keeps the stale
+    # attachment, so the projection and towerkit's own editor disagree about
+    # where the excess sits. Healing here means one thing is validated, dumped
+    # and re-projected: the healed program.
+    heal_follows(program)
     check = validate_program(program)
     if not check.ok:
         return check
