@@ -84,6 +84,16 @@ IMPLEMENTED: dict[str, str] = {
         "page with towerkit's own words when the validator says no (a gap, an "
         "overlap, an over-sign)."
     ),
+    "export_open_items": (
+        "BUILT 2026-08-19 (phase 4), both flows behind the TUI's one key: the "
+        "open-items workbook downloads from GET /accounts/{ref}/export/"
+        "open-items.xlsx (the same services.export_open_items.write the "
+        "terminal calls), and the merge half landed in phase 3 (POST "
+        ".../program/{placement_id}/merge). Downloads are plain anchor GETs "
+        "with Content-Disposition: attachment — the file-response decision is "
+        "in DECISIONS.md. Tower SVG/PDF and the schematic workbook download "
+        "beside it, through towerkit's own renderers."
+    ),
     "scaffold_tower": (
         "BUILT 2026-08-19. A confirm step shows the DESTINATION PATH and then "
         "POST .../program/{placement_id}/scaffold writes the file and links it. "
@@ -138,13 +148,7 @@ PENDING: dict[str, str] = {
         "opportunity, with no towerkit involvement."
     ),
     "assign_team": "team assignment editing not built on the web yet",
-    "export_open_items": (
-        "two flows behind one key. The XLSX export is deferred by decision "
-        "(needs a file-download response the web spec does not cover — see "
-        "docs/superpowers/specs/2026-08-17-web-frontend-design.md); on the "
-        "placements tab this same key runs action_merge_placement instead — a "
-        "DB-mutating merge with its own modal. Neither is on the web."
-    ),
+
     "import_here": (
         "deferred by decision, not yet reached: bulk paste-import needs a "
         "browser-side parser design of its own; the TUI flow does not port"

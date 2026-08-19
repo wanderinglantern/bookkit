@@ -54,6 +54,15 @@
         {% include "account/_line_add_button.html" %}
       {% endwith %}
     </div>
+    {# Export cluster (phase 4): plain anchors — downloads are navigations,
+       not swaps. Every word in each artifact came off towerkit's renderer. #}
+    <div class="lines-strip export-strip">
+      <span class="detail-label">export</span>
+      <a class="row-action-btn" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/export/tower.svg">tower SVG</a>
+      <a class="row-action-btn" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/export/tower.pdf">tower PDF</a>
+      <a class="row-action-btn" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/export/schematic.xlsx">schematic XLSX</a>
+      <a class="row-action-btn" href="/accounts/{{ header.org.ref }}/export/open-items.xlsx">open items XLSX</a>
+    </div>
     {# The terms strip (phase 4): retentions and sublimits, editable where
        they are read — they already rendered in the tower and the SOI and
        could not be touched from any bookkit surface. #}

@@ -2085,6 +2085,153 @@ async def scaffold_create(request: Request, ref: str, placement_id: str) -> HTML
     return _programs_panel(request, ref, org)
 
 
+# --- exports: the artifacts the terminal can make (phase 4) --------------------
+#
+# DOWNLOADS ARE PLAIN ANCHOR GETs answering Content-Disposition: attachment —
+# no htmx: browsers handle a download navigation natively and a swap contract
+# adds nothing (DECISIONS.md, 2026-08-19). Artifacts render into a per-request
+# temp dir through towerkit's OWN renderers — the agreement rule end to end:
+# every word in the SVG, the PDF and the schematic came off the renderer.
+# The open-items workbook CALLS services.export_open_items and never touches
+# it (Grant has in-flight edits to that module).
+
+
+def _refusal_page(request: Request, message: str, back: str) -> HTMLResponse:
+    """A download link's refusal is a NAVIGATION, not a swap — answer with a
+    small readable page and a way back, never a bare status code."""
+    return HTMLResponse(
+        f'<p class="form-error" role="alert">{message}</p>'
+        f'<p><a href="{back}">back to the program tab</a></p>'
+    )
+
+
+def _attachment(content: bytes, filename: str, media_type: str) -> Any:
+    from fastapi.responses import Response
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _loaded_program(placement: Any) -> Any:
+    from pathlib import Path as _Path
+
+    from towerkit.model import load_program
+
+    return load_program(_Path(str(placement.program_path)))
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/export/tower.svg",
+    response_class=HTMLResponse,
+)
+def export_tower_svg(request: Request, ref: str, placement_id: str) -> Any:
+    return _export_tower(request, ref, placement_id, "svg", "image/svg+xml")
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/export/tower.pdf",
+    response_class=HTMLResponse,
+)
+def export_tower_pdf(request: Request, ref: str, placement_id: str) -> Any:
+    return _export_tower(request, ref, placement_id, "pdf", "application/pdf")
+
+
+def _export_tower(
+    request: Request, ref: str, placement_id: str, fmt: str, media_type: str
+) -> Any:
+    import tempfile
+    from pathlib import Path as _Path
+
+    org = _org(request, ref)
+    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    if not placement.program_path:
+        return _refusal_page(
+            request,
+            f"{placement.ref} has no program file linked — nothing to draw yet",
+            f"/accounts/{ref}/program",
+        )
+    # Agg BEFORE towerkit's renderer imports pyplot: the default macOS
+    # backend wants a display a server thread does not have.
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from towerkit.render.mpl_program import render_program
+    from towerkit.theme import load_theme
+
+    program = _loaded_program(placement)
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = render_program(
+            program, load_theme(), _Path(tmp), placement.ref, formats=[fmt]
+        )
+        content = paths[0].read_bytes()
+    return _attachment(content, f"{placement.ref}-tower.{fmt}", media_type)
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/export/schematic.xlsx",
+    response_class=HTMLResponse,
+)
+def export_schematic(request: Request, ref: str, placement_id: str) -> Any:
+    import tempfile
+    from pathlib import Path as _Path
+
+    org = _org(request, ref)
+    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    if not placement.program_path:
+        return _refusal_page(
+            request,
+            f"{placement.ref} has no program file linked — nothing to draw yet",
+            f"/accounts/{ref}/program",
+        )
+    from openpyxl import Workbook
+    from towerkit.render.schematic_xlsx import add_schematic_sheet
+    from towerkit.render.table_xlsx import finalize_workbook
+    from towerkit.theme import load_theme
+
+    program = _loaded_program(placement)
+    wb = Workbook()
+    default = wb.active
+    if default is not None:
+        wb.remove(default)
+    add_schematic_sheet(wb, program, load_theme())
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _Path(tmp) / "schematic.xlsx"
+        finalize_workbook(wb, out)
+        content = out.read_bytes()
+    return _attachment(
+        content,
+        f"{placement.ref}-schematic.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@router.get("/accounts/{ref}/export/open-items.xlsx", response_class=HTMLResponse)
+def export_open_items_workbook(request: Request, ref: str) -> Any:
+    """The TUI's `x`, webside — the same services.export_open_items.write the
+    terminal calls, so the two surfaces can never produce different books."""
+    import tempfile
+    from datetime import date as _date
+    from pathlib import Path as _Path
+
+    from ...services import export_open_items as export_svc
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = export_svc.write(
+            conn, org.id, _Path(tmp) / f"{org.ref}-open-items.xlsx", _date.today()
+        )
+        content = out.read_bytes()
+    return _attachment(
+        content,
+        f"{org.ref}-open-items.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 # --- the terms strip: retentions and sublimits (phase 4) -----------------------
 #
 # One route family serves both kinds through a {kind} path parameter,
