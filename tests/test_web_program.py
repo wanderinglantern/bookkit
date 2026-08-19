@@ -1088,6 +1088,51 @@ def test_statutory_asks_first_then_replaces_the_limit_with_the_word(
     assert ">statutory<" in marked.text, "the limit column does not say the word"
 
 
+def test_marking_statutory_clears_follows_and_attach(app_and_org, tmp_path):
+    """The combination bug the phase-3 review caught: statutory cover
+    attaches at nothing and follows nothing, and a set_statutory that left
+    either behind made the validator refuse a follows-on layer every time,
+    with a message that never named the toggle to clear."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    # statutory cover owns its whole column (towerkit refuses a statutory
+    # layer sharing a line), so it lives on its own line — added here, which
+    # arrives with the pending layer this test then marks
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/lines",
+        data={"name": "Workers Comp"},
+    )
+    assert added.status_code == 200
+    wc_line = next(
+        lid for lid, name in sync.program_lines(conn, placement.id)
+        if name == "Workers Comp"
+    )
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["applies_to"] == [wc_line]
+    )
+    assert client.post(
+        f"{_layer_base(org, placement, layer_id)}/follows", data={"follows": "true"}
+    ).status_code == 200
+
+    marked = client.post(
+        f"{_layer_base(org, placement, layer_id)}/statutory",
+        data={"statutory": "true"},
+    )
+
+    assert marked.status_code == 200
+    from towerkit.model import load_program
+
+    layer = next(
+        ly for ly in load_program(Path(placement.program_path)).layers
+        if ly.id == layer_id
+    )
+    assert layer.statutory is True
+    assert layer.attach == 0
+    assert layer.follows_underlying is False
+
+
 def test_leaving_statutory_requires_the_replacing_limit(app_and_org, tmp_path):
     client, org = app_and_org
     conn = client.app.state.conn
@@ -1141,9 +1186,10 @@ def test_follows_underlying_toggles_from_the_details_row(app_and_org, tmp_path):
         if ly.id == layer_id
     )
     assert layer.follows_underlying is True
-    # the returned row must SHOW the state, not just write it — the chip
-    # rendered permanently-off until layer_details carried the flag
-    assert "is-on" in toggled.text
+    # the returned row must SHOW the state, not just write it — and the
+    # assertion must target the FOLLOWS button: a bare "is-on" substring was
+    # satisfied by the layer's own applies-to chip (fresh-eyes review)
+    assert "follows-toggle is-on" in toggled.text
 
 
 def _lines_base(org, placement):

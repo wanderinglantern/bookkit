@@ -960,8 +960,15 @@ def set_statutory(
     def mutate(program: Program) -> None:
         layer = _find_layer(program, layer_id)
         if statutory:
+            # THE FULL RESET, matching towerkit's own edit.set_statutory:
+            # statutory cover attaches at nothing and follows nothing —
+            # leaving either set makes the validator refuse
+            # (statutory-attach / statutory-follows) with a message that
+            # never names the toggle to clear (fresh-eyes review, phase 3).
             layer.statutory = True
             layer.limit = 0
+            layer.attach = 0
+            layer.follows_underlying = False
         else:
             if limit_cents is None:
                 raise ValueError(

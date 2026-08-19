@@ -47,7 +47,7 @@
               hx-get="{{ base }}/statutory"
               hx-target="closest tr" hx-swap="outerHTML">mark statutory</button>
     {% endif %}
-    <button type="button" class="row-action-btn{% if follows %} is-on{% endif %}"
+    <button type="button" class="row-action-btn follows-toggle{% if follows %} is-on{% endif %}"
             title="{{ 'the attachment is derived from the layers below' if follows else 'derive the attachment from the layers below' }}"
             hx-post="{{ base }}/follows" hx-vals='{"follows": "{{ 'false' if follows else 'true' }}"}'
             hx-target="closest tr" hx-swap="outerHTML">follows underlying</button>
