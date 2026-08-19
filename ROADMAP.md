@@ -863,3 +863,58 @@ racing it.
 3. **MCP derivation + the denylist he wants to read** + `describe()` + the parity ledger.
 4. Then, as those land: the assignee; the states model with the monopolistic check; C9; the
    renewal date and calendar tab; the format pass; slice 1 phase B.
+
+---
+
+## Grant's answers to the AE review (2026-08-18, last thing before he slept)
+
+| | Decision |
+|---|---|
+| **A1** post-bind through issued | **queue it** — not next, but on the list |
+| **A2** stewardship composition | **not now** |
+| **A3** claims as an entity | **not now** |
+| **A4** the web's dead top nav | **wire them** — see the problem below |
+| **A5** the four quiet bugs | **all four** |
+| **A6** quick capture's attendees | **fix** |
+
+### A4 is much larger than the question implied, and he could not have known
+
+He chose "wire them" over "mark them pending" and over "record the decision". But the six inert
+items — **Today, Navigator, Pipeline, Calendar, Markets, Towers** — have **nowhere to point.** The
+partial's own comment says it: *"the rest of the nav has nowhere to go yet… no other web route
+exists outside /book and the account page."*
+
+So **wiring them means building six web screens**, not adding six hrefs. That is a sub-project on
+the scale of the account page, not an overnight fix.
+
+**Ruling, to be argued with in the morning:** take him at his word but sequence it, and never leave
+a dead control behind in the meantime.
+- Build **Today** first — it is the attention surface, the TUI's composition already exists and is
+  reusable, and it is the screen he would actually open.
+- Then **Towers**, because program work is what he said his morning is for.
+- Anything not yet built gets the honest pending treatment its neighbours already have
+  (`title="Not wired yet — …"`). That is **not** a substitute for wiring and he rejected it as an
+  answer; it is what an unbuilt item looks like while it waits, and it is strictly better than the
+  silent `<span>` shipped today.
+- **Do not ship a nav item that navigates to an empty shell.** A screen that exists and says nothing
+  is worse than a label that admits it is not built.
+
+### A5 — all four, and what each actually is
+
+1. **Today's renewals table declares 7 columns and renders 4** at 140 cols, dropping `lines` — the
+   field CLAUDE.md calls mandatory context ("program name alone is not enough"). A width problem,
+   not a data problem.
+2. **The Overview tab prints "empty — a adds the first row" over five populated tables**, because
+   the hint derives from the focused table rather than the table it labels.
+3. **Search never renders a contact's org** (five identical "Chen" rows) and the contact index does
+   not cover email. The org half is composition; the email half touches the FTS index — check
+   whether that is a migration before assuming it is not.
+4. **`program_layers` promises participants and returns none** — `sync.layer_details` does not carry
+   them. Its description and its data disagree. **Sequenced last of the four**: it touches
+   `mcpserver.py`, which the `mcp-derived-surface` branch is rewriting.
+
+### A6 — the column that can never fill
+
+Quick capture never writes the `interaction_contact` link, so the participant column the web
+timeline renders will be **permanently blank in real use**. A column that looks built and cannot
+ever fill is worse than an absent one.
