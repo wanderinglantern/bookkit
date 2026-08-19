@@ -29,16 +29,17 @@ import math
 import re
 import sqlite3
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 
 from towerkit.model import load_program
-from towerkit.soi import SoiRow, SoiSection, build_soi
+from towerkit.soi import SoiRow, SoiSection, SoiStatus, build_soi
 
 from ..models import (
     INTERNAL_CATEGORY,
     Placement,
+    PlacementStatus,
     Project,
     Task,
     is_internal_category,
@@ -391,6 +392,44 @@ def compose_projects(conn: sqlite3.Connection, org_id: str) -> list[SheetSection
 
 _UNLINKED_CARRIER = "See policy documents"
 
+# WHAT THE BOOK KNOWS, IN THE WORDS THE CLIENT READS. towerkit's SoiStatus is
+# a display vocabulary of seven; bookkit's PlacementStatus reaches five of
+# them. Two are not identity mappings and both are deliberate:
+#
+#   lapsed → Expired      "Lapsed" is our word for a dead policy year; the
+#                         client's word for cover that has run out is expired.
+#   prospective → To be placed
+#                         NOT `Proposed`. `Proposed` means a designed program
+#                         with carriers pencilled against it; a prospective
+#                         placement has nobody on the risk at all, which is
+#                         exactly what "to be placed" says.
+#
+# Only BOUND is cover in force — `SoiRow.is_bound` decides which subtotal a
+# premium lands under, and every other value here lands it under `Unbound`.
+_SOI_STATUS: dict[PlacementStatus, SoiStatus] = {
+    PlacementStatus.PROSPECTIVE: SoiStatus.TO_BE_PLACED,
+    PlacementStatus.SUBMITTED: SoiStatus.SUBMITTED,
+    PlacementStatus.QUOTED: SoiStatus.QUOTED,
+    PlacementStatus.BOUND: SoiStatus.BOUND,
+    PlacementStatus.LAPSED: SoiStatus.EXPIRED,
+}
+
+# THE MAP MUST BE TOTAL, AND MUST SAY SO AT IMPORT. A missing key is not a
+# blank cell on one row: an unstated status is not bound, so the premium of a
+# placement whose status nobody mapped silently joins the `Unbound cover`
+# subtotal on a client's schedule — a wrong number, printed confidently, with
+# nothing on the sheet to hint at it. `_SOI_STATUS[...]` is therefore a plain
+# subscript (KeyError, never `.get()` returning None), and this check turns a
+# new PlacementStatus member into an import-time failure on every surface at
+# once rather than a quiet miscount discovered by a client.
+if set(_SOI_STATUS) != set(PlacementStatus):
+    missing = sorted(set(PlacementStatus) - set(_SOI_STATUS))
+    raise RuntimeError(
+        f"_SOI_STATUS does not map every PlacementStatus: {missing}. "
+        "Add the client-facing towerkit.soi.SoiStatus for it — an unmapped "
+        "status would print blank and be counted as unbound cover."
+    )
+
 
 def _expired(placement: Placement, today: date) -> bool:
     """Is this policy year OVER as of `today`? Decided on the placement's own
@@ -429,7 +468,15 @@ def _premium_dollars(cents: int | None) -> int | None:
 def _book_data_section(org_name: str, placement: Placement) -> SoiSection:
     """Minimal SOI section for a placement with no (readable) towerkit file —
     program name, period, status, premium from book data, so the policy list
-    is complete, never silently partial."""
+    is complete, never silently partial.
+
+    THE STATUS IS A ROW FIELD, NOT A LABEL SUFFIX. This section used to say
+    it as `Legacy Property (Bound)` in the heading while a LINKED placement's
+    heading said nothing at all — so the more we knew about a programme, the
+    less the client could tell whether it was real. Now both surfaces answer
+    in the same Status column, and the answer is load-bearing rather than
+    decorative: `SoiRow.is_bound` is what puts this premium under `Bound
+    cover` instead of `Unbound cover`."""
     row = SoiRow(
         insured=org_name,
         coverage=placement.program_name,
@@ -440,11 +487,34 @@ def _book_data_section(org_name: str, placement: Placement) -> SoiSection:
         limits="",
         retention="",
         premium=_premium_dollars(placement.total_premium),
+        status=_SOI_STATUS[placement.status],
     )
-    return SoiSection(
-        label=f"{placement.program_name} ({_status_label(str(placement.status))})",
-        rows=(row,),
-    )
+    return SoiSection(label=placement.program_name, rows=(row,))
+
+
+def _placement_status_applied(
+    rows: tuple[SoiRow, ...], mapped: SoiStatus
+) -> tuple[SoiRow, ...]:
+    """The file's per-layer status, overridden only where the BOOK knows
+    better.
+
+    `build_soi` already stamps every row from the program file, and that is
+    the FINER answer: it can say `To be placed` for the one layer nobody is on
+    inside an otherwise bound programme, which the placement's single status
+    can never express. Flattening it would print bound cover over an unplaced
+    layer and sweep its premium into the `Bound cover` subtotal — the exact
+    class of overstatement this column exists to remove.
+
+    So a BOUND placement leaves the file alone. Anything else replaces every
+    row, because those are the cases the file cannot see: a fully-populated
+    design the broker has not yet bound reads as BOUND to towerkit, while the
+    book knows it is only `Quoted`. Overriding always moves a row towards
+    unbound, never towards bound, so the sheet can only ever understate cover.
+
+    `SoiRow` is frozen — `dataclasses.replace`, not assignment."""
+    if mapped == SoiStatus.BOUND:
+        return rows
+    return tuple(replace(row, status=mapped) for row in rows)
 
 
 def compose_soi(conn: sqlite3.Connection, org_id: str, today: date) -> list[SoiSection]:
@@ -454,8 +524,9 @@ def compose_soi(conn: sqlite3.Connection, org_id: str, today: date) -> list[SoiS
 
     EXPIRED POLICY YEARS ARE EXCLUDED (see `_expired`). A Schedule of
     Insurance is a statement of cover in force; a prior year rendered
-    identically beside current cover reads as current cover, and "(Bound)"
-    is true in the past tense. Non-empty exactly when the org has a placement
+    identically beside current cover reads as current cover, and the Status
+    column does not save the reader from that — `Bound` is true in the past
+    tense, and last year's programme was bound. Non-empty exactly when the org has a placement
     that has not expired — the sheet-inclusion rule. An account whose cover
     has ALL expired therefore gets no SOI sheet rather than a sheet with
     headers and no policies: the same omitted-not-blank rule sheets 2 and 3
@@ -474,12 +545,13 @@ def compose_soi(conn: sqlite3.Connection, org_id: str, today: date) -> list[SoiS
             except Exception:  # moved/unreadable file — fall back to book data
                 program = None
             if program is not None:
+                mapped = _SOI_STATUS[placement.status]
                 sections = [
                     SoiSection(
                         label=placement.program_name
                         if section.label is None
                         else f"{placement.program_name} — {section.label}",
-                        rows=section.rows,
+                        rows=_placement_status_applied(section.rows, mapped),
                     )
                     for section in build_soi(program)
                 ]
