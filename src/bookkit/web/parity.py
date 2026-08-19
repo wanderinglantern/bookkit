@@ -266,12 +266,14 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "mcp": "DEFERRED — structure from an assistant is undecided",
     },
     "remove_line": {
-        "web": "the lines strip: remove, confirm naming both grades of blast (POST .../lines/{line_id}/remove)",
+        "web": "the lines strip: remove, confirm naming both grades of blast "
+        "(POST .../lines/{line_id}/remove)",
         "tui": "via o -> towerkit's editor",
         "mcp": "DEFERRED — structure from an assistant is undecided",
     },
     "set_statutory": {
-        "web": "the details row: mark statutory (confirm names the limit given up), leave asks the figure (POST .../layers/{layer_id}/statutory)",
+        "web": "the details row: mark statutory (confirm names the limit given "
+        "up), leave asks the figure (POST .../layers/{layer_id}/statutory)",
         "tui": "via o -> towerkit's editor",
         "mcp": "DEFERRED — structure from an assistant is undecided",
     },
