@@ -722,3 +722,89 @@ def test_the_tables_that_carry_prose_declare_that_they_fit(app_and_org):
 
     for url in (f"/accounts/{org.ref}/work", f"/accounts/{org.ref}/requests/{request.id}"):
         assert 'class="rows rows-fit"' in client.get(url).text, url
+
+
+# --- the roomy door onto the answer -------------------------------------------
+
+
+def _first_item(client, request):
+    from bookkit.repo import rfi as rfi_repo
+
+    return rfi_repo.items_for_request(client.app.state.conn, request.id)[0]
+
+
+def test_the_answer_form_opens_with_what_is_already_there(app_and_org):
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+
+    item = _first_item(client, request)
+    conn = client.app.state.conn
+    with db.transaction(conn):
+        rfi_repo.update_item(conn, item.id, response="partial: 2023 onward sent")
+
+    form = client.get(
+        f"/accounts/{org.ref}/requests/{request.id}/items/{item.id}/answer"
+    )
+
+    assert form.status_code == 200
+    assert "partial: 2023 onward sent" in form.text
+    assert "<textarea" in form.text, "a long answer needs a box, not a one-line input"
+
+
+def test_answering_writes_the_response_and_leaves_the_status_alone(app_and_org):
+    """Grant, 2026-08-19: notes may just be notes. An answer that quietly
+    marked the item received would empty a chase queue nobody had cleared."""
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+
+    item = _first_item(client, request)
+    assert item.status == "outstanding"
+
+    saved = client.post(
+        f"/accounts/{org.ref}/requests/{request.id}/items/{item.id}/answer",
+        data={"response": "Controller is pulling the class-code split; expect Friday."},
+    )
+
+    assert saved.status_code == 200
+    after = rfi_repo.get_item(client.app.state.conn, item.id)
+    assert after.response == "Controller is pulling the class-code split; expect Friday."
+    assert after.status == "outstanding"
+    assert after.received_on is None
+
+
+def test_answering_is_one_revertible_web_batch(app_and_org):
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+    from bookkit.services import batches as batches_svc
+
+    item = _first_item(client, request)
+    conn = client.app.state.conn
+
+    client.post(
+        f"/accounts/{org.ref}/requests/{request.id}/items/{item.id}/answer",
+        data={"response": "sent 12 Aug"},
+    )
+
+    batch = _latest_batch(conn)
+    assert batch is not None and batch.source == "web"
+    assert item.prompt[:20] in batch.summary
+
+    batches_svc.revert(conn, batch.ref, now=db.utc_now())
+    assert rfi_repo.get_item(conn, item.id).response != "sent 12 Aug"
+
+
+def test_every_item_offers_the_bigger_box(app_and_org):
+    """Including a received one — an answer is edited after the fact more
+    often than it is right first time."""
+    client, org, request = app_and_org
+
+    panel = client.get(f"/accounts/{org.ref}/requests/{request.id}").text
+
+    for item in _items(client, request):
+        assert f"/items/{item.id}/answer" in panel, item.prompt
+
+
+def _items(client, request):
+    from bookkit.repo import rfi as rfi_repo
+
+    return rfi_repo.items_for_request(client.app.state.conn, request.id)

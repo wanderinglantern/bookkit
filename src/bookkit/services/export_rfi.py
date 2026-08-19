@@ -48,12 +48,24 @@ def _earliest_due(items: list[RfiItem], request: RfiRequest) -> str | None:
     return min(dues) if dues else None
 
 
-def _item_row(item: RfiItem, request: RfiRequest) -> tuple[str, str, str, str]:
+def _item_row(item: RfiItem, request: RfiRequest) -> tuple[str, str, str, str, str]:
+    """Five wide, always. Whether the fifth column is PRINTED is the
+    assembler's call (export_open_items: it appears only when something on the
+    sheet has actually been answered), but composing it conditionally here
+    would make the row shape depend on the account, and every downstream index
+    — the row-height estimate reads values[1] — would have to ask which shape
+    it got.
+
+    Note what this column can and cannot show: the sheet is outstanding-only,
+    so an answer is visible while the item is still open — an interim note,
+    "controller is pulling it, expect Friday" — and leaves the sheet with its
+    item the moment somebody marks it received."""
     return (
         item.prompt,
         flatten_markdown(item.detail or ""),
         _status_label(item.kind),
         _due_cell(item, request),
+        flatten_markdown(item.response or ""),
     )
 
 

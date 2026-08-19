@@ -973,6 +973,15 @@ _RFI_COLUMNS: tuple[tuple[str, float], ...] = (
     ("Item", 34.0), ("Detail", 75.0), ("Type", 12.0), ("Needed by", 16.0),
 )
 
+_RFI_RESPONSE_COLUMN: tuple[str, float] = ("Response", 60.0)
+"""Printed only when something on the sheet has been answered.
+
+Grant, 2026-08-19: answers are client-visible — they are written in language
+the client could read back. Always printing the column is the version to
+avoid: on the many accounts where nothing has been answered yet it is a blank
+band down a client deliverable, which reads as a form we forgot to fill in
+rather than a fact about the account."""
+
 _RFI_HEADER_LABEL = "Items we need from you"
 
 SCOPE_NOTE = (
@@ -1096,16 +1105,29 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
     rfi_sections = compose_information_requests(conn, org_id, today)
     if rfi_sections:
         ws_rfi = wb.create_sheet(sanitize_sheet_title("Information Requests"))
-        rfi_columns = [TableColumn(h, w) for h, w in _RFI_COLUMNS]
+        # compose_information_requests always returns rows five wide; the fifth
+        # is printed only if it says something on THIS account.
+        answered = any(row[4] for section in rfi_sections for row in section.rows)
+        headers = _RFI_COLUMNS + (_RFI_RESPONSE_COLUMN,) if answered else _RFI_COLUMNS
+        rfi_columns = [TableColumn(h, w) for h, w in headers]
         render_table_sheet(
             ws_rfi, rfi_columns,
             [TableSection(_RFI_HEADER_LABEL, ())] +
-            [TableSection(s.label, s.rows) for s in rfi_sections],
+            [
+                TableSection(
+                    s.label,
+                    tuple(row if answered else row[:4] for row in s.rows),
+                )
+                for s in rfi_sections
+            ],
             theme=theme,
-            # Detail is the only multi-line column here; same estimate,
-            # same family as sheet 1's row-height rule.
+            # Detail and Response are the multi-line columns here; same
+            # estimate, same family as sheet 1's row-height rule. A tall answer
+            # in a row sized for its question is clipped, which on this sheet
+            # loses the half the client wrote.
             row_height=lambda values: _prose_row_height(
                 (str(values[1]), _RFI_COLUMNS[1][1]),
+                *(((str(values[4]), _RFI_RESPONSE_COLUMN[1]),) if answered else ()),
             ),
         )
 

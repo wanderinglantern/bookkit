@@ -90,9 +90,12 @@ def test_compose_item_row_shape(conn) -> None:
         kind="document",
     )
     row = compose_information_requests(conn, org.id, TODAY)[0].rows[0]
+    # Five wide since 2026-08-19 — the last cell is the client's answer, blank
+    # here. The row shape does not depend on the account; whether the fifth
+    # column is PRINTED does (export_open_items._RFI_RESPONSE_COLUMN).
     assert row == (
         "audited financials", "Please send audited financials for the last 3 years.",
-        "Document", "2026-09-01",
+        "Document", "2026-09-01", "",
     )
 
 
@@ -339,3 +342,31 @@ def test_the_operator_note_is_unchanged_when_no_item_is_internal(conn) -> None:
     rfi.add_item(conn, req.id, "audited financials", category="Financials")
 
     assert withheld_note(conn, org.id) == ""
+
+
+# --- the client's own answers, on the client's own sheet ----------------------
+
+
+def test_an_answer_rides_along_with_the_item(conn) -> None:
+    """Grant, 2026-08-19: responses are client-visible, because they are
+    written in language the client could read back."""
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    item = rfi.add_item(conn, req.id, "payroll by class code")
+    rfi.update_item(conn, item.id, response="Confirmed **$4.2M**, split 63/37.")
+
+    row = compose_information_requests(conn, org.id, TODAY)[0].rows[0]
+
+    assert row[4] == "Confirmed $4.2M, split 63/37.", "markdown is flattened, as elsewhere"
+
+
+def test_a_received_item_takes_its_answer_off_the_sheet_with_it(conn) -> None:
+    """The sheet is outstanding-only, so an answer is visible while the ask is
+    still open — an interim note. Marking it received removes the whole row,
+    which is the existing rule and not something the answer column changes."""
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    item = rfi.add_item(conn, req.id, "payroll by class code")
+    rfi.update_item(conn, item.id, response="Confirmed.", status="received")
+
+    assert compose_information_requests(conn, org.id, TODAY) == []

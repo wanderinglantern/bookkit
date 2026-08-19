@@ -39,6 +39,7 @@ from ...forms.entities import (
     apply_rfi_item,
     apply_task,
     request_form,
+    rfi_answer_form,
     rfi_item_form,
     task_form,
 )
@@ -461,6 +462,43 @@ async def item_create(request: Request, ref: str, request_id: str) -> HTMLRespon
     refused = _save(
         request, org, spec, action, raw,
         lambda values: apply_rfi_item(conn, values, request_id),
+    )
+    return refused or _items_panel(request, org, request_id, oob=True)
+
+
+@router.get(
+    "/accounts/{ref}/requests/{request_id}/items/{item_id}/answer",
+    response_class=HTMLResponse,
+)
+def item_answer_form(
+    request: Request, ref: str, request_id: str, item_id: str
+) -> HTMLResponse:
+    """The roomy door onto the same column the row edits in place."""
+    org = _org(request, ref)
+    item = _owned_item(_conn(request), org, request_id, item_id)
+    action = f"/accounts/{ref}/requests/{request_id}/items/{item_id}/answer"
+    return HTMLResponse(render_form(request, rfi_answer_form(item), action))
+
+
+@router.post(
+    "/accounts/{ref}/requests/{request_id}/items/{item_id}/answer",
+    response_class=HTMLResponse,
+)
+async def item_answer_save(
+    request: Request, ref: str, request_id: str, item_id: str
+) -> HTMLResponse:
+    """Writes `response` and NOTHING else. An answer is often a note rather
+    than a delivery, so the status/received_on pair stays where it was until
+    somebody presses Mark received."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    item = _owned_item(conn, org, request_id, item_id)
+    spec = rfi_answer_form(item)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = f"/accounts/{ref}/requests/{request_id}/items/{item_id}/answer"
+    refused = _save(
+        request, org, spec, action, raw,
+        lambda values: rfi_repo.update_item(conn, item_id, response=values["response"]),
     )
     return refused or _items_panel(request, org, request_id, oob=True)
 

@@ -12,7 +12,7 @@ import pytest
 
 from bookkit.forms import entities
 from bookkit.forms.spec import Field, FormSpec
-from bookkit.repo import interactions, orgs, placements, submissions
+from bookkit.repo import interactions, orgs, placements, rfi, submissions
 from bookkit.web.forms_render import render_cell, render_cell_display, render_form
 
 
@@ -46,6 +46,14 @@ def _stub_submission(conn: sqlite3.Connection):
     return submissions.create(conn, market.id, "2026-01-01", placement_id=placement.id)
 
 
+def _stub_rfi_item(conn: sqlite3.Connection):
+    """rfi_answer_form(item) pre-fills from a real row — its one field is the
+    item's own response."""
+    org = _stub_org(conn)
+    request = rfi.create_request(conn, org.id, "stub ask", "2026-01-01")
+    return rfi.add_item(conn, request.id, "stub item")
+
+
 def _stub_interaction(conn: sqlite3.Connection):
     org = _stub_org(conn)
     return interactions.log(
@@ -72,6 +80,7 @@ _BUILD_CALLS: dict[str, Callable[[Callable, sqlite3.Connection], FormSpec]] = {
     "need_form": lambda build, conn: build(conn=conn),
     "request_form": lambda build, conn: build(conn=conn),
     "rfi_item_form": lambda build, conn: build(conn=conn),
+    "rfi_answer_form": lambda build, conn: build(_stub_rfi_item(conn)),
     "submission_form": lambda build, conn: build(conn),
     "response_form": lambda build, conn: build(_stub_submission(conn), conn),
     # takes no conn: its only select is the status vocabulary, a models.py

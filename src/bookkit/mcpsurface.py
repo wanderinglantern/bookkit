@@ -126,6 +126,16 @@ MODELS: dict[str, type[Row]] = {
 # builder is neither, so a new entity form cannot land silently editable OR
 # silently unreachable.
 UNMAPPED_BUILDERS: dict[str, str] = {
+    "rfi_answer_form": (
+        "Not a second surface — a roomier door onto ONE field the rfi_item "
+        "entry above already carries. The web's request items table edits "
+        "`response` in a row cell; this builder opens the same column in a "
+        "textarea for the answers that are three sentences long (Grant, "
+        "2026-08-19). Mapping it as its own kind would advertise an entity "
+        "that does not exist and split one column across two ledger entries. "
+        "The assistant reaches the same field through request_item_received's "
+        "`response` argument."
+    ),
     "subjectivity_form": (
         "A subjectivity hangs off a submission, and submissions are not an "
         "edit_field kind — there is no _edit_target resolver for one, so a ref "

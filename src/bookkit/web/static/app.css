@@ -1037,6 +1037,16 @@ table.rows.rows-fit {
 /* Prose wraps and takes the slack; the cell keeps its own click target. The
    rule lives on the inner span because that is what carries the text — the
    dashed editable underline should hug the sentence, not the column. */
+/* Two row actions sit here (Answer, Mark received); keep them on one line so
+   the column's width is the pair, not whichever happened to wrap. */
+.row-actions-cell {
+  white-space: nowrap;
+}
+
+.row-actions-cell .row-action-btn + .row-action-btn {
+  margin-left: 0.75rem;
+}
+
 table.rows td.prose {
   /* No min-width. A floor looks like it protects the prose column and in fact
      sets the table's own minimum: two prose columns at 14rem could not fit an

@@ -2268,6 +2268,31 @@ def test_write_four_sheet_order_when_rfi_outstanding(conn, tmp_path):
     assert "Sompo — property questions · asked 5 Aug · due 19 Aug" in values
 
 
+def test_the_response_column_appears_only_once_something_is_answered(conn, tmp_path):
+    """A permanently blank Response band down a client deliverable reads as a
+    form we forgot to fill in. It prints when this account has an answer to
+    show, and not before."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    client = orgs.create(conn, kind="client", name="Acme", status="active", owner="grant")
+    req = rfi.create_request(conn, client.id, "property questions", "2026-08-05")
+    item = rfi.add_item(conn, req.id, "how many locations?")
+
+    unanswered = load_workbook(write(conn, client.id, tmp_path / "before.xlsx", date(2026, 8, 13)))
+    assert [c.value for c in unanswered["Information Requests"][1]] == [
+        "Item", "Detail", "Type", "Needed by",
+    ]
+
+    rfi.update_item(conn, item.id, response="Fourteen, list attached.")
+
+    answered = load_workbook(write(conn, client.id, tmp_path / "after.xlsx", date(2026, 8, 13)))
+    ws = answered["Information Requests"]
+    assert [c.value for c in ws[1]] == ["Item", "Detail", "Type", "Needed by", "Response"]
+    assert "Fourteen, list attached." in [c.value for row in ws.iter_rows() for c in row]
+
+
 def test_write_omits_information_requests_sheet_when_nothing_outstanding(conn, tmp_path):
     """An RFI request that exists but has no outstanding items (received or
     waived) must not add a 4th tab — omitted, not rendered blank, matching
