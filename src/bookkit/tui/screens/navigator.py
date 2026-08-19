@@ -496,7 +496,13 @@ class NavigatorScreen(Screen):
             ("placements", len(placements.for_org(conn, org_id))),
             ("contacts", len(contacts.for_org(conn, org_id))),
             ("opportunities", len(opportunities.for_org(conn, org_id))),
-            ("tasks", len(tasks_repo.open_tasks(conn, org_id=org_id))),
+            # open_tasks_for_client, not open_tasks(org_id=): a task attached
+            # to a placement may carry org_id NULL (legal — see
+            # repo/tasks.open_tasks_for_client), so the org_id filter alone
+            # silently DROPS it. Every other surface counts the client's tasks
+            # through the placement join; this tree used to disagree with the
+            # account card two panes over, and both with the web app.
+            ("tasks", len(tasks_repo.open_tasks_for_client(conn, org_id))),
             ("projects", len(projects_repo.projects_for_org(conn, org_id))),
             ("requests", len(rfi_repo.requests_for_org(conn, org_id))),
         )
@@ -915,7 +921,8 @@ class NavigatorScreen(Screen):
             )
             table.inline_fields = task_inline(conn, org_id)
             today = date.today()
-            for task in grouped_by_category(tasks_repo.open_tasks(conn, org_id=org_id)):
+            # the LIST must agree with the count in the tree node above it
+            for task in grouped_by_category(tasks_repo.open_tasks_for_client(conn, org_id)):
                 key = f"task:{task.id}"
                 self._row_org[key] = org_id
                 due = (
@@ -979,7 +986,7 @@ class NavigatorScreen(Screen):
         ]
         premium = book.bound_premium_for_org(conn, org_id)
         n_contacts = len(contacts.for_org(conn, org_id))
-        n_tasks = len(tasks_repo.open_tasks(conn, org_id=org_id))
+        n_tasks = len(tasks_repo.open_tasks_for_client(conn, org_id))
         lines = [
             f"[b]{org.name}[/b]  [{theme.DIM}]{org.ref}[/]",
             "",

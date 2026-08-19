@@ -103,3 +103,90 @@ def test_no_await_inside_a_transaction():
         "connection — read the value BEFORE the transaction opens and pass it "
         f"in: {offenders}"
     )
+
+
+# --- the towerkit boundary ---------------------------------------------------
+
+
+def test_sync_delegates_program_structure_to_towerkit():
+    """towerkit.edit is the ONE definition of a structural mutation and of the
+    id rule that names what it creates. towerkit's own
+    tests/test_conventions.py bans reaching past it — but it scans
+    `src/towerkit/tui` only, so the rule was enforced on the surface that
+    obeyed it and INVISIBLE on bookkit, which did not. This is that test,
+    pointed at the surface it was missing.
+
+    Two things had already drifted before the guard existed: a private `_slug`
+    that considered only LAYER ids taken (so a layer could take a LINE's id,
+    and nothing validates that), and no `heal_follows` at all (so bookkit
+    refused program edits towerkit accepts).
+
+    Participants are deliberately NOT on this list: towerkit.edit has no
+    participant API, because towerkit's own surfaces never bind markets onto a
+    layer — that is bookkit's half of the boundary. If towerkit ever grows
+    `edit.add_participant`, add `.participants.append(` here and delegate.
+    """
+    banned = (
+        ".layers.append(", ".layers.pop(", ".layers.remove(",
+        ".lines.append(", ".lines.pop(", ".lines.remove(",
+        ".retentions.append(", ".retentions.pop(", ".retentions.remove(",
+        ".sublimits.append(", ".sublimits.pop(", ".sublimits.remove(",
+        "program.layers =", "program.lines =",
+        "program.retentions =", "program.sublimits =",
+    )
+    text = (SRC / "sync.py").read_text()
+    offenders = [
+        f"sync.py:{n}: {pattern}"
+        for n, line in enumerate(text.splitlines(), start=1)
+        if not line.lstrip().startswith("#")
+        for pattern in banned
+        if pattern in line
+    ]
+    assert offenders == [], (
+        "structural mutation of a Program belongs in towerkit.edit, not "
+        f"bookkit's write-through: {offenders}"
+    )
+
+
+def test_sync_does_not_reimplement_towerkits_id_rule():
+    """`_slug` was a copy of `towerkit.edit.unique_id` that had already drifted
+    — it excluded layer ids only, so a layer id could collide with a line id."""
+    text = (SRC / "sync.py").read_text()
+    assert "def _slug(" not in text, (
+        "sync._slug was a drifted copy of towerkit.edit.unique_id — call "
+        "towerkit's function, do not grow a second one"
+    )
+    assert "from towerkit.edit import" in text, (
+        "sync.py must import towerkit.edit rather than reimplement it"
+    )
+
+
+def test_client_task_counts_go_through_one_rule():
+    """`open_tasks(org_id=...)` DROPS a placement-attached task whose org_id is
+    NULL (legal — see repo/tasks.open_tasks_for_client). Every client-scoped
+    count must use open_tasks_for_client, or the navigator's account card, the
+    navigator's tree, the account screen and the web app disagree about how
+    many open tasks an account has. They did, in three places.
+
+    `open_tasks(due_by=...)` is untouched — that is the book-wide due list, and
+    it is org-agnostic by design. The ban is on the org_id KEYWORD, matched by
+    AST rather than by grep so a comment explaining the rule cannot trip it.
+    """
+    offenders: list[str] = []
+    for path in SRC.rglob("*.py"):
+        if path.relative_to(SRC).parts[0] == "repo":
+            continue  # repo/tasks.py defines both; that is where they live
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            if name != "open_tasks":
+                continue
+            if any(kw.arg == "org_id" for kw in node.keywords):
+                offenders.append(f"{path.relative_to(SRC)}:{node.lineno}")
+    assert offenders == [], (
+        "a client-scoped task count must call open_tasks_for_client — "
+        f"open_tasks(org_id=) drops placement-attached tasks: {offenders}"
+    )

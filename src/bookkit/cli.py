@@ -282,8 +282,12 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
                 if item.placement.total_premium
                 else "—"
             )
+            # renewal_on, not period_to: days_remaining counts to the
+            # earliest live LINE end, and printing the program period's end
+            # beside it is the "70d over on a future date" bug (CLAUDE.md).
             print(
-                f"{item.placement.period_to}  {item.days_remaining:>3}d  "
+                f"{item.renewal_on or item.placement.period_to}  "
+                f"{item.days_remaining:>3}d  "
                 f"[{item.placement.status:<11}] {item.org.name:<32} "
                 f"{item.placement.program_name}  {premium}"
             )
@@ -458,8 +462,10 @@ def _print_today(conn: sqlite3.Connection) -> None:
     print(f"\nRENEWALS NEXT 120 DAYS ({len(items)})")
     for item in items[:15]:
         cover = f" ({item.lines})" if item.lines else ""
+        # same rule as `bookctl renewals` above: print the date counted to
         print(
-            f"  {item.placement.period_to} ({item.days_remaining:>3}d) "
+            f"  {item.renewal_on or item.placement.period_to} "
+            f"({item.days_remaining:>3}d) "
             f"{item.org.name} — {item.placement.program_name}{cover} "
             f"[{item.placement.status}]"
         )
