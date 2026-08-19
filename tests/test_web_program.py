@@ -188,3 +188,50 @@ def test_a_primary_layer_attaching_at_zero_says_zero(app_and_org):
     row = page.split(primaries[0]["name"], 1)[1][:400]
 
     assert "$0" in row, "a $0 attachment rendered as unknown"
+
+
+# --- phase 2: the write seam --------------------------------------------------
+
+
+def test_the_write_wrapper_refuses_with_the_diagnostics_intact():
+    """A flat string is enough for an MCP client and not enough for the web.
+
+    The route has to tell an ordinary validation refusal — re-render the cell
+    with the message, keep the typed value — from a CONFLICT, which offers
+    Reload / Overwrite / Keep editing. Only the diagnostics carry the code
+    that distinguishes them, and `sync._mutate` is what puts it there."""
+    from towerkit.validate import Diagnostics
+
+    from bookkit.services.program_files import ProgramWriteRefused, raise_on_errors
+
+    diags = Diagnostics()
+    diags.error("conflict", "the file moved under this write")
+
+    with pytest.raises(ProgramWriteRefused) as refused:
+        raise_on_errors(diags)
+
+    assert refused.value.diags is diags
+    assert any(d.code == "conflict" for d in refused.value.diags.errors)
+    assert "moved under" in str(refused.value)
+
+
+def test_a_clean_write_returns_its_warnings_rather_than_raising():
+    """Warnings ride along: an unplaced layer is a warning, not a refusal, and
+    a write that refused on one would make a half-built tower unsaveable."""
+    from towerkit.validate import Diagnostics
+
+    from bookkit.services.program_files import raise_on_errors
+
+    diags = Diagnostics()
+    diags.warn("layer-unplaced", "Excess: 0% placed")
+
+    assert raise_on_errors(diags) == ["Excess: 0% placed"]
+
+
+def test_a_refusal_is_still_a_value_error():
+    """The ordinary case has to keep working with no new code: ValueError is
+    what open_batch already rolls back on, and what every web form already
+    renders."""
+    from bookkit.services.program_files import ProgramWriteRefused
+
+    assert issubclass(ProgramWriteRefused, ValueError)

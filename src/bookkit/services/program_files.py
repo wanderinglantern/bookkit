@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from towerkit.atomicio import atomic_write_bytes
 
@@ -22,6 +23,86 @@ from ..sync import file_sha256
 
 SNAPSHOT_KEEP = 20
 _DIRNAME = ".mcp-snapshots"
+# The directory name is historical: it was the MCP server's alone until the
+# web became the second writer (2026-08-19). Renaming it would strand every
+# snapshot already on Grant's disk, which is the opposite of what a revert
+# store is for, so the name stays and this comment explains it.
+
+
+class ProgramWriteRefused(ValueError):
+    """A program write towerkit's validator refused — NOTHING was written.
+
+    Carries the Diagnostics rather than a flattened string, because the web
+    has to tell apart two refusals the MCP server does not:
+
+    - an ordinary validation refusal (an over-signed layer, sub-dollar money,
+      a layer id that no longer exists) — re-render the field with the message
+      and the typed value, exactly like every other web form refusal;
+    - a CONFLICT (`code == "conflict"`) — the file moved under this write, and
+      the answer is a three-way choice, not an error message.
+
+    Being a ValueError is what makes the first case free: it propagates out of
+    open_batch, the transaction rolls back, and the existing refusal path
+    renders it with no new code.
+    """
+
+    def __init__(self, diags: Any) -> None:
+        self.diags = diags
+        super().__init__("; ".join(d.message for d in diags.errors))
+
+
+def raise_on_errors(diags: Any) -> list[str]:
+    """write_through's Diagnostics → a caller's contract: errors refuse
+    (nothing was written), warnings ride along in the return.
+
+    Warnings must NOT refuse: an unplaced layer is a warning, and a tower is
+    routinely half-built. Refusing on one would make the normal working state
+    of a placement unsaveable.
+    """
+    if not diags.ok:
+        raise ProgramWriteRefused(diags)
+    return [d.message for d in diags.warnings]
+
+
+def write(
+    conn: Any,
+    placement: Any,
+    *,
+    tool: str,
+    summary: str,
+    mutate: Any,
+    open_batch: Any,
+) -> tuple[Any, list[str]]:
+    """One batched program-file write: capture the pre-image, run the sync.*
+    writer, snapshot on success.
+
+    THE ONE SEAM, TWO CALLERS — the MCP server and the web. A route that calls
+    sync.* directly writes outside a batch and leaves no pre-image, which is
+    exactly what makes a program write unrevertible; that is why this is a
+    service and not a helper inside mcpserver.py.
+
+    `open_batch` is passed in rather than imported so this module does not
+    depend on either surface: each caller supplies its own source stamp
+    ('mcp' or 'web'), and the tool names stay identical across the two so the
+    changes list reads uniformly whichever surface made the edit.
+
+    The pre-image is read BEFORE the batch opens and captured only AFTER the
+    write succeeds, so a refused write leaves no snapshot debris. Both halves
+    of that order are load-bearing.
+
+    sync._mutate already folds WriteConflict into the diagnostics with
+    code='conflict', so a conflict arrives here as an ordinary refusal and the
+    caller decides how much of a fuss to make about it.
+    """
+    path = Path(str(placement.program_path))
+    pre_image = path.read_bytes()
+    with open_batch(
+        conn, tool=tool, org_id=placement.org_id, summary=summary,
+    ) as batch:
+        diags = mutate()
+        warnings = raise_on_errors(diags)  # raising rolls the batch back
+        capture(path, batch.ref, pre_image)
+    return batch, warnings
 
 
 def _snapdir(program_path: Path) -> Path:
