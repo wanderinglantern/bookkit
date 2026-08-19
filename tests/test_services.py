@@ -949,8 +949,9 @@ def test_write_three_tab_order_and_headers(conn, tmp_path):
     assert [c.value for c in wb["Projects"][1]] == [
         "Line", "Notes", "Needed by", "Status", "Limit"]
     assert [c.value for c in wb["Schedule of Insurance"][1]] == [
-        "Insured", "Line of Coverage", "Carrier", "Policy Number", "Effective Date",
-        "Expiration Date", "Limits", "Deductible / SIR / Retention", "Premium"]
+        "Insured", "Line of Coverage", "Status", "Carrier", "Policy Number",
+        "Effective Date", "Expiration Date", "Limits",
+        "Deductible / SIR / Retention", "Premium"]
     # show_premiums=True end to end: the book-data premium in whole dollars
     soi_values = [c.value for row in wb["Schedule of Insurance"].iter_rows() for c in row]
     assert 250_000 in soi_values
@@ -1137,7 +1138,7 @@ def test_compose_soi_unlinked_placement_gets_book_data_section(conn):
     )
     sections = compose_soi(conn, org.id, date(2025, 6, 1))
     assert len(sections) == 1
-    assert sections[0].label == "Legacy Property (Bound)"
+    assert sections[0].label == "Legacy Property"  # the status is a column now
     row = sections[0].rows[0]
     assert row.insured == "Paper Co"
     assert row.coverage == "Legacy Property"
@@ -1174,8 +1175,9 @@ def test_compose_soi_empty_when_no_placements(conn):
 
 def test_compose_soi_excludes_an_expired_policy_year(conn):
     """A prior year renders IDENTICALLY to current cover — same columns, same
-    styling, "(Bound)" true in the past tense. Exclusion is decided on
-    period_to, the same date the Expiration column prints."""
+    styling, and a Status column still reading `Bound`, which is true in the
+    past tense. Exclusion is decided on period_to, the same date the
+    Expiration column prints."""
     from bookkit.services.export_open_items import compose_soi
 
     org = orgs.create(conn, name="Two Years Co", kind="client")
@@ -1185,7 +1187,7 @@ def test_compose_soi_excludes_an_expired_policy_year(conn):
                       "2025-09-07", "2026-09-07", status="bound")
 
     labels = [s.label for s in compose_soi(conn, org.id, date(2026, 8, 18))]
-    assert labels == ["2025 Casualty Program (Bound)"]
+    assert labels == ["2025 Casualty Program"]
 
 
 def test_compose_soi_keeps_cover_expiring_today(conn):
@@ -1199,8 +1201,7 @@ def test_compose_soi_keeps_cover_expiring_today(conn):
                       status="bound")
 
     today = date(2026, 8, 18)
-    assert [s.label for s in compose_soi(conn, org.id, today)] == [
-        "Expiring Today (Bound)"]
+    assert [s.label for s in compose_soi(conn, org.id, today)] == ["Expiring Today"]
     # and gone the next morning
     assert compose_soi(conn, org.id, date(2026, 8, 19)) == []
 
@@ -1284,7 +1285,7 @@ def test_all_expired_account_gets_no_soi_sheet_rather_than_an_empty_one(
     path2 = write(conn, org.id, tmp_path / "l2.xlsx", date(2024, 6, 1))
     wb2 = load_workbook(path2)
     assert "Schedule of Insurance" in wb2.sheetnames
-    assert wb2["Schedule of Insurance"]["A2"].value == "2024 Program (Bound)"
+    assert wb2["Schedule of Insurance"]["A2"].value == "2024 Program"
 
 
 def test_premium_dollars_delegates_then_floors_for_display():
@@ -1295,6 +1296,231 @@ def test_premium_dollars_delegates_then_floors_for_display():
     # sub-dollar cents: money.cents_to_dollars refuses; the SOI's whole-dollar
     # display column floors instead (format_cents_compact's documented rule)
     assert _premium_dollars(500_000_50) == 500_000
+
+
+# --- C2: the Status column, and the label suffix it replaces ----------------
+
+
+def test_soi_status_mapping_covers_every_placement_status():
+    """A dict lookup on a status the map has never heard of must FAIL, not
+    hand a client's schedule a blank Status cell whose premium then quietly
+    lands under `Unbound cover`. The module asserts this at import; this test
+    is the same guard where a reader will find it."""
+    from bookkit.models import PlacementStatus
+    from bookkit.services.export_open_items import _SOI_STATUS
+
+    assert set(_SOI_STATUS) == set(PlacementStatus)
+
+
+def test_book_data_section_states_status_in_the_column_not_the_label(conn):
+    """THE finding. A placement WITHOUT a program file used to carry `(Bound)`
+    in its section label while a linked one carried nothing — the more we knew
+    about a programme, the less the client could tell whether it was real. The
+    status is a row field now, so the suffix is gone from the label and the
+    premium of genuinely bound unlinked cover lands under `Bound cover`."""
+    from towerkit.soi import NOT_STATED, SoiStatus, premium_subtotal
+
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Paper Co", kind="client")
+    placements.create(
+        conn, org.id, "Legacy Property", "2025-01-01", "2026-01-01",
+        status="bound", total_premium=12_345_00,
+    )
+    (section,) = compose_soi(conn, org.id, date(2025, 6, 1))
+    assert section.label == "Legacy Property"  # no "(Bound)" suffix
+    row = section.rows[0]
+    assert row.status == SoiStatus.BOUND
+    assert row.is_bound is True
+    # and the money lands on the right subtotal line, which is the whole point
+    assert premium_subtotal(section, bound=True) == 12_345
+    assert premium_subtotal(section, bound=False) == NOT_STATED
+
+
+@pytest.mark.parametrize(
+    "book_status,expected",
+    [
+        ("prospective", "To be placed"),
+        ("submitted", "Submitted"),
+        ("quoted", "Quoted"),
+        ("bound", "Bound"),
+        ("lapsed", "Expired"),
+    ],
+)
+def test_book_data_status_maps_every_placement_status(conn, book_status, expected):
+    """Each of bookkit's five, in the client-facing words towerkit prints.
+    `lapsed` on cover whose period has not run out is a mid-term cancellation:
+    the year is not over, so the row is still on the schedule — saying
+    `Expired` is exactly how the reader learns the cover is gone."""
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name=f"Co {book_status}", kind="client")
+    placements.create(
+        conn, org.id, "A Program", "2025-01-01", "2026-01-01",
+        status=book_status, total_premium=10_000_00,
+    )
+    (section,) = compose_soi(conn, org.id, date(2025, 6, 1))
+    assert section.rows[0].status == expected
+    # only Bound is cover in force — everything else is unbound premium
+    assert section.rows[0].is_bound is (expected == "Bound")
+
+
+def _staggered_program(insured: str, *, placed: bool):
+    """A two-layer program: GL fully placed with Zurich, Property with NO
+    participants — towerkit reads the second as `To be placed` on its own."""
+    from towerkit.model import Layer, Line, Participant, Period, Program
+    from towerkit.model import Placement as TkPlacement
+
+    return Program(
+        insured=insured, program="Package",
+        placement=TkPlacement.BOUND if placed else TkPlacement.PROPOSED,
+        period=Period(start=date(2025, 10, 1), end=date(2026, 10, 1)),
+        lines=[
+            Line(id="gl", name="General Liability", abbr="GL"),
+            Line(id="prop", name="Property", abbr="PROP"),
+        ],
+        layers=[
+            Layer(
+                id="gl1", name="Primary GL", applies_to=["gl"],
+                attach=0, limit=1_000_000, premium=52_000,
+                participants=[Participant(carrier="Zurich", share_bps=10_000)],
+            ),
+            Layer(
+                id="prop1", name="Primary Property", applies_to=["prop"],
+                attach=0, limit=5_000_000, premium=31_000,
+                participants=[],  # nobody on the risk yet
+            ),
+        ],
+    )
+
+
+def test_compose_soi_linked_bound_keeps_towerkits_per_layer_status(conn, tmp_path):
+    """A BOUND placement whose file says one layer is still unplaced. The
+    file's per-layer status is BETTER than the placement's — it can say `To be
+    placed` for one layer of an otherwise bound programme — so a bound
+    placement must not flatten it. Overriding every row with `Bound` here
+    would print bound cover over a layer nobody is on, and sweep its premium
+    into the `Bound cover` subtotal."""
+    from towerkit.model import dump_program
+    from towerkit.soi import SoiStatus
+
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Staggered Co", kind="client", status="active")
+    p = placements.create(
+        conn, org.id, "2026 Package", "2025-10-01", "2026-10-01", status="bound"
+    )
+    path = tmp_path / "package.json"
+    dump_program(_staggered_program("Staggered Co", placed=True), path)
+    placements.update(conn, p.id, program_path=str(path))
+
+    sections = compose_soi(conn, org.id, date(2026, 1, 1))
+    by_coverage = {r.coverage: r for s in sections for r in s.rows}
+    assert by_coverage["General Liability"].status == SoiStatus.BOUND
+    assert by_coverage["Property"].status == SoiStatus.TO_BE_PLACED, (
+        "a bound placement flattened the file's per-layer status — an unplaced "
+        "layer is being printed as bound cover"
+    )
+    assert by_coverage["Property"].is_bound is False
+    # both layers share one section (neither line carries a group), so the two
+    # subtotal lines are where the split shows: GL's premium is cover in force,
+    # Property's is not
+    (section,) = sections
+    assert section.bound_premium_total == 52_000
+    assert section.unbound_premium_total == 31_000
+
+
+def test_compose_soi_linked_unbound_placement_overrides_every_row(conn, tmp_path):
+    """The other direction: the BOOK knows something the file cannot. The file
+    is a design the broker has fully populated, so towerkit reads its layers as
+    bound — but the book says the placement is only QUOTED, and nothing on a
+    quoted placement is cover in force. Every row is overridden, and no
+    premium reaches the `Bound cover` subtotal."""
+    from towerkit.model import Layer, Line, Participant, Period, Program, dump_program
+    from towerkit.model import Placement as TkPlacement
+    from towerkit.soi import NOT_STATED, SoiStatus, premium_subtotal
+
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Quoted Co", kind="client", status="active")
+    p = placements.create(
+        conn, org.id, "2026 Casualty", "2025-10-01", "2026-10-01", status="quoted"
+    )
+    program = Program(
+        insured="Quoted Co", program="Casualty", placement=TkPlacement.BOUND,
+        period=Period(start=date(2025, 10, 1), end=date(2026, 10, 1)),
+        lines=[Line(id="gl", name="General Liability", abbr="GL")],
+        layers=[
+            Layer(
+                id="gl1", name="Primary GL", applies_to=["gl"],
+                attach=0, limit=1_000_000, premium=52_000,
+                participants=[Participant(carrier="Zurich", share_bps=10_000)],
+            )
+        ],
+    )
+    path = tmp_path / "casualty.json"
+    dump_program(program, path)
+    placements.update(conn, p.id, program_path=str(path))
+
+    (section,) = compose_soi(conn, org.id, date(2026, 1, 1))
+    assert section.rows[0].status == SoiStatus.QUOTED
+    assert section.rows[0].is_bound is False
+    assert premium_subtotal(section, bound=True) == NOT_STATED
+    assert premium_subtotal(section, bound=False) == 52_000
+
+
+def test_soi_sheet_prints_the_status_column_and_both_subtotals(conn, tmp_path):
+    """End to end, in the file a client opens: the Status column carries the
+    word, and the two subtotal lines separate cover in force from cover that
+    is not."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Sheet Co", kind="client", status="active")
+    placements.create(
+        conn, org.id, "Bound Property", "2025-01-01", "2026-12-01",
+        status="bound", total_premium=100_000_00,
+    )
+    placements.create(
+        conn, org.id, "Quoted Casualty", "2025-01-01", "2026-12-01",
+        status="quoted", total_premium=40_000_00,
+    )
+    tasks.create(conn, "something open", org_id=org.id)
+
+    path = write(conn, org.id, tmp_path / "sheet.xlsx", date(2026, 6, 1))
+    sheet = load_workbook(path)["Schedule of Insurance"]
+    assert [c.value for c in sheet[1]][:3] == ["Insured", "Line of Coverage", "Status"]
+    cells = [[c.value for c in row] for row in sheet.iter_rows()]
+    flat = [c for row in cells for c in row]
+    # section labels carry no status suffix any more
+    assert "Bound Property" in flat and "Quoted Casualty" in flat
+    assert not any(
+        isinstance(c, str) and c.endswith("(Bound)") for c in flat
+    ), "the label suffix survived the move to a Status column"
+    assert "Bound" in flat and "Quoted" in flat
+    # two sections, each with its own pair of subtotal lines: walk the sheet
+    # and file every subtotal under the section label above it
+    subtotals: dict[str, dict[str, object]] = {}
+    current = ""
+    for row in cells:
+        head = row[0]
+        if not isinstance(head, str):
+            continue
+        if head in ("Bound Property", "Quoted Casualty"):
+            current = head
+        elif "premium subtotal" in head:
+            subtotals.setdefault(current, {})[head] = row[-1]
+    assert subtotals == {
+        "Bound Property": {
+            "Bound cover — premium subtotal": 100_000,
+            "Unbound cover — premium subtotal": "\u2014",
+        },
+        "Quoted Casualty": {
+            "Bound cover — premium subtotal": "\u2014",
+            "Unbound cover — premium subtotal": 40_000,
+        },
+    }
 
 
 # --- sheet 2 (assembler): Information Requests -----------------------------
