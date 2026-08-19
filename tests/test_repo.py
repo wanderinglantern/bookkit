@@ -239,6 +239,121 @@ def test_a_removed_contact_stays_out_of_the_email_index(conn) -> None:
     assert search.search(conn, "tom@quartz.example") == []
 
 
+def test_an_email_hit_ranks_AFTER_every_fts_hit_and_says_so_in_the_rank(
+    conn,
+) -> None:
+    """The email pass is unranked, and unranked must sort last — bm25 and "the
+    string is in there" are not the same scale.
+
+    The rank it carries must also be TRUTHY. It was 0.0, and tui/commands.py
+    read it as `min(1.0, hit.rank) if hit.rank else 0.5`: 0.0 is falsy, so an
+    address match took the 0.5 default and outranked every name match in the
+    command palette. A sentinel meaning "unranked" that also reads as "no
+    value" is a landmine for every consumer, not just that one."""
+    org = make_client(conn, "Zephyr Marine Holdings")
+    contacts.create(
+        conn, org.id, first_name="Zephyr", last_name="Nakamura", title="CFO"
+    )
+    other = make_client(conn, "Other Co")
+    contacts.create(
+        conn, other.id, first_name="Bill", last_name="Smith",
+        email="bill@zephyr.example",
+    )
+    interactions.log(conn, org.id, "note", "Zephyr kickoff call", "2026-08-01")
+
+    hits = search.search(conn, "zephyr")
+    email_hit = next(h for h in hits if h.snippet == "bill@zephyr.example")
+    assert email_hit.rank, "the unranked sentinel is falsy — `or default` will fire"
+    fts = [h for h in hits if h is not email_hit]
+    assert fts, "fixture drifted: nothing matched the index"
+    assert all(h.rank < email_hit.rank for h in fts), [h.rank for h in hits]
+    assert hits[-1] is email_hit, [h.title for h in hits]
+
+
+def test_hits_of_one_kind_arrive_together(conn) -> None:
+    """Both readers — the search screen and the CLI — print a header the
+    moment the kind changes, so the hit list has to be grouped by kind or a
+    query prints the same header twice. A flat sort on rank does not group:
+    an org scoring between a contact and an unranked email hit produced
+    CONTACTS, ORGS, CONTACTS, and the reader has no way to tell that is one
+    list rather than two."""
+    org = make_client(conn, "Zephyr Marine Holdings")
+    contacts.create(
+        conn, org.id, first_name="Zephyr", last_name="Nakamura", title="CFO"
+    )
+    other = make_client(conn, "Other Co")
+    contacts.create(
+        conn, other.id, first_name="Bill", last_name="Smith",
+        email="bill@zephyr.example",
+    )
+    interactions.log(conn, org.id, "note", "Zephyr kickoff call", "2026-08-01")
+
+    kinds = [h.kind for h in search.search(conn, "zephyr")]
+    assert set(kinds) == {"org", "contact", "interaction"}, kinds
+    assert kinds.count("contact") == 2, kinds  # one by name, one by address
+    # each kind occupies one contiguous run, so one header is printed per kind
+    runs = [k for i, k in enumerate(kinds) if i == 0 or kinds[i - 1] != k]
+    assert len(runs) == len(set(runs)), f"{kinds} — a kind is split in two"
+
+
+def test_a_wildcard_typed_into_the_search_box_is_a_literal(conn) -> None:
+    """LIKE has its own metacharacters and a search box is user input: without
+    ESCAPE, "%" matches every stored address and "_" matches any character, so
+    a typo turns a precise lookup into the whole book. Nothing asserted this,
+    so the next edit to that WHERE clause would have dropped it in silence."""
+    org = make_client(conn, "Percentile Analytics")
+    literal = contacts.create(
+        conn, org.id, first_name="Ada", last_name="Percy", email="a%b@percentile.test",
+    )
+    contacts.create(
+        conn, org.id, first_name="Bo", last_name="Quist", email="axb@percentile.test",
+    )
+    contacts.create(
+        conn, org.id, first_name="Cy", last_name="Rand", email="ab@percentile.test",
+    )
+
+    # '%' is the character typed, not "anything at all"
+    found = [h.entity_id for h in search.search(conn, "a%b@percentile.test")]
+    assert found == [literal.id], found
+    # and a query made only of wildcards matches the addresses that contain
+    # them, which is none of these — it does not return the book, and it does
+    # not raise
+    assert search.search(conn, "%%%") == []
+    # '_' is a literal too, or "a_b" would answer for "axb"
+    assert [h.entity_id for h in search.search(conn, "a_b@percentile.test")] == []
+
+
+def test_the_email_pass_declines_a_query_made_entirely_of_noise(conn) -> None:
+    """EMAIL_MIN_TERM's whole job. It was 3, and reasoned about "co" and "io"
+    — while "com", "net" and "org" are three characters each and sit in almost
+    every address ever stored, so `_by_email("com")` came back with the entire
+    limit. No length can make this a guarantee (a book sharing one domain
+    matches on any term), which is why the floor is documented as a floor."""
+    org = make_client(conn, "Kettleburn Logistics")
+    contacts.create(
+        conn, org.id, first_name="Ada", last_name="Kettle", email="ada@kettleburn.com",
+    )
+    assert search.search(conn, "com") == []
+    assert search.search(conn, "org") == []
+    # a distinctive fragment still answers
+    assert [h.kind for h in search.search(conn, "kettleburn.com")] == ["contact"]
+
+
+def test_every_term_has_to_be_in_the_address_not_just_the_long_ones(conn) -> None:
+    """The conjunction dropped short terms instead of requiring them, so
+    "zz p.raman" fell back to "p.raman" alone and returned an address with no
+    "zz" anywhere in it — a hit the FTS pass, which ANDs its terms, would
+    never have produced. The floor decides whether the pass RUNS; it does not
+    decide which terms count."""
+    org = make_client(conn, "Trellis Growers")
+    contacts.create(
+        conn, org.id, first_name="Ada", last_name="Trellis", email="ada@trellis.example",
+    )
+    assert search.search(conn, "zz ada@trellis.example") == []
+    # ...and the same query without the term nobody's address contains works
+    assert [h.kind for h in search.search(conn, "ada@trellis.example")] == ["contact"]
+
+
 def test_fts_updates_on_edit(conn) -> None:
     org = make_client(conn)
     orgs.update(conn, org.id, name="Molecular Industries")

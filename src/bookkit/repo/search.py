@@ -18,10 +18,25 @@ class SearchHit:
     rank: float
 
 
-# short enough to be a fragment of anybody's address ("co", "io"): matching
-# those against every stored email returns the whole book, ranked last, and
-# buries the hits that mean something.
-EMAIL_MIN_TERM = 3
+# A floor on the SHORTEST query worth scanning every stored address for, not
+# a relevance guarantee — no length can be one, since a whole book can share a
+# domain ("example", 7 characters, matches every seeded contact). What it does
+# buy is the fragment that is in almost everybody's address by construction:
+# at 3 it let "com", "net" and "org" through, and `_by_email("com")` came back
+# with the entire limit. Raised to 4, and applied to the LONGEST term rather
+# than each one (see _by_email), so "raman com" still runs and still requires
+# both — it is only a query made entirely of noise that is declined.
+EMAIL_MIN_TERM = 4
+
+# The rank an email hit carries. NOT 0.0, twice over. SQLite bm25 scores are
+# negative and this module's contract is "lower sorts first", so any positive
+# number puts an address match after every FTS hit — which is the intent, and
+# what 0.0 also happened to do. What 0.0 additionally did was be FALSY, and a
+# consumer written as `hit.rank or <default>` silently swapped in its default:
+# tui/commands.py did exactly that and floated email hits to the TOP of the
+# command palette, above every name match. A sentinel that means "unranked"
+# must not also read as "no value".
+EMAIL_RANK = 1.0
 
 _LIKE_SPECIALS = str.maketrans({"\\": "\\\\", "%": "\\%", "_": "\\_"})
 
@@ -59,8 +74,13 @@ def _by_email(
     "@harborview" and "p.raman" are not words it can be asked for, while a
     substring is a substring.
     """
-    terms = [t for t in text.split() if len(t) >= EMAIL_MIN_TERM]
-    if not terms:
+    terms = text.split()
+    # EVERY term goes into the conjunction, including the short ones. Dropping
+    # them answered a different question than the one asked: "zz p.raman" fell
+    # back to "p.raman" alone and returned an address with no "zz" in it, a
+    # hit the FTS pass — which ANDs its terms — would never have produced. The
+    # length floor decides whether the pass RUNS, not which terms count.
+    if not terms or max(len(t) for t in terms) < EMAIL_MIN_TERM:
         return []
     where = " AND ".join(
         [r"LOWER(c.email) LIKE '%' || LOWER(?) || '%' ESCAPE '\'"] * len(terms)
@@ -127,7 +147,7 @@ def search(conn: sqlite3.Connection, text: str, limit: int = 40) -> list[SearchH
                 # is precise but it is not ranked — bm25 and "the string is in
                 # there" are not the same scale and must not be interleaved as
                 # if they were.
-                0.0,
+                EMAIL_RANK,
             )
         )
     rows = conn.execute(
@@ -151,5 +171,15 @@ def search(conn: sqlite3.Connection, text: str, limit: int = 40) -> list[SearchH
                 r["rank"],
             )
         )
-    hits.sort(key=lambda h: h.rank)
+    # Grouped by type, then by rank — and grouped is the load-bearing half.
+    # A flat sort on rank interleaves the kinds, and both readers (the search
+    # screen and the CLI) print a header on every change of kind, so a query
+    # matching an org BETWEEN two contact hits printed two CONTACTS sections.
+    # The groups themselves are ordered by their own best hit, so the kind
+    # that answered the query best still leads.
+    best_of_kind: dict[str, float] = {}
+    for hit in hits:
+        if hit.rank < best_of_kind.get(hit.kind, float("inf")):
+            best_of_kind[hit.kind] = hit.rank
+    hits.sort(key=lambda h: (best_of_kind[h.kind], h.rank))
     return hits[:limit]
