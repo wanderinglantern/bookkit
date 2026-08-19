@@ -381,11 +381,20 @@ def test_reverting_twice_says_already_reverted(app_and_org):
     assert "already reverted" in client.get(again.headers["HX-Redirect"]).text
 
 
-def test_a_program_batch_refuses_and_names_program_revert_file(app_and_org):
-    """A program_* batch wrote a towerkit FILE; services/batches refuses with
-    a message naming the tool that can undo it. The toast must carry THAT
-    sentence, not a re-typed copy — so the assertion compares against the
-    exception the service itself raises."""
+def test_a_program_batch_with_no_snapshot_says_it_was_not_put_back(app_and_org):
+    """A program_* batch wrote a towerkit FILE, and services/batches still
+    refuses those outright — file contents are not event_log rows.
+
+    What CHANGED on 2026-08-19: the rail no longer stops at that refusal. It
+    calls the file-side revert (services.program_files.revert_file), which is
+    what the MCP server has used since program writes shipped. This batch
+    carries no snapshot — nothing was actually written through it — so the
+    file revert refuses too, and the toast says the change was not put back
+    and why. The old assertion expected the rail's own "cannot undo a file"
+    message, which is no longer the answer it gives.
+
+    services.batches.revert's refusal is unchanged and still tested where it
+    belongs, in tests/test_batches_service.py."""
     client, org = app_and_org
     conn = client.app.state.conn
     from bookkit.services import batches as batches_svc
@@ -399,13 +408,11 @@ def test_a_program_batch_refuses_and_names_program_revert_file(app_and_org):
 
     response = _revert(client, org.ref, batch.ref)
     assert response.status_code == 204
-    assert _redirect_params(response)["outcome"] == "program"
+    assert _redirect_params(response)["outcome"] == "filerefused"
 
-    with pytest.raises(ValueError) as raised:
-        batches_svc.revert(conn, batch.ref, now=db.utc_now())
-
-    page = client.get(response.headers["HX-Redirect"])
-    assert str(raised.value) in page.text
+    page = client.get(response.headers["HX-Redirect"]).text
+    assert "was not put back" in page
+    assert "towerkit" in page
 
 
 def test_an_unknown_batch_ref_is_gone_not_a_500(app_and_org):

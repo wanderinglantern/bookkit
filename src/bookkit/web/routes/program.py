@@ -207,6 +207,137 @@ def _owned_layer(
     raise HTTPException(status_code=404, detail=f"layer {layer_id} is not on {placement.ref}")
 
 
+def _is_conflict(refused: Any) -> bool:
+    """One code, checked exactly. sync._mutate folds WriteConflict into the
+    diagnostics as code='conflict'; every other refusal is a value towerkit's
+    validator would not accept, which is a different question with a different
+    answer."""
+    return any(d.code == "conflict" for d in refused.diags.errors)
+
+
+def _write_layer_field(
+    conn: sqlite3.Connection, placement: Any, layer_id: str, key: str,
+    value: Any, field: Field, layer: dict[str, Any],
+) -> None:
+    """The one write, so the save path and the overwrite retry cannot drift
+    into doing different things."""
+    program_files.write(
+        conn, placement,
+        tool="program_layer_edit",
+        summary=f"set {field.label} on {layer['name']}",
+        mutate=lambda: sync.update_layer(conn, placement.id, layer_id, **{key: value}),
+        open_batch=_open_batch_web,
+    )
+
+
+def _conflict(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any],
+    key: str, typed: str, message: str,
+) -> HTMLResponse:
+    return TEMPLATES.TemplateResponse(
+        request, "account/_layer_conflict.html",
+        {
+            "action": _layer_cell_action(ref, placement_id, layer["id"], key),
+            "field": _layer_field(key),
+            "typed": typed,
+            "message": message,
+            "layer": layer,
+        },
+    )
+
+
+def _reproject(conn: sqlite3.Connection, placement: Any) -> None:
+    """Catch the recorded sha up with what is on disk NOW.
+
+    Both Reload and Overwrite do this first, and it is not a write to the file
+    — it re-reads it and refreshes the proj_* cache, which is exactly what the
+    conflict said had gone stale."""
+    from pathlib import Path
+
+    sync.project(conn, Path(str(placement.program_path)), placement_id=placement.id)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/cell/{key}/reload",
+    response_class=HTMLResponse,
+)
+def layer_cell_reload(
+    request: Request, ref: str, placement_id: str, layer_id: str, key: str
+) -> HTMLResponse:
+    """THEIRS wins. Re-project, discard the draft, show what the file holds."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, _ = _owned_layer(request, org, placement_id, layer_id)
+    _reproject(conn, placement)
+    request.state.layer_details = {}
+    _, fresh = _owned_layer(request, org, placement_id, layer_id)
+    cell = _layer_display_cell(request, ref, placement_id, fresh, key)
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(cell) + _text(panel))
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/cell/{key}/overwrite",
+    response_class=HTMLResponse,
+)
+async def layer_cell_overwrite(
+    request: Request, ref: str, placement_id: str, layer_id: str, key: str
+) -> HTMLResponse:
+    """MINE lands on top of theirs — a RETRY, not a force.
+
+    Re-project so the sha check passes, then re-apply the SAME single field.
+    write_through loads the file fresh on every call, so whatever else changed
+    while this tab was open survives underneath the one value being written.
+
+    Deliberately narrower than towerkit's own TUI offers.
+    EditSession.save(force=True) pushes an entire in-memory program, which is
+    right there — one long-lived session, "mine is authoritative now" — and
+    wrong here, where each POST is one field freshly loaded. Reusing it would
+    silently discard a layer somebody else had just added.
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    field = _layer_field(key)
+    raw = str((await request.form()).get(key, ""))
+    try:
+        value = parse_value(field, raw)
+    except ValueError as exc:
+        return _layer_editor_cell(request, ref, placement_id, layer, key, str(exc), raw)
+
+    _reproject(conn, placement)
+    request.state.layer_details = {}
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    try:
+        _write_layer_field(conn, placement, layer_id, key, value, field, layer)
+    except Exception as exc:
+        return _layer_editor_cell(request, ref, placement_id, layer, key, str(exc), raw)
+
+    request.state.layer_details = {}
+    _, fresh = _owned_layer(request, org, placement_id, layer_id)
+    cell = _layer_display_cell(request, ref, placement_id, fresh, key)
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(cell) + _text(panel))
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/cell/{key}/keep",
+    response_class=HTMLResponse,
+)
+async def layer_cell_keep(
+    request: Request, ref: str, placement_id: str, layer_id: str, key: str
+) -> HTMLResponse:
+    """Neither. Put the editor back with what was typed still in it, and the
+    message still saying why nothing was written."""
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    raw = str((await request.form()).get(key, ""))
+    return _layer_editor_cell(
+        request, ref, placement_id, layer, key,
+        "the file moved under this edit — nothing has been written", raw,
+    )
+
+
 def _text(response: Any) -> str:
     """A rendered response's body as text. Starlette types `.body` as
     bytes | memoryview, and only one of those decodes."""
@@ -312,13 +443,14 @@ async def layer_cell_save(
         )
 
     try:
-        program_files.write(
-            conn, placement,
-            tool="program_layer_edit",
-            summary=f"set {field.label} on {layer['name']}",
-            mutate=lambda: sync.update_layer(conn, placement.id, layer_id, **{key: value}),
-            open_batch=_open_batch_web,
-        )
+        _write_layer_field(conn, placement, layer_id, key, value, field, layer)
+    except program_files.ProgramWriteRefused as refused:
+        if _is_conflict(refused):
+            # NOT an ordinary refusal. The file moved under this write, and
+            # answering it with the same one-line message leaves the user
+            # retyping into a form that will refuse again.
+            return _conflict(request, ref, placement_id, layer, key, raw, str(refused))
+        return _layer_editor_cell(request, ref, placement_id, layer, key, str(refused), raw)
     except Exception as exc:  # a refused write is a message, never a 500
         return _layer_editor_cell(request, ref, placement_id, layer, key, str(exc), raw)
 

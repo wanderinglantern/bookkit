@@ -52,6 +52,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from ...models import EventBatch, Org
 from ...repo import batches as batches_repo
 from ...services import batches as batches_svc
+from ...services import program_files
 from .account import DEFAULT_TAB, TABS, _conn, _org
 
 router = APIRouter()
@@ -117,9 +118,17 @@ def revert_change(
         # and repo/base.py raises bare ones — one malformed event_log row under
         # an `edit_contact` batch was enough to make the page state, with
         # confidence, that a contact edit "wrote a towerkit program FILE"
-        # (review round 1, F2). services/batches.revert makes the same call off
-        # the same attribute, so this is the condition, not a guess at it.
-        return _redirect(ref, tab, batch_ref, "program")
+        # (review round 1, F2).
+        #
+        # It used to STOP here and say batch undo cannot restore a file, which
+        # was true and useless: the file-side revert has existed on the MCP
+        # server since program writes shipped. The rail is the second caller of
+        # that one service now (2026-08-19).
+        try:
+            program_files.revert_file(conn, batch)
+        except ValueError:
+            return _redirect(ref, tab, batch_ref, "filerefused")
+        return _redirect(ref, tab, batch_ref, "filereverted")
 
     try:
         result = batches_svc.revert(conn, batch_ref, now=db.utc_now())
@@ -221,7 +230,9 @@ def toast_for(
         if batch.org_id != org.id:
             return {"text": "that change no longer exists", "remedy": None}
         return None
-    if outcome not in ("reverted", "refused", "already", "program"):
+    if outcome not in (
+        "reverted", "refused", "already", "program", "filereverted", "filerefused"
+    ):
         return None
 
     try:
@@ -245,6 +256,30 @@ def toast_for(
         if count is None or count < 0 or batch.reverted_at is None:
             return None
         return {"text": f"{batch.ref} reverted — {count} change(s)", "remedy": None}
+    if outcome in ("filereverted", "filerefused"):
+        # Both claims are checked against the book before a word is rendered,
+        # the same rule every other token here obeys: the batch must be a
+        # program write, and must be in the state its token claims.
+        if not batch.tool.startswith("program_"):
+            return None
+        if outcome == "filereverted":
+            if batch.reverted_at is None:
+                return None
+            return {
+                "text": f"{batch.ref} put back — the program file was restored",
+                "remedy": None,
+            }
+        if batch.reverted_at is not None:
+            return None
+        return {
+            "text": f"{batch.ref} was not put back",
+            "remedy": (
+                "bookkit keeps a copy of the program file as each change left "
+                "it, and this one no longer matches what is on disk — something "
+                "edited it since. Fix it in towerkit, or revert the newer "
+                "changes first."
+            ),
+        }
     if outcome == "program":
         if not batch.tool.startswith("program_"):
             return None

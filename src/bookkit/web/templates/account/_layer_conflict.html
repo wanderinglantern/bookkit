@@ -1,0 +1,39 @@
+{# The file moved under this write (spec D5's three-way).
+
+   A conflict is not a refused VALUE, and answering it with the same one-line
+   message leaves the user retyping into a form that will refuse again. What
+   they need is the choice: take theirs, land mine on top, or neither.
+
+   The typed value rides in a hidden field on all three, so nothing is retyped
+   whichever is chosen — including Keep editing, which puts the editor back
+   exactly as it was.
+
+   OVERWRITE IS A RETRY, NOT A FORCE. It re-projects and re-applies this ONE
+   field, so a change somebody else made while this tab was open survives
+   underneath it. towerkit's own TUI offers a wider force-write because it
+   holds a long-lived edit session; the web has one field, freshly loaded, and
+   borrowing those semantics would discard a layer another surface just added.
+   The copy says so, because a control called "Overwrite" invites the other
+   reading. #}
+<td class="cell cell-editing cell-error" data-field="{{ field.key }}">
+  <div class="conflict" role="alertdialog" aria-label="This program file changed">
+    <p class="conflict-title">{{ layer.name }} — the file changed while you were editing</p>
+    <p class="conflict-detail">{{ message }}</p>
+    <p class="conflict-detail">Nothing has been written.</p>
+    <div class="form-actions">
+      <button type="button" class="btn-pill"
+              hx-post="{{ action }}/reload" hx-include="closest td"
+              hx-target="closest td" hx-swap="outerHTML"
+              title="Take what the file holds now and discard what you typed">Reload</button>
+      <button type="button" class="btn-pill btn-pill-primary"
+              hx-post="{{ action }}/overwrite" hx-include="closest td"
+              hx-target="closest td" hx-swap="outerHTML"
+              title="Re-apply just this field on top of the file as it stands now — other changes are kept">Overwrite</button>
+      <button type="button" class="btn-pill"
+              hx-post="{{ action }}/keep" hx-include="closest td"
+              hx-target="closest td" hx-swap="outerHTML"
+              title="Leave the field open with what you typed">Keep editing</button>
+    </div>
+    <input type="hidden" name="{{ field.key }}" value="{{ typed }}">
+  </div>
+</td>

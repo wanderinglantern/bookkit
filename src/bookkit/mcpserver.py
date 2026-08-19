@@ -1573,49 +1573,14 @@ def _program_edit(
 
 
 def _program_revert_file(conn: sqlite3.Connection, batch_ref: str) -> dict[str, Any]:
-    """Restore the pre-image of one program write — the file-side revert
-    batch undo cannot provide. Refuses if anything touched the file since."""
-    from pathlib import Path as _Path
+    """services.program_files.revert_file, with this surface's ref resolution.
 
-    from . import sync as sync_mod
-    from .repo import batches as batches_repo
+    The body moved there on 2026-08-19 so the web's Recent Changes rail could
+    be the second caller rather than a hand-copied twin — the same move
+    `_program_write` made. Nothing about this tool's contract changed."""
     from .services import program_files
 
-    batch = _resolve_batch(conn, batch_ref)
-    if not batch.tool.startswith("program_"):
-        raise ValueError(
-            f"{batch_ref} is not a program-file write — use revert_batch"
-        )
-    if batch.reverted_at is not None:
-        raise ValueError(f"{batch_ref} was already reverted at {batch.reverted_at}")
-    if batch.org_id is None:
-        raise ValueError(f"{batch_ref} names no account — cannot locate its file")
-    from .repo import placements as placements_repo
-
-    linked = [
-        p for p in placements_repo.for_org(conn, batch.org_id) if p.program_path
-    ]
-    target = None
-    for placement in linked:
-        try:
-            # the comprehension filtered None paths; mypy cannot see that
-            program_files.restore(_Path(str(placement.program_path)), batch_ref)
-            target = placement
-            break
-        except ValueError as exc:
-            if "was a write to" not in str(exc) and "no snapshot" not in str(exc):
-                raise                          # sha mismatch etc: surface it
-    if target is None:
-        raise ValueError(f"no snapshot for {batch_ref} on any of this account's files")
-    from .db import utc_now
-
-    with db.transaction(conn):                 # unbatched, like revert_batch
-        diags = sync_mod.project(conn, _Path(str(target.program_path)),
-                                 placement_id=target.id)
-        batches_repo.mark_reverted(conn, batch.id, utc_now())
-    return {"reverted": True, "batch": batch_ref,
-            "file": target.program_path,
-            "warnings": [d.message for d in diags.warnings]}
+    return program_files.revert_file(conn, _resolve_batch(conn, batch_ref))
 
 
 def _find_member(conn: sqlite3.Connection, name: str) -> Any:
