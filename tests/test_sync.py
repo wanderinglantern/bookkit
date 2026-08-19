@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -165,9 +165,24 @@ def test_cross_book_exposure(synced) -> None:
     for row in rows:
         assert row.share_bps == 6_000
         assert row.layer_name == "Umbrella"
-    # window actually filters
-    beyond = exposure.carrier_exposure(conn, "Swiss Re", days=5, today=TODAY)
-    assert len(beyond) <= len(rows)
+    # `len(beyond) <= len(rows)` — measured at 0 and 3 — CANNOT FAIL, so
+    # ignoring the `days` argument outright was green (2026-08-18). Pin the
+    # horizon to its own last day, computed from the data rather than guessed.
+    assert all(r.period_to >= TODAY.isoformat() for r in rows)
+    horizon = (TODAY + timedelta(days=365)).isoformat()
+    assert all(r.period_to <= horizon for r in rows)
+
+    soonest = min(r.period_to for r in rows)
+    gap = (date.fromisoformat(soonest) - TODAY).days
+    on_the_day = exposure.carrier_exposure(conn, "Swiss Re", days=gap, today=TODAY)
+    assert [r.period_to for r in on_the_day] == [soonest], (
+        "the horizon must include its own last day, and nothing past it"
+    )
+    assert exposure.carrier_exposure(conn, "Swiss Re", days=gap - 1, today=TODAY) == [], (
+        "a program expiring the day after the horizon is outside the window"
+    )
+    # and the window really does widen — a staircase, not a constant
+    assert 0 < len(on_the_day) < len(rows)
 
 
 def test_seed_projects_its_program_files_it_does_not_just_point_at_them(

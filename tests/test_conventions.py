@@ -1,9 +1,36 @@
 """Architecture conventions that grep can enforce."""
 
 import ast
+import re
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "bookkit"
+
+# THREE ways to run SQL through sqlite3, not one. The rule was spelled as the
+# literal ".execute(" — which is a substring of NEITHER ".executemany(" nor
+# ".executescript(" — so a bulk write moved into services/, tui/, imports/,
+# web/ or mcpserver.py via executemany left every convention test green
+# (2026-08-18). db.py already uses executescript, so the idiom is live here.
+_RAW_SQL = re.compile(r"\.execute(?:many|script)?\s*\(")
+
+
+def _raw_sql_in(path: Path) -> list[str]:
+    rel = path.relative_to(SRC)
+    return [
+        f"{rel}:{n}: {line.strip()}"
+        for n, line in enumerate(path.read_text().splitlines(), 1)
+        if _RAW_SQL.search(line)
+    ]
+
+
+def test_the_raw_sql_predicate_catches_all_three_spellings():
+    """The rule above is only as good as its pattern, and the pattern is the
+    thing that was wrong. Pin it directly."""
+    for spelling in ("conn.execute(", "conn.executemany(", "conn.executescript("):
+        assert _RAW_SQL.search(spelling), f"predicate misses {spelling}"
+    assert not _RAW_SQL.search("self.execute_plan()")
+    # and it must actually fire somewhere real, or the tests below are vacuous
+    assert _raw_sql_in(SRC / "repo" / "base.py"), "predicate matches nothing in repo/"
 
 
 def test_no_openpyxl_outside_imports_package():
@@ -20,18 +47,18 @@ def test_no_raw_sql_in_tui_imports_or_services():
     # repo didn't offer — repo.base.raw_row now does, so the rule holds.
     for pkg in ("tui", "imports", "services"):
         for path in (SRC / pkg).rglob("*.py"):
-            assert ".execute(" not in path.read_text(), \
+            assert _raw_sql_in(path) == [], \
                 f"raw SQL in {path.relative_to(SRC)} — queries live in repo/"
 
 
 def test_no_raw_sql_in_mcpserver():
-    text = (SRC / "mcpserver.py").read_text()
-    assert ".execute(" not in text, "mcpserver must consume repo/services only"
+    assert _raw_sql_in(SRC / "mcpserver.py") == [], \
+        "mcpserver must consume repo/services only"
 
 
 def test_no_raw_sql_in_web():
     for path in (SRC / "web").rglob("*.py"):
-        assert ".execute(" not in path.read_text(), \
+        assert _raw_sql_in(path) == [], \
             f"raw SQL in {path.relative_to(SRC)} — queries live in repo/"
 
 
