@@ -28,6 +28,7 @@ from ... import sync
 from ...forms.entities import apply_placement, placement_form
 from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS
 from ...forms.spec import Field, initial_text, parse_value
+from ...money import format_cents_compact
 from ...repo import placements as placements_repo
 from ...services import batches as batches_svc
 from ...services import program_files
@@ -60,14 +61,14 @@ def _layer_row(
     """One layer, ready to render — the editable fields as CELLS, the derived
     ones as plain text.
 
-    MONEY IS SHOWN EXACT, not compact. A cell is one string for both the
-    display and the editor's pre-fill, and "$50M" parses back as $50,000,000 —
-    so a layer at $50,123,456 would lose $123,456 the first time anybody
-    clicked its cell and pressed Enter without typing. That is the same class
-    of bug as pre-filling a value the parser refuses (CLAUDE.md, the cents
-    rule): the difference is that this one saves successfully and destroys the
-    number quietly. Scannability loses to precision on an editable money
-    column.
+    MONEY DISPLAYS COMPACT, EDITS EXACT (D5, 2026-08-19). The display string
+    and the editor's pre-fill used to be the same string, which forced exact
+    display: "$50M" would have parsed back as $50,000,000 and quietly lost the
+    odd dollars of a layer at $50,123,456 on an unedited save. D5 severed the
+    two — _display_text renders the compact form the tower drawing above this
+    table already uses, and the EDITOR routes keep pre-filling the exact
+    figure through initial_text, so the loss scenario cannot occur. Weakening
+    the pre-fill back to a compact string reintroduces silent data loss.
 
     `signed_pct` and `statutory` stay plain: both are derived — signed is the
     sum of the participants' shares — and a cell offering to edit a derived
@@ -76,7 +77,7 @@ def _layer_row(
     def cell(key: str) -> str:
         field = _LAYER_CELLS[key]
         return render_cell_display(
-            request, field, initial_text(field, layer.get(key)),
+            request, field, _display_text(field, layer.get(key)),
             _layer_cell_action(ref, placement_id, layer["id"], key),
             extra_class=_LAYER_CELL_CLASS.get(key, ""),
         )
@@ -358,6 +359,19 @@ def _layer_cell_action(ref: str, placement_id: str, layer_id: str, key: str) -> 
     return f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/cell/{key}"
 
 
+def _display_text(field: Field, value: Any) -> str:
+    """The DISPLAY string for a cell — distinct from the editor's pre-fill on
+    purpose (D5): money reads compact here, matching the tower drawing, while
+    every editor keeps pre-filling the exact figure via initial_text. One
+    string used to serve both, which is why display had to be exact; the
+    split is what makes compact display safe."""
+    if value is None:
+        return ""
+    if field.kind == "money":
+        return format_cents_compact(int(value))
+    return initial_text(field, value)
+
+
 def _layer_display_cell(
     request: Request, ref: str, placement_id: str, layer: dict[str, Any], key: str
 ) -> HTMLResponse:
@@ -365,7 +379,7 @@ def _layer_display_cell(
     action = _layer_cell_action(ref, placement_id, layer["id"], key)
     return HTMLResponse(
         render_cell_display(
-            request, field, initial_text(field, layer.get(key)), action,
+            request, field, _display_text(field, layer.get(key)), action,
             extra_class=_LAYER_CELL_CLASS.get(key, ""),
         )
     )

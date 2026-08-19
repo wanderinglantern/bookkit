@@ -168,7 +168,11 @@ def test_layer_money_is_formatted_not_raw_cents(app_and_org):
     right-hand side was always true and the test passed with the formatter
     replaced by str(). Review caught it by mutation. It now checks a non-zero
     figure, in a named cell, and asserts the formatted form is present as well
-    as the raw one absent."""
+    as the raw one absent.
+
+    DISPLAY IS COMPACT AS OF D5 (2026-08-19): the cell shows "$5M", matching
+    the tower drawing above it, and the editor pre-fills the exact figure —
+    see test_money_editor_prefill_stays_exact for the other half."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)[0]
@@ -183,8 +187,27 @@ def test_layer_money_is_formatted_not_raw_cents(app_and_org):
     )
 
     assert cell != str(priced["limit_cents"]), "raw cents rendered"
-    assert "," in cell, f"money rendered without thousands separators: {cell!r}"
-    assert cell == format_cents(priced["limit_cents"]).lstrip("$")
+    from bookkit.money import format_cents_compact
+
+    assert cell == format_cents_compact(priced["limit_cents"])
+
+
+def test_money_editor_prefill_stays_exact(app_and_org):
+    """The half of D5 that keeps the old invariant alive: the editor's
+    pre-fill is the exact figure, because a compact string ("$50M") parses
+    back lossily and an unedited save would destroy the odd dollars."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    priced = next(
+        layer for layer in sync.layer_details(conn, placement.id)
+        if layer["limit_cents"]
+    )
+
+    editor = client.get(_cell(org, placement, priced, "limit_cents") + "/edit").text
+
+    exact = format_cents(priced["limit_cents"]).lstrip("$")
+    assert f'value="{exact}"' in editor
 
 
 def test_a_primary_layer_attaching_at_zero_says_zero(app_and_org):
@@ -192,10 +215,7 @@ def test_a_primary_layer_attaching_at_zero_says_zero(app_and_org):
     a fact about the tower — rendering it as a dash tells the reader the
     attachment is unknown when it is known and is zero.
 
-    The figure is exact rather than compact because these cells are editable
-    and one string serves both the display and the editor's pre-fill: "$50M"
-    parses back as $50,000,000 and would quietly destroy the odd dollars of a
-    layer at $50,123,456."""
+    Compact display (D5) renders it "$0" — a figure, not a dash."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)[0]
@@ -208,7 +228,7 @@ def test_a_primary_layer_attaching_at_zero_says_zero(app_and_org):
     page = client.get(f"/accounts/{org.ref}/program").text
     cell = _cell_text(page, placement, primaries[0]["id"], "attach_cents")
 
-    assert cell == "0", f"a $0 attachment rendered as {cell!r}"
+    assert cell == "$0", f"a $0 attachment rendered as {cell!r}"
     assert "—" not in cell, "the attachment cell reads as unrecorded"
 
 

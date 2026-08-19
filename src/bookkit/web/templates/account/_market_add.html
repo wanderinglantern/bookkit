@@ -1,0 +1,35 @@
+{# The in-row market add: swapped over the collapsed "+ market" control
+   (closest .market-add, outerHTML) so binding a market happens where the
+   markets are read, not in a form host above the tower.
+
+   COMMIT IN PLACE: a refusal re-renders this same fragment with the error
+   and everything typed still in it. Cancel re-fetches the collapsed button
+   from {base}/button — a fragment, not a panel. Success returns the button
+   plus the whole layers panel out of band, because a bind changes the
+   layer's signed percentage and possibly its neighbours (heal_follows).
+
+   The carrier input completes from existing market names (Field.suggestions
+   → datalist), the same vocabulary rule the TUI's forms follow. #}
+<span class="market-add">
+  <form class="market-add-form" hx-post="{{ base }}"
+        hx-target="closest .market-add" hx-swap="outerHTML">
+    {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+    {% for f in fields %}
+      <input type="text" name="{{ f.key }}" aria-label="{{ f.label }}"
+             placeholder="{{ f.label }}"
+             value="{{ values.get(f.key, '') if values else '' }}"
+             {% if f.suggestions %}list="ma-{{ f.key }}"{% endif %}
+             {% if f.required %}required{% endif %}
+             {% if loop.first %}autofocus{% endif %}>
+      {% if f.suggestions %}
+        <datalist id="ma-{{ f.key }}">
+          {% for s in f.suggestions %}<option value="{{ s }}"></option>{% endfor %}
+        </datalist>
+      {% endif %}
+    {% endfor %}
+    <button type="submit" class="row-action-btn">bind</button>
+    <button type="button" class="row-action-btn"
+            hx-get="{{ base }}/button"
+            hx-target="closest .market-add" hx-swap="outerHTML">cancel</button>
+  </form>
+</span>
