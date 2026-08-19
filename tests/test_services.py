@@ -1276,8 +1276,12 @@ def test_compose_soi_linked_placement_uses_towerkit_soi(conn, tmp_path):
     sections = compose_soi(conn, org.id, date(2026, 1, 1))
     assert len(sections) == 1
     section = sections[0]
-    # build_soi's unlabeled section takes the program name as its label
-    assert section.label == "2026 Package"
+    # build_soi's unlabeled section takes the program name as its label — the
+    # FILE's, not the book's. The two agree on any projected placement
+    # (sync.project writes program_name=program.program); where they disagree
+    # the book's is the stale one, and heading a casualty tower "2025 Property
+    # Program" is the milder half of the mislink defect.
+    assert section.label == "Package Program"
     row = section.rows[0]
     assert row.insured == "Linked Co"
     assert row.coverage == "General Liability"
@@ -1318,7 +1322,11 @@ def test_compose_soi_unreadable_file_falls_back_to_book_data(conn, tmp_path):
     )
     sections = compose_soi(conn, org.id, date(2025, 6, 1))
     assert len(sections) == 1  # the policy list is never silently partial
-    assert sections[0].rows[0].carrier == "See policy documents"
+    # ...and it says so. The placement is prospective, so there are no policy
+    # documents to send the reader to (see _UNPLACED_CARRIER), and the heading
+    # states that a file was expected here and not used.
+    assert sections[0].rows[0].carrier == "To be placed"
+    assert "policy detail unavailable" in (sections[0].label or "")
 
 
 def test_compose_soi_empty_when_no_placements(conn):
@@ -1679,6 +1687,385 @@ def test_soi_sheet_prints_the_status_column_and_both_subtotals(conn, tmp_path):
             "Unbound cover — premium subtotal": 40_000,
         },
     }
+
+
+# --- client safety on the Schedule of Insurance ----------------------------
+
+
+def _one_layer_program(insured: str, program_name: str, **kw):
+    """A single-layer bound casualty program, so a test can vary the ONE thing
+    it is about."""
+    from towerkit.model import Layer, Line, Participant, Period, Program
+    from towerkit.model import Placement as TkPlacement
+
+    return Program(
+        insured=insured, program=program_name, placement=TkPlacement.BOUND,
+        period=Period(start=date(2025, 10, 1), end=date(2026, 10, 1)),
+        lines=[Line(id="gl", name="General Liability", abbr="GL")],
+        layers=[Layer(
+            id="gl1", name="Primary GL", applies_to=["gl"], attach=0,
+            limit=1_000_000, premium=52_000,
+            participants=[Participant(carrier="Zurich", share_bps=10_000)],
+        )],
+        **kw,
+    )
+
+
+def test_a_program_file_confirmed_to_another_account_exports_no_rows(conn, tmp_path):
+    """THE ONE THAT SHIPS A COMPETITOR'S TOWER. A placement on this client
+    points at a file whose program_link confirms it to a DIFFERENT account:
+    every row of that file — insured, carriers, shares, limits, premiums —
+    used to land in this client's workbook under this client's file name.
+
+    The file is refused; the EXPORT is not. The placement still prints from
+    book data, under a heading that says the detail is unavailable, and the
+    operator is told whose file it actually is."""
+    from towerkit.model import dump_program
+
+    from bookkit.repo import links
+    from bookkit.services.export_open_items import compose_soi, soi_problems
+
+    theirs = orgs.create(conn, name="Atomic Industries, Inc.", kind="client")
+    ours = orgs.create(conn, name="Probe Holdings Ltd", kind="client")
+    path = tmp_path / "atomic-casualty.json"
+    dump_program(_one_layer_program("Atomic Industries, Inc.", "Casualty Program"), path)
+    links.confirm(conn, str(path), theirs.id, "Atomic Industries, Inc.")
+
+    p = placements.create(conn, ours.id, "2026 Casualty Program",
+                          "2025-10-01", "2026-10-01", status="bound",
+                          total_premium=1_000_000_00)
+    placements.update(conn, p.id, program_path=str(path))
+
+    (section,) = compose_soi(conn, ours.id, date(2026, 8, 18))
+    insureds = {row.insured for row in section.rows}
+    assert insureds == {"Probe Holdings Ltd"}, "another client's insured shipped"
+    assert not any(row.carrier == "Zurich" for row in section.rows), (
+        "another client's carriers shipped"
+    )
+    assert "policy detail unavailable" in (section.label or "")
+    # the client's copy never names the other account; the operator's line does
+    assert "Atomic" not in (section.label or "")
+    assert "Atomic Industries, Inc." in soi_problems(conn, ours.id, date(2026, 8, 18))[0]
+
+
+def test_an_unconfirmed_file_naming_a_different_insured_exports_no_rows(conn, tmp_path):
+    """No program_link row at all — a program_path set outside sync.project.
+    There is no org id to compare, so the insured string is compared, and any
+    disagreement loses. Nothing fuzzy: an identity we cannot vouch for costs
+    this client a summary row; being wrong ships someone else's tower."""
+    from towerkit.model import dump_program
+
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Probe Holdings Ltd", kind="client")
+    path = tmp_path / "someone-else.json"
+    dump_program(_one_layer_program("Atomic Industries, Inc.", "Casualty Program"), path)
+    p = placements.create(conn, org.id, "2026 Casualty Program",
+                          "2025-10-01", "2026-10-01", status="bound")
+    placements.update(conn, p.id, program_path=str(path))
+
+    (section,) = compose_soi(conn, org.id, date(2026, 8, 18))
+    assert {r.insured for r in section.rows} == {"Probe Holdings Ltd"}
+    assert "policy detail unavailable" in (section.label or "")
+
+
+def test_a_matching_insured_with_no_link_row_is_accepted(conn, tmp_path):
+    """The other side of the same guard: case and stray whitespace are not a
+    different company, so a hand-linked file that names this account is USED.
+    Without this the refusal would blank out every honestly linked schedule,
+    which is the cost that makes an all-or-nothing refusal wrong."""
+    from towerkit.model import dump_program
+
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Probe Holdings Ltd", kind="client")
+    path = tmp_path / "probe.json"
+    dump_program(_one_layer_program("probe   holdings ltd", "Casualty Program"), path)
+    p = placements.create(conn, org.id, "2026 Casualty Program",
+                          "2025-10-01", "2026-10-01", status="bound")
+    placements.update(conn, p.id, program_path=str(path))
+
+    (section,) = compose_soi(conn, org.id, date(2026, 8, 18))
+    assert [r.carrier for r in section.rows] == ["Zurich"]
+
+
+def test_a_stale_program_name_loses_to_the_file_and_is_reported(conn, tmp_path):
+    """The milder half, which the seeded book reproduces on its own: the
+    placement is called "2025 Property Program" and its linked file is a
+    casualty tower. A stale LABEL is not grounds to discard a correct TOWER,
+    so the file wins the heading and the operator is told to re-project."""
+    from towerkit.model import dump_program
+
+    from bookkit.services.export_open_items import compose_soi, soi_problems
+
+    org = orgs.create(conn, name="Atomic Industries, Inc.", kind="client")
+    path = tmp_path / "atomic-casualty.json"
+    dump_program(_one_layer_program("Atomic Industries, Inc.", "Casualty Program"), path)
+    p = placements.create(conn, org.id, "2025 Property Program",
+                          "2025-10-01", "2026-10-01", status="bound")
+    placements.update(conn, p.id, program_path=str(path))
+
+    (section,) = compose_soi(conn, org.id, date(2026, 8, 18))
+    assert section.label == "Casualty Program"
+    assert "2025 Property Program" not in (section.label or "")
+    assert [r.carrier for r in section.rows] == ["Zurich"]  # the tower survives
+    (problem,) = soi_problems(conn, org.id, date(2026, 8, 18))
+    assert "Casualty Program" in problem and "re-project" in problem
+
+
+def test_a_run_off_layer_says_expired_and_leaves_the_bound_subtotal(conn, tmp_path):
+    """CRITICAL 2. An excess layer whose own period ended 49 days ago, inside
+    a programme whose other layers run to November. It printed `Bound`, with
+    its premium in the `Bound cover` subtotal: $10,000,000 xs $2,000,000 of
+    cover the client does not hold, and money they are not paying.
+
+    The placement-level EXCLUSION rule is untouched (the programme is still on
+    the schedule, which is the point of _expired's docstring); what changes is
+    what each ROW says."""
+    from towerkit.model import Layer, Line, Participant, Period, Program, dump_program
+    from towerkit.model import Placement as TkPlacement
+    from towerkit.soi import SoiStatus, premium_subtotal
+
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Vertex Manufacturing Co", kind="client")
+    program = Program(
+        insured="Vertex Manufacturing Co", program="Casualty Program",
+        placement=TkPlacement.BOUND,
+        period=Period(start=date(2025, 11, 1), end=date(2026, 11, 1)),
+        lines=[Line(id="gl", name="General Liability", abbr="GL")],
+        layers=[
+            Layer(id="gl1", name="Primary GL", applies_to=["gl"], attach=0,
+                  limit=2_000_000, premium=1_250_000,
+                  participants=[Participant(carrier="Zurich", share_bps=10_000)]),
+            Layer(id="gl2", name="Excess GL", applies_to=["gl"],
+                  attach=2_000_000, limit=10_000_000, premium=500_000,
+                  period=Period(start=date(2025, 11, 1), end=date(2026, 6, 30)),
+                  participants=[Participant(carrier="Swiss Re", share_bps=6_000),
+                                Participant(carrier="Chubb", share_bps=4_000)]),
+        ],
+    )
+    path = tmp_path / "vertex.json"
+    dump_program(program, path)
+    p = placements.create(conn, org.id, "Casualty Program",
+                          "2025-11-01", "2026-11-01", status="bound")
+    placements.update(conn, p.id, program_path=str(path))
+
+    today = date(2026, 8, 18)
+    (section,) = compose_soi(conn, org.id, today)
+    by_coverage = {r.coverage: r for r in section.rows}
+    ran_off = by_coverage["General Liability — Excess GL"]
+    assert ran_off.expiration == date(2026, 6, 30)
+    assert ran_off.status == SoiStatus.EXPIRED
+    assert ran_off.is_bound is False
+    # the live layer is untouched, and the programme is still on the schedule
+    assert by_coverage["General Liability — Primary GL"].status == SoiStatus.BOUND
+    # and the money moved with the word
+    assert premium_subtotal(section, bound=True) == 1_250_000
+    assert premium_subtotal(section, bound=False) == 500_000
+
+
+def test_a_layer_expiring_today_is_still_bound(conn, tmp_path):
+    """Cover runs to the end of its last day — the same strictly-`<` rule
+    _expired keeps one level up. A `<=` here would call a client's live layer
+    expired on the day they are most likely to be reading the schedule."""
+    from towerkit.model import Layer, Line, Participant, Period, Program, dump_program
+    from towerkit.model import Placement as TkPlacement
+    from towerkit.soi import SoiStatus
+
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Last Layer Co", kind="client")
+    program = Program(
+        insured="Last Layer Co", program="Casualty Program",
+        placement=TkPlacement.BOUND,
+        period=Period(start=date(2025, 11, 1), end=date(2026, 11, 1)),
+        lines=[Line(id="gl", name="General Liability", abbr="GL")],
+        layers=[Layer(
+            id="gl1", name="Primary GL", applies_to=["gl"], attach=0,
+            limit=2_000_000, premium=1_000,
+            period=Period(start=date(2025, 11, 1), end=date(2026, 8, 18)),
+            participants=[Participant(carrier="Zurich", share_bps=10_000)],
+        )],
+    )
+    path = tmp_path / "lastday.json"
+    dump_program(program, path)
+    p = placements.create(conn, org.id, "Casualty Program",
+                          "2025-11-01", "2026-11-01", status="bound")
+    placements.update(conn, p.id, program_path=str(path))
+
+    (section,) = compose_soi(conn, org.id, date(2026, 8, 18))
+    assert section.rows[0].status == SoiStatus.BOUND
+    (section,) = compose_soi(conn, org.id, date(2026, 8, 19))
+    assert section.rows[0].status == SoiStatus.EXPIRED
+
+
+def test_an_unreadable_tower_prints_what_the_book_holds_and_says_so(conn, tmp_path):
+    """CRITICAL 3. A six-layer D&O tower and a moved file were
+    indistinguishable in the output: one row, no limit, no policy number, no
+    retention, no carrier, and nothing anywhere saying data had been lost.
+
+    The book still held the total limits; the sheet now prints them, and the
+    heading states that the detail is missing."""
+    from bookkit.services.export_open_items import compose_soi, soi_problems
+
+    org = orgs.create(conn, name="Zenith Foods Holdings, LLC", kind="client")
+    p = placements.create(
+        conn, org.id, "2026 Executive Risk Program", "2026-01-01", "2027-01-01",
+        status="bound", total_limit=10_000_000_00, total_premium=485_000_00,
+    )
+    placements.update(conn, p.id, program_path=str(tmp_path / "gone.json"))
+
+    today = date(2026, 8, 18)
+    (section,) = compose_soi(conn, org.id, today)
+    assert "policy detail unavailable" in (section.label or "")
+    assert section.rows[0].limits == "Total limits $10,000,000"
+    (problem,) = soi_problems(conn, org.id, today)
+    assert "could not read" in problem and "gone.json" in problem
+    # the client's copy never carries the path
+    assert "gone.json" not in (section.label or "")
+
+
+def test_a_corrupt_program_file_is_reported_not_swallowed(conn, tmp_path):
+    """A file that parses to nothing takes the same visible path as one that
+    moved — a bare `except Exception` made both silent, and made a bug in
+    this module silent too."""
+    from bookkit.services.export_open_items import compose_soi, soi_problems
+
+    org = orgs.create(conn, name="Corrupt Co", kind="client")
+    path = tmp_path / "half-written.json"
+    path.write_text('{"insured": "Corrupt Co", "program": ', encoding="utf-8")
+    p = placements.create(conn, org.id, "2026 Property Program",
+                          "2026-02-01", "2027-02-01", status="bound",
+                          total_premium=310_000_00)
+    placements.update(conn, p.id, program_path=str(path))
+
+    (section,) = compose_soi(conn, org.id, date(2026, 8, 18))
+    assert "policy detail unavailable" in (section.label or "")
+    (problem,) = soi_problems(conn, org.id, date(2026, 8, 18))
+    assert "JSONDecodeError" in problem
+
+
+def test_an_unreadable_file_does_not_stop_the_rest_of_the_export(conn, tmp_path):
+    """The refusal is scoped to the placement, never to the deliverable. A
+    file we cannot vouch for must not cost the client their other programmes,
+    their open items or their information requests."""
+    from openpyxl import load_workbook
+    from towerkit.model import dump_program
+
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Mixed Co", kind="client", status="active")
+    good = tmp_path / "good.json"
+    dump_program(_one_layer_program("Mixed Co", "Casualty Program"), good)
+    p_good = placements.create(conn, org.id, "Casualty Program",
+                               "2025-10-01", "2026-10-01", status="bound")
+    placements.update(conn, p_good.id, program_path=str(good))
+    p_bad = placements.create(conn, org.id, "Property Program",
+                              "2025-11-01", "2026-11-01", status="bound",
+                              total_premium=90_000_00)
+    placements.update(conn, p_bad.id, program_path=str(tmp_path / "gone.json"))
+    tasks.create(conn, "still an open item", org_id=org.id)
+
+    path = write(conn, org.id, tmp_path / "mixed.xlsx", date(2026, 8, 18))
+    wb = load_workbook(path)
+    assert "Schedule of Insurance" in wb.sheetnames
+    flat = [c.value for row in wb["Schedule of Insurance"].iter_rows() for c in row]
+    assert "Zurich" in flat, "the readable programme was lost with the bad one"
+    assert any(isinstance(c, str) and "policy detail unavailable" in c for c in flat)
+    assert any(
+        c.value == "still an open item"
+        for row in wb[wb.sheetnames[0]].iter_rows() for c in row
+    )
+
+
+def test_unplaced_cover_never_sends_the_reader_to_policy_documents(conn):
+    """A row reading `To be placed`, effective next January, told the reader
+    to `See policy documents` — documents that do not exist. They conclude
+    they misfiled them rather than that there is no policy."""
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Nothing Yet Co", kind="client")
+    placements.create(conn, org.id, "2026 Property Program",
+                      "2026-01-01", "2027-01-01", status="prospective")
+    placements.create(conn, org.id, "2026 Casualty Program",
+                      "2026-01-01", "2027-01-01", status="bound")
+
+    carriers = {
+        s.rows[0].status: s.rows[0].carrier
+        for s in compose_soi(conn, org.id, date(2026, 8, 18))
+    }
+    assert carriers["To be placed"] == "To be placed"
+    assert carriers["Bound"] == "See policy documents"
+
+
+def test_cover_that_has_not_incepted_is_not_on_a_schedule_of_what_is_held(conn):
+    """`placements.for_org` orders by period_to DESC, so a 2027 renewal was
+    the FIRST row a client saw on a schedule of what they hold today. A
+    Schedule of Insurance states cover IN FORCE; the window is closed at both
+    ends, by the same rule and for the same reason as the expired one."""
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Northwind Freight LLC", kind="client")
+    placements.create(conn, org.id, "2027 Property Program",
+                      "2027-01-01", "2028-01-01", status="prospective")
+    placements.create(conn, org.id, "2026 Property Program",
+                      "2026-01-01", "2027-01-01", status="bound")
+
+    labels = [s.label for s in compose_soi(conn, org.id, date(2026, 8, 18))]
+    assert labels == ["2026 Property Program"]
+
+
+def test_cover_incepting_today_is_in_force(conn):
+    """The mirror of the expiring-today rule: cover begins at the start of its
+    first day, so the comparison is strictly `>`. Together the two rules leave
+    no day of a policy year outside the window."""
+    from bookkit.services.export_open_items import compose_soi
+
+    org = orgs.create(conn, name="Day One Co", kind="client")
+    placements.create(conn, org.id, "Starts Today", "2026-08-18", "2027-08-18",
+                      status="bound")
+
+    assert [s.label for s in compose_soi(conn, org.id, date(2026, 8, 18))] == [
+        "Starts Today"
+    ]
+    assert compose_soi(conn, org.id, date(2026, 8, 17)) == []
+
+
+def test_an_account_whose_only_cover_is_future_gets_no_soi_sheet(conn, tmp_path):
+    """The sheet-inclusion rule, on the new end of the window: omitted, not
+    blank — the same rule the all-expired account already follows."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    org = orgs.create(conn, name="Not Yet Co", kind="client", status="active")
+    placements.create(conn, org.id, "2027 Program", "2027-01-01", "2028-01-01",
+                      status="bound")
+    tasks.create(conn, "bind it", org_id=org.id)
+
+    wb = load_workbook(write(conn, org.id, tmp_path / "ny.xlsx", date(2026, 8, 18)))
+    assert "Schedule of Insurance" not in wb.sheetnames
+
+
+def test_soi_problems_is_silent_when_every_link_is_sound(conn, tmp_path):
+    """The operator line only ever says something when something is wrong —
+    the same discipline withheld_note keeps."""
+    from towerkit.model import dump_program
+
+    from bookkit.services.export_open_items import soi_note, soi_problems
+
+    org = orgs.create(conn, name="Clean Co", kind="client")
+    path = tmp_path / "clean.json"
+    dump_program(_one_layer_program("Clean Co", "Casualty Program"), path)
+    p = placements.create(conn, org.id, "Casualty Program",
+                          "2025-10-01", "2026-10-01", status="bound")
+    placements.update(conn, p.id, program_path=str(path))
+    placements.create(conn, org.id, "Paper Only", "2026-01-01", "2027-01-01",
+                      status="bound")
+
+    assert soi_problems(conn, org.id, date(2026, 8, 18)) == []
+    assert soi_note(conn, org.id, date(2026, 8, 18)) == ""
 
 
 # --- sheet 2 (assembler): Information Requests -----------------------------
