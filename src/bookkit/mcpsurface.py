@@ -589,9 +589,14 @@ def describe(kind: str | None = None) -> dict[str, Any]:
             for name, reason in UNMAPPED_BUILDERS.items()
             if name != "org_form_initial_profile"
         }
+    # BOTH per-field roosters, not just DENIED. A field a model can see on
+    # the TUI or the web and cannot write here needs an answer wherever it
+    # looks, and `task.assignee` had none anywhere — the whole point of
+    # writing its reason down. NOT_A_COLUMN answers "why can't I set the AM
+    # Best rating" too, which the module has always said deserves an answer.
     out["denied_fields"] = {
         f"{denied_kind}.{field}": reason
-        for (denied_kind, field), reason in sorted(DENIED.items())
+        for (denied_kind, field), reason in sorted({**NOT_A_COLUMN, **DENIED}.items())
         if kind is None or denied_kind == kind
     }
     out["note"] = VALUE_RULES

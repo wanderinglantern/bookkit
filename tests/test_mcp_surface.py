@@ -691,6 +691,27 @@ def test_the_assignee_is_documented_rather_than_silently_dropped():
     assert "assignee" not in mcpsurface.editable()["task"]
 
 
+def test_describe_says_why_a_field_it_does_not_list_is_missing():
+    """The third place that said nothing. A model reading describe("task")
+    saw no `assignee` and no reason, while both other surfaces offer it —
+    so the answer has to be where it looks, not only in the source."""
+    denied = mcpsurface.describe("task")["denied_fields"]
+    assert "task.assignee" in denied
+    assert "repo/assignees" in denied["task.assignee"]
+    assert "org.am_best_rating" in mcpsurface.describe("org")["denied_fields"]
+    # and every field on a form that MCP will not write is answered for
+    for kind, builder in mcpsurface.BUILDERS.items():
+        answered = mcpsurface.describe(kind)["denied_fields"]
+        surface = mcpsurface.editable()[kind]
+        for field in builder().fields:
+            if field.key in surface:
+                continue
+            assert f"{kind}.{field.key}" in answered or field.key.endswith("_id"), (
+                f"{kind}.{field.key} is on a form, is not writable, and "
+                "describe gives no reason"
+            )
+
+
 def test_the_assignee_triple_is_denied_by_name_not_by_accident(monkeypatch):
     """models.Task: "never set them field by field, or a stale id can outlive
     a kind and the pair stops meaning anything". Only assignee_id was denied,
