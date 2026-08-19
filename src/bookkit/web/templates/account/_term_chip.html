@@ -1,0 +1,13 @@
+{# One term — a retention or a sublimit — as a chip: click opens the in-row
+   edit form, remove confirms in place. Terms carry no ids; the index is
+   towerkit's own addressing, and every write re-renders the panel so an
+   index is never stale (the market-seat rule). #}
+<span class="term-chip">
+  <span class="term-label" tabindex="0"
+        hx-get="{{ base }}/{{ term.index }}/edit"
+        hx-trigger="click, keyup[key=='Enter']"
+        hx-target="closest .term-chip" hx-swap="outerHTML">{{ label }}</span>
+  <button type="button" class="row-action-btn"
+          hx-get="{{ base }}/{{ term.index }}/remove"
+          hx-target="closest .term-chip" hx-swap="outerHTML">remove</button>
+</span>

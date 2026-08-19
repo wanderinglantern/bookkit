@@ -834,3 +834,21 @@ def test_move_line_reorders_and_off_the_end_is_a_noop(linked) -> None:
     # off the end: towerkit's contract is a no-op, not an error
     assert sync.move_line(conn, placement.id, moved[-1], +1).ok
     assert [ln.id for ln in load_program(path).lines] == moved
+
+
+def test_program_terms_reads_what_the_editors_need(linked) -> None:
+    conn, _, placement, path = linked
+    assert sync.add_retention(
+        conn, placement.id, ["gl"], "deductible", amount_cents=250_000_00
+    ).ok
+    assert sync.add_sublimit(conn, placement.id, "Flood", 1_000_000_00, ["gl"]).ok
+
+    terms = sync.program_terms(conn, placement.id)
+
+    retention = terms["retentions"][-1]
+    assert retention["type"] == "deductible"
+    assert retention["amount_cents"] == 250_000_00
+    assert retention["applies_to"] == ["gl"]
+    sublimit = terms["sublimits"][-1]
+    assert sublimit["name"] == "Flood"
+    assert sublimit["amount_cents"] == 1_000_000_00

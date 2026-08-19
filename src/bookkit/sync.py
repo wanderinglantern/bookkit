@@ -1333,6 +1333,43 @@ def layer_details(conn: sqlite3.Connection, placement_id: str) -> list[dict[str,
     return out
 
 
+def program_terms(
+    conn: sqlite3.Connection, placement_id: str
+) -> dict[str, list[dict[str, Any]]]:
+    """The tower's terms — retentions and sublimits — with everything their
+    editors need; money in cents (bookkit-native), applies_to as line ids.
+    Index order is towerkit's own addressing for these (they carry no ids),
+    and every web write re-renders the panel so an index is never stale."""
+    placement = placements.get(conn, placement_id)
+    empty: dict[str, list[dict[str, Any]]] = {"retentions": [], "sublimits": []}
+    if not placement.program_path:
+        return empty
+    try:
+        program = load_program(Path(placement.program_path))
+    except Exception:
+        return empty
+    return {
+        "retentions": [
+            {
+                "index": i,
+                "type": str(r.type),
+                "amount_cents": dollars_to_cents(r.amount),
+                "applies_to": list(r.applies_to),
+            }
+            for i, r in enumerate(program.retentions)
+        ],
+        "sublimits": [
+            {
+                "index": i,
+                "name": s.name,
+                "amount_cents": dollars_to_cents(s.amount),
+                "applies_to": list(s.applies_to),
+            }
+            for i, s in enumerate(program.sublimits)
+        ],
+    }
+
+
 def line_labels(program_path: str | None) -> str:
     """Compact lines-of-cover label ("GL, AL, EL") straight from the file —
     what cover the placement actually is, for the attention tables. Empty

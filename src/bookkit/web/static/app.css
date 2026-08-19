@@ -2194,3 +2194,29 @@ table.rows tr.is-waived td {
     scroll-behavior: auto;
   }
 }
+
+/* --- the terms strip and line arrows (phase 4) ------------------------------ */
+
+.terms-strip .term-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  margin-right: 0.6rem;
+}
+
+.term-label {
+  cursor: pointer;
+  border-bottom: 1px dashed var(--edit-underline);
+}
+
+.term-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.15rem;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.line-arrow {
+  padding: 0 0.25rem;
+}

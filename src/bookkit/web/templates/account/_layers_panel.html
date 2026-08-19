@@ -54,6 +54,20 @@
         {% include "account/_line_add_button.html" %}
       {% endwith %}
     </div>
+    {# The terms strip (phase 4): retentions and sublimits, editable where
+       they are read — they already rendered in the tower and the SOI and
+       could not be touched from any bookkit surface. #}
+    <div class="lines-strip terms-strip">
+      <span class="detail-label">terms</span>
+      {% for chip in term_chips.retentions %}{{ chip | safe }}{% endfor %}
+      {% with base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/retentions", singular = "retention" %}
+        {% include "account/_term_add_button.html" %}
+      {% endwith %}
+      {% for chip in term_chips.sublimits %}{{ chip | safe }}{% endfor %}
+      {% with base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/sublimits", singular = "sublimit" %}
+        {% include "account/_term_add_button.html" %}
+      {% endwith %}
+    </div>
   {% endif %}
 
   {% if tower %}

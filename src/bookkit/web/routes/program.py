@@ -147,6 +147,7 @@ def _programs(request: Request, org: Any) -> list[dict[str, Any]]:
                 "placement": placement,
                 "placement_cells": _placement_cells(request, org.ref, placement),
                 "line_chips": _line_chips(request, org.ref, placement),
+                "term_chips": _term_chips(request, org.ref, placement),
                 "linked": bool(placement.program_path),
                 "layers": [
                     _layer_row(request, org.ref, placement.id, layer) for layer in layers
@@ -548,6 +549,38 @@ async def line_cell_save(
         )
     except Exception as exc:
         return editor(str(exc))
+    request.state.layer_details = {}
+    return _panel(request, ref, org, placement_id)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/lines/{line_id}/move",
+    response_class=HTMLResponse,
+)
+async def line_move(
+    request: Request, ref: str, placement_id: str, line_id: str
+) -> HTMLResponse:
+    """Column order in the drawing (phase 4). A move off either end is
+    towerkit's documented no-op; either way the panel comes back, so the
+    chips and the tower's columns always agree."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    name = _line_name(conn, placement_id, line_id)
+    try:
+        delta = int(str((await request.form()).get("delta", "0")))
+    except ValueError:
+        delta = 0
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_line_edit",
+            summary=f"moved line {name}",
+            mutate=lambda: sync.move_line(conn, placement_id, line_id, delta),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _panel_refusal(request, ref, org, placement_id, str(exc))
     request.state.layer_details = {}
     return _panel(request, ref, org, placement_id)
 
@@ -1263,6 +1296,7 @@ def _panel(request: Request, ref: str, org: Any, placement_id: str) -> HTMLRespo
             "placement": placement,
             "placement_cells": _placement_cells(request, ref, placement),
             "line_chips": _line_chips(request, ref, placement),
+            "term_chips": _term_chips(request, ref, placement),
             "linked": bool(placement.program_path),
             "layers": [
                 _layer_row(request, ref, placement_id, layer)
@@ -2049,3 +2083,327 @@ async def scaffold_create(request: Request, ref: str, placement_id: str) -> HTML
     except Exception as exc:
         return _programs_panel(request, ref, org, error=str(exc))
     return _programs_panel(request, ref, org)
+
+
+# --- the terms strip: retentions and sublimits (phase 4) -----------------------
+#
+# One route family serves both kinds through a {kind} path parameter,
+# REGISTERED LAST ON PURPOSE: Starlette matches /program/{placement_id}/{kind}
+# before FastAPI validates the enum, so every literal sibling
+# (/renew, /merge, /scaffold, /layers, /lines, /submissions, /cell) must be
+# registered FIRST to win. Appending anything after this block that shares
+# the /program/{placement_id}/<one-segment> shape will be shadowed — add such
+# routes ABOVE this comment.
+
+from enum import StrEnum as _StrEnum  # noqa: E402
+
+
+class TermKind(_StrEnum):
+    retentions = "retentions"
+    sublimits = "sublimits"
+
+
+_TERM_AMOUNT_FIELD = Field("amount", "amount", "money", required=True)
+_TERM_SINGULAR = {"retentions": "retention", "sublimits": "sublimit"}
+
+
+def _terms_base(ref: str, placement_id: str, kind: str) -> str:
+    return f"/accounts/{ref}/program/{placement_id}/{kind}"
+
+
+def _term_lines(conn: sqlite3.Connection, placement_id: str) -> list[dict[str, str]]:
+    return [
+        {"id": lid, "name": str(name)}
+        for lid, name in sync.program_lines(conn, placement_id)
+    ]
+
+
+def _line_names(conn: sqlite3.Connection, placement_id: str, ids: list[str]) -> str:
+    names = dict(sync.program_lines(conn, placement_id))
+    return ", ".join(str(names.get(lid, lid)) for lid in ids)
+
+
+def _term_label(
+    conn: sqlite3.Connection, placement_id: str, kind: str, term: dict[str, Any]
+) -> str:
+    lines = _line_names(conn, placement_id, term["applies_to"])
+    amount = format_cents_compact(term["amount_cents"])
+    head = term["type"].upper() if kind == "retentions" else term["name"]
+    return f"{head} {amount} · {lines}"
+
+
+def _term_chip_html(
+    request: Request, ref: str, placement_id: str, kind: str, term: dict[str, Any]
+) -> str:
+    conn = _conn(request)
+    template = TEMPLATES.env.get_template("account/_term_chip.html")
+    return template.render(
+        base=_terms_base(ref, placement_id, kind),
+        term=term,
+        label=_term_label(conn, placement_id, kind, term),
+    )
+
+
+def _term_chips(request: Request, ref: str, placement: Any) -> dict[str, list[str]] | None:
+    if not placement.program_path:
+        return None
+    conn = _conn(request)
+    terms = sync.program_terms(conn, placement.id)
+    return {
+        kind: [
+            _term_chip_html(request, ref, placement.id, kind, term)
+            for term in terms[kind]
+        ]
+        for kind in ("retentions", "sublimits")
+    }
+
+
+def _term_by_index(
+    conn: sqlite3.Connection, placement_id: str, kind: str, index: int
+) -> dict[str, Any]:
+    terms = sync.program_terms(conn, placement_id)[kind]
+    if not 0 <= index < len(terms):
+        raise HTTPException(status_code=404, detail=f"no {kind[:-1]} at index {index}")
+    return terms[index]
+
+
+def _term_form(
+    request: Request, ref: str, placement_id: str, kind: str,
+    action: str, values: dict[str, Any], error: str | None = None,
+) -> HTMLResponse:
+    conn = _conn(request)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_term_form.html",
+        {
+            "kind": kind, "action": action,
+            "cancel_url": f"{_terms_base(ref, placement_id, kind)}/button",
+            "lines": _term_lines(conn, placement_id),
+            "values": values, "error": error,
+        },
+    )
+
+
+def _term_add_button(
+    request: Request, ref: str, placement_id: str, kind: str
+) -> HTMLResponse:
+    return TEMPLATES.TemplateResponse(
+        request, "account/_term_add_button.html",
+        {"base": _terms_base(ref, placement_id, kind), "singular": _TERM_SINGULAR[kind]},
+    )
+
+
+async def _term_values(request: Request, kind: str) -> dict[str, Any]:
+    form = await request.form()
+    return {
+        "type": str(form.get("type", "")),
+        "name": str(form.get("name", "")),
+        "amount": str(form.get("amount", "")),
+        "line": [str(v) for v in form.getlist("line")],
+    }
+
+
+def _parse_term(kind: str, values: dict[str, Any]) -> tuple[int, list[str]]:
+    """(amount_cents, line ids) — refusing in the broker's language."""
+    amount = parse_value(_TERM_AMOUNT_FIELD, values["amount"])
+    if amount in (None, ""):
+        raise ValueError("amount is required")
+    if not values["line"]:
+        raise ValueError("pick at least one line of cover")
+    if kind == "sublimits" and not values["name"].strip():
+        raise ValueError("the sublimit needs a name")
+    return int(amount), values["line"]
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/{kind}/new", response_class=HTMLResponse
+)
+def term_add_form(
+    request: Request, ref: str, placement_id: str, kind: TermKind
+) -> HTMLResponse:
+    org = _org(request, ref)
+    _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return _term_form(
+        request, ref, placement_id, kind.value,
+        _terms_base(ref, placement_id, kind.value),
+        {"line": []},
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/{kind}/button", response_class=HTMLResponse
+)
+def term_add_button(
+    request: Request, ref: str, placement_id: str, kind: TermKind
+) -> HTMLResponse:
+    org = _org(request, ref)
+    _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return _term_add_button(request, ref, placement_id, kind.value)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/{kind}", response_class=HTMLResponse
+)
+async def term_add(
+    request: Request, ref: str, placement_id: str, kind: TermKind
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    values = await _term_values(request, kind.value)
+    action = _terms_base(ref, placement_id, kind.value)
+    try:
+        amount_cents, line_ids = _parse_term(kind.value, values)
+        if kind.value == "retentions":
+            mutate = lambda: sync.add_retention(  # noqa: E731
+                conn, placement_id, line_ids, values["type"], amount_cents
+            )
+        else:
+            mutate = lambda: sync.add_sublimit(  # noqa: E731
+                conn, placement_id, values["name"].strip(), amount_cents, line_ids
+            )
+        program_files.write(
+            conn, placement,
+            tool="program_term_add",
+            summary=f"added a {_TERM_SINGULAR[kind.value]}",
+            mutate=mutate,
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _term_form(request, ref, placement_id, kind.value, action, values, str(exc))
+    button = _term_add_button(request, ref, placement_id, kind.value)
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(button) + _text(panel))
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/{kind}/{index}/chip",
+    response_class=HTMLResponse,
+)
+def term_chip(
+    request: Request, ref: str, placement_id: str, kind: TermKind, index: int
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    term = _term_by_index(conn, placement_id, kind.value, index)
+    return HTMLResponse(_term_chip_html(request, ref, placement_id, kind.value, term))
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/{kind}/{index}/edit",
+    response_class=HTMLResponse,
+)
+def term_edit_form(
+    request: Request, ref: str, placement_id: str, kind: TermKind, index: int
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    term = _term_by_index(conn, placement_id, kind.value, index)
+    values = {
+        "type": term.get("type", ""),
+        "name": term.get("name", ""),
+        "amount": initial_text(_TERM_AMOUNT_FIELD, term["amount_cents"]),
+        "line": list(term["applies_to"]),
+    }
+    return _term_form(
+        request, ref, placement_id, kind.value,
+        f"{_terms_base(ref, placement_id, kind.value)}/{index}",
+        values,
+    )
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/{kind}/{index}",
+    response_class=HTMLResponse,
+)
+async def term_edit(
+    request: Request, ref: str, placement_id: str, kind: TermKind, index: int
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    _term_by_index(conn, placement_id, kind.value, index)
+    values = await _term_values(request, kind.value)
+    action = f"{_terms_base(ref, placement_id, kind.value)}/{index}"
+    try:
+        amount_cents, line_ids = _parse_term(kind.value, values)
+        if kind.value == "retentions":
+            mutate = lambda: sync.edit_retention(  # noqa: E731
+                conn, placement_id, index,
+                type=values["type"], amount_cents=amount_cents, applies_to=line_ids,
+            )
+        else:
+            mutate = lambda: sync.edit_sublimit(  # noqa: E731
+                conn, placement_id, index,
+                name=values["name"].strip(), amount_cents=amount_cents,
+                applies_to=line_ids,
+            )
+        program_files.write(
+            conn, placement,
+            tool="program_term_edit",
+            summary=f"edited a {_TERM_SINGULAR[kind.value]}",
+            mutate=mutate,
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _term_form(request, ref, placement_id, kind.value, action, values, str(exc))
+    request.state.layer_details = {}
+    return _panel(request, ref, org, placement_id)
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/{kind}/{index}/remove",
+    response_class=HTMLResponse,
+)
+def term_remove_confirm(
+    request: Request, ref: str, placement_id: str, kind: TermKind, index: int
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    term = _term_by_index(conn, placement_id, kind.value, index)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_term_remove_confirm.html",
+        {
+            "base": _terms_base(ref, placement_id, kind.value),
+            "term": term,
+            "label": _term_label(conn, placement_id, kind.value, term),
+        },
+    )
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/{kind}/{index}/remove",
+    response_class=HTMLResponse,
+)
+def term_remove(
+    request: Request, ref: str, placement_id: str, kind: TermKind, index: int
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    term = _term_by_index(conn, placement_id, kind.value, index)
+    label = _term_label(conn, placement_id, kind.value, term)
+    try:
+        if kind.value == "retentions":
+            mutate = lambda: sync.remove_retention(conn, placement_id, index)  # noqa: E731
+        else:
+            mutate = lambda: sync.remove_sublimit(conn, placement_id, index)  # noqa: E731
+        program_files.write(
+            conn, placement,
+            tool="program_term_remove",
+            summary=f"removed {label}",
+            mutate=mutate,
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return TEMPLATES.TemplateResponse(
+            request, "account/_term_remove_confirm.html",
+            {
+                "base": _terms_base(ref, placement_id, kind.value),
+                "term": term, "label": label, "error": str(exc),
+            },
+        )
+    request.state.layer_details = {}
+    return _panel(request, ref, org, placement_id)
