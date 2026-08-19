@@ -6,6 +6,7 @@ save keeps the form up for correction (the platform default since 2026-08-12).""
 from __future__ import annotations
 
 import sqlite3
+import textwrap
 from datetime import date
 from typing import Any
 
@@ -790,6 +791,29 @@ def rfi_item_form(
             Field("response", "response", "textarea"),
         ],
         initial=initial,
+    )
+
+
+def rfi_answer_form(item: RfiItem) -> FormSpec:
+    """The answer alone, in a box with room in it.
+
+    The Response cell edits in place on the row, which is the right shape for
+    "confirmed, $4.2M" and the wrong one for three sentences about which
+    subsidiary the payroll sits in (Grant, 2026-08-19). Same field, same
+    column, roomier door.
+
+    ONE field on purpose. Status is not here and must not be: an answer is
+    frequently a note rather than a delivery, and deciding on the operator's
+    behalf that the item is now satisfied is the failure that empties a chase
+    list nobody has actually cleared. Marking received stays a deliberate
+    press on the row."""
+    # The title becomes the undo unit's sentence (BatchSpec.for_title), so it
+    # carries the item it answered — the changes list groups by the slug ahead
+    # of the dash and reads the whole line.
+    return FormSpec(
+        f"answer item — {textwrap.shorten(item.prompt, width=60, placeholder=' …')}",
+        [Field("response", "response", "textarea")],
+        initial={"response": item.response or ""},
     )
 
 

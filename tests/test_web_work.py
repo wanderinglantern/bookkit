@@ -654,3 +654,157 @@ def test_a_task_priority_outside_the_vocabulary_is_refused(app_and_org):
     assert response.status_code == 200
     assert "form-error" in response.text
     assert len(tasks_repo.open_tasks_for_client(conn, org.id)) == before
+
+
+# --- the column class survives an edit ---------------------------------------
+#
+# A cell is built in three places per table: the panel's first render, the
+# display route htmx swaps back after a save, and the editor. They each used to
+# carry their own literal class map, so a class present on the first render
+# could vanish the moment the cell was edited — and the column would change
+# shape mid-session with nothing to explain it. These tests compare what the
+# panel rendered against what the routes return, rather than asserting a
+# hard-coded class list in three places of their own.
+
+
+def _cell_classes(html: str, field: str) -> set[str]:
+    """The classes on the cell for `field`, read out of rendered HTML."""
+    import re
+
+    match = re.search(rf'<td class="([^"]*)"[^>]*data-field="{field}"', html)
+    assert match, f"no cell rendered for {field} in:\n{html[:2000]}"
+    return set(match.group(1).split())
+
+
+@pytest.mark.parametrize("field", ["prompt", "response", "due_on", "category"])
+def test_an_item_cell_comes_back_from_a_save_dressed_as_it_started(app_and_org, field):
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+
+    item = rfi_repo.items_for_request(client.app.state.conn, request.id)[0]
+    panel = client.get(f"/accounts/{org.ref}/requests/{request.id}").text
+    swapped = client.get(
+        f"/accounts/{org.ref}/requests/{request.id}/items/{item.id}/cell/{field}"
+    ).text
+
+    assert _cell_classes(swapped, field) == _cell_classes(panel, field)
+
+
+@pytest.mark.parametrize("field", ["title", "description", "due_on", "assignee"])
+def test_a_task_cell_comes_back_from_a_save_dressed_as_it_started(app_and_org, field):
+    client, org, _request = app_and_org
+    from bookkit.repo import tasks as tasks_repo
+
+    task = tasks_repo.open_tasks_for_client(client.app.state.conn, org.id)[0]
+    panel = client.get(f"/accounts/{org.ref}/work").text
+    swapped = client.get(f"/accounts/{org.ref}/tasks/{task.id}/cell/{field}").text
+
+    assert _cell_classes(swapped, field) == _cell_classes(panel, field)
+
+
+def test_the_question_and_the_answer_are_marked_as_prose(app_and_org):
+    """Not decoration: `prose` is what lets those two columns wrap. Without it
+    the table sizes itself to the longest unwrapped sentence and the columns to
+    its right — Status, Response, and the Mark received button — render past
+    the panel's edge, live and invisible."""
+    client, org, request = app_and_org
+
+    panel = client.get(f"/accounts/{org.ref}/requests/{request.id}").text
+
+    assert "prose" in _cell_classes(panel, "prompt")
+    assert "prose" in _cell_classes(panel, "response")
+
+
+def test_the_tables_that_carry_prose_declare_that_they_fit(app_and_org):
+    """`rows-fit` is the other half of the same fix — prose can only wrap if
+    the table is not sizing itself to max-content."""
+    client, org, request = app_and_org
+
+    for url in (f"/accounts/{org.ref}/work", f"/accounts/{org.ref}/requests/{request.id}"):
+        assert 'class="rows rows-fit"' in client.get(url).text, url
+
+
+# --- the roomy door onto the answer -------------------------------------------
+
+
+def _first_item(client, request):
+    from bookkit.repo import rfi as rfi_repo
+
+    return rfi_repo.items_for_request(client.app.state.conn, request.id)[0]
+
+
+def test_the_answer_form_opens_with_what_is_already_there(app_and_org):
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+
+    item = _first_item(client, request)
+    conn = client.app.state.conn
+    with db.transaction(conn):
+        rfi_repo.update_item(conn, item.id, response="partial: 2023 onward sent")
+
+    form = client.get(
+        f"/accounts/{org.ref}/requests/{request.id}/items/{item.id}/answer"
+    )
+
+    assert form.status_code == 200
+    assert "partial: 2023 onward sent" in form.text
+    assert "<textarea" in form.text, "a long answer needs a box, not a one-line input"
+
+
+def test_answering_writes_the_response_and_leaves_the_status_alone(app_and_org):
+    """Grant, 2026-08-19: notes may just be notes. An answer that quietly
+    marked the item received would empty a chase queue nobody had cleared."""
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+
+    item = _first_item(client, request)
+    assert item.status == "outstanding"
+
+    saved = client.post(
+        f"/accounts/{org.ref}/requests/{request.id}/items/{item.id}/answer",
+        data={"response": "Controller is pulling the class-code split; expect Friday."},
+    )
+
+    assert saved.status_code == 200
+    after = rfi_repo.get_item(client.app.state.conn, item.id)
+    assert after.response == "Controller is pulling the class-code split; expect Friday."
+    assert after.status == "outstanding"
+    assert after.received_on is None
+
+
+def test_answering_is_one_revertible_web_batch(app_and_org):
+    client, org, request = app_and_org
+    from bookkit.repo import rfi as rfi_repo
+    from bookkit.services import batches as batches_svc
+
+    item = _first_item(client, request)
+    conn = client.app.state.conn
+
+    client.post(
+        f"/accounts/{org.ref}/requests/{request.id}/items/{item.id}/answer",
+        data={"response": "sent 12 Aug"},
+    )
+
+    batch = _latest_batch(conn)
+    assert batch is not None and batch.source == "web"
+    assert item.prompt[:20] in batch.summary
+
+    batches_svc.revert(conn, batch.ref, now=db.utc_now())
+    assert rfi_repo.get_item(conn, item.id).response != "sent 12 Aug"
+
+
+def test_every_item_offers_the_bigger_box(app_and_org):
+    """Including a received one — an answer is edited after the fact more
+    often than it is right first time."""
+    client, org, request = app_and_org
+
+    panel = client.get(f"/accounts/{org.ref}/requests/{request.id}").text
+
+    for item in _items(client, request):
+        assert f"/items/{item.id}/answer" in panel, item.prompt
+
+
+def _items(client, request):
+    from bookkit.repo import rfi as rfi_repo
+
+    return rfi_repo.items_for_request(client.app.state.conn, request.id)

@@ -25,7 +25,7 @@
   <div class="form-host"></div>
   {% if item_rows %}
     <div class="table-scroll">
-      <table class="rows">
+      <table class="rows rows-fit">
         <thead>
           <tr><th>Item</th><th>Type</th><th>Group</th><th>Needed by</th>
               <th>Status</th><th>Response</th><th></th></tr>
@@ -50,7 +50,17 @@
                 {% if row.received_on %}{{ row.received_on }}{% endif %}
               </td>
               {{ row.response_cell | safe }}
-              <td>
+              {# Two doors onto the answer, and they are not alternatives: the
+                 Response cell edits in place for "confirmed, $4.2M", and this
+                 opens a full-size box for the three-sentence kind. It cannot
+                 live inside the Response cell — that whole <td> is the
+                 click-to-edit target, so a control nested in it would open the
+                 inline editor on the way past. #}
+              <td class="row-actions-cell">
+                <button type="button" class="row-action-btn"
+                        title="Open a full-size box — the Response cell edits in place for short answers"
+                        hx-get="/accounts/{{ header.org.ref }}/requests/{{ rfi_request.id }}/items/{{ row.id }}/answer"
+                        hx-target="#items-panel .form-host" hx-swap="innerHTML">Answer</button>
                 {% if row.status == "outstanding" %}
                   <button type="button" class="row-action-btn"
                           hx-post="/accounts/{{ header.org.ref }}/requests/{{ rfi_request.id }}/items/{{ row.id }}/received"

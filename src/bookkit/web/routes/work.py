@@ -39,6 +39,7 @@ from ...forms.entities import (
     apply_rfi_item,
     apply_task,
     request_form,
+    rfi_answer_form,
     rfi_item_form,
     task_form,
 )
@@ -60,6 +61,27 @@ router = APIRouter()
 # server-side, the same guard relationship.py's _contact_field applies.
 _TASK_CELLS: dict[str, Field] = {f.key: f for f in TASK_FIELDS}
 _ITEM_CELLS: dict[str, Field] = {f.key: f for f in RFI_ITEM_FIELDS}
+
+# The column class a cell carries, in ONE place per table. It used to be a
+# literal at each of the three call sites that build a cell — the panel's first
+# render, the display route htmx swaps back after a save, and the editor — so a
+# class added to one of them vanished the moment the cell was edited, and the
+# column silently changed shape mid-session. "prose" is the one that must not
+# drift: without it a long underwriting question sizes its column to the whole
+# unwrapped sentence, which pushed Status, Response and "Mark received" off the
+# right-hand edge of the panel where nothing said they were there (Grant, on his
+# own book, 2026-08-19).
+_TASK_CELL_CLASS: dict[str, str] = {
+    "due_on": "num",
+    "assignee": "assignee",
+    "title": "prose",
+    "description": "prose",
+}
+_ITEM_CELL_CLASS: dict[str, str] = {
+    "due_on": "num",
+    "prompt": "prose",
+    "response": "prose",
+}
 
 
 # --- tasks -----------------------------------------------------------------
@@ -119,20 +141,21 @@ def _task_cell_value(conn: sqlite3.Connection, task: Task, key: str) -> str:
 
 
 def _task_row(request: Request, ref: str, task: Task) -> dict[str, Any]:
-    def cell(key: str, *, extra_class: str = "", suffix: str = "") -> str:
+    def cell(key: str, *, suffix: str = "") -> str:
         field = _TASK_CELLS[key]
         value = _task_cell_value(_conn(request), task, key)
         action = _task_cell_action(ref, task.id, key)
         return render_cell_display(
-            request, field, value, action, extra_class=extra_class, suffix=suffix
+            request, field, value, action,
+            extra_class=_TASK_CELL_CLASS.get(key, ""), suffix=suffix,
         )
 
     return {
         "id": task.id,
-        "due_cell": cell("due_on", extra_class="num", suffix=_task_due_suffix(task)),
+        "due_cell": cell("due_on", suffix=_task_due_suffix(task)),
         "title_cell": cell("title"),
         "category_cell": cell("category", suffix=_task_category_suffix(task)),
-        "assignee_cell": cell("assignee", extra_class="assignee"),
+        "assignee_cell": cell("assignee"),
         "description_cell": cell("description"),
     }
 
@@ -177,7 +200,7 @@ def _task_display_cell(request: Request, ref: str, task_id: str, key: str) -> HT
     existing = tasks_repo.get(_conn(request), task_id)
     value = _task_cell_value(_conn(request), existing, key)
     action = _task_cell_action(ref, task_id, key)
-    extra_class = {"due_on": "num", "assignee": "assignee"}.get(key, "")
+    extra_class = _TASK_CELL_CLASS.get(key, "")
     # the badge has to come back with the saved cell, or flagging a task
     # Internal inline leaves the row looking exactly as it did before
     suffix = {
@@ -201,9 +224,11 @@ def _task_editor_cell(
         else _task_cell_value(_conn(request), existing, key)
     )
     action = _task_cell_action(ref, task_id, key)
-    extra_class = {"due_on": "num", "assignee": "assignee"}.get(key, "")
     return HTMLResponse(
-        render_cell(request, field, value, action, error=error, extra_class=extra_class)
+        render_cell(
+            request, field, value, action, error=error,
+            extra_class=_TASK_CELL_CLASS.get(key, ""),
+        )
     )
 
 
@@ -371,12 +396,13 @@ def _item_due_suffix(item: Any, request_row: RfiRequest) -> str:
 def _item_row(
     request: Request, ref: str, request_id: str, item: Any, request_row: RfiRequest
 ) -> dict[str, Any]:
-    def cell(key: str, *, extra_class: str = "", suffix: str = "") -> str:
+    def cell(key: str, *, suffix: str = "") -> str:
         field = _ITEM_CELLS[key]
         value = initial_text(field, getattr(item, key, None))
         action = _item_cell_action(ref, request_id, item.id, key)
         return render_cell_display(
-            request, field, value, action, extra_class=extra_class, suffix=suffix
+            request, field, value, action,
+            extra_class=_ITEM_CELL_CLASS.get(key, ""), suffix=suffix,
         )
 
     return {
@@ -386,7 +412,7 @@ def _item_row(
         "received_on": item.received_on,
         "prompt_cell": cell("prompt"),
         "category_cell": cell("category"),
-        "due_cell": cell("due_on", extra_class="num", suffix=_item_due_suffix(item, request_row)),
+        "due_cell": cell("due_on", suffix=_item_due_suffix(item, request_row)),
         "response_cell": cell("response"),
     }
 
@@ -440,6 +466,43 @@ async def item_create(request: Request, ref: str, request_id: str) -> HTMLRespon
     return refused or _items_panel(request, org, request_id, oob=True)
 
 
+@router.get(
+    "/accounts/{ref}/requests/{request_id}/items/{item_id}/answer",
+    response_class=HTMLResponse,
+)
+def item_answer_form(
+    request: Request, ref: str, request_id: str, item_id: str
+) -> HTMLResponse:
+    """The roomy door onto the same column the row edits in place."""
+    org = _org(request, ref)
+    item = _owned_item(_conn(request), org, request_id, item_id)
+    action = f"/accounts/{ref}/requests/{request_id}/items/{item_id}/answer"
+    return HTMLResponse(render_form(request, rfi_answer_form(item), action))
+
+
+@router.post(
+    "/accounts/{ref}/requests/{request_id}/items/{item_id}/answer",
+    response_class=HTMLResponse,
+)
+async def item_answer_save(
+    request: Request, ref: str, request_id: str, item_id: str
+) -> HTMLResponse:
+    """Writes `response` and NOTHING else. An answer is often a note rather
+    than a delivery, so the status/received_on pair stays where it was until
+    somebody presses Mark received."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    item = _owned_item(conn, org, request_id, item_id)
+    spec = rfi_answer_form(item)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = f"/accounts/{ref}/requests/{request_id}/items/{item_id}/answer"
+    refused = _save(
+        request, org, spec, action, raw,
+        lambda values: rfi_repo.update_item(conn, item_id, response=values["response"]),
+    )
+    return refused or _items_panel(request, org, request_id, oob=True)
+
+
 def _item_display_cell(
     request: Request, ref: str, request_id: str, item_id: str, key: str
 ) -> HTMLResponse:
@@ -448,13 +511,14 @@ def _item_display_cell(
     existing = rfi_repo.get_item(conn, item_id)
     value = initial_text(field, getattr(existing, key, None))
     action = _item_cell_action(ref, request_id, item_id, key)
-    extra_class = ""
     suffix = ""
     if key == "due_on":
-        extra_class = "num"
         suffix = _item_due_suffix(existing, rfi_repo.get_request(conn, request_id))
     return HTMLResponse(
-        render_cell_display(request, field, value, action, extra_class=extra_class, suffix=suffix)
+        render_cell_display(
+            request, field, value, action,
+            extra_class=_ITEM_CELL_CLASS.get(key, ""), suffix=suffix,
+        )
     )
 
 
@@ -466,9 +530,11 @@ def _item_editor_cell(
     existing = rfi_repo.get_item(_conn(request), item_id)
     value = typed if typed is not None else initial_text(field, getattr(existing, key, None))
     action = _item_cell_action(ref, request_id, item_id, key)
-    extra_class = "num" if key == "due_on" else ""
     return HTMLResponse(
-        render_cell(request, field, value, action, error=error, extra_class=extra_class)
+        render_cell(
+            request, field, value, action, error=error,
+            extra_class=_ITEM_CELL_CLASS.get(key, ""),
+        )
     )
 
 

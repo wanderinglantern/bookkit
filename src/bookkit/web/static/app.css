@@ -1017,6 +1017,52 @@ table.rows tr:hover td {
   background: var(--hover);
 }
 
+/* A table whose widest column is PROSE. `table.rows` is width: max-content so
+   a genuinely wide table (a tower, a schedule) can scroll rather than crush its
+   own columns — but an underwriting question is a sentence, and max-content
+   sizes a sentence to its full unwrapped length. On the request items table
+   that pushed Status, Response and "Mark received" past the panel's right edge,
+   behind a scrollbar macOS does not draw until you scroll: the controls were
+   live, reachable by keyboard, and invisible (Grant, 2026-08-19).
+
+   .rows-fit says this table fits its panel instead. Auto layout gives every
+   short column its content width and hands the slack to .prose, which wraps.
+   Nothing overflows, so the header-rule problem that width: max-content was
+   introduced to fix cannot arise here. */
+table.rows.rows-fit {
+  width: 100%;
+  table-layout: auto;
+}
+
+/* Prose wraps and takes the slack; the cell keeps its own click target. The
+   rule lives on the inner span because that is what carries the text — the
+   dashed editable underline should hug the sentence, not the column. */
+/* Two row actions sit here (Answer, Mark received); keep them on one line so
+   the column's width is the pair, not whichever happened to wrap. */
+.row-actions-cell {
+  white-space: nowrap;
+}
+
+.row-actions-cell .row-action-btn + .row-action-btn {
+  margin-left: 0.75rem;
+}
+
+table.rows td.prose {
+  /* No min-width. A floor looks like it protects the prose column and in fact
+     sets the table's own minimum: two prose columns at 14rem could not fit an
+     844px panel, and the table went back to overflowing — the exact bug this
+     rule exists to remove. Auto layout apportions what is left after the short
+     columns take their content width, and at a genuinely narrow window the
+     min-content widths take over and .table-scroll scrolls, which is the
+     designed fallback rather than a failure. */
+  white-space: normal;
+}
+
+table.rows td.prose .is-editable {
+  display: inline;
+  white-space: normal;
+}
+
 table.rows td.num,
 table.rows td.mono {
   font-family: var(--mono);
@@ -1174,6 +1220,9 @@ table.rows tr.is-waived td {
   display: block;
   font-size: var(--hint-size);
   color: var(--muted);
+  /* a date is one token: "req: 2026-" / "09-15" over two lines reads as two
+     half-dates, which is worse than the column being a little wider */
+  white-space: nowrap;
 }
 
 .back-link {
