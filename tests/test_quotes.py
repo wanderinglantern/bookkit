@@ -52,10 +52,11 @@ def _quote(
     market_id: str,
     placement_id: str,
     expires_on: str | None,
+    sent_on: str = "2026-07-01",
     **fields: object,
 ):
     sub = submissions.create(
-        conn, market_id, "2026-07-01", placement_id=placement_id, **fields
+        conn, market_id, sent_on, placement_id=placement_id, **fields
     )
     return submissions.update(
         conn,
@@ -791,9 +792,12 @@ def test_the_chase_queue_leads_with_the_soonest_expiry(
     queue is worked top-down, so an ordering nothing pins is an ordering that
     can silently put the lapsed quote at the bottom."""
     _, market, placement = _book(conn)
-    late = _quote(conn, market, placement, _iso(90))
-    lapsed = _quote(conn, market, placement, _iso(-10))
-    soon = _quote(conn, market, placement, _iso(3))
+    # sent dates deliberately disagree with expiry dates, and insertion order
+    # disagrees with both: an ordering that only LOOKS right because SQLite's
+    # sorter is stable over the index scan is not an ordering anything holds
+    late = _quote(conn, market, placement, _iso(90), sent_on="2026-06-01")
+    lapsed = _quote(conn, market, placement, _iso(-10), sent_on="2026-07-15")
+    soon = _quote(conn, market, placement, _iso(3), sent_on="2026-06-20")
     order = [q.submission.id for q in quotes_svc.expiring(conn, TODAY, days=120)]
     assert order == [lapsed.id, soon.id, late.id]
 
@@ -1058,3 +1062,41 @@ def test_the_web_tab_tells_an_empty_pipeline_how_a_quote_gets_recorded(
         body = client.get(f"/accounts/{org.ref}/pipeline").text
     assert "no quotes in hand" in body
     assert "market-response form" in body
+
+
+async def test_e_on_an_empty_pipeline_table_refuses_out_loud(
+    snapshot_db: Path,
+) -> None:
+    """A REFUSAL SAYS SOMETHING (CLAUDE.md). `e` on the subjectivities table
+    with nothing selected returned in silence — no modal, no message, no
+    change, which reads as a broken app — while `a` on the same table said so
+    correctly. The submissions table beside it had the same silence, so both
+    are fixed: an account with no submissions is the commonest way to get
+    here."""
+    from bookkit.tui.app import BookkitApp
+    from bookkit.tui.widgets.tables import ListTable
+
+    conn = db.connect(snapshot_db)
+    org = orgs.create(conn, name="Quiet Holdings", kind="client")
+    conn.close()
+
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=(140, 45), notifications=True) as pilot:
+        await pilot.pause()
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("6")
+        await pilot.pause()
+        for table_id in ("pipeline-subjs", "pipeline-subs"):
+            table = app.screen.query_one(f"#{table_id}", ListTable)
+            assert table.row_count == 0
+            table.focus()
+            await pilot.pause()
+            app.clear_notifications()
+            await pilot.press("e")
+            await pilot.pause()
+            messages = [str(n.message) for n in app._notifications]
+            assert messages, f"e on #{table_id} did nothing, silently"
+            assert any(
+                w in m.lower() for m in messages for w in ("press", "tab", "add")
+            ), f"e on #{table_id} said {messages!r}, which is not a next step"
