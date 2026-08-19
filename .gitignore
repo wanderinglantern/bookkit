@@ -25,3 +25,6 @@ bookkit-wheelhouse-macos.zip
 
 # subagent-driven-development scratch (ledger, briefs, review packages)
 .superpowers/
+
+# browser-automation output from verification runs — regenerates, never reviewed
+.playwright-mcp/
