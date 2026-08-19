@@ -1958,3 +1958,133 @@ table.rows tr.is-waived td {
     padding-top: 0.75rem;
   }
 }
+
+
+/* --- the tower panel (account/_tower_panel.html) ---------------------------
+   Geometry arrives as percentages from bookkit.web.tower; nothing here
+   recomputes it, and no string here is composed — every label is one
+   towerkit's renderer chose.
+
+   The chart height is declared ONCE, as a custom property, because the
+   label-drop decisions were made against that exact number server-side. If
+   this and bookkit.web.tower.CHART_HEIGHT_PX drift, every drop decision is
+   made against a height the browser is not using and nothing anywhere fails;
+   tests/test_web_tower.py holds them together. */
+.tower {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 1rem 0 1.5rem;
+}
+
+.tower-groups {
+  position: relative;
+  height: 1rem;
+}
+
+.tower-group {
+  position: absolute;
+  bottom: 0;
+  font-size: var(--hint-size);
+  color: var(--muted);
+  text-align: center;
+  border-bottom: 1px solid var(--hairline);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tower-chart {
+  --tower-chart-height: 240px;
+  position: relative;
+  height: var(--tower-chart-height);
+  border-bottom: 1px solid var(--ink);
+  background: var(--paper);
+}
+
+/* A reference line is the only y-scale there is: the vertical scale is
+   deliberately non-linear (gamma-compressed), so no axis is drawn and the
+   caveat below says so. */
+.tower-refline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--grid);
+  pointer-events: none;
+}
+
+/* BELOW its line, not above it. The topmost reference line sits at the very
+   top of the chart, and a label above that one is drawn outside the box and
+   clipped — the one figure a reader most wants (the top of the tower) was the
+   one cut in half. */
+.tower-refline span {
+  position: absolute;
+  right: 0;
+  top: 0.1em;
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--hint-size);
+  color: var(--muted);
+  background: var(--paper);
+  padding-left: 0.25rem;
+}
+
+.tower-layer {
+  position: absolute;
+  border: 1px solid var(--border);
+  pointer-events: none;
+}
+
+/* Dashed for a layer nobody has bound yet — the same treatment towerkit's own
+   renderer gives it, so the two drawings read alike. */
+.tower-layer.is-pending {
+  border-style: dashed;
+}
+
+.tower-block {
+  position: absolute;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.05rem;
+  padding: 0 0.25rem;
+  background: var(--grid);
+  border: 1px solid var(--border);
+}
+
+/* Unplaced capacity is HATCHED, not merely paler: colour alone is not a
+   signal in this app, and "nobody is on this layer" is the fact a reader most
+   needs to catch at a glance. */
+.tower-block.is-unplaced {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--stone),
+    var(--stone) 4px,
+    var(--unplaced) 4px,
+    var(--unplaced) 5px
+  );
+}
+
+.tower-line {
+  font-size: var(--hint-size);
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tower-retentions {
+  display: flex;
+  gap: 1rem;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+/* Rendered OUTSIDE the chart, never inside it: the chart clips, and a caveat
+   that can be clipped is a caveat that can be missing from the one drawing
+   that needed it. */
+.tower-caveat {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  font-style: italic;
+}

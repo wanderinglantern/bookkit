@@ -1,0 +1,68 @@
+{# One program's tower.
+
+   EVERY STRING HERE CAME OFF THE RENDERER. bookkit composes none of its own:
+   a second renderer describing the same program is exactly what the agreement
+   rule (spec D2.1) forbids, and the export is the copy that reaches a client.
+   Geometry is percentages, already converted by bookkit.web.tower — nothing
+   below multiplies, divides or flips anything.
+
+   The chart's height is CSS (--tower-chart-height) and MUST match
+   bookkit.web.tower.CHART_HEIGHT_PX, which is the height the renderer made its
+   label-drop decisions against; tests/test_web_tower.py holds the two
+   together.
+
+   No y-axis, ever: the vertical scale is deliberately compressed so a $2M
+   primary and a $50M excess can share one picture, and an axis would invite
+   measuring off it. The caveat says so instead, and renders OUTSIDE the chart
+   because the chart clips. #}
+<section class="tower" aria-label="Tower — {{ caption }}">
+  {% if tower.groups %}
+    <div class="tower-groups">
+      {% for group in tower.groups %}
+        <span class="tower-group"
+              style="left:{{ group.left }}%;width:{{ group.width }}%">{{ group.label }}</span>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <div class="tower-chart">
+    {% for line in tower.ref_lines %}
+      <div class="tower-refline" style="bottom:{{ line.bottom }}%"><span>{{ line.label }}</span></div>
+    {% endfor %}
+
+    {# Outlines first, so a participant block paints inside its layer. #}
+    {% for layer in tower.layers %}
+      {% for rect in layer.outlines %}
+        <div class="tower-layer{% if layer.pending %} is-pending{% endif %}"
+             style="left:{{ rect.left }}%;bottom:{{ rect.bottom }}%;width:{{ rect.width }}%;height:{{ rect.height }}%"
+             title="{{ layer.name }} — {{ layer.terms }}"></div>
+      {% endfor %}
+    {% endfor %}
+
+    {% for block in tower.blocks %}
+      {% for rect in block.rects %}
+        <div class="tower-block{% if block.unplaced %} is-unplaced{% endif %}"
+             style="left:{{ rect.left }}%;bottom:{{ rect.bottom }}%;width:{{ rect.width }}%;height:{{ rect.height }}%">
+          {# The label rides the FIRST rect only. A stepped block is one seat
+             drawn in several pieces; printing its name on each piece would
+             read as several carriers. #}
+          {% if loop.first %}
+            {% for line in block.lines %}<span class="tower-line">{{ line }}</span>{% endfor %}
+          {% endif %}
+        </div>
+      {% endfor %}
+    {% endfor %}
+  </div>
+
+  {% if tower.retentions %}
+    <div class="tower-retentions">
+      {% for retention in tower.retentions %}
+        <span class="tower-retention">{{ retention.label }}</span>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if tower.caveat %}
+    <p class="tower-caveat">{{ tower.caveat }}</p>
+  {% endif %}
+</section>

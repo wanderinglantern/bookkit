@@ -27,6 +27,12 @@
   </div>
   <div class="form-host"></div>
 
+  {% if tower %}
+    {% with caption = placement.program_name ~ " · " ~ placement.ref %}
+      {% include "account/_tower_panel.html" %}
+    {% endwith %}
+  {% endif %}
+
   {% if layers %}
     <div class="table-scroll">
       <table class="rows rows-fit">

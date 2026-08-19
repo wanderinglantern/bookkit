@@ -17,7 +17,8 @@
 
   {% if programs %}
     {% for program in programs %}
-      {% with placement = program.placement, layers = program.layers, linked = program.linked %}
+      {% with placement = program.placement, layers = program.layers,
+              linked = program.linked, tower = program.tower %}
         {% include "account/_layers_panel.html" %}
       {% endwith %}
     {% endfor %}

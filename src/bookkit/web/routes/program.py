@@ -97,6 +97,30 @@ def _layer_row(
     }
 
 
+def _tower_for(placement: Any) -> dict[str, Any] | None:
+    """The drawn tower for a placement's linked file, or None.
+
+    None and an empty tower are different facts — "no program file" against "a
+    program with nothing in it" — and the template says different things about
+    them. A file that will not load is also None rather than an exception: the
+    layers table above it still renders from the projection, and a tab that
+    500s because one drawing failed is worse than a tab with one drawing
+    missing.
+    """
+    if not placement.program_path:
+        return None
+    from pathlib import Path
+
+    from towerkit.model import load_program
+
+    from ..tower import panel
+
+    try:
+        return panel(load_program(Path(placement.program_path)))
+    except Exception:
+        return None
+
+
 def _programs(request: Request, org: Any) -> list[dict[str, Any]]:
     """Every placement on the account, each with its layers.
 
@@ -118,6 +142,7 @@ def _programs(request: Request, org: Any) -> list[dict[str, Any]]:
                 "layers": [
                     _layer_row(request, org.ref, placement.id, layer) for layer in layers
                 ],
+                "tower": _tower_for(placement),
             }
         )
     return out
