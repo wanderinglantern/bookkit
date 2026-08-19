@@ -18,6 +18,10 @@
             hx-target="#requests-panel .form-host" hx-swap="innerHTML">+ Add request</button>
   </div>
   <div class="form-host"></div>
+  {# A refused destructive write lands HERE, not in a 4xx the browser drops on
+     the floor. Same .form-error class a refused save uses — one look for a
+     refusal, wherever it came from. #}
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
   {% if request_rows %}
     <div class="table-scroll">
       <table class="rows">
@@ -45,6 +49,11 @@
               <td>
                 <a class="row-action-btn"
                    href="/accounts/{{ header.org.ref }}/requests/{{ r.request.id }}">Items</a>
+                <button type="button" class="row-action-btn"
+                        title="Remove a request filed in error — its items go with it"
+                        hx-get="/accounts/{{ header.org.ref }}/requests/{{ r.request.id }}/remove"
+                        hx-target="#requests-panel .form-host"
+                        hx-swap="innerHTML">Remove</button>
                 <button type="button" class="row-action-btn"
                         hx-get="/accounts/{{ header.org.ref }}/requests/{{ r.request.id }}/edit"
                         hx-target="#requests-panel .form-host" hx-swap="innerHTML">Edit</button>

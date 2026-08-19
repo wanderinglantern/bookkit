@@ -23,6 +23,7 @@
             hx-target="#items-panel .form-host" hx-swap="innerHTML">+ Add item</button>
   </div>
   <div class="form-host"></div>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
   {% if item_rows %}
     <div class="table-scroll">
       <table class="rows rows-fit">
@@ -66,6 +67,13 @@
                           hx-post="/accounts/{{ header.org.ref }}/requests/{{ rfi_request.id }}/items/{{ row.id }}/received"
                           hx-target="#items-panel" hx-swap="outerHTML">Mark received</button>
                 {% endif %}
+                {# For an ask filed in ERROR. An ask that is simply not coming
+                   is WAIVED, which keeps the row and says so — deleting that
+                   one would lose a fact about the chase. #}
+                <button type="button" class="row-action-btn"
+                        title="Remove an item filed in error — waive it instead if it is simply not coming"
+                        hx-post="/accounts/{{ header.org.ref }}/requests/{{ rfi_request.id }}/items/{{ row.id }}/remove"
+                        hx-target="#items-panel" hx-swap="outerHTML">Remove</button>
               </td>
             </tr>
           {% endfor %}
