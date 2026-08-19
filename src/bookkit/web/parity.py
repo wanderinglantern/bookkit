@@ -282,6 +282,47 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "tui": "via o -> towerkit's editor",
         "mcp": "DEFERRED — structure from an assistant is undecided",
     },
+    # --- phase 4: terms and order ---
+    "add_retention": {
+        "web": "the terms strip: + retention, in row (POST .../retentions)",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
+    "edit_retention": {
+        "web": "the terms strip: chip opens the in-row form "
+        "(POST .../retentions/{index})",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
+    "remove_retention": {
+        "web": "the terms strip: remove, confirm in place "
+        "(POST .../retentions/{index}/remove)",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
+    "add_sublimit": {
+        "web": "the terms strip: + sublimit, in row (POST .../sublimits)",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
+    "edit_sublimit": {
+        "web": "the terms strip: chip opens the in-row form "
+        "(POST .../sublimits/{index})",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
+    "remove_sublimit": {
+        "web": "the terms strip: remove, confirm in place "
+        "(POST .../sublimits/{index}/remove)",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
+    "move_line": {
+        "web": "the lines strip: per-chip left/right "
+        "(POST .../lines/{line_id}/move)",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
 }
 
 
@@ -318,26 +359,24 @@ TOWERKIT_EDIT_OPS: dict[str, str] = {
     "set_follows_underlying": "sync.set_follows_underlying (phase 3); see SYNC_VERBS",
     # deferred BY NAME, with the reason
     "set_line_group": (
-        "DEFERRED — line grouping is diagram cosmetics (Line.group is not "
-        "even projected, see NOTES.md); joins the Towers page work (phase 4)"
+        "DEFERRED BY NAME — line grouping is diagram cosmetics (Line.group is "
+        "not even projected, see NOTES.md); revisit with evidence of demand"
     ),
-    "move_line": (
-        "DEFERRED — column order in the drawing; joins the Towers page work "
-        "(phase 4) where the drawing is the point"
-    ),
+    "move_line": "sync.move_line (phase 4) — the lines strip's per-chip arrows",
     "restack": (
-        "DEFERRED — a bulk re-seat of every layer is a wide blast radius for "
-        "one click; needs its own confirm design showing the before/after"
+        "UNREACHABLE through the guarded seam, by proof rather than deferral "
+        "(phase 4): write_through only accepts files that already projected — "
+        "i.e. validated — and a valid tower has no gaps or overlaps for "
+        "restack to heal, so through bookkit it is a no-op on every reachable "
+        "input. restack is towerkit's DRAFT healer and belongs to its editor; "
+        "a web button that provably does nothing would be dead chrome (D4)."
     ),
-    "add_retention": (
-        "DEFERRED — retentions render in the tower and the SOI; their editor "
-        "is phase 4 (the drawing surface), not a table row"
-    ),
-    "edit_retention": "DEFERRED — with add_retention (phase 4)",
-    "remove_retention": "DEFERRED — with add_retention (phase 4)",
-    "add_sublimit": "DEFERRED — with add_retention (phase 4)",
-    "edit_sublimit": "DEFERRED — with add_retention (phase 4)",
-    "remove_sublimit": "DEFERRED — with add_retention (phase 4)",
+    "add_retention": "sync.add_retention (phase 4); see SYNC_VERBS",
+    "edit_retention": "sync.edit_retention (phase 4); see SYNC_VERBS",
+    "remove_retention": "sync.remove_retention (phase 4); see SYNC_VERBS",
+    "add_sublimit": "sync.add_sublimit (phase 4); see SYNC_VERBS",
+    "edit_sublimit": "sync.edit_sublimit (phase 4); see SYNC_VERBS",
+    "remove_sublimit": "sync.remove_sublimit (phase 4); see SYNC_VERBS",
     # branch-only (feat/mcp-hardening): not on towerkit main — do not depend;
     # re-decide each when the branch merges
     "set_statutory": (
