@@ -960,17 +960,198 @@ def test_undo_after_an_mcp_write_reverts_the_write_not_the_provenance(server_db)
 # -- batching: one call, one undo unit ----------------------------------------
 
 
-def test_every_write_tool_returns_a_batch_ref(server_db):
+# The roster below is what makes this section's name true. It used to check
+# TWO tools while claiming to check every one of them, which is worse than no
+# test: an auditor asking "is every write batched?" got a green tick from an
+# assertion that had never seen nine of them. The roster is derived from
+# _register_write_tools itself, so an eleventh write tool fails
+# test_the_write_tool_roster_is_accounted_for on the commit that adds it, not
+# whenever someone next reads this file.
+
+
+def _registered_write_tools(tmp_path) -> set[str]:
+    """Every tool _register_write_tools registers — read off the registrar, so
+    the list cannot go stale."""
+    from mcp.server.mcpserver import MCPServer
+
+    probe = MCPServer("roster-probe")
+    mcpserver._register_write_tools(probe, db.connect(tmp_path / "roster.db"))
+    return {t.name for t in probe._tool_manager.list_tools()}
+
+
+# Registered on the rw connection but read-only: they need the writable
+# connection for nothing but proximity to the verbs they serve refs to.
+_NON_MUTATING = {"recent_activity", "program_layers", "list_batches"}
+
+# The two reverts, deliberately unbatched: a revert's own writes carry
+# note='revert' and NO batch_id, so a revert cannot itself be batch-reverted
+# (services/batches.py:326). program_revert_file DOES return a "batch" key,
+# but it is the ref of the batch being PUT BACK — asserting on it would be
+# the test agreeing with itself.
+_UNBATCHED_BY_DESIGN = {"revert_batch", "program_revert_file"}
+
+
+def _acme(rw):
+    return orgs.create(rw, name="Acme", kind="client")
+
+
+def _a_task(rw):
+    org = _acme(rw)
+    return org, tasks_repo.create(rw, "chase the quote", org_id=org.id)
+
+
+def _a_request_item(rw):
+    _acme(rw)
+    out = mcpserver._request_create(rw, "Acme", "Sompo questions", ["loss runs"])
+    items = mcpserver._request_items(rw, out["request_ref"])
+    return items["items"][0]["item_ref"]
+
+
+def _an_assignment(rw):
+    _acme(rw)
+    mcpserver._member_create(rw, "Dana Okafor")
+    return mcpserver._team_assign(rw, "Dana Okafor", client="Acme")
+
+
+def _linked_placement(rw, tmp_path):
+    """A placement backed by a real towerkit program file — what the four
+    program_* writes need. Same shape as tests/test_mcp_program.py's fixture."""
+    from test_linking_flow import make_program, write_program
+
+    from bookkit import sync
+
+    org = orgs.create(rw, kind="client", name="Test Client, Inc.", status="active")
+    path = write_program(
+        tmp_path / "p" / "test.json",
+        make_program("Test Client, Inc.", "2026-01-01", "2027-01-01", tbd_line=True),
+    )
+    assert sync.confirm_link(rw, path, org.id).ok
+    return placements.by_program_path(rw, str(path))
+
+
+# tool name -> a call that must come back with a fresh batch ref. Each builds
+# its own prerequisites: one fresh database per case, so order is not a
+# hidden input.
+_BATCHED_WRITES = {
+    "log_activity": lambda rw, tmp: (
+        _acme(rw), mcpserver._log_activity(rw, "Acme", "a note"))[1],
+    "activity_delete": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._activity_delete(
+            rw, mcpserver._log_activity(rw, "Acme", "a note")["interaction_ref"]),
+    )[1],
+    "task_create": lambda rw, tmp: (
+        _acme(rw), mcpserver._task_create(rw, "chase the quote", client="Acme"))[1],
+    "task_complete": lambda rw, tmp: mcpserver._task_complete(
+        rw, _a_task(rw)[1].id),
+    "task_reopen": lambda rw, tmp: mcpserver._task_reopen(
+        rw, mcpserver._task_complete(rw, _a_task(rw)[1].id)["task_ref"]),
+    "client_create": lambda rw, tmp: mcpserver._client_create(
+        rw, "Zephyr Logistics"),
+    "enrich_field": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._enrich_field(rw, "Acme", "website", "https://acme.example"),
+    )[1],
+    "edit_field": lambda rw, tmp: mcpserver._edit_field(
+        rw, "task", _a_task(rw)[1].id, "title",
+        value="chase the binder", expecting="chase the quote"),
+    "contact_add": lambda rw, tmp: (
+        _acme(rw), mcpserver._contact_add(rw, "Acme", "Ann", "Lee"))[1],
+    "contact_remove": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._contact_add(rw, "Acme", "Ann", "Lee"),
+        mcpserver._contact_remove(rw, "Acme", "Ann Lee"),
+    )[2],
+    "opportunity_create": lambda rw, tmp: (
+        _acme(rw), mcpserver._opportunity_create(rw, "Acme", "Cyber placement"))[1],
+    "opportunity_stage": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._opportunity_stage(
+            rw,
+            mcpserver._opportunity_create(
+                rw, "Acme", "Cyber placement")["opportunity_ref"],
+            "qualified"),
+    )[1],
+    "project_create": lambda rw, tmp: (
+        _acme(rw), mcpserver._project_create(rw, "Acme", "Warehouse build"))[1],
+    "need_add": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._need_add(
+            rw,
+            mcpserver._project_create(
+                rw, "Acme", "Warehouse build")["project_ref"],
+            "GL", "2026-12-01"),
+    )[1],
+    "member_create": lambda rw, tmp: mcpserver._member_create(rw, "Dana Okafor"),
+    "team_assign": lambda rw, tmp: _an_assignment(rw),
+    "team_unassign": lambda rw, tmp: mcpserver._team_unassign(
+        rw, _an_assignment(rw)["assignment_id"]),
+    "member_deactivate": lambda rw, tmp: (
+        mcpserver._member_create(rw, "Dana Okafor"),
+        mcpserver._member_deactivate(rw, "Dana Okafor"),
+    )[1],
+    "member_reactivate": lambda rw, tmp: (
+        mcpserver._member_create(rw, "Dana Okafor"),
+        mcpserver._member_deactivate(rw, "Dana Okafor"),
+        mcpserver._member_reactivate(rw, "Dana Okafor"),
+    )[2],
+    "request_create": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._request_create(rw, "Acme", "Sompo questions", ["loss runs"]),
+    )[1],
+    "request_item_received": lambda rw, tmp: mcpserver._request_item_received(
+        rw, _a_request_item(rw)),
+    "request_item_waive": lambda rw, tmp: mcpserver._request_item_waive(
+        rw, _a_request_item(rw)),
+    "program_layer_add": lambda rw, tmp: mcpserver._program_layer_add(
+        rw, _linked_placement(rw, tmp).ref, "Excess GL", line_ids=["gl"],
+        attach="2m", limit="5m"),
+    "program_bind": lambda rw, tmp: mcpserver._program_bind(
+        # primary-cy is the unsigned layer in the fixture program; primary-gl
+        # is already 100% Zurich and any share on it over-signs
+        rw, _linked_placement(rw, tmp).ref, "primary-cy", "Chubb", "25%"),
+    "program_layer_edit": lambda rw, tmp: mcpserver._program_layer_edit(
+        rw, _linked_placement(rw, tmp).ref, "primary-gl", policy_number="GL-1"),
+    "program_edit": lambda rw, tmp: mcpserver._program_edit(
+        rw, _linked_placement(rw, tmp).ref, name="Renamed Program"),
+}
+
+
+def test_the_write_tool_roster_is_accounted_for(tmp_path):
+    """Every tool _register_write_tools registers is either exercised below or
+    named as a deliberate exception. This is the assertion that makes the next
+    test's name true — and the one that fails when a write tool is added with
+    no batch-ref coverage."""
+    accounted = set(_BATCHED_WRITES) | _NON_MUTATING | _UNBATCHED_BY_DESIGN
+    registered = _registered_write_tools(tmp_path)
+    assert registered - accounted == set(), "write tool with no batch-ref case"
+    assert accounted - registered == set(), "stale entry: no such write tool"
+
+
+@pytest.mark.parametrize("tool", sorted(_BATCHED_WRITES))
+def test_every_write_tool_returns_a_batch_ref(tool, server_db, tmp_path):
+    """One MCP call is one undo unit, on all twenty-six of them. This checked
+    exactly two — _log_activity and _task_create — under this name; the other
+    write tools were batched, but nothing held them there."""
+    rw = db.connect(server_db)
+    out = _BATCHED_WRITES[tool](rw, tmp_path)
+    assert isinstance(out, dict), f"{tool} returned no dict"
+    assert "batch" in out, f"{tool} returned no batch ref"
+    assert out["batch"].startswith("MCP-"), f"{tool} batch ref: {out['batch']!r}"
+    # a real row, stamped by this surface, not a string that merely looks right
+    batch = batches_repo.get_by_ref(rw, out["batch"])
+    assert batch.source == "mcp"
+    assert batch.tool == tool
+
+
+def test_two_calls_are_two_undo_units(server_db):
     conn = db.connect(server_db)
     orgs.create(conn, name="Acme", kind="client")
     conn.close()
     rw = db.connect(server_db)
 
     logged = mcpserver._log_activity(rw, "Acme", "a note")
-    assert logged["batch"].startswith("MCP-")
-
     made = mcpserver._task_create(rw, "chase the quote", client="Acme")
-    assert made["batch"].startswith("MCP-")
     assert made["batch"] != logged["batch"]
 
 
