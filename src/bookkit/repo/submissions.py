@@ -219,16 +219,15 @@ def quoted_rows_for_org(conn: sqlite3.Connection, org_id: str) -> list[sqlite3.R
     ).fetchall()
 
 
-def expiring_quote_rows(conn: sqlite3.Connection, horizon: str) -> list[sqlite3.Row]:
-    """Every quote in hand across the book whose expiry falls on or before the
-    horizon — or is already past, so a LAPSED quote never falls off the queue.
+def _book_quote_sql(expiry_clause: str, order_by: str) -> str:
+    """The book-wide quote queue's one SELECT, shared by the dated queue and
+    the undated tail beside it.
 
-    Undated quotes are excluded, exactly as rfi.outstanding_rows excludes an
-    undated request: a quote nobody gave us an expiry for is not yet a clock,
-    and inventing one would be guessing at the number the whole feature exists
-    to be honest about."""
-    return conn.execute(
-        f"""
+    One statement rather than two near-copies: the two differ ONLY in which
+    side of `quote_expires_on IS NULL` they take, and a second copy of nine
+    joins is a place for the aliveness rules to drift apart.
+    """
+    return f"""
         SELECT s.*, m.name AS market_name,
                COALESCE(p.org_id, o.org_id) AS org_id,
                COALESCE(pc.name, oc.name)   AS org_name,
@@ -247,12 +246,56 @@ def expiring_quote_rows(conn: sqlite3.Connection, horizon: str) -> list[sqlite3.
         LEFT JOIN org pc ON pc.id = p.org_id AND {base.alive('pc')}
         LEFT JOIN org oc ON oc.id = o.org_id AND {base.alive('oc')}
         WHERE s.status = 'quoted' AND {base.alive('s')}
-          AND s.quote_expires_on IS NOT NULL
-          AND s.quote_expires_on <= ?
+          AND {expiry_clause}
           AND COALESCE(p.org_id, o.org_id) IS NOT NULL
-        ORDER BY s.quote_expires_on
-        """,
+        ORDER BY {order_by}
+    """
+
+
+def expiring_quote_rows(conn: sqlite3.Connection, horizon: str) -> list[sqlite3.Row]:
+    """Every quote in hand across the book whose expiry falls on or before the
+    horizon — or is already past, so a LAPSED quote never falls off the queue.
+
+    Soonest expiry first: the queue is read top-down and the thing lapsing
+    first is the thing to do first.
+
+    Undated quotes are not here, but they are NOT unsurfaced — see
+    `undated_quote_rows` below, which the same leaf renders as its tail. The
+    rule is only that no date is invented for them; being invisible is a
+    different decision from being undated, and this branch once made the
+    second by accident of the first.
+
+    NB the precedent is not exact: `rfi.outstanding_rows` also drops undated
+    rows, but only AFTER a fallback — `MIN(COALESCE(i.due_on, r.due_on))`
+    lets an undated item inherit its request's date, so what it excludes is a
+    request with no date anywhere. A quote has no second date to fall back
+    to, so the same-shaped clause excludes strictly more, which is exactly
+    why the tail beside it has to exist."""
+    return conn.execute(
+        _book_quote_sql(
+            "s.quote_expires_on IS NOT NULL AND s.quote_expires_on <= ?",
+            "s.quote_expires_on",
+        ),
         (horizon,),
+    ).fetchall()
+
+
+def undated_quote_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every quote in hand across the book whose expiry NOBODY RECORDED.
+
+    The deliberate twin of `expiring_quote_rows`, and the difference is the
+    point. That one is a clock; this one is the absence of a clock, which is
+    its own piece of work: somebody has to go and ask the underwriter when
+    these terms die. A dated quote 200 days out is not in the queue either,
+    but it will arrive there on its own — an undated one never will, so
+    leaving it to arrive means leaving it to lapse unseen. Thin data
+    correlates with sloppy handling, so these are over-represented among the
+    quotes that actually go away.
+
+    No window applies: there is no date to compare a window to. Oldest
+    submission first, so the one that has been unanswered longest leads."""
+    return conn.execute(
+        _book_quote_sql("s.quote_expires_on IS NULL", "s.sent_on, s.id")
     ).fetchall()
 
 

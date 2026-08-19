@@ -163,14 +163,37 @@ def expiring(
     already past, because an overdue item never falls off (CLAUDE.md).
 
     Soonest first, so a lapsed quote leads and the one lapsing on Friday
-    follows it. Quotes with no recorded expiry are absent on purpose: the repo
-    query says why.
+    follows it. Quotes with no recorded expiry are absent from THIS list on
+    purpose — they are not on a clock and no date is invented for them — but
+    they are not therefore invisible: `undated` below is the tail the same
+    surfaces render beside this queue.
     """
     today = today or date.today()
     horizon = (today + timedelta(days=days)).isoformat()
     return [
         _item(row, today, row["org_id"], row["org_name"] or "")
         for row in submissions.expiring_quote_rows(conn, horizon)
+    ]
+
+
+def undated(conn: sqlite3.Connection, today: date | None = None) -> list[QuoteItem]:
+    """Every quote in hand across the book that nobody gave an expiry.
+
+    The tail on `expiring`, and it exists because refusing to INVENT a date
+    and refusing to SHOW the item are two different decisions. This module
+    makes the first and not the second: no date is guessed here, the surfaces
+    render `expiry_word(None)` — "no expiry" — where a countdown would go,
+    and the work the reader is being handed is "go and ask the underwriter
+    when this dies", which is a real, doable thing.
+
+    A dated quote outside the window is absent too, but it arrives on its own
+    when its date comes round. An undated one never arrives, so it is exactly
+    the case that needs carrying rather than the one that can be left.
+    """
+    today = today or date.today()
+    return [
+        _item(row, today, row["org_id"], row["org_name"] or "")
+        for row in submissions.undated_quote_rows(conn)
     ]
 
 

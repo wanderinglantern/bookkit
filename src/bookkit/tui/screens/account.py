@@ -1813,26 +1813,43 @@ class AccountScreen(Screen):
             focused = self.focused
             if focused is not None and focused.id == "pipeline-subjs":
                 subj_key = self._selected_key("pipeline-subjs")
-                if subj_key:
-                    subj = submissions.get_subjectivity(conn, subj_key)
-                    self._push_form(
-                        ef.subjectivity_form(subj),
-                        lambda v: ef.apply_subjectivity(
-                            conn, v, subj.submission_id, subj
-                        ),
+                # A REFUSAL SAYS SOMETHING (CLAUDE.md): returning in silence
+                # from a key the hint line names reads as a broken app. `a`
+                # on this same table already says so; `e` did not.
+                if not subj_key:
+                    self.notify(
+                        "no subjectivity selected — press a to add one, or tab "
+                        "to the submissions table to pick a different quote",
+                        severity="warning",
                     )
+                    return
+                subj = submissions.get_subjectivity(conn, subj_key)
+                self._push_form(
+                    ef.subjectivity_form(subj),
+                    lambda v: ef.apply_subjectivity(
+                        conn, v, subj.submission_id, subj
+                    ),
+                )
             elif focused is not None and focused.id == "pipeline-subs":
                 key = self._selected_key("pipeline-subs")
-                if key:
-                    sub = submissions.get(conn, key)
+                if not key:
+                    # the sibling branch's silence, and the same fix: an empty
+                    # submissions table is the commonest way to press e here
+                    self.notify(
+                        "no submission selected — press s to send one to a "
+                        "market first",
+                        severity="warning",
+                    )
+                    return
+                sub = submissions.get(conn, key)
 
-                    def response_saved(values: dict) -> None:
-                        ef.apply_response(conn, sub.id, values)
-                        if values.get("status") == "bound":
-                            # bound → offer to put the market on a layer
-                            self._offer_bind_to_layer(sub.id)
+                def response_saved(values: dict) -> None:
+                    ef.apply_response(conn, sub.id, values)
+                    if values.get("status") == "bound":
+                        # bound → offer to put the market on a layer
+                        self._offer_bind_to_layer(sub.id)
 
-                    self._push_form(ef.response_form(sub, conn), response_saved)
+                self._push_form(ef.response_form(sub, conn), response_saved)
             else:
                 key = self._selected_key("pipeline-opps")
                 if key:

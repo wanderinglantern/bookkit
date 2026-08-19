@@ -13,6 +13,7 @@ named test was watched to fail, and the code restored.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -148,6 +149,107 @@ def test_an_up_to_date_book_is_not_snapshotted_on_every_open(tmp_path: Path) -> 
     db.connect(path).close()
     after = len(list((tmp_path / "backups").glob("*"))) if (tmp_path / "backups").exists() else 0
     assert after == before
+
+
+def _book_at_schema_11(path: Path) -> str:
+    """A book at the PREVIOUS schema version holding real rows — which is what
+    every one of Grant's databases is the first time it meets 012. Returns the
+    org name written into it."""
+    conn = db.connect(path, migrate=False)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_version"
+        " (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+    )
+    for version, sql_path in sorted(db.pending_migrations(conn))[:11]:
+        conn.executescript(sql_path.read_text())
+        conn.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+            (version, db.utc_now()),
+        )
+    org = orgs.create(conn, name="Atomic Industries", kind="client")
+    conn.close()
+    assert db.schema_version(db.connect(path, migrate=False)) == 11
+    return org.name
+
+
+def test_a_failed_snapshot_aborts_the_migration(tmp_path: Path) -> None:
+    """THE test the snapshot exists for, and the one thing nothing pinned.
+
+    A snapshot that cannot be written and a migration that runs anyway is
+    strictly worse than no snapshot at all: the user believes there is a
+    rollback and the schema has already changed under them. The behaviour was
+    correct — `snapshot_before_migrations` raises and `apply_migrations` never
+    runs — but wrapping the call in `try/except Exception: pass` left the whole
+    suite green, and this sits on the one choke point every surface passes
+    through (TUI, CLI, web, MCP all reach migrations via db.connect).
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    path = tmp_path / "book.db"
+    _book_at_schema_11(path)
+
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    os.chmod(backups, 0o500)          # readable, listable, NOT writable
+    try:
+        with pytest.raises(sqlite3.Error):
+            db.connect(path)
+    finally:
+        os.chmod(backups, 0o700)      # or tmp_path cannot be cleaned up
+
+    # the file is untouched: no half-migrated book behind a rollback that
+    # does not exist
+    conn = db.connect(path, migrate=False)
+    try:
+        assert db.schema_version(conn) == 11
+    finally:
+        conn.close()
+    assert not list(backups.glob("*.bak"))
+
+
+def test_the_snapshot_is_taken_before_the_migration_not_after(
+    tmp_path: Path,
+) -> None:
+    """A snapshot of the ALREADY-migrated file is not a rollback, it is a
+    second copy of the thing you wanted to undo. The existing test only asked
+    that a backup exist and contain the book's rows, both of which stay true
+    if the two calls swap order — so the order itself is pinned here, by the
+    schema version inside the copy."""
+    path = tmp_path / "book.db"
+    _book_at_schema_11(path)
+
+    conn = db.connect(path)
+    assert db.schema_version(conn) == 12
+    conn.close()
+
+    backups = sorted((tmp_path / "backups").glob("book.db.*.bak"))
+    assert backups, "no snapshot was taken before the pending migration"
+    copy = db.connect(backups[-1], migrate=False)
+    try:
+        assert db.schema_version(copy) == 11, (
+            "the snapshot was taken AFTER the migration — it cannot roll one back"
+        )
+    finally:
+        copy.close()
+
+
+def test_a_backup_that_fails_its_integrity_check_is_not_left_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A torn VACUUM INTO leaves a file that looks exactly like a good backup:
+    same directory, same timestamped name, same mode. The caller is told it
+    failed; the person who comes looking for a rollback three weeks later is
+    not. Absence is the only state that distinguishes it."""
+    path = tmp_path / "book.db"
+    conn = db.connect(path)
+    orgs.create(conn, name="Atomic Industries", kind="client")
+
+    monkeypatch.setattr(db, "integrity_check", lambda _conn: False)
+    dest = tmp_path / "backups" / "book.db.torn.bak"
+    with pytest.raises(RuntimeError, match="integrity check"):
+        db.backup(conn, dest)
+    conn.close()
+    assert not dest.exists(), "a corrupt backup was left where a good one goes"
 
 
 # --- the expiry boundary -----------------------------------------------------
@@ -614,3 +716,345 @@ def test_the_web_pipeline_tab_reads_the_expiry_in_words(
     assert '<div id="quotes-panel">' in body
     assert "Quotes in hand" in body
     assert "Subjectivities outstanding" in body
+
+
+# --- fix round 1: the undated quote, and the orderings nothing read ----------
+#
+# Refusing to INVENT an expiry is right and stays. Refusing to SHOW the item
+# is a second decision, and the first round made it by accident of the first:
+# an undated quote left submissions.outstanding() the moment its status
+# flipped, was excluded from quotes_svc.expiring by `IS NOT NULL`, and so
+# reached no leaf, no Today pane and nothing that counts. It appeared only if
+# somebody opened that one account's tab. That is the missing middle put back
+# for the case where the data is thinnest — and thin data correlates with
+# sloppy handling, so it is over-represented among the quotes that lapse.
+
+
+def test_an_undated_quote_is_surfaced_without_inventing_a_date(
+    conn: sqlite3.Connection,
+) -> None:
+    """Both halves at once: it is NOT on the dated queue (no date is guessed)
+    and it IS on a surface (no date is needed to say "go and ask")."""
+    _, market, placement = _book(conn)
+    _quote(conn, market, placement, None)
+    assert quotes_svc.expiring(conn, TODAY, days=120) == []
+    tail = quotes_svc.undated(conn, TODAY)
+    assert len(tail) == 1
+    assert tail[0].expires_on is None
+    assert tail[0].days_remaining is None
+    assert tail[0].expiry_word == "no expiry"
+    assert tail[0].expiry_state == quotes_svc.UNDATED
+
+
+def test_the_undated_tail_holds_only_undated_quotes(
+    conn: sqlite3.Connection,
+) -> None:
+    """A dated quote belongs to the clock queue, wherever its date falls —
+    including 200 days out, which arrives on its own. Nothing may reach both
+    lists, or the leaf double-counts."""
+    _, market, placement = _book(conn)
+    _quote(conn, market, placement, _iso(5))
+    _quote(conn, market, placement, _iso(200))
+    undated = _quote(conn, market, placement, None)
+    tail = quotes_svc.undated(conn, TODAY)
+    assert [q.submission.id for q in tail] == [undated.id]
+
+
+def test_the_undated_tail_is_quotes_only(conn: sqlite3.Connection) -> None:
+    """A submission still OUT has no expiry either, and it is not a quote —
+    it belongs to the past-SLA queue, whose clock is a different clock."""
+    _, market, placement = _book(conn)
+    submissions.create(conn, market, "2026-07-01", placement_id=placement)
+    for status in (SubmissionStatus.DECLINED, SubmissionStatus.BOUND):
+        sub = submissions.create(conn, market, "2026-07-01", placement_id=placement)
+        submissions.update(conn, sub.id, status=status.value)
+    assert quotes_svc.undated(conn, TODAY) == []
+
+
+def test_a_quote_expiring_on_the_last_day_of_the_window_is_in_the_queue(
+    conn: sqlite3.Connection,
+) -> None:
+    """M05: the horizon is inclusive. `<=` → `<` was green, because the suite
+    asserted 121 excluded and never 120 included — a quote expiring on exactly
+    the boundary day would have vanished from the queue in silence."""
+    _, market, placement = _book(conn)
+    _quote(conn, market, placement, _iso(120))
+    queue = quotes_svc.expiring(conn, TODAY, days=120)
+    assert len(queue) == 1
+    assert queue[0].days_remaining == 120
+
+
+def test_the_chase_queue_leads_with_the_soonest_expiry(
+    conn: sqlite3.Connection,
+) -> None:
+    """M07: the docstring promises soonest-first and nothing read it. The
+    queue is worked top-down, so an ordering nothing pins is an ordering that
+    can silently put the lapsed quote at the bottom."""
+    _, market, placement = _book(conn)
+    late = _quote(conn, market, placement, _iso(90))
+    lapsed = _quote(conn, market, placement, _iso(-10))
+    soon = _quote(conn, market, placement, _iso(3))
+    order = [q.submission.id for q in quotes_svc.expiring(conn, TODAY, days=120)]
+    assert order == [lapsed.id, soon.id, late.id]
+
+
+def test_an_account_lists_dated_quotes_before_undated_ones(
+    conn: sqlite3.Connection,
+) -> None:
+    """M09: `for_org`'s documented undated-last ordering, read by nothing.
+    Undated last is the point — a quote on a clock outranks one that is only
+    a question."""
+    client, market, placement = _book(conn)
+    nodate = _quote(conn, market, placement, None)
+    later = _quote(conn, market, placement, _iso(40))
+    sooner = _quote(conn, market, placement, _iso(2))
+    order = [q.submission.id for q in quotes_svc.for_org(conn, client, today=TODAY)]
+    assert order == [sooner.id, later.id, nodate.id]
+
+
+def test_subjectivities_list_outstanding_first(conn: sqlite3.Connection) -> None:
+    """M13: outstanding-first, whatever the dates say — the ones being chased
+    sit at the top. Documented, unread, and a met subjectivity with an early
+    due date would otherwise head the list of work to do."""
+    _, market, placement = _book(conn)
+    quote = _quote(conn, market, placement, _iso(10))
+    met = submissions.add_subjectivity(
+        conn, quote.id, "signed application", due_on=_iso(-5)
+    )
+    submissions.update_subjectivity(conn, met.id, status="met")
+    still_open = submissions.add_subjectivity(
+        conn, quote.id, "loss runs", due_on=_iso(20)
+    )
+    order = [s.id for s in submissions.subjectivities_for(conn, quote.id)]
+    assert order == [still_open.id, met.id]
+
+
+def test_the_repo_query_behind_a_clients_quotes_is_scoped_to_quoted(
+    conn: sqlite3.Connection,
+) -> None:
+    """M10: `status = 'quoted'` in `quoted_rows_for_org` could be dropped and
+    nothing noticed. The service-level scoping IS held, but the repo owns
+    every query here (CLAUDE.md) and the account tab reads this row set — a
+    declined submission listed under "quotes in hand" is a quote that is not
+    in hand."""
+    client, market, placement = _book(conn)
+    quoted = _quote(conn, market, placement, _iso(9))
+    submissions.create(conn, market, "2026-07-01", placement_id=placement)  # out
+    for status in (SubmissionStatus.DECLINED, SubmissionStatus.BOUND):
+        other = submissions.create(conn, market, "2026-07-01", placement_id=placement)
+        submissions.update(conn, other.id, status=status.value)
+    rows = submissions.quoted_rows_for_org(conn, client)
+    assert [r["id"] for r in rows] == [quoted.id]
+
+
+def test_urgent_is_two_weeks(conn: sqlite3.Connection) -> None:
+    """M32: the states were asserted against URGENT_DAYS itself, so raising it
+    from 14 to 45 stayed green — the constant cannot pin its own value. Two
+    weeks is the shortest turnaround a client decision realistically has;
+    widening it would paint half the book urgent and retire the colour."""
+    assert quotes_svc.URGENT_DAYS == 14
+    assert quotes_svc.expiry_state(14) == quotes_svc.URGENT
+    assert quotes_svc.expiry_state(15) == quotes_svc.LIVE
+    assert quotes_svc.expiry_word(14) == "14d left"
+    assert quotes_svc.expiry_word(15) == "15d"
+
+
+def test_the_new_submission_form_asks_for_the_underwriter_too(
+    conn: sqlite3.Connection,
+) -> None:
+    """M27: only the RESPONSE form's underwriter field was tested. You often
+    know who picked the submission up before an answer comes back, and Today
+    named "Travelers", which you cannot email."""
+    _book(conn)
+    spec = ef.submission_form(conn)
+    fields = {f.key: f for f in spec.fields}
+    assert "underwriter_contact_id" in fields
+    # optional on purpose: a required field here pushes people to pick the
+    # wrong name to get past it
+    assert fields["underwriter_contact_id"].required is False
+
+
+def test_the_underwriter_picker_leaves_out_retired_people(
+    conn: sqlite3.Connection,
+) -> None:
+    """M31: `active = 1` in `at_market_orgs` could be dropped and nothing
+    noticed. An underwriter who has left the carrier is exactly the name you
+    must not be offered — the whole point of the field is that it is somebody
+    you can email today."""
+    _, market, _ = _book(conn)
+    here = contacts.create(conn, market, first_name="Dana", last_name="Reeve")
+    gone = contacts.create(conn, market, first_name="Sam", last_name="Ng")
+    contacts.update(conn, gone.id, active=0)
+    ids = [cid for _label, cid in ef.underwriter_options(conn)]
+    assert ids == [here.id]
+
+
+# --- fix round 1: the surfaces the undated quote now reaches ------------------
+
+
+async def test_the_quotes_leaf_carries_the_undated_ones_as_a_tail(
+    snapshot_db: Path,
+) -> None:
+    """`quotes expiring · 1 (+15 no expiry)`. Two numbers, never summed: the
+    first counts clocks and the second counts quotes with no clock at all.
+    Before this the undated ones were on no leaf anywhere — and the sample
+    book alone holds fourteen of them, which is how big the hole was."""
+    from bookkit.tui.app import BookkitApp
+
+    conn = db.connect(snapshot_db)
+    org = orgs.list_orgs(conn, kind="client")[0]
+    market = orgs.list_orgs(conn, kind="market")[0]
+    placement = placements.for_org(conn, org.id)[0]
+    _quote(conn, market.id, placement.id, _iso(5))
+    _quote(conn, market.id, placement.id, None)
+    dated = len(quotes_svc.expiring(conn, TODAY, days=120))
+    no_expiry = len(quotes_svc.undated(conn, TODAY))
+    conn.close()
+    assert no_expiry > 1, "the seeded book should already hold undated quotes"
+
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        tree = app.screen.query_one("#nav-tree")
+        labels = [str(node.label) for node in tree.root.children[0].children]
+        leaf = next(line for line in labels if "quotes expiring" in line)
+        assert f"· {dated}" in leaf, leaf
+        assert f"(+{no_expiry} no expiry)" in leaf, leaf
+
+
+async def test_the_undated_quote_reads_no_expiry_never_a_zero_countdown(
+    snapshot_db: Path,
+) -> None:
+    """The lie this whole feature exists to prevent: `days_remaining or 0`
+    renders an undated quote as "0d" — expires today. Now that the leaf
+    carries undated quotes that branch is live, not defensive, so the cell is
+    a dash and the expiry column says "no expiry"."""
+    from bookkit.tui.app import BookkitApp
+    from bookkit.tui.widgets.tables import ListTable
+
+    conn = db.connect(snapshot_db)
+    org = orgs.list_orgs(conn, kind="client")[0]
+    market = orgs.list_orgs(conn, kind="market")[0]
+    placement = placements.for_org(conn, org.id)[0]
+    _quote(conn, market.id, placement.id, None)
+    conn.close()
+
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        nav = app.screen
+        nav._current = ("att", "quotes")
+        nav._render_pane()
+        await pilot.pause()
+        table = nav.query_one("#nav-table", ListTable)
+        rows = [[str(cell) for cell in table.get_row(key)] for key in table.rows]
+        undated_rows = [r for r in rows if any("no expiry" in c for c in r)]
+        assert undated_rows, rows
+        for row in undated_rows:
+            assert not any(c.strip() == "0d" for c in row), row
+            assert "—" in row, row
+
+
+async def test_open_items_carries_the_quote_and_its_subjectivities(
+    snapshot_db: Path,
+) -> None:
+    """M39: the Open-items quote rows could be deleted whole and the suite
+    stayed green. Open items answers "everything this client still owes or is
+    owed" — a quote whose terms lapse in three days is the most expensive
+    thing that can be missing from it."""
+    from bookkit.tui.app import BookkitApp
+    from bookkit.tui.widgets.tables import ListTable
+
+    conn = db.connect(snapshot_db)
+    org = orgs.list_orgs(conn, kind="client")[0]
+    market = orgs.list_orgs(conn, kind="market")[0]
+    placement = placements.for_org(conn, org.id)[0]
+    quote = _quote(conn, market.id, placement.id, _iso(3))
+    submissions.add_subjectivity(conn, quote.id, "signed application", due_on=_iso(1))
+    conn.close()
+
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("8")
+        await pilot.pause()
+        context = app.screen.query_one("#open-items-context", ListTable)
+        keys = [str(k.value) for k in context.rows]
+        assert f"quote:{quote.id}" in keys, keys
+        assert any(k.startswith("subjectivity:") for k in keys), keys
+        rendered = " ".join(
+            str(cell) for row in context.rows for cell in context.get_row(row)
+        )
+        assert "3d left" in rendered, rendered
+
+
+async def test_j_down_the_submissions_repoints_the_subjectivities(
+    snapshot_db: Path,
+) -> None:
+    """M38: the master/detail repoint could be replaced with `pass` and the
+    suite stayed green — the detail table would keep showing the FIRST
+    submission's subjectivities under whatever row the cursor is on, which is
+    a chase list attributed to the wrong market."""
+    from bookkit.tui.app import BookkitApp
+    from bookkit.tui.widgets.tables import ListTable
+
+    conn = db.connect(snapshot_db)
+    org = orgs.list_orgs(conn, kind="client")[0]
+    markets = orgs.list_orgs(conn, kind="market")
+    placement = placements.for_org(conn, org.id)[0]
+    first = _quote(conn, markets[0].id, placement.id, _iso(4))
+    second = _quote(conn, markets[1].id, placement.id, _iso(8))
+    submissions.add_subjectivity(conn, first.id, "signed application")
+    submissions.add_subjectivity(conn, second.id, "loss runs through 8/1")
+    conn.close()
+
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        app.open_account(org.id)
+        await pilot.pause()
+        await pilot.press("6")
+        await pilot.pause()
+        subs = app.screen.query_one("#pipeline-subs", ListTable)
+        subs.focus()
+        await pilot.pause()
+
+        def detail() -> str:
+            subjs = app.screen.query_one("#pipeline-subjs", ListTable)
+            return " ".join(
+                str(cell) for row in subjs.rows for cell in subjs.get_row(row)
+            )
+
+        seen = {detail()}
+        for _ in range(len(subs.rows)):
+            await pilot.press("j")
+            await pilot.pause()
+            seen.add(detail())
+        assert any("signed application" in text for text in seen), seen
+        assert any("loss runs through 8/1" in text for text in seen), seen
+
+
+def test_the_web_tab_tells_an_empty_pipeline_how_a_quote_gets_recorded(
+    tmp_path: Path, frozen_clock: date
+) -> None:
+    """The note sat INSIDE `{% if quote_rows %}`, so the one reader who most
+    needs it — the person looking at an empty tab wondering where quotes come
+    from — was the only one not told. The tab is read-only on purpose; a
+    read-only surface that does not say where the write lives is just a dead
+    end."""
+    from fastapi.testclient import TestClient
+
+    from bookkit.web.app import create_app
+
+    path = tmp_path / "web.db"
+    conn = db.connect(path)
+    client_id, _market, _placement = _book(conn)
+    org = orgs.get(conn, client_id)
+    conn.close()
+
+    with TestClient(create_app(path)) as client:
+        body = client.get(f"/accounts/{org.ref}/pipeline").text
+    assert "no quotes in hand" in body
+    assert "market-response form" in body

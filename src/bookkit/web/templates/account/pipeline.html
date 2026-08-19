@@ -61,15 +61,18 @@
           </tbody>
         </table>
       </div>
-      <p class="panel-note">
-        Recorded in the terminal app: <code>e</code> on a submission opens the
-        market-response form, which carries the expiry and the underwriter.
-      </p>
     {% else %}
       <div class="panel-empty">
         <p>no quotes in hand — a submission becomes a quote when a market answers</p>
       </div>
     {% endif %}
+    {# OUTSIDE the if: the reader who most needs to know how a quote gets
+       recorded is the one looking at an empty tab, and the note used to be
+       the one thing they could not see. #}
+    <p class="panel-note">
+      Recorded in the terminal app: <code>e</code> on a submission opens the
+      market-response form, which carries the expiry and the underwriter.
+    </p>
   </div>
 
   <div class="work-section-gap"></div>
