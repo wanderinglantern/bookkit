@@ -25,7 +25,8 @@
     {% for program in programs %}
       {% with placement = program.placement, layers = program.layers,
               linked = program.linked, tower = program.tower,
-              placement_cells = program.placement_cells %}
+              placement_cells = program.placement_cells,
+              line_chips = program.line_chips %}
         {% include "account/_layers_panel.html" %}
       {% endwith %}
     {% endfor %}

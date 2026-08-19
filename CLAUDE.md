@@ -181,6 +181,13 @@
 - Grant reviews long-form work as published artifacts, not terminal
   scrollback — an audit or a multi-phase build gets a report artifact and,
   for ongoing work, a build log kept updated at the same URL.
+- THE WEB IS THE DAILY DRIVER, so its parity universe is EVERYTHING THE
+  TERMINAL WORKFLOW REACHES — bookkit TUI keys AND towerkit's editor behind
+  `o`, which a browser does not have. "Built but not accessible" is a bug
+  class (statutory, 2026-08-19): web/parity.TOWERKIT_EDIT_OPS introspects
+  towerkit.edit at runtime and the suite goes red until every op is covered
+  or deferred by name with a reason. When towerkit grows a capability, the
+  red test IS the ticket.
 - UI WORK SHOWS ITSELF (Grant, 2026-08-19): when a phase changes what a
   screen looks like, update the artifact with SCREENSHOTS of the running UI
   (seeded demo data, embedded as data: URIs) and numbered feedback areas

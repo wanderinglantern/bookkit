@@ -5,6 +5,20 @@ All notable changes to bookkit, newest date first.
 ## 2026-08-19
 
 ### Added
+- Lines of cover are editable from the browser (D1): rename in place (ids
+  cascade), remove behind a confirm naming what dies vs what narrows, add
+  in row (arriving with a pending layer — towerkit refuses an empty line).
+  A scaffolded program's "Coverage TBD" is one rename away from real.
+- The layer details row grew structure: applies-to toggle chips (the first
+  caller for sync.set_applies_to), statutory on/off (confirm-first; leaving
+  asks for the replacing limit), follows-underlying one-click toggle.
+- The tower drawing is clickable: a block scrolls to and flashes the table
+  row that edits it.
+- Merge a duplicate program from the web — same service and undo unit as
+  the TUI's x.
+- web/parity.TOWERKIT_EDIT_OPS: every towerkit editor op, introspected at
+  runtime, must be covered or deferred by name — closing the "fully built
+  but not accessible" class Grant caught on statutory.
 - Web placement editing: the program section header's name, period, status
   and commission are inline cells; the file-vs-row ownership rule lives in
   one service both surfaces call.

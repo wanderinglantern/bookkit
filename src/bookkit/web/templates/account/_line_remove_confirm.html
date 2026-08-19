@@ -1,0 +1,18 @@
+{# The line-removal confirm, in place over the chip. GET rendered this and
+   wrote NOTHING. The blast radius comes in two grades and both are named:
+   layers covering ONLY this line die with it (towerkit's cascade), layers
+   spanning several merely stop covering it. #}
+<span class="line-chip line-remove-confirm" role="alertdialog" aria-label="Remove {{ name }}">
+  {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+  remove {{ name }}?
+  {%- if dying %} {{ dying | join(", ") }} go{{ "es" if dying | length == 1 else "" }} with it;
+  {%- endif %}
+  {%- if narrowing %} {{ narrowing | join(", ") }} just stop{{ "s" if narrowing | length == 1 else "" }} covering it;
+  {%- endif %} the change list can revert the rows
+  <button type="button" class="row-action-btn row-action-danger"
+          hx-post="{{ base }}/remove"
+          hx-target="closest .line-chip" hx-swap="outerHTML">remove line</button>
+  <button type="button" class="row-action-btn"
+          hx-get="{{ base }}/chip"
+          hx-target="closest .line-chip" hx-swap="outerHTML">keep</button>
+</span>

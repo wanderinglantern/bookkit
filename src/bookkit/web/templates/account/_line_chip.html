@@ -1,0 +1,12 @@
+{# One line of cover on the lines strip: its name as an inline cell (rename
+   in place — the id follows the name and every appliesTo cascades, so this
+   is the control that turns a scaffold's "Coverage TBD" into a real line),
+   plus its remove control, which fetches an in-place confirm naming the
+   layers that die with the line. #}
+<span class="line-chip">
+  {{ name_cell | safe }}
+  <button type="button" class="row-action-btn"
+          title="Remove {{ name }} — layers covering only this line go with it"
+          hx-get="{{ base }}/remove"
+          hx-target="closest .line-chip" hx-swap="outerHTML">remove</button>
+</span>

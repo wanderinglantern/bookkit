@@ -220,3 +220,30 @@ def test_every_verb_entry_speaks_for_all_three_surfaces():
         assert set(surfaces) == {"web", "tui", "mcp"}, verb
         for surface, note in surfaces.items():
             assert note.strip(), f"{verb}/{surface} says nothing"
+
+
+def test_every_towerkit_edit_op_is_accounted_for():
+    """Grant, 2026-08-19: 'fully built but not accessible' — a capability can
+    exist end-to-end in towerkit and never surface in the browser, and no
+    test noticed because parity was enumerated over bookkit's surfaces only.
+    This introspects towerkit.edit AT RUNTIME: an op towerkit grows (or
+    loses) turns this red until TOWERKIT_EDIT_OPS names it — covered,
+    deferred with a reason, or branch-only pending a decision."""
+    import inspect
+
+    from towerkit import edit
+
+    from bookkit.web.parity import TOWERKIT_EDIT_OPS
+
+    public = {
+        name
+        for name, obj in vars(edit).items()
+        if inspect.isfunction(obj)
+        and obj.__module__ == "towerkit.edit"
+        and not name.startswith("_")
+    }
+
+    assert public == set(TOWERKIT_EDIT_OPS), (
+        f"unaccounted towerkit ops: {public - set(TOWERKIT_EDIT_OPS)}; "
+        f"stale ledger entries: {set(TOWERKIT_EDIT_OPS) - public}"
+    )

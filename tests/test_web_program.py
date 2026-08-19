@@ -873,6 +873,428 @@ def test_a_refused_submission_keeps_the_typed_notes(app_and_org):
     assert "required" in refused
 
 
+def _merge_url(org, placement):
+    return f"/accounts/{org.ref}/program/{placement.id}/merge"
+
+
+def test_the_merge_form_offers_only_same_account_siblings(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import placements as placements_repo
+
+    mine = placements_repo.for_org(conn, org.id)
+    source = mine[0]
+    other_org = next(
+        o for o in orgs_repo.list_orgs(conn, kind="client") if o.id != org.id
+    )
+    foreign = placements_repo.for_org(conn, other_org.id)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    assert f'hx-get="{_merge_url(org, source)}"' in page, "no merge control"
+
+    form = client.get(_merge_url(org, source)).text
+
+    assert f'value="{source.id}"' not in form, "the form offers merging into itself"
+    for sibling in mine[1:]:
+        assert f'value="{sibling.id}"' in form
+    for stranger in foreign:
+        assert f'value="{stranger.id}"' not in form, "a foreign placement is offered"
+
+
+def test_a_merge_moves_the_children_and_retires_the_source(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+    from bookkit.repo import submissions as submissions_repo
+
+    mine = placements_repo.for_org(conn, org.id)
+    # merge the UNLINKED duplicate into the linked one — two file-backed refuse
+    source = next(p for p in mine if not p.program_path)
+    target = next(p for p in mine if p.program_path)
+    from bookkit.repo import orgs as orgs_repo
+
+    market = orgs_repo.list_orgs(conn, kind="market")[0]
+    moved = submissions_repo.create(
+        conn, market.id, "2026-08-01", placement_id=source.id
+    )
+
+    merged = client.post(_merge_url(org, source), data={"target_id": target.id})
+
+    assert merged.status_code == 200
+    assert source.ref not in merged.text, "the retired source still shows"
+    fresh = submissions_repo.get(conn, moved.id)
+    assert fresh.placement_id == target.id, "the submission did not move"
+
+
+def test_merging_two_file_backed_placements_refuses_with_the_panel_intact(
+    app_and_org, tmp_path
+):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+
+    linked_one = next(
+        p for p in placements_repo.for_org(conn, org.id) if p.program_path
+    )
+    linked_two = _two_line_placement(client, org, tmp_path)
+
+    refused = client.post(
+        _merge_url(org, linked_one), data={"target_id": linked_two.id}
+    )
+
+    assert refused.status_code == 200
+    assert 'id="programs-panel"' in refused.text
+    assert "two sources of truth" in refused.text
+    assert placements_repo.get(conn, linked_one.id).deleted_at is None
+
+
+def test_every_drawn_layer_lands_on_its_row(app_and_org):
+    """The tower is a SURFACE now (F11): a drawn block carries its layer id
+    and the table row carries the matching anchor, so a click scrolls and
+    flashes the row. Attributes only — every string and rect still comes off
+    the renderer, so the agreement rule is untouched."""
+    import re
+
+    client, org = app_and_org
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    drawn = set(re.findall(r'data-layer-id="([^"]+)"', page))
+    rows = set(re.findall(r'data-layer-row="([^"]+)"', page))
+    assert drawn, "the tower carries no hit targets"
+    missing = drawn - rows
+    assert not missing, f"drawn layers with no row to land on: {missing}"
+
+
+def test_the_tower_click_handler_and_motion_guard_exist(app_and_org):
+    client, org = app_and_org
+
+    js = client.get("/static/form-host.js").text
+    css = client.get("/static/app.css").text
+
+    assert "data-layer-id" in js, "no click handler for the tower"
+    assert "data-layer-row" in js
+    assert "row-flash" in css
+    assert "prefers-reduced-motion" in css, "the flash animation has no motion guard"
+
+
+def _layer_base(org, placement, layer_id):
+    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}"
+
+
+def test_the_details_row_offers_applies_to_chips(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    layer = sync.layer_details(conn, placement.id)[0]
+
+    row = client.get(_details_url(org, placement, layer["id"])).text
+
+    for _line_id, name in sync.program_lines(conn, placement.id):
+        assert name in row, f"line {name} not offered"
+    assert f'hx-post="{_layer_base(org, placement, layer["id"])}/applies-to"' in row
+
+
+def test_toggling_a_line_on_rescopes_the_layer(app_and_org, tmp_path):
+    """First caller ever for sync.set_applies_to — dead code since the sync
+    layer was built. Valid move: an excess spanning both equal-top primaries
+    narrows to one, then widens back."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "Umbrella Both", "line": "__all__", "attach_cents": "2,000,000",
+              "limit_cents": "5,000,000", "premium_cents": ""},
+    )
+    assert added.status_code == 200
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "Umbrella Both"
+    )
+
+    narrowed = client.post(
+        f"{_layer_base(org, placement, layer_id)}/applies-to", data={"line": "cy"}
+    )
+
+    assert narrowed.status_code == 200
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer_id
+    )
+    assert layer["applies_to"] == ["gl"], f"toggle off left {layer['applies_to']}"
+
+    widened = client.post(
+        f"{_layer_base(org, placement, layer_id)}/applies-to", data={"line": "cy"}
+    )
+    assert widened.status_code == 200
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer_id
+    )
+    assert sorted(layer["applies_to"]) == ["cy", "gl"]
+
+
+def test_toggling_off_the_last_line_is_refused_with_the_file_untouched(
+    app_and_org, tmp_path
+):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["applies_to"] == ["gl"]
+    )
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        f"{_layer_base(org, placement, layer['id'])}/applies-to", data={"line": "gl"}
+    )
+
+    assert refused.status_code == 200
+    assert path.read_bytes() == before
+    assert "cover" in refused.text or "line" in refused.text
+
+
+def test_statutory_asks_first_then_replaces_the_limit_with_the_word(
+    app_and_org, tmp_path
+):
+    """Grant, 2026-08-19: statutory was modelled, rendered and never
+    changeable from the browser — 'fully built but not accessible'."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    layer = sync.layer_details(conn, placement.id)[0]
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    row = client.get(_details_url(org, placement, layer["id"])).text
+    assert f'hx-get="{_layer_base(org, placement, layer["id"])}/statutory"' in row
+
+    confirm = client.get(f"{_layer_base(org, placement, layer['id'])}/statutory")
+    assert confirm.status_code == 200
+    assert "statutory" in confirm.text
+    assert path.read_bytes() == before, "the confirm GET wrote"
+
+    marked = client.post(
+        f"{_layer_base(org, placement, layer['id'])}/statutory",
+        data={"statutory": "true"},
+    )
+    assert marked.status_code == 200
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert fresh["statutory"] is True
+    assert ">statutory<" in marked.text, "the limit column does not say the word"
+
+
+def test_marking_statutory_clears_follows_and_attach(app_and_org, tmp_path):
+    """The combination bug the phase-3 review caught: statutory cover
+    attaches at nothing and follows nothing, and a set_statutory that left
+    either behind made the validator refuse a follows-on layer every time,
+    with a message that never named the toggle to clear."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    # statutory cover owns its whole column (towerkit refuses a statutory
+    # layer sharing a line), so it lives on its own line — added here, which
+    # arrives with the pending layer this test then marks
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/lines",
+        data={"name": "Workers Comp"},
+    )
+    assert added.status_code == 200
+    wc_line = next(
+        lid for lid, name in sync.program_lines(conn, placement.id)
+        if name == "Workers Comp"
+    )
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["applies_to"] == [wc_line]
+    )
+    assert client.post(
+        f"{_layer_base(org, placement, layer_id)}/follows", data={"follows": "true"}
+    ).status_code == 200
+
+    marked = client.post(
+        f"{_layer_base(org, placement, layer_id)}/statutory",
+        data={"statutory": "true"},
+    )
+
+    assert marked.status_code == 200
+    from towerkit.model import load_program
+
+    layer = next(
+        ly for ly in load_program(Path(placement.program_path)).layers
+        if ly.id == layer_id
+    )
+    assert layer.statutory is True
+    assert layer.attach == 0
+    assert layer.follows_underlying is False
+
+
+def test_leaving_statutory_requires_the_replacing_limit(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    layer = sync.layer_details(conn, placement.id)[0]
+    assert client.post(
+        f"{_layer_base(org, placement, layer['id'])}/statutory",
+        data={"statutory": "true"},
+    ).status_code == 200
+
+    restored = client.post(
+        f"{_layer_base(org, placement, layer['id'])}/statutory",
+        data={"statutory": "false", "limit": "3,000,000"},
+    )
+
+    assert restored.status_code == 200
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert fresh["statutory"] is False
+    assert fresh["limit_cents"] == 3_000_000_00
+
+
+def test_follows_underlying_toggles_from_the_details_row(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "GL Excess", "line": "gl", "attach_cents": "2,000,000",
+              "limit_cents": "3,000,000", "premium_cents": ""},
+    )
+    assert added.status_code == 200
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "GL Excess"
+    )
+
+    row = client.get(_details_url(org, placement, layer_id)).text
+    assert f'hx-post="{_layer_base(org, placement, layer_id)}/follows"' in row
+
+    toggled = client.post(
+        f"{_layer_base(org, placement, layer_id)}/follows", data={"follows": "true"}
+    )
+
+    assert toggled.status_code == 200
+    from towerkit.model import load_program
+
+    layer = next(
+        ly for ly in load_program(Path(placement.program_path)).layers
+        if ly.id == layer_id
+    )
+    assert layer.follows_underlying is True
+    # the returned row must SHOW the state, not just write it — and the
+    # assertion must target the FOLLOWS button: a bare "is-on" substring was
+    # satisfied by the layer's own applies-to chip (fresh-eyes review)
+    assert "follows-toggle is-on" in toggled.text
+
+
+def _lines_base(org, placement):
+    return f"/accounts/{org.ref}/program/{placement.id}/lines"
+
+
+def test_the_lines_strip_renders_every_line_as_a_cell(app_and_org, tmp_path):
+    """D1: the browser can finally NAME the cover. A scaffolded program was
+    stuck on 'Coverage TBD' forever because no web control could touch a
+    line (review finding F4)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    for line_id, name in sync.program_lines(conn, placement.id):
+        assert (
+            f'data-cell-action="{_lines_base(org, placement)}/{line_id}/cell/name"'
+            in page
+        ), f"line {name} is not an editable cell"
+    assert f'hx-get="{_lines_base(org, placement)}/new"' in page, "no + line control"
+
+
+def test_renaming_a_line_cascades_and_rerenders_the_panel(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+
+    saved = client.post(
+        f"{_lines_base(org, placement)}/cy/cell/name", data={"name": "Cyber Liability"}
+    )
+
+    assert saved.status_code == 200
+    lines = dict(sync.program_lines(conn, placement.id))
+    assert "Cyber Liability" in lines.values()
+    assert "cy" not in lines, "the id did not follow the name"
+    new_id = next(lid for lid, nm in lines.items() if nm == "Cyber Liability")
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "Primary Cyber"
+    )
+    assert new_id in layer["applies_to"], "the cascade left the layer stranded"
+    assert 'hx-swap-oob="true"' in saved.text or 'id="program-' in saved.text
+
+
+def test_line_remove_asks_first_naming_what_dies_with_it(app_and_org, tmp_path):
+    client, org = app_and_org
+    placement = _two_line_placement(client, org, tmp_path)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    confirm = client.get(f"{_lines_base(org, placement)}/cy/remove")
+
+    assert confirm.status_code == 200
+    assert "Primary Cyber" in confirm.text, "the confirm hides the dying layer"
+    assert path.read_bytes() == before, "the confirm GET wrote"
+
+    removed = client.post(f"{_lines_base(org, placement)}/cy/remove")
+
+    assert removed.status_code == 200
+    conn = client.app.state.conn
+    assert "cy" not in dict(sync.program_lines(conn, placement.id))
+    assert "Primary Cyber" not in [
+        ly["name"] for ly in sync.layer_details(conn, placement.id)
+    ]
+
+
+def test_removing_the_last_line_is_refused_in_place(app_and_org, tmp_path):
+    client, org = app_and_org
+    placement = _two_line_placement(client, org, tmp_path)
+    assert client.post(f"{_lines_base(org, placement)}/cy/remove").status_code == 200
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(f"{_lines_base(org, placement)}/gl/remove")
+
+    assert refused.status_code == 200
+    assert "only line" in refused.text
+    assert path.read_bytes() == before
+
+
+def test_adding_a_line_lands_with_a_pending_layer(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+
+    form = client.get(f"{_lines_base(org, placement)}/new").text
+    assert 'name="name"' in form
+
+    added = client.post(
+        f"{_lines_base(org, placement)}", data={"name": "Marine Cargo"}
+    )
+
+    assert added.status_code == 200
+    lines = dict(sync.program_lines(conn, placement.id))
+    assert "Marine Cargo" in lines.values()
+    new_id = next(lid for lid, nm in lines.items() if nm == "Marine Cargo")
+    covering = [
+        ly for ly in sync.layer_details(conn, placement.id)
+        if new_id in ly["applies_to"]
+    ]
+    assert covering, "the new line arrived empty — the validator forbids that"
+
+
 def _renew_url(org, placement):
     return f"/accounts/{org.ref}/program/{placement.id}/renew"
 

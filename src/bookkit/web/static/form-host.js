@@ -47,6 +47,30 @@
     }
   });
 
+  // The tower is a surface (phase 3): a drawn block carries its layer id,
+  // and clicking it lands on the table row that edits it — scroll + flash.
+  // Hit targets only; the drawing's strings and geometry stay the
+  // renderer's.
+  document.body.addEventListener("click", function (evt) {
+    var block = evt.target.closest && evt.target.closest("[data-layer-id]");
+    if (!block) return;
+    var id = block.getAttribute("data-layer-id");
+    var section = block.closest("section.program") || document;
+    var row = section.querySelector('[data-layer-row="' + id + '"]');
+    if (!row) return;
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.classList.remove("row-flash");
+    void row.offsetWidth; // restart the animation on a second click
+    row.classList.add("row-flash");
+    row.addEventListener(
+      "animationend",
+      function () {
+        row.classList.remove("row-flash");
+      },
+      { once: true }
+    );
+  });
+
   document.body.addEventListener("click", function (evt) {
     var btn = evt.target.closest && evt.target.closest("[data-row-close]");
     if (!btn) return;

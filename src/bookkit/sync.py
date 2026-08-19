@@ -42,8 +42,11 @@ from rapidfuzz import fuzz, process
 # src/towerkit/tui, so the rule was invisible here. See
 # tests/test_conventions.py::test_sync_delegates_program_structure_to_towerkit.
 from towerkit.edit import add_layer as edit_add_layer
+from towerkit.edit import add_line as edit_add_line
 from towerkit.edit import heal_follows, slugify, unique_id
 from towerkit.edit import remove_layer as edit_remove_layer
+from towerkit.edit import remove_line as edit_remove_line
+from towerkit.edit import rename_line as edit_rename_line
 from towerkit.model import SCHEMA_ID, Program, dump_program, load_program
 from towerkit.model import Layer as TkModelLayer
 
@@ -879,6 +882,121 @@ def add_layer(
     return _mutate(conn, placement_id, mutate)
 
 
+def _find_line(program: Program, line_id: str) -> None:
+    """A ValueError towerkit's KeyError-raising _line would bypass _mutate
+    with — same reason remove_layer pre-checks via _find_layer."""
+    if not any(line.id == line_id for line in program.lines):
+        raise ValueError(f"line {line_id!r} is not in this program (re-sync?)")
+
+
+def add_line(conn: sqlite3.Connection, placement_id: str, name: str) -> Diagnostics:
+    """A new line of cover, ARRIVING WITH a pending 'To be placed' layer —
+    towerkit's validator makes an empty line an ERROR (line-empty), so a bare
+    line could never be written through. Same shape scaffold_program uses;
+    build the real layers here or in towerkit. (D1, phase 3, 2026-08-19.)"""
+
+    def mutate(program: Program) -> None:
+        if any(line.name == name for line in program.lines):
+            raise ValueError(f"this program already has a line named {name!r}")
+        line = edit_add_line(program, name)
+        layer = edit_add_layer(program, [line.id])
+        layer.name = "To be placed"
+        layer.attach = 0
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def rename_line(
+    conn: sqlite3.Connection, placement_id: str, line_id: str, name: str
+) -> Diagnostics:
+    """towerkit's rename: the id follows the name and CASCADES through every
+    appliesTo, so nothing is stranded on the old slug. This is the write that
+    turns a scaffold's 'Coverage TBD' into a real line without leaving the
+    browser — the dead-end the parity review called F4."""
+
+    def mutate(program: Program) -> None:
+        _find_line(program, line_id)
+        edit_rename_line(program, line_id, name)
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def remove_line(
+    conn: sqlite3.Connection, placement_id: str, line_id: str
+) -> Diagnostics:
+    """towerkit's cascade: the id leaves every appliesTo and any layer,
+    retention or sublimit left with an empty appliesTo goes with it. The
+    validator still gates the result, so a removal that leaves the program
+    invalid refuses with nothing written."""
+
+    def mutate(program: Program) -> None:
+        _find_line(program, line_id)
+        if len(program.lines) == 1:
+            raise ValueError(
+                "this is the program's only line — a program with no lines "
+                "cannot be drawn; rename it instead"
+            )
+        edit_remove_line(program, line_id)
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def set_statutory(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    statutory: bool,
+    limit_cents: int | None = None,
+) -> Diagnostics:
+    """Mark a layer statutory (WC Part A: benefits, NO dollar limit — the
+    model forces limit == 0 and the renderer draws it off-scale), or back to
+    a dollar-limited layer, which REQUIRES the limit to restore. Field-level
+    writes are sync's established practice (update_layer does the same);
+    towerkit's validator still gates the result.
+
+    Grant, 2026-08-19: 'fully built but not accessible' — statutory handling
+    existed everywhere except as something a browser could change."""
+
+    def mutate(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        if statutory:
+            # THE FULL RESET, matching towerkit's own edit.set_statutory:
+            # statutory cover attaches at nothing and follows nothing —
+            # leaving either set makes the validator refuse
+            # (statutory-attach / statutory-follows) with a message that
+            # never names the toggle to clear (fresh-eyes review, phase 3).
+            layer.statutory = True
+            layer.limit = 0
+            layer.attach = 0
+            layer.follows_underlying = False
+        else:
+            if limit_cents is None:
+                raise ValueError(
+                    f"{layer.name}: leaving statutory needs the dollar limit "
+                    "that replaces it"
+                )
+            layer.statutory = False
+            layer.limit = _require_dollars(limit_cents, "limit")
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def set_follows_underlying(
+    conn: sqlite3.Connection, placement_id: str, layer_id: str, follows: bool
+) -> Diagnostics:
+    """A follows-underlying layer's attachment is DERIVED — write_through's
+    heal_follows recomputes it from the layers below on every write, so
+    turning this on hands the attachment to the tower and turning it off
+    freezes whatever the heal last computed."""
+    from towerkit.edit import set_follows_underlying as edit_set_follows
+
+    def mutate(program: Program) -> None:
+        _find_layer(program, layer_id)
+        edit_set_follows(program, layer_id, follows)
+
+    return _mutate(conn, placement_id, mutate)
+
+
 def remove_layer(
     conn: sqlite3.Connection, placement_id: str, layer_id: str
 ) -> Diagnostics:
@@ -1050,6 +1168,7 @@ def layer_details(conn: sqlite3.Connection, placement_id: str) -> list[dict[str,
                 # cover" from "a layer whose limit happens to be zero" — the two
                 # are opposite facts that arithmetic alone renders identical.
                 "statutory": layer.statutory,
+                "follows_underlying": layer.follows_underlying,
                 "participants": [
                     {
                         "carrier": part.carrier,

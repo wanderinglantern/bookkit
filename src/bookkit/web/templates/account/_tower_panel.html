@@ -33,7 +33,12 @@
     {# Outlines first, so a participant block paints inside its layer. #}
     {% for layer in tower.layers %}
       {% for rect in layer.outlines %}
+        {# data-layer-id is a HIT TARGET, nothing more: a click scrolls to
+           the matching table row (form-host.js). Attributes only — every
+           string and rect here still comes off the renderer, so the
+           agreement rule (spec D2.1) is untouched. #}
         <div class="tower-layer{% if layer.pending %} is-pending{% endif %}"
+             data-layer-id="{{ layer.layer_id }}"
              style="left:{{ rect.left }}%;bottom:{{ rect.bottom }}%;width:{{ rect.width }}%;height:{{ rect.height }}%"
              title="{{ layer.name }} — {{ layer.terms }}"></div>
       {% endfor %}
@@ -42,6 +47,7 @@
     {% for block in tower.blocks %}
       {% for rect in block.rects %}
         <div class="tower-block{% if block.unplaced %} is-unplaced{% endif %}"
+             data-layer-id="{{ block.layer_id }}"
              style="left:{{ rect.left }}%;bottom:{{ rect.bottom }}%;width:{{ rect.width }}%;height:{{ rect.height }}%">
           {# The label rides the FIRST rect only. A stepped block is one seat
              drawn in several pieces; printing its name on each piece would

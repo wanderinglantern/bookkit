@@ -2163,3 +2163,34 @@ table.rows tr.is-waived td {
 .detail-label:first-child {
   margin-left: 0;
 }
+
+
+/* --- the tower is a surface (phase 3) --------------------------------------
+   A drawn block lands on its table row: pointer affordance on the blocks,
+   a short flash on the row it finds. Reduced motion gets the color change
+   with no animation and no smooth scroll (form-host.js uses CSS to decide
+   nothing — the guard here simply stills the flash). */
+
+.tower-layer[data-layer-id],
+.tower-block[data-layer-id] {
+  cursor: pointer;
+}
+
+@keyframes row-flash {
+  0% { background: var(--accent-wash); }
+  100% { background: transparent; }
+}
+
+.row-flash > td {
+  animation: row-flash 1.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-flash > td {
+    animation: none;
+    background: var(--accent-wash);
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
