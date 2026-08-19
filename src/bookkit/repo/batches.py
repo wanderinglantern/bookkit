@@ -55,14 +55,25 @@ def get_by_ref(conn: sqlite3.Connection, ref: str) -> EventBatch:
 
 
 def recent(
-    conn: sqlite3.Connection, since: str, limit: int = 20
+    conn: sqlite3.Connection, since: str, limit: int = 20,
+    org_id: str | None = None,
 ) -> list[EventBatch]:
-    """Newest first. `since` is an ISO timestamp the caller computes — no wall
-    clock in here."""
+    """Newest first, EVERY source — tui, web and mcp alike. `since` is an ISO
+    timestamp the caller computes — no wall clock in here.
+
+    `org_id` narrows to one account. It matches the batch's own org_id, which
+    a few batches legitimately do not have: client_create opens its batch
+    before the org exists, so an account's own creation is not in its own
+    filtered history."""
+    where = ["created_at >= ?"]
+    params: list[str | int] = [since]
+    if org_id is not None:
+        where.append("org_id = ?")
+        params.append(org_id)
     rows = conn.execute(
-        "SELECT * FROM event_batch WHERE created_at >= ?"
+        f"SELECT * FROM event_batch WHERE {' AND '.join(where)}"
         " ORDER BY created_at DESC, ref DESC LIMIT ?",
-        (since, limit),
+        (*params, limit),
     ).fetchall()
     return [EventBatch.from_row(r) for r in rows]
 

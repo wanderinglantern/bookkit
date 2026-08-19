@@ -222,8 +222,25 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         """Opportunity pipeline health: count, total and probability-weighted
         premium, and average days-in-stage per stage (identified through
         won/lost); win rate and per-gate advance rates; count of submissions
-        past SLA. Money is formatted dollars."""
+        past SLA. Money is formatted dollars. Aggregates only — no deal is
+        named here; call `opportunities` for the individual deals and their
+        refs."""
         return _pipeline_status(ro)
+
+    @server.tool()
+    async def opportunities(
+        client: str | None = None, include_closed: bool = False
+    ) -> list[dict[str, Any]]:
+        """Open deals WITH the `opportunity_ref` that opportunity_stage and
+        edit_field(kind="opportunity") take. Use this to FIND a deal you need
+        to move or correct: pipeline_status returns per-stage aggregates only
+        and `search` returns no ids at all, so nothing else on this surface
+        can name a deal the assistant did not create itself. Omit `client` for
+        every open deal on the book (each row names its account, so "the Acme
+        cyber deal" is findable in one call); pass `client` (exact name or
+        ref; on a miss the error lists the nearest candidates) to scope it.
+        `include_closed` adds won/lost deals, which are excluded by default."""
+        return _opportunities(ro, client=client, include_closed=include_closed)
 
     @server.tool()
     async def team_roster() -> dict[str, Any]:
@@ -237,16 +254,26 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
 def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
     @server.tool()
     async def log_activity(
-        client: str, note: str, follow_up: str | None = None
+        client: str, note: str, follow_up: str | None = None,
+        type: str = "note", occurred_on: str | None = None,
     ) -> dict[str, Any]:
-        """Log a client interaction (call, email, meeting, site note) — additive
-        and event-logged; nothing existing is touched. `client` resolves the same
-        way as every other client-scoped tool (exact client name or ref; on a
-        miss the error lists the nearest candidates — never guess an id). Pass
-        `follow_up` as any human date ("friday", "+2w", "2026-09-01") to also
-        create a follow-up task in the same transaction; omit it to just log
-        the note."""
-        return _log_activity(rw, client, note, follow_up=follow_up)
+        """Log a client interaction — additive and event-logged; nothing
+        existing is touched. `client` resolves the same way as every other
+        client-scoped tool (exact client name or ref; on a miss the error
+        lists the nearest candidates — never guess an id). `type` is what
+        actually happened: call | meeting | email | note | site_visit | event
+        (default note; anything else is refused with the list).
+        `occurred_on` is WHEN, as a human date ("yesterday", "2 days ago",
+        "2026-08-11" — but NOT "last tuesday", which does not parse) — it
+        defaults to today, so pass it for anything you are writing up after
+        the fact. A bare 1-2 digit number is refused rather than read as a
+        day of the month. Get both right at the time: there is no interaction
+        kind in edit_field, so the only correction is activity_delete
+        (find the ref with recent_activity) and log it again. Pass
+        `follow_up` as any human date to also create a follow-up task in the
+        same transaction."""
+        return _log_activity(rw, client, note, follow_up=follow_up,
+                             type=type, occurred_on=occurred_on)
 
     @server.tool()
     async def recent_activity(client: str, limit: int = 20) -> list[dict[str, Any]]:
@@ -608,11 +635,21 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
                            expecting=expecting, client=client)
 
     @server.tool()
-    async def list_batches(limit: int = 20) -> list[dict[str, Any]]:
-        """Recent changes THIS server made, newest first, each with the `ref`
-        that `revert_batch` takes. Covers the last 14 days. Use it to show the
-        user what you changed, or to find a change that needs putting back."""
-        return _list_batches(rw, date.today(), limit=limit)
+    async def list_batches(
+        limit: int = 20, days: int = 14, client: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Recent changes to the book, newest first, each with the `ref` that
+        `revert_batch` takes. NOT just this server's work: every batched write
+        is here, whatever made it — this assistant, the TUI, or the web app —
+        and each row's `tool` and `source` say which. So this answers "what
+        changed on this account lately", not only "what did I change".
+        `days` is the window (default 14). `client` narrows to one account
+        (exact name or ref; on a miss the error lists the nearest candidates)
+        — note that a batch which names no account, such as the one that
+        CREATED that client, cannot be matched by it. Anything reverted
+        already is marked `reverted: true`."""
+        return _list_batches(rw, date.today(), limit=limit, days=days,
+                             client=client)
 
     @server.tool()
     async def revert_batch(ref: str, force: bool = False) -> dict[str, Any]:
@@ -789,6 +826,62 @@ def _resolve_client(conn: sqlite3.Connection, ref_or_name: str) -> Any:
     raise ValueError(f"no client matching {ref_or_name!r} — nearest: {hint}")
 
 
+def _resolve_task(conn: sqlite3.Connection, task_ref: str) -> Any:
+    """Exact ref only — a write target is never fuzzy-matched. The refusal
+    names WHERE the right ref comes from, the standard the assignment/
+    opportunity/project resolvers already set: repo.get raises a bare
+    `task TSK-9999 not found`, which tells a model nothing it can act on."""
+    from .repo import tasks as tasks_repo
+
+    try:
+        return tasks_repo.get(conn, task_ref)
+    except KeyError:
+        raise ValueError(
+            f"no task {task_ref!r} — read open_items or today_brief for exact refs"
+        ) from None
+
+
+def _resolve_need(conn: sqlite3.Connection, need_ref: str) -> Any:
+    """Need ids reach a caller through open_items FOR A CLIENT (the per-client
+    branch carries each row's `ref`; the book-wide one does not) or as
+    need_add's return."""
+    from .repo import projects as projects_repo
+
+    try:
+        return projects_repo.get_need(conn, need_ref)
+    except KeyError:
+        raise ValueError(
+            f"no project need {need_ref!r} — read open_items for that client "
+            f"for exact ids"
+        ) from None
+
+
+def _resolve_rfi_item(conn: sqlite3.Connection, item_ref: str) -> RfiItem:
+    from .repo import rfi as rfi_repo
+
+    try:
+        return rfi_repo.get_item(conn, item_ref)
+    except KeyError:
+        raise ValueError(
+            f"no request item {item_ref!r} — read request_items for exact refs"
+        ) from None
+
+
+def _resolve_batch(conn: sqlite3.Connection, ref: str) -> EventBatch:
+    """Resolved here rather than left to the service so the refusal names a
+    recovery path. The extra lookup is deliberate: services.batches.revert
+    resolves again, and one cheap SELECT is the price of not having one
+    refusal style per tool."""
+    from .repo import batches as batches_repo
+
+    try:
+        return batches_repo.get_by_ref(conn, ref)
+    except KeyError:
+        raise ValueError(
+            f"no batch {ref!r} — read list_batches for exact refs"
+        ) from None
+
+
 @contextmanager
 def _open_batch(
     conn: sqlite3.Connection, *, tool: str, summary: str, org_id: str | None = None
@@ -810,14 +903,35 @@ def _provenance(conn: sqlite3.Connection, entity: str, entity_id: str) -> None:
 
 
 def _log_activity(
-    conn: sqlite3.Connection, client: str, note: str, follow_up: str | None = None
+    conn: sqlite3.Connection, client: str, note: str, follow_up: str | None = None,
+    type: str = "note", occurred_on: str | None = None,
 ) -> dict[str, Any]:
+    """`type` and `occurred_on` both default to what this tool used to
+    hardcode, so nothing that called it before changes. They exist because an
+    assistant could not record "the call I had with Sarah last Tuesday" — and
+    could not correct it afterwards either, there being no interaction kind in
+    edit_field. Both parse through machinery that already exists: the
+    InteractionType vocabulary (refused with the list, like every other closed
+    vocabulary here) and parse_human_date, which refuses a bare 1-2 digit
+    number on purpose — dateparser reads "5" as a MONTH and future-biases it,
+    which once saved a follow-up as 2027-05-01 and dropped it out of every
+    attention window silently. That refusal is passed through, not routed
+    around."""
     from .dates import parse_human_date
     from .forms.spec import date_refusal
+    from .models import InteractionType
     from .repo import interactions
     from .repo import tasks as tasks_repo
 
     org = _resolve_client(conn, client)
+    kind = _clean_typed(
+        tuple(t.value for t in InteractionType), "type", type)
+    when = date.today().isoformat()
+    if occurred_on:
+        happened = parse_human_date(occurred_on)
+        if happened is None:
+            raise ValueError(date_refusal(occurred_on))
+        when = happened.isoformat()
     due = None
     if follow_up:
         parsed = parse_human_date(follow_up)
@@ -826,12 +940,11 @@ def _log_activity(
         due = parsed.isoformat()
     with _open_batch(
         conn, tool="log_activity", org_id=org.id,
-        summary=f"logged a note on {org.name}"
+        summary=f"logged a {kind} on {org.name}"
         + (" with a follow-up task" if due else ""),
     ) as batch:
         interaction = interactions.log(
-            conn, org.id, type="note",
-            occurred_on=date.today().isoformat(),
+            conn, org.id, type=kind, occurred_on=when,
             subject=note[:80], body=note,
         )
         _provenance(conn, "interaction", interaction.id)
@@ -841,6 +954,7 @@ def _log_activity(
                 conn, f"Follow up: {note[:60]}", org_id=org.id, due_on=due)
             _provenance(conn, "task", task.id)
     return {"org_id": org.id, "interaction_ref": interaction.id,
+            "type": interaction.type, "occurred_on": interaction.occurred_on,
             "follow_up_task": task.id if task else None,
             "batch": batch.ref}
 
@@ -925,7 +1039,7 @@ def _task_complete(conn: sqlite3.Connection, task_ref: str) -> dict[str, Any]:
     open_items/today_brief — no fuzzy title matching, by design."""
     from .repo import tasks as tasks_repo
 
-    task = tasks_repo.get(conn, task_ref)  # KeyError on unknown → tool error
+    task = _resolve_task(conn, task_ref)
     with _open_batch(
         conn, tool="task_complete", org_id=task.org_id,
         summary=f"completed task: {task.title}",
@@ -1320,7 +1434,7 @@ def _program_revert_file(conn: sqlite3.Connection, batch_ref: str) -> dict[str, 
     from .repo import batches as batches_repo
     from .services import program_files
 
-    batch = batches_repo.get_by_ref(conn, batch_ref)   # KeyError → tool error
+    batch = _resolve_batch(conn, batch_ref)
     if not batch.tool.startswith("program_"):
         raise ValueError(
             f"{batch_ref} is not a program-file write — use revert_batch"
@@ -1614,7 +1728,7 @@ def _opportunity_stage(
 def _task_reopen(conn: sqlite3.Connection, task_ref: str) -> dict[str, Any]:
     from .repo import tasks as tasks_repo
 
-    task = tasks_repo.get(conn, task_ref)             # KeyError → tool error
+    task = _resolve_task(conn, task_ref)
     with _open_batch(
         conn, tool="task_reopen", org_id=task.org_id,
         summary=f"reopened task: {task.title}",
@@ -1627,7 +1741,7 @@ def _task_reopen(conn: sqlite3.Connection, task_ref: str) -> dict[str, Any]:
 def _request_item_waive(conn: sqlite3.Connection, item_ref: str) -> dict[str, Any]:
     from .repo import rfi as rfi_repo
 
-    item = rfi_repo.get_item(conn, item_ref)          # KeyError → tool error
+    item = _resolve_rfi_item(conn, item_ref)
     request = rfi_repo.get_request(conn, item.request_id)
     with _open_batch(
         conn, tool="request_item_waive", org_id=request.org_id,
@@ -1787,13 +1901,11 @@ def _edit_target(
     if kind == "project_need":
         from .repo import projects as projects_repo
 
-        need = projects_repo.get_need(conn, ref)          # KeyError → tool error
+        need = _resolve_need(conn, ref)
         project = projects_repo.get_project(conn, need.project_id)
         return need.id, project.org_id, need
     if kind == "task":
-        from .repo import tasks as tasks_repo
-
-        task = tasks_repo.get(conn, ref)                  # KeyError → tool error
+        task = _resolve_task(conn, ref)
         return task.id, task.org_id, task
     if kind == "team_member":
         from .repo import team
@@ -1811,7 +1923,7 @@ def _edit_target(
     if kind == "rfi_item":
         from .repo import rfi as rfi_repo
 
-        item = rfi_repo.get_item(conn, ref)               # KeyError → tool error
+        item = _resolve_rfi_item(conn, ref)
         request = rfi_repo.get_request(conn, item.request_id)
         return item.id, request.org_id, item
     if kind == "team_assignment":
@@ -1939,8 +2051,8 @@ def _request_item_received(
     from .repo import rfi as rfi_repo
     from .services import rfi as rfi_svc
 
-    # KeyError on an unknown id → tool error, never a silently-created row
-    found = rfi_repo.get_item(conn, item_ref)
+    # refused, never a silently-created row
+    found = _resolve_rfi_item(conn, item_ref)
     with _open_batch(
         conn, tool="request_item_received",
         org_id=rfi_repo.get_request(conn, found.request_id).org_id,
@@ -2054,15 +2166,22 @@ def _request_create(
 
 
 def _list_batches(
-    conn: sqlite3.Connection, today: date, limit: int = 20, days: int = 14
+    conn: sqlite3.Connection, today: date, limit: int = 20, days: int = 14,
+    client: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Recent batched writes, newest first — what this server changed and
-    whether it has been put back."""
+    """Recent batched writes, newest first, and whether they have been put
+    back. EVERY source, not just this server's — repo.batches.recent has no
+    source filter and never had one, while the tool docstring claimed
+    otherwise for long enough that a model would never have reached for this
+    to answer "what changed on this account this week". `source` is returned
+    so the caller can tell them apart rather than being told a half-truth."""
     from .repo import batches as batches_repo
     from .services import batches as batches_svc
 
+    org_id = _resolve_client(conn, client).id if client is not None else None
     since = (today - timedelta(days=days)).isoformat()
-    recent = batches_repo.recent(conn, since=since, limit=limit)
+    recent = batches_repo.recent(
+        conn, since=since, limit=limit, org_id=org_id)
     labels = batches_svc.account_names(conn, recent)  # one query, not N
     out = []
     for batch in recent:
@@ -2071,7 +2190,7 @@ def _list_batches(
             account = labels.get(batch.org_id, "(deleted account)")
         out.append({
             "ref": batch.ref, "tool": batch.tool, "summary": batch.summary,
-            "account": account, "at": batch.created_at,
+            "source": batch.source, "account": account, "at": batch.created_at,
             "reverted": batch.reverted_at is not None,
         })
     return out
@@ -2084,6 +2203,7 @@ def _revert_batch(
     since, listing what blocks it — never a partial write unless forced."""
     from .services import batches as batches_svc
 
+    _resolve_batch(conn, ref)          # refuse with a recovery path, not KeyError
     result = batches_svc.revert(conn, ref, now=now, force=force)
     return {
         "ref": result.batch.ref,
@@ -2298,6 +2418,51 @@ def _open_items(conn: sqlite3.Connection, client: str | None = None) -> dict[str
         # far-future included, exactly as the per-client branch lists them
         "information_requests": _book_information_requests(conn),
     }
+
+
+def _opportunities(
+    conn: sqlite3.Connection, client: str | None = None,
+    include_closed: bool = False,
+) -> list[dict[str, Any]]:
+    """Deals, WITH refs — the same hole _recent_activity was added to close
+    for interactions, still open one entity over. pipeline_status returns
+    per-stage aggregates and _search returns no ids by design, so before this
+    the only OPP- ref a model could ever hold was one returned by
+    opportunity_create or opportunity_stage in the same session: every deal
+    on the book was unreachable to opportunity_stage and to
+    edit_field(kind="opportunity"). Book-wide by default and each row names
+    its account, so one call turns a remembered description into a ref."""
+    from .money import format_cents
+    from .repo import opportunities as opportunities_repo
+    from .repo import orgs
+
+    closed = ("won", "lost")
+    if client is not None:
+        org = _resolve_client(conn, client)
+        opps = opportunities_repo.for_org(
+            conn, org.id, open_only=not include_closed)
+        names = {org.id: org.name}
+    else:
+        opps = [
+            o for o in opportunities_repo.by_stage(conn)
+            if include_closed or str(o.stage) not in closed
+        ]
+        names = {o.id: o.name for o in orgs.list_orgs(conn)}
+    return [
+        {
+            "opportunity_ref": o.ref,
+            "account": names.get(o.org_id, "(deleted account)"),
+            "title": o.title,
+            "stage": str(o.stage),
+            "lines": o.lines,
+            "target_premium": format_cents(o.target_premium)
+            if o.target_premium else None,
+            "target_effective": o.target_effective,
+            "probability_pct": o.probability_pct,
+            "source": o.source,
+        }
+        for o in opps
+    ]
 
 
 def _pipeline_status(conn: sqlite3.Connection) -> dict[str, Any]:

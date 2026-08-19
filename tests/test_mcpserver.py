@@ -285,6 +285,73 @@ def test_build_server_registers_open_items_and_pipeline_status(server_db):
     assert {"open_items", "pipeline_status"} <= names
 
 
+# -- opportunities are nameable from a read -----------------------------------
+
+
+def _two_client_opps(server_db):
+    """Two clients, one open deal each, plus a closed one — the shape that
+    tells a scoped list from a book-wide one."""
+    from bookkit.repo import base, opportunities
+
+    conn = db.connect(server_db)
+    acme = orgs.create(conn, name="Acme Manufacturing", kind="client")
+    other = orgs.create(conn, name="Borealis Foods", kind="client")
+    opportunities.create(conn, acme.id, "Acme cyber renewal", lines="cyber",
+                         target_premium=150_000_00)
+    opportunities.create(conn, other.id, "Borealis property")
+    dead = opportunities.create(conn, acme.id, "Acme drone program")
+    base.update(conn, "opportunity", dead.id, {"stage": "lost"})
+    conn.close()
+    return db.connect_readonly(server_db)
+
+
+def test_opportunities_names_a_deal_the_assistant_did_not_create(server_db):
+    """The whole point: one call from "the Acme cyber deal" to an OPP- ref
+    that opportunity_stage will take. Before this tool the only OPP- ref in
+    any return value came from opportunity_create/opportunity_stage, so a
+    fresh session could not name a single existing deal."""
+    ro = _two_client_opps(server_db)
+
+    out = mcpserver._opportunities(ro)
+
+    row = next(r for r in out if r["title"] == "Acme cyber renewal")
+    assert row["opportunity_ref"].startswith("OPP-")
+    assert row["account"] == "Acme Manufacturing"   # names its account
+    assert row["stage"] == "identified"
+    assert row["target_premium"].startswith("$")    # cents never leave raw
+
+
+def test_opportunities_excludes_closed_deals_unless_asked(server_db):
+    ro = _two_client_opps(server_db)
+
+    titles = {r["title"] for r in mcpserver._opportunities(ro)}
+    assert "Acme drone program" not in titles
+
+    with_closed = {r["title"] for r in mcpserver._opportunities(ro, include_closed=True)}
+    assert "Acme drone program" in with_closed
+
+
+def test_opportunities_scopes_to_one_client(server_db):
+    ro = _two_client_opps(server_db)
+
+    titles = {r["title"] for r in
+              mcpserver._opportunities(ro, client="Acme Manufacturing")}
+    assert titles == {"Acme cyber renewal"}
+
+
+def test_opportunities_unknown_client_names_the_nearest(server_db):
+    """Same refusal every client-scoped tool gives — never a bare KeyError."""
+    ro = _two_client_opps(server_db)
+    with pytest.raises(ValueError, match="no client matching"):
+        mcpserver._opportunities(ro, client="Acmee")
+
+
+def test_opportunities_is_registered_as_a_read_tool(server_db):
+    server = build_server(server_db)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    assert "opportunities" in names
+
+
 def test_resolve_client_unknown_name_suggests_nearest(server_db):
     conn = db.connect(server_db)
     orgs.create(conn, name="Acme Corp", kind="client")
@@ -366,8 +433,11 @@ def test_task_complete_flips_status_with_provenance(server_db):
 
 
 def test_task_complete_requires_exact_ref(server_db):
+    """Exact refs only — and the refusal names where to get one. It used to
+    be a bare repo KeyError ("task TSK-9999 not found"), which named the
+    failure and no recovery."""
     rw = db.connect(server_db)
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="no task 'not-a-real-id' — read open_items"):
         mcpserver._task_complete(rw, "not-a-real-id")
 
 
@@ -639,7 +709,9 @@ def test_request_item_received_flips_status_and_drops_the_open_count(server_db):
 
 def test_request_item_received_requires_exact_ref(server_db):
     rw = db.connect(server_db)
-    with pytest.raises(KeyError):
+    with pytest.raises(
+        ValueError, match="no request item 'not-a-real-id' — read request_items"
+    ):
         mcpserver._request_item_received(rw, "not-a-real-id")
 
 
@@ -888,17 +960,198 @@ def test_undo_after_an_mcp_write_reverts_the_write_not_the_provenance(server_db)
 # -- batching: one call, one undo unit ----------------------------------------
 
 
-def test_every_write_tool_returns_a_batch_ref(server_db):
+# The roster below is what makes this section's name true. It used to check
+# TWO tools while claiming to check every one of them, which is worse than no
+# test: an auditor asking "is every write batched?" got a green tick from an
+# assertion that had never seen nine of them. The roster is derived from
+# _register_write_tools itself, so an eleventh write tool fails
+# test_the_write_tool_roster_is_accounted_for on the commit that adds it, not
+# whenever someone next reads this file.
+
+
+def _registered_write_tools(tmp_path) -> set[str]:
+    """Every tool _register_write_tools registers — read off the registrar, so
+    the list cannot go stale."""
+    from mcp.server.mcpserver import MCPServer
+
+    probe = MCPServer("roster-probe")
+    mcpserver._register_write_tools(probe, db.connect(tmp_path / "roster.db"))
+    return {t.name for t in probe._tool_manager.list_tools()}
+
+
+# Registered on the rw connection but read-only: they need the writable
+# connection for nothing but proximity to the verbs they serve refs to.
+_NON_MUTATING = {"recent_activity", "program_layers", "list_batches"}
+
+# The two reverts, deliberately unbatched: a revert's own writes carry
+# note='revert' and NO batch_id, so a revert cannot itself be batch-reverted
+# (services/batches.py:326). program_revert_file DOES return a "batch" key,
+# but it is the ref of the batch being PUT BACK — asserting on it would be
+# the test agreeing with itself.
+_UNBATCHED_BY_DESIGN = {"revert_batch", "program_revert_file"}
+
+
+def _acme(rw):
+    return orgs.create(rw, name="Acme", kind="client")
+
+
+def _a_task(rw):
+    org = _acme(rw)
+    return org, tasks_repo.create(rw, "chase the quote", org_id=org.id)
+
+
+def _a_request_item(rw):
+    _acme(rw)
+    out = mcpserver._request_create(rw, "Acme", "Sompo questions", ["loss runs"])
+    items = mcpserver._request_items(rw, out["request_ref"])
+    return items["items"][0]["item_ref"]
+
+
+def _an_assignment(rw):
+    _acme(rw)
+    mcpserver._member_create(rw, "Dana Okafor")
+    return mcpserver._team_assign(rw, "Dana Okafor", client="Acme")
+
+
+def _linked_placement(rw, tmp_path):
+    """A placement backed by a real towerkit program file — what the four
+    program_* writes need. Same shape as tests/test_mcp_program.py's fixture."""
+    from test_linking_flow import make_program, write_program
+
+    from bookkit import sync
+
+    org = orgs.create(rw, kind="client", name="Test Client, Inc.", status="active")
+    path = write_program(
+        tmp_path / "p" / "test.json",
+        make_program("Test Client, Inc.", "2026-01-01", "2027-01-01", tbd_line=True),
+    )
+    assert sync.confirm_link(rw, path, org.id).ok
+    return placements.by_program_path(rw, str(path))
+
+
+# tool name -> a call that must come back with a fresh batch ref. Each builds
+# its own prerequisites: one fresh database per case, so order is not a
+# hidden input.
+_BATCHED_WRITES = {
+    "log_activity": lambda rw, tmp: (
+        _acme(rw), mcpserver._log_activity(rw, "Acme", "a note"))[1],
+    "activity_delete": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._activity_delete(
+            rw, mcpserver._log_activity(rw, "Acme", "a note")["interaction_ref"]),
+    )[1],
+    "task_create": lambda rw, tmp: (
+        _acme(rw), mcpserver._task_create(rw, "chase the quote", client="Acme"))[1],
+    "task_complete": lambda rw, tmp: mcpserver._task_complete(
+        rw, _a_task(rw)[1].id),
+    "task_reopen": lambda rw, tmp: mcpserver._task_reopen(
+        rw, mcpserver._task_complete(rw, _a_task(rw)[1].id)["task_ref"]),
+    "client_create": lambda rw, tmp: mcpserver._client_create(
+        rw, "Zephyr Logistics"),
+    "enrich_field": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._enrich_field(rw, "Acme", "website", "https://acme.example"),
+    )[1],
+    "edit_field": lambda rw, tmp: mcpserver._edit_field(
+        rw, "task", _a_task(rw)[1].id, "title",
+        value="chase the binder", expecting="chase the quote"),
+    "contact_add": lambda rw, tmp: (
+        _acme(rw), mcpserver._contact_add(rw, "Acme", "Ann", "Lee"))[1],
+    "contact_remove": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._contact_add(rw, "Acme", "Ann", "Lee"),
+        mcpserver._contact_remove(rw, "Acme", "Ann Lee"),
+    )[2],
+    "opportunity_create": lambda rw, tmp: (
+        _acme(rw), mcpserver._opportunity_create(rw, "Acme", "Cyber placement"))[1],
+    "opportunity_stage": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._opportunity_stage(
+            rw,
+            mcpserver._opportunity_create(
+                rw, "Acme", "Cyber placement")["opportunity_ref"],
+            "qualified"),
+    )[1],
+    "project_create": lambda rw, tmp: (
+        _acme(rw), mcpserver._project_create(rw, "Acme", "Warehouse build"))[1],
+    "need_add": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._need_add(
+            rw,
+            mcpserver._project_create(
+                rw, "Acme", "Warehouse build")["project_ref"],
+            "GL", "2026-12-01"),
+    )[1],
+    "member_create": lambda rw, tmp: mcpserver._member_create(rw, "Dana Okafor"),
+    "team_assign": lambda rw, tmp: _an_assignment(rw),
+    "team_unassign": lambda rw, tmp: mcpserver._team_unassign(
+        rw, _an_assignment(rw)["assignment_id"]),
+    "member_deactivate": lambda rw, tmp: (
+        mcpserver._member_create(rw, "Dana Okafor"),
+        mcpserver._member_deactivate(rw, "Dana Okafor"),
+    )[1],
+    "member_reactivate": lambda rw, tmp: (
+        mcpserver._member_create(rw, "Dana Okafor"),
+        mcpserver._member_deactivate(rw, "Dana Okafor"),
+        mcpserver._member_reactivate(rw, "Dana Okafor"),
+    )[2],
+    "request_create": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._request_create(rw, "Acme", "Sompo questions", ["loss runs"]),
+    )[1],
+    "request_item_received": lambda rw, tmp: mcpserver._request_item_received(
+        rw, _a_request_item(rw)),
+    "request_item_waive": lambda rw, tmp: mcpserver._request_item_waive(
+        rw, _a_request_item(rw)),
+    "program_layer_add": lambda rw, tmp: mcpserver._program_layer_add(
+        rw, _linked_placement(rw, tmp).ref, "Excess GL", line_ids=["gl"],
+        attach="2m", limit="5m"),
+    "program_bind": lambda rw, tmp: mcpserver._program_bind(
+        # primary-cy is the unsigned layer in the fixture program; primary-gl
+        # is already 100% Zurich and any share on it over-signs
+        rw, _linked_placement(rw, tmp).ref, "primary-cy", "Chubb", "25%"),
+    "program_layer_edit": lambda rw, tmp: mcpserver._program_layer_edit(
+        rw, _linked_placement(rw, tmp).ref, "primary-gl", policy_number="GL-1"),
+    "program_edit": lambda rw, tmp: mcpserver._program_edit(
+        rw, _linked_placement(rw, tmp).ref, name="Renamed Program"),
+}
+
+
+def test_the_write_tool_roster_is_accounted_for(tmp_path):
+    """Every tool _register_write_tools registers is either exercised below or
+    named as a deliberate exception. This is the assertion that makes the next
+    test's name true — and the one that fails when a write tool is added with
+    no batch-ref coverage."""
+    accounted = set(_BATCHED_WRITES) | _NON_MUTATING | _UNBATCHED_BY_DESIGN
+    registered = _registered_write_tools(tmp_path)
+    assert registered - accounted == set(), "write tool with no batch-ref case"
+    assert accounted - registered == set(), "stale entry: no such write tool"
+
+
+@pytest.mark.parametrize("tool", sorted(_BATCHED_WRITES))
+def test_every_write_tool_returns_a_batch_ref(tool, server_db, tmp_path):
+    """One MCP call is one undo unit, on all twenty-six of them. This checked
+    exactly two — _log_activity and _task_create — under this name; the other
+    write tools were batched, but nothing held them there."""
+    rw = db.connect(server_db)
+    out = _BATCHED_WRITES[tool](rw, tmp_path)
+    assert isinstance(out, dict), f"{tool} returned no dict"
+    assert "batch" in out, f"{tool} returned no batch ref"
+    assert out["batch"].startswith("MCP-"), f"{tool} batch ref: {out['batch']!r}"
+    # a real row, stamped by this surface, not a string that merely looks right
+    batch = batches_repo.get_by_ref(rw, out["batch"])
+    assert batch.source == "mcp"
+    assert batch.tool == tool
+
+
+def test_two_calls_are_two_undo_units(server_db):
     conn = db.connect(server_db)
     orgs.create(conn, name="Acme", kind="client")
     conn.close()
     rw = db.connect(server_db)
 
     logged = mcpserver._log_activity(rw, "Acme", "a note")
-    assert logged["batch"].startswith("MCP-")
-
     made = mcpserver._task_create(rw, "chase the quote", client="Acme")
-    assert made["batch"].startswith("MCP-")
     assert made["batch"] != logged["batch"]
 
 
@@ -950,6 +1203,117 @@ def test_list_batches_shows_recent_work_newest_first(server_db):
     assert out[0]["tool"] == "task_create"
     assert out[0]["reverted"] is False
     assert out[1]["account"] == "Acme"
+
+
+def test_list_batches_covers_every_surface_not_just_this_server(server_db):
+    """The docstring said "changes THIS server made"; repo.batches.recent has
+    no source filter and never had one. The tool is MORE capable than it
+    advertised, so a model would never have reached for it to answer "what
+    changed on this account this week" — the fix is the docstring plus the
+    `source` field that lets a caller tell them apart."""
+    from datetime import date as date_cls
+
+    conn = db.connect(server_db)
+    org = orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+
+    mine = mcpserver._log_activity(rw, "Acme", "an assistant note")
+    with batches_svc.open_batch(
+        rw, source="tui", tool="task_form", summary="a TUI edit", org_id=org.id
+    ):
+        tasks_repo.create(rw, "typed at the keyboard", org_id=org.id)
+
+    out = mcpserver._list_batches(rw, today=date_cls.today())
+    by_source = {row["source"] for row in out}
+    assert by_source == {"mcp", "tui"}
+    assert next(r for r in out if r["ref"] == mine["batch"])["source"] == "mcp"
+
+
+def test_list_batches_filters_to_one_account(server_db):
+    from datetime import date as date_cls
+
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    orgs.create(conn, name="Borealis Foods", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+
+    acme = mcpserver._log_activity(rw, "Acme", "acme note")
+    mcpserver._log_activity(rw, "Borealis Foods", "borealis note")
+
+    out = mcpserver._list_batches(rw, today=date_cls.today(), client="Acme")
+    assert [row["ref"] for row in out] == [acme["batch"]]
+    assert out[0]["account"] == "Acme"
+
+
+def test_list_batches_unknown_account_names_the_nearest(server_db):
+    from datetime import date as date_cls
+
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+    with pytest.raises(ValueError, match="no client matching"):
+        mcpserver._list_batches(rw, today=date_cls.today(), client="Acmee")
+
+
+def test_list_batches_window_is_a_parameter_defaulting_to_fourteen_days(server_db):
+    """Default behaviour is unchanged for existing callers: 14 days, every
+    account. `days` widens or narrows it."""
+    from datetime import date as date_cls
+    from datetime import timedelta
+
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    rw = db.connect(server_db)
+
+    out = mcpserver._log_activity(rw, "Acme", "a note")
+    today = date_cls.today()
+
+    # 20 days on: outside the default window, inside a 30-day one
+    later = today + timedelta(days=20)
+    assert mcpserver._list_batches(rw, today=later) == []
+    refs = [row["ref"] for row in mcpserver._list_batches(rw, today=later, days=30)]
+    assert refs == [out["batch"]]
+
+    # and the default really is 14, not "everything"
+    edge = today + timedelta(days=13)
+    assert [r["ref"] for r in mcpserver._list_batches(rw, today=edge)] == [out["batch"]]
+
+
+def test_registered_tools_pass_their_arguments_through(server_db):
+    """The rest of this module calls the _verb helpers directly (see the
+    module docstring), which cannot catch a wrapper that forgets to forward a
+    new argument — a mutation that dropped list_batches' `days`/`client` from
+    the wrapper survived the whole suite. These drive the REGISTERED closures.
+    """
+    import asyncio
+
+    from bookkit.repo import opportunities as opportunities_repo
+
+    conn = db.connect(server_db)
+    acme = orgs.create(conn, name="Acme", kind="client")
+    other = orgs.create(conn, name="Borealis Foods", kind="client")
+    opportunities_repo.create(conn, acme.id, "Acme cyber renewal")
+    # a second account's deal, so a wrapper that drops `client` and falls
+    # back to the book-wide list returns two rows and fails below
+    opportunities_repo.create(conn, other.id, "Borealis property")
+    conn.close()
+
+    server = build_server(server_db)
+    tools = {t.name: t for t in server._tool_manager.list_tools()}
+
+    deals = asyncio.run(tools["opportunities"].fn(client="Acme"))
+    assert [d["title"] for d in deals] == ["Acme cyber renewal"]
+    assert deals[0]["opportunity_ref"].startswith("OPP-")
+
+    asyncio.run(tools["log_activity"].fn(client="Acme", note="a note"))
+    asyncio.run(tools["log_activity"].fn(client="Borealis Foods", note="other"))
+    scoped = asyncio.run(tools["list_batches"].fn(days=30, client="Acme"))
+    assert [row["account"] for row in scoped] == ["Acme"]
+    assert scoped[0]["source"] == "mcp"
 
 
 def test_revert_batch_puts_the_value_back(server_db):
@@ -1872,3 +2236,148 @@ def test_editable_fields_all_exist_on_their_table(server_db):
         columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
         missing = set(fields) - columns
         assert not missing, f"{kind}: {sorted(missing)} offered but not on {table}"
+
+
+# -- a refusal says something: no bare repo KeyError reaches the model --------
+
+
+def test_unknown_refs_refuse_with_a_recovery_path(server_db):
+    """Six kinds in _edit_target already named where the right id comes from
+    ("read team_roster for exact ids"); task, project need, rfi item and batch
+    fell straight through to repo KeyError — `task TSK-9999 not found` names
+    the failure and no recovery. One function, two standards. A KeyError also
+    is not a ValueError, so these assertions fail on the old behaviour twice
+    over: wrong type, and no pointer."""
+    rw, org = _rw(server_db)
+
+    with pytest.raises(ValueError) as task_err:
+        mcpserver._edit_target(rw, "task", "TSK-9999", None)
+    assert "no task 'TSK-9999'" in str(task_err.value)
+    assert "open_items" in str(task_err.value)
+
+    with pytest.raises(ValueError) as need_err:
+        mcpserver._edit_target(rw, "project_need", "nope", None)
+    assert "no project need 'nope'" in str(need_err.value)
+    assert "open_items" in str(need_err.value)
+
+    with pytest.raises(ValueError) as item_err:
+        mcpserver._edit_target(rw, "rfi_item", "nope", None)
+    assert "no request item 'nope'" in str(item_err.value)
+    assert "request_items" in str(item_err.value)
+
+    with pytest.raises(ValueError) as batch_err:
+        mcpserver._revert_batch(rw, "MCP-9999", now="2026-08-18T09:00:00+00:00")
+    assert "no batch 'MCP-9999'" in str(batch_err.value)
+    assert "list_batches" in str(batch_err.value)
+
+
+def test_every_ref_taking_verb_refuses_the_same_way(server_db):
+    """The resolvers are shared, so the verbs that take the same ref direct
+    from the model refuse identically — task_complete was the message the
+    audit actually quoted."""
+    rw, org = _rw(server_db)
+
+    for call in (
+        lambda: mcpserver._task_complete(rw, "TSK-9999"),
+        lambda: mcpserver._task_reopen(rw, "TSK-9999"),
+    ):
+        with pytest.raises(ValueError, match="no task 'TSK-9999' — read open_items"):
+            call()
+
+    for call in (
+        lambda: mcpserver._request_item_waive(rw, "nope"),
+        lambda: mcpserver._request_item_received(rw, "nope"),
+    ):
+        with pytest.raises(ValueError, match="no request item 'nope' — read request_items"):
+            call()
+
+    with pytest.raises(ValueError, match="no batch 'MCP-9999' — read list_batches"):
+        mcpserver._program_revert_file(rw, "MCP-9999")
+
+
+# -- log_activity can record yesterday ----------------------------------------
+
+
+def test_log_activity_records_the_type_and_the_day_it_happened(server_db):
+    """It hardcoded type="note" and occurred_on=today, so "the call I had with
+    Sarah last Tuesday" could not be logged — and, there being no interaction
+    kind in edit_field, could not be corrected after the fact either."""
+    rw, org = _rw(server_db)
+
+    out = mcpserver._log_activity(
+        rw, "Acme", "walked the yard with Sarah",
+        type="site_visit", occurred_on="2026-08-11",
+    )
+
+    assert out["type"] == "site_visit"
+    assert out["occurred_on"] == "2026-08-11"
+    logged = interactions.get(rw, out["interaction_ref"])
+    assert logged.type == "site_visit"
+    assert logged.occurred_on == "2026-08-11"
+    # and it is findable by the read that names refs
+    found = mcpserver._recent_activity(rw, "Acme")[0]
+    assert found["type"] == "site_visit" and found["occurred_on"] == "2026-08-11"
+
+
+def test_log_activity_defaults_are_exactly_what_it_used_to_hardcode(server_db):
+    from datetime import date as date_cls
+
+    rw, org = _rw(server_db)
+    out = mcpserver._log_activity(rw, "Acme", "a note")
+    assert out["type"] == "note"
+    assert out["occurred_on"] == date_cls.today().isoformat()
+
+
+def test_log_activity_refuses_a_type_outside_the_vocabulary(server_db):
+    rw, org = _rw(server_db)
+    with pytest.raises(ValueError) as err:
+        mcpserver._log_activity(rw, "Acme", "a note", type="phonecall")
+    assert "'type' must be one of" in str(err.value)
+    assert "site_visit" in str(err.value)          # names the legal values
+    assert interactions.for_org(rw, org.id) == []  # nothing written
+
+
+def test_log_activity_refuses_a_bare_number_as_a_date(server_db):
+    """CLAUDE.md's rule, reached through the tool: dateparser reads "5" as a
+    MONTH and future-biases it, so "the 5th" once saved as 2027-05-01 and fell
+    off every attention window silently. parse_human_date refuses it and the
+    refusal must reach the model intelligibly, not be routed around."""
+    rw, org = _rw(server_db)
+    with pytest.raises(ValueError) as err:
+        mcpserver._log_activity(rw, "Acme", "a note", occurred_on="5")
+    assert "'5' is not a date" in str(err.value)
+    assert "a bare number is ambiguous" in str(err.value)
+    assert interactions.for_org(rw, org.id) == []  # nothing written
+
+
+def test_log_activity_takes_a_human_backdate(server_db):
+    """The write-up-after-the-fact case, in the forms parse_human_date
+    actually accepts. NOTE: "last tuesday" is NOT one of them — it returns
+    None and is refused, so the tool docstring must not promise it."""
+    from datetime import date as date_cls
+    from datetime import timedelta
+
+    rw, org = _rw(server_db)
+    today = date_cls.today()
+
+    yesterday = mcpserver._log_activity(
+        rw, "Acme", "spoke to Sarah", type="call", occurred_on="yesterday")
+    assert yesterday["occurred_on"] == (today - timedelta(days=1)).isoformat()
+
+    older = mcpserver._log_activity(
+        rw, "Acme", "and again", type="call", occurred_on="2 days ago")
+    assert older["occurred_on"] == (today - timedelta(days=2)).isoformat()
+
+
+def test_registered_log_activity_forwards_type_and_occurred_on(server_db):
+    import asyncio
+
+    conn = db.connect(server_db)
+    orgs.create(conn, name="Acme", kind="client")
+    conn.close()
+    server = build_server(server_db)
+    tools = {t.name: t for t in server._tool_manager.list_tools()}
+
+    out = asyncio.run(tools["log_activity"].fn(
+        client="Acme", note="a call", type="call", occurred_on="2026-08-11"))
+    assert out["type"] == "call" and out["occurred_on"] == "2026-08-11"
