@@ -669,6 +669,93 @@ def test_market_remove_asks_first_and_the_get_writes_nothing(app_and_org):
     assert path.read_bytes() == before, "the confirm GET wrote to the file"
 
 
+def _placement_cell(org, placement, key):
+    return f"/accounts/{org.ref}/program/{placement.id}/cell/{key}"
+
+
+def test_placement_header_facts_are_cells(app_and_org):
+    """Name, period, status and commission were static text beside editable
+    layer cells (the web could not edit a placement's own facts at all —
+    parity gap, phase 2)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    for key in ("program_name", "period_from", "period_to", "status", "commission_bps"):
+        assert f'data-cell-action="{_placement_cell(org, placement, key)}"' in page, key
+
+
+def test_a_placement_name_saves_through_the_file(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    path = Path(placement.program_path)
+
+    saved = client.post(
+        _placement_cell(org, placement, "program_name"),
+        data={"program_name": "Renamed From The Header"},
+    )
+
+    assert saved.status_code == 200
+    assert "Renamed From The Header" in path.read_text()
+    from bookkit.repo import placements as placements_repo
+
+    assert (
+        placements_repo.get(conn, placement.id).program_name
+        == "Renamed From The Header"
+    )
+    assert 'hx-swap-oob="true"' in saved.text, "no panel refresh with the cell"
+
+
+def test_a_placement_status_saves_to_the_row_only(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    path = Path(placement.program_path)
+    sha_before = sync.file_sha256(path)
+    new_status = "quoted" if placement.status != "quoted" else "submitted"
+
+    saved = client.post(
+        _placement_cell(org, placement, "status"), data={"status": new_status}
+    )
+
+    assert saved.status_code == 200
+    from bookkit.repo import placements as placements_repo
+
+    assert placements_repo.get(conn, placement.id).status == new_status
+    assert sync.file_sha256(path) == sha_before, "a book-owned edit wrote the file"
+
+
+def test_a_refused_placement_date_keeps_the_editor_and_the_file(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        _placement_cell(org, placement, "period_to"), data={"period_to": "1999-01-01"}
+    )
+
+    assert refused.status_code == 200
+    assert path.read_bytes() == before
+    assert "cell-editing" in refused.text, "the refusal did not keep the editor open"
+    assert 'value="1999-01-01"' in refused.text
+
+
+def test_the_status_editor_is_a_select_of_the_real_statuses(app_and_org):
+    client, org = app_and_org
+    placement = _linked(client.app.state.conn, org)[0]
+
+    editor = client.get(_placement_cell(org, placement, "status") + "/edit").text
+
+    assert "<select" in editor
+    for status in ("prospective", "submitted", "quoted", "bound", "lapsed"):
+        assert status in editor
+
+
 def _details_url(org, placement, layer_id):
     return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/details"
 

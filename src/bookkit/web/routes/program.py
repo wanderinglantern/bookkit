@@ -26,18 +26,19 @@ from fastapi.responses import HTMLResponse
 
 from ... import sync
 from ...forms.entities import apply_placement, placement_form
-from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS
+from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS, PLACEMENT_FIELDS
 from ...forms.spec import Field, initial_text, parse_value
 from ...money import format_cents_compact
 from ...repo import placements as placements_repo
 from ...repo import vocab
 from ...services import batches as batches_svc
-from ...services import program_files
+from ...services import placement_edit, program_files
 from ..app import TEMPLATES
 from ..forms_render import render_cell, render_cell_display, render_form
 from .account import _conn, _context, _org, _owned, _save, layers_for
 
 _LAYER_CELLS: dict[str, Field] = {f.key: f for f in LAYER_FIELDS}
+_PLACEMENT_CELLS: dict[str, Field] = {f.key: f for f in PLACEMENT_FIELDS}
 
 # The column class a layer cell carries, in ONE place. Three literals — the
 # panel's first render, the display route htmx swaps back after a save, and the
@@ -144,6 +145,7 @@ def _programs(request: Request, org: Any) -> list[dict[str, Any]]:
         out.append(
             {
                 "placement": placement,
+                "placement_cells": _placement_cells(request, org.ref, placement),
                 "linked": bool(placement.program_path),
                 "layers": [
                     _layer_row(request, org.ref, placement.id, layer) for layer in layers
@@ -177,6 +179,146 @@ def program_tab(request: Request, ref: str) -> HTMLResponse:
     context = _context(conn, org, "program", request)
     context["programs"] = _programs(request, org)
     return TEMPLATES.TemplateResponse(request, "account/program.html", context)
+
+
+# --- editing the placement's own facts where they are read --------------------
+#
+# The header's name, period, status and commission are cells (phase 2): the
+# web could not edit a placement's own facts at all, while the layer table
+# below them edited in place. WHICH OWNER a field writes to — the towerkit
+# file or the row — is services.placement_edit's call, not this module's.
+
+
+def _placement_field(key: str) -> Field:
+    field = _PLACEMENT_CELLS.get(key)
+    if field is None:
+        raise HTTPException(
+            status_code=404, detail=f"{key} is not an editable placement field"
+        )
+    return field
+
+
+def _placement_cell_action(ref: str, placement_id: str, key: str) -> str:
+    return f"/accounts/{ref}/program/{placement_id}/cell/{key}"
+
+
+def _placement_cell_class(key: str, placement: Any) -> str:
+    if key == "status":
+        # the pill class the static header used — colour stays signal
+        return f"status-{placement.status}"
+    if key in ("period_from", "period_to", "commission_bps"):
+        return "mono"
+    return ""
+
+
+def _placement_display_cell(
+    request: Request, ref: str, placement: Any, key: str
+) -> HTMLResponse:
+    field = _placement_field(key)
+    return HTMLResponse(
+        render_cell_display(
+            request, field, _display_text(field, getattr(placement, key)),
+            _placement_cell_action(ref, placement.id, key),
+            tag="span", extra_class=_placement_cell_class(key, placement),
+        )
+    )
+
+
+def _placement_editor_cell(
+    request: Request, ref: str, placement: Any, key: str,
+    error: str | None = None, typed: str | None = None,
+) -> HTMLResponse:
+    field = _placement_field(key)
+    value = typed if typed is not None else initial_text(field, getattr(placement, key))
+    return HTMLResponse(
+        render_cell(
+            request, field, value, _placement_cell_action(ref, placement.id, key),
+            error=error, tag="span",
+            extra_class=_placement_cell_class(key, placement),
+        )
+    )
+
+
+def _placement_cells(request: Request, ref: str, placement: Any) -> dict[str, str]:
+    return {
+        key: _text(_placement_display_cell(request, ref, placement, key))
+        for key in _PLACEMENT_CELLS
+    }
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/cell/{key}", response_class=HTMLResponse
+)
+def placement_cell(
+    request: Request, ref: str, placement_id: str, key: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return _placement_display_cell(request, ref, placement, key)
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/cell/{key}/edit",
+    response_class=HTMLResponse,
+)
+def placement_cell_edit(
+    request: Request, ref: str, placement_id: str, key: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return _placement_editor_cell(request, ref, placement, key)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/cell/{key}", response_class=HTMLResponse
+)
+async def placement_cell_save(
+    request: Request, ref: str, placement_id: str, key: str
+) -> HTMLResponse:
+    """One header fact, routed to its owner by services.placement_edit.split:
+    a file-owned field rides the snapshot seam (one batch, one pre-image),
+    a book-owned one is a plain batched row write, and an UNCHANGED value
+    writes nothing at all. A write-through conflict answers as a one-line
+    refusal here (like market cells; the three-way stays layer-cell-shaped).
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    field = _placement_field(key)
+    raw = str((await request.form()).get(key, ""))
+    try:
+        value = parse_value(field, raw)
+        if field.required and value in (None, ""):
+            raise ValueError(f"{field.label} is required")
+        file_changes, book_changes = placement_edit.split(placement, {key: value})
+    except ValueError as exc:
+        return _placement_editor_cell(request, ref, placement, key, str(exc), raw)
+
+    try:
+        if file_changes:
+            program_files.write(
+                conn, placement,
+                tool="program_edit",
+                summary=f"edited {placement.ref}: {field.label}",
+                mutate=lambda: placement_edit.write_file_fields(
+                    conn, placement, file_changes
+                ),
+                open_batch=_open_batch_web,
+            )
+        elif book_changes:
+            with _open_batch_web(
+                conn, tool="placement_edit", org_id=placement.org_id,
+                summary=f"edited {placement.ref}: {field.label}",
+            ):
+                placement_edit.write_book_fields(conn, placement, book_changes)
+    except Exception as exc:
+        return _placement_editor_cell(request, ref, placement, key, str(exc), raw)
+
+    request.state.layer_details = {}
+    fresh = placements_repo.get(conn, placement_id)
+    cell = _placement_display_cell(request, ref, fresh, key)
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(cell) + _text(panel))
 
 
 # --- editing a layer where it is read -----------------------------------------
@@ -588,6 +730,7 @@ def _panel(request: Request, ref: str, org: Any, placement_id: str) -> HTMLRespo
         {
             "header": {"org": org},
             "placement": placement,
+            "placement_cells": _placement_cells(request, ref, placement),
             "linked": bool(placement.program_path),
             "layers": [
                 _layer_row(request, ref, placement_id, layer)
