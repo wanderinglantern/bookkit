@@ -1129,6 +1129,41 @@ _BATCHED_WRITES = {
 }
 
 
+# tool name -> the entity types its batch MUST contain. The receipt test
+# below proves a batch ROW exists; this proves the call's EVENTS were stamped
+# with it. Without it `db.current_batch()` could return None for every write —
+# every event_log row landing with batch_id NULL, the undo spine entirely
+# dead — and all twenty-six receipt cases still passed (2026-08-18).
+_TOUCHES = {
+    "log_activity": {"interaction"},
+    "activity_delete": {"interaction"},
+    "task_create": {"task"},
+    "task_complete": {"task"},
+    "task_reopen": {"task"},
+    "client_create": {"org"},
+    "enrich_field": {"org"},
+    "edit_field": {"task"},
+    "contact_add": {"contact"},
+    "contact_remove": {"contact"},
+    "opportunity_create": {"opportunity"},
+    "opportunity_stage": {"opportunity"},
+    "project_create": {"project"},
+    "need_add": {"project_need"},
+    "member_create": {"team_member"},
+    "team_assign": {"team_assignment"},
+    "team_unassign": {"team_assignment"},
+    "member_deactivate": {"team_member"},
+    "member_reactivate": {"team_member"},
+    "request_create": {"rfi_request", "rfi_item"},
+    "request_item_received": {"rfi_item"},
+    "request_item_waive": {"rfi_item"},
+    "program_layer_add": {"placement"},
+    "program_bind": {"placement"},
+    "program_layer_edit": {"placement"},
+    "program_edit": {"placement"},
+}
+
+
 def test_the_write_tool_roster_is_accounted_for(tmp_path):
     """Every tool _register_write_tools registers is either exercised below or
     named as a deliberate exception. This is the assertion that makes the next
@@ -1138,6 +1173,9 @@ def test_the_write_tool_roster_is_accounted_for(tmp_path):
     registered = _registered_write_tools(tmp_path)
     assert registered - accounted == set(), "write tool with no batch-ref case"
     assert accounted - registered == set(), "stale entry: no such write tool"
+    # a batch ref with no stamped events is a dead undo unit, so the roster
+    # gates the spine case too — a new tool cannot be added with only a receipt
+    assert set(_TOUCHES) == set(_BATCHED_WRITES), "write tool with no _TOUCHES entry"
 
 
 @pytest.mark.parametrize("tool", sorted(_BATCHED_WRITES))
@@ -1154,6 +1192,27 @@ def test_every_write_tool_returns_a_batch_ref(tool, server_db, tmp_path):
     batch = batches_repo.get_by_ref(rw, out["batch"])
     assert batch.source == "mcp"
     assert batch.tool == tool
+
+
+@pytest.mark.parametrize("tool", sorted(_BATCHED_WRITES))
+def test_every_write_tool_stamps_its_events_with_that_batch(tool, server_db, tmp_path):
+    """The receipt above is not the undo unit — the stamped events are. `u`
+    and revert_batch both work off `events_for(batch.id)`; a batch whose events
+    carry batch_id NULL reverts NOTHING while reporting a healthy ref.
+
+    Lives beside the receipt test and over the same roster so the roster
+    assertion gates both: a write tool added tomorrow cannot reach main with a
+    ref and no spine."""
+    rw = db.connect(server_db)
+    out = _BATCHED_WRITES[tool](rw, tmp_path)
+    batch = batches_repo.get_by_ref(rw, out["batch"])
+
+    events = batches_repo.events_for(rw, batch.id)
+    assert events, f"{tool}: batch {out['batch']} has no events — nothing to undo"
+    assert {e.entity_type for e in events} == _TOUCHES[tool], (
+        f"{tool} stamped {sorted({e.entity_type for e in events})}, "
+        f"expected {sorted(_TOUCHES[tool])}"
+    )
 
 
 def test_two_calls_are_two_undo_units(server_db):

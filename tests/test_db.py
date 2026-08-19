@@ -34,8 +34,17 @@ def test_migrations_are_idempotent(db_path: Path) -> None:
 
 
 def test_migration_versions_recorded(conn: sqlite3.Connection) -> None:
-    rows = conn.execute("SELECT version, applied_at FROM schema_version").fetchall()
-    assert [r["version"] for r in rows] == list(range(1, len(rows) + 1))
+    """The expectation used to be derived from len(rows), and all(...) is
+    vacuous on [] — so dropping the `INSERT INTO schema_version` was green,
+    while in production the next connect() re-runs every migration and dies
+    (2026-08-18). Count the migration FILES instead: one recorded row each."""
+    files = sorted(p.name for p in db.migrations_dir().glob("*.sql"))
+    assert files, "no migrations on disk — the assertions below would be vacuous"
+    rows = conn.execute(
+        "SELECT version, applied_at FROM schema_version ORDER BY version"
+    ).fetchall()
+    assert [r["version"] for r in rows] == list(range(1, len(files) + 1))
+    assert db.schema_version(conn) == len(files)
     assert all(r["applied_at"] for r in rows)
 
 
@@ -146,7 +155,15 @@ def test_batch_context_is_cleared_after_the_block(tmp_path):
     stamped = conn.execute(
         "SELECT COUNT(*) FROM event_log WHERE batch_id IS NOT NULL"
     ).fetchone()[0]
+    # `in_batch == stamped` is 0 == 0 when batching is entirely broken, so it
+    # closed on nothing (2026-08-18). The batch must have caught its own write
+    # first, and only then can "nothing leaked in afterwards" mean anything.
+    assert in_batch > 0, "the block's own event was never stamped with the batch"
     assert in_batch == stamped     # nothing leaked into the batch afterwards
+    after = conn.execute(
+        "SELECT COUNT(*) FROM event_log WHERE batch_id IS NULL"
+    ).fetchone()[0]
+    assert after > 0, "the write after the block should be unstamped"
 
 
 @pytest.mark.asyncio
@@ -257,7 +274,7 @@ def test_concurrent_transactions_do_not_collide(db_path):
     assert not errors, errors
 
 
-def test_connect_sets_a_busy_timeout(tmp_path):
+def test_connect_sets_a_busy_timeout(tmp_path, monkeypatch):
     """F2, as REDUCED: this value is also Python's sqlite3 default, so the
     guarantee already held — what was missing is anything pinning it. The TUI
     and the MCP server both hold read-write connections to the same file, so a
@@ -274,6 +291,22 @@ def test_connect_sets_a_busy_timeout(tmp_path):
     ro = db.connect_readonly(path)
     try:
         assert ro.execute("PRAGMA busy_timeout").fetchone()[0] == db.BUSY_TIMEOUT_MS
+    finally:
+        ro.close()
+
+    # 5000 is ALSO python's sqlite3 default, so both assertions above hold with
+    # every `PRAGMA busy_timeout` line deleted (2026-08-18). Move the constant
+    # off the default and the pragma has to actually be issued.
+    monkeypatch.setattr(db, "BUSY_TIMEOUT_MS", 7321)
+    other = tmp_path / "moved.db"
+    conn = db.connect(other)
+    try:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 7321
+    finally:
+        conn.close()
+    ro = db.connect_readonly(other)
+    try:
+        assert ro.execute("PRAGMA busy_timeout").fetchone()[0] == 7321
     finally:
         ro.close()
 

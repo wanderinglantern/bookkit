@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 import sqlite3
 from pathlib import Path
@@ -63,19 +64,59 @@ def test_soft_delete_hides_everywhere(conn) -> None:
     assert len(search.search(conn, "Atomic")) == 1
 
 
+# Functions that query a soft-delete table on purpose without the filter.
+# Keyed by (module, function) with the reason, and asserted to still exist —
+# an exception that quietly stops applying is how the rule rots.
+_ALIVE_EXEMPT = {
+    ("orgs.py", "set_parent"): (
+        "the cycle walk must follow soft-deleted ancestors: a deleted org can "
+        "be undeleted, and stopping at one would let a cycle through it pass"
+    ),
+}
+
+
+def _functions_with_entity_selects(module: Path):
+    """(name, source) for every function in `module` whose body SELECTs from a
+    soft-delete table. Per FUNCTION, because the alive() filter is often built
+    into a `where` fragment a few lines above the query string."""
+    src = module.read_text()
+    tree = ast.parse(src)
+    tables = set(base.ENTITY_TABLES.values())
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        seg = ast.get_source_segment(src, fn) or ""
+        if "SELECT" not in seg.upper():
+            continue
+        hit = {t for t in re.findall(r"(?:FROM|JOIN)\s+(\w+)", seg, re.I) if t in tables}
+        if hit:
+            yield fn.name, seg, sorted(hit)
+
+
 def test_no_raw_soft_delete_bypass_in_repo() -> None:
     """Every SELECT in repo/ against a soft-delete table must go through
-    alive(); a raw 'deleted_at' comparison outside base.py is a bug."""
-    for module in REPO_DIR.glob("*.py"):
+    alive(); a raw 'deleted_at' comparison outside base.py is a bug.
+
+    This asked `"base.alive(" in text` PER FILE, so submissions.py's fifteen
+    entity SELECTs were all satisfied by any ONE surviving occurrence
+    (2026-08-18). Scoped to the function that owns the query instead."""
+    checked = 0
+    exempt_seen: set[tuple[str, str]] = set()
+    for module in sorted(REPO_DIR.glob("*.py")):
         if module.name in ("base.py", "search.py"):
             continue  # base defines the filter; search filters explicitly per join
-        text = module.read_text()
-        selects = re.findall(r"SELECT .*?FROM (\w+)", text, re.DOTALL)
-        for table in selects:
-            if table in base.ENTITY_TABLES.values():
-                assert "base.alive(" in text or "{base.alive()}" in text, (
-                    f"{module.name} queries {table} without the alive() filter"
-                )
+        for name, seg, tables in _functions_with_entity_selects(module):
+            checked += 1
+            if (module.name, name) in _ALIVE_EXEMPT:
+                exempt_seen.add((module.name, name))
+                continue
+            assert "base.alive(" in seg, (
+                f"{module.name}:{name} queries {tables} without the alive() filter"
+            )
+    assert checked > 50, f"only {checked} repo queries found — the scan broke"
+    assert exempt_seen == set(_ALIVE_EXEMPT), (
+        f"stale alive() exemption: {set(_ALIVE_EXEMPT) - exempt_seen}"
+    )
 
 
 def test_contacts_primary_flag(conn) -> None:

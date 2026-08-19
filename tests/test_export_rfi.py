@@ -147,6 +147,32 @@ def test_compose_orders_requests_by_earliest_outstanding_due_then_ref(conn) -> N
     assert titles_in_order == ["sooner ask", "later ask", "undated ask"]
 
 
+def test_compose_breaks_a_due_date_tie_on_ref(conn) -> None:
+    """The `then ref` half of the name above was unreachable: no two fixture
+    requests shared a due date, so dropping the ref from the sort key changed
+    nothing (2026-08-18).
+
+    The tie is only visible because requests_for_org hands them back
+    `requested_on DESC` within a due date — so repo order is B, A and ref
+    order is A, B. A stable sort with no tiebreak keeps B first.
+    """
+    org = _client(conn)
+    first = rfi.create_request(
+        conn, org.id, "A asked first", "2026-08-01", due_on="2026-09-01")
+    rfi.add_item(conn, first.id, "x")
+    second = rfi.create_request(
+        conn, org.id, "B asked later", "2026-08-05", due_on="2026-09-01")
+    rfi.add_item(conn, second.id, "y")
+    assert first.ref < second.ref
+    assert [r.ref for r in rfi.requests_for_org(conn, org.id)] == [
+        second.ref, first.ref
+    ], "repo order must differ from ref order or the tiebreak is untested"
+
+    sections = compose_information_requests(conn, org.id, TODAY)
+    titles = [s.label.split(" · ")[0].split(" — ", 1)[1] for s in sections]
+    assert titles == ["A asked first", "B asked later"]
+
+
 def test_compose_item_due_pulls_a_request_forward_in_ordering(conn) -> None:
     """An item's own earlier due beats its request's later due for ordering,
     the same "earliest effective due" rule that drives the chase queue."""

@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
 from bookkit import seed
-from bookkit.repo import contacts, events, opportunities, orgs, placements, rfi, submissions, tasks
+from bookkit.money import weighted_cents
+from bookkit.repo import (
+    contacts,
+    events,
+    interactions,
+    opportunities,
+    orgs,
+    placements,
+    rfi,
+    submissions,
+    tasks,
+)
 from bookkit.repo import projects as projects_repo
 from bookkit.services import book, capture, hit_rate, pipeline, renewals, sla, staleness, undo
 from bookkit.services.export_open_items import SCOPE_NOTE, compose
@@ -42,7 +53,64 @@ def test_renewal_buckets(seeded) -> None:
     assert upcoming_only == sorted(upcoming_only)
 
 
+def test_the_attention_window_is_exactly_120_days(seeded) -> None:
+    """`0 <= days_remaining <= 120` in the test above is CLAMPED by the query
+    under test, and the seed's largest in-window value is 104 — so cutting
+    `upcoming(days=)` from 120 to 35 left the whole suite green while the
+    attention window silently shrank (2026-08-18). Pin BOTH edges with
+    placements planted on them: day 120 must be in, day 121 must be out.
+
+    Unlinked on purpose — no program_path means `_renewal_on` falls back to
+    period_to, so the date under test is the one written here."""
+    org = orgs.create(seeded, name="Horizon Edge Co", kind="client", status="active")
+    on_the_edge = placements.create(
+        seeded, org.id, "Edge Day 120",
+        (TODAY - timedelta(days=245)).isoformat(),
+        (TODAY + timedelta(days=120)).isoformat(),
+        status="bound",
+    )
+    just_past = placements.create(
+        seeded, org.id, "Edge Day 121",
+        (TODAY - timedelta(days=244)).isoformat(),
+        (TODAY + timedelta(days=121)).isoformat(),
+        status="bound",
+    )
+
+    found = {i.placement.id: i for i in renewals.upcoming(seeded, TODAY)}
+    assert on_the_edge.id in found, "day 120 fell outside the 120-day window"
+    assert found[on_the_edge.id].days_remaining == 120
+    assert found[on_the_edge.id].bucket == "91-120"
+    assert just_past.id not in found, "day 121 is past the window and must not show"
+
+
 def test_staleness_weighted_by_premium(seeded) -> None:
+    """The seed leaves only two stale accounts and ordering them by days_stale
+    gives the SAME order as days_stale x premium, so dropping the premium
+    factor entirely (`days_stale * 1`) was green (2026-08-18). The fixture
+    below plants the inversion the name promises: a big account stale for a
+    short while must outrank a tiny one stale for far longer."""
+    whale = orgs.create(seeded, name="Whale Holdings", kind="client", status="active")
+    minnow = orgs.create(seeded, name="Minnow LLC", kind="client", status="active")
+    pauper = orgs.create(seeded, name="Pauper Co", kind="client", status="active")
+    plan = [
+        # org, days since last contact, current bound premium (cents)
+        (whale, 70, 5_000_000_00),
+        (minnow, 400, 1_00),
+        (pauper, 300, 0),  # no bound placement at all
+    ]
+    for org, gap, premium in plan:
+        interactions.log(
+            seeded, org.id, "call", "checked in",
+            (TODAY - timedelta(days=gap)).isoformat(),
+        )
+        if premium:
+            placements.create(
+                seeded, org.id, f"{org.name} Program",
+                (TODAY - timedelta(days=200)).isoformat(),
+                (TODAY + timedelta(days=165)).isoformat(),
+                status="bound", total_premium=premium,
+            )
+
     stale = staleness.stale_accounts(seeded, TODAY, threshold_days=60)
     assert stale, "seed deliberately leaves accounts stale"
     weights = [s.weight for s in stale]
@@ -50,6 +118,21 @@ def test_staleness_weighted_by_premium(seeded) -> None:
     for account in stale:
         assert account.days_stale > 60
         assert account.org.status == "active"
+
+    by_id = {s.org.id: s for s in stale}
+    assert {whale.id, minnow.id, pauper.id} <= set(by_id)
+    # the inversion: days_stale alone would put minnow first
+    assert by_id[minnow.id].days_stale > by_id[whale.id].days_stale
+    order = [s.org.id for s in stale]
+    assert order.index(whale.id) < order.index(minnow.id), (
+        "premium is not weighting the ranking — a 5m account 70 days cold "
+        "ranks below a $1 account"
+    )
+    assert by_id[whale.id].premium == 5_000_000_00
+    # a premium-less account still gets a rank, not a zero
+    assert by_id[pauper.id].premium == 0
+    assert by_id[pauper.id].weight == by_id[pauper.id].days_stale
+    assert order.index(minnow.id) < order.index(pauper.id)
 
 
 def test_stage_transitions_enforced(seeded) -> None:
@@ -75,7 +158,20 @@ def test_pipeline_metrics(seeded) -> None:
     total = sum(r.count for r in rows)
     assert total == len(opportunities.by_stage(seeded))
     for r in rows:
-        assert r.weighted_cents <= r.total_cents
+        # `weighted <= total` CANNOT FAIL — weighted is total * pct // 100 with
+        # pct <= 100 — so halving every stage's weighted pipeline was green
+        # (2026-08-18). Pin the figure to the opportunities it is drawn from,
+        # via the separately unit-tested money helper.
+        stage_opps = opportunities.by_stage(seeded, r.stage)
+        assert r.weighted_cents == sum(
+            weighted_cents(o.target_premium or 0, o.probability_pct)
+            for o in stage_opps
+        ), f"{r.stage}: not the probability-weighted sum of its own opportunities"
+        assert r.total_cents == sum(o.target_premium or 0 for o in stage_opps)
+    # anti-vacuity: the seed must actually exercise weighting, or the loop
+    # above holds just as well for an empty or unweighted pipeline
+    assert sum(r.weighted_cents for r in rows) > 0
+    assert any(0 < r.weighted_cents < r.total_cents for r in rows)
     assert by_stage["qualified"].avg_days_in_stage is not None  # seed advanced through it
 
 
