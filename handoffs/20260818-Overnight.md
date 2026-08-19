@@ -40,9 +40,23 @@ Three implementers, deliberately in separate worktrees because their files colli
 - `mcp-derived-surface` was told **not** to edit `forms/entities.py`, and `submission-quotes` was
   told **not** to touch any MCP tool, so those two do not collide.
 
-## 3. The queue after these three
+## 3. The queue after these three — REPRIORITISED 2026-08-18 late
 
-In order, and none of it is blocked on Grant:
+**Grant's instruction: move the program-editing friction up.** His morning goal is to *build*
+programs, not only review them, so the surface he will sit in front of comes first. Everything below
+was resequenced around that.
+
+**NEXT IN towerkit, the moment `soi-status-and-statutory` lands:**
+
+**0. The editor's share-editing friction.** The AE measured **42 keystrokes to change one carrier's
+share**, and found `v` — the fast sheet — carries no participants. Verified: `v` is
+`action_layers_sheet` (`editor.py:205, :886`), and a participants sheet *does* exist
+(`_participants_sheet`, `editor.py:697`, with `CellEdited` handling at `:948`) — so the cost is
+**navigation, not editing**. The likely shape of the fix is a participants sheet reachable directly,
+the way `v` reaches layers. **Measure the current path before changing it**, and report the count
+before and after; a fix that does not move the number is not a fix.
+
+Then, in order, and none of it blocked on Grant:
 
 1. **Assignee (C4), task only.** His call, against the AE's advice to span task/RFI/submission —
    recorded as his. **But the AE's storage correction stands**: `assignee_kind` + `assignee_id` when
