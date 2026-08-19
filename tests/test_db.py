@@ -70,6 +70,140 @@ def test_failed_migration_rolls_back(db_path: Path, tmp_path: Path, monkeypatch)
     connection.close()
 
 
+def _migrations_plus(tmp_path: Path, name: str, sql: str) -> Path:
+    """A copy of the real migrations directory with one more file in it."""
+    bad_dir = tmp_path / "migrations"
+    bad_dir.mkdir(exist_ok=True)
+    for entry in db.migrations_dir().iterdir():
+        (bad_dir / entry.name).write_text(entry.read_text())
+    (bad_dir / name).write_text(sql)
+    return bad_dir
+
+
+def test_a_migration_may_not_take_its_own_transaction_control(
+    db_path: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """A migration containing its own `COMMIT;` ends the runner's transaction
+    early, so everything after it lands unconditionally. One that then FAILED
+    left its tables committed, never advanced schema_version, and made the
+    runner's own `ROLLBACK` raise "cannot rollback - no transaction is active"
+    on the way out — so every later `connect()` died on "table already exists"
+    and the book was unopenable on all four surfaces, permanently, with no
+    message naming the cause (2026-08-18).
+
+    Nothing can undo committed DDL, so the file is refused before the first
+    statement of the first pending migration runs, and the database is left
+    exactly as it was."""
+    bad_dir = _migrations_plus(
+        tmp_path, "099_commits_early.sql",
+        "CREATE TABLE widget (id TEXT PRIMARY KEY);\n"
+        "COMMIT;\n"
+        "CREATE TABLE widget (id TEXT PRIMARY KEY);\n",
+    )
+    monkeypatch.setattr(db, "migrations_dir", lambda: bad_dir)
+
+    with pytest.raises(db.MigrationRefused, match="transaction control"):
+        db.connect(db_path)
+
+    # and again — the refusal is stable, not a one-time wedge
+    with pytest.raises(db.MigrationRefused):
+        db.connect(db_path)
+
+    raw = sqlite3.connect(db_path)
+    try:
+        left = raw.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'widget'"
+        ).fetchone()
+    finally:
+        raw.close()
+    assert left is None, "a refused migration committed a table anyway"
+
+
+def test_the_trigger_bodies_in_the_real_migrations_are_not_transaction_control(
+    tmp_path: Path,
+) -> None:
+    """001_initial.sql defines eight triggers, every one of them
+    `CREATE TRIGGER ... BEGIN ... END;`. A keyword grep would refuse the whole
+    schema; the check splits statements the way sqlite's own shell does, so a
+    trigger's BEGIN is inside a CREATE, not a statement of its own."""
+    for entry in sorted(db.migrations_dir().iterdir()):
+        if entry.suffix == ".sql":
+            db.check_migration(entry, entry.read_text(encoding="utf-8"))
+
+
+class _CommitsThenFails:
+    """A connection whose executescript ends the transaction and THEN fails —
+    the exact state a migration with its own `COMMIT;` produced. Everything
+    else delegates to the real connection."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+    def executescript(self, _script: str):
+        self._conn.execute("BEGIN")
+        self._conn.execute("CREATE TABLE half_applied (x)")
+        self._conn.execute("COMMIT")
+        raise sqlite3.OperationalError("table half_applied already exists")
+
+
+def test_a_migration_error_is_not_replaced_by_the_rollback_that_follows_it(
+    db_path: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """The runner rolled back UNCONDITIONALLY. With the transaction already
+    gone, `ROLLBACK` raised out of the except block and REPLACED the real
+    error with "cannot rollback - no transaction is active" — so the failure
+    that actually broke the book never reached anyone, and what they got
+    instead was a message about the cleanup (2026-08-18).
+
+    `check_migration` now refuses the file that produces that state, so this
+    is no longer reachable THROUGH a migration. The guard is asserted on the
+    state itself rather than through a file, because a defence that only holds
+    while a second defence holds is worth nothing on the day the first one is
+    evaded — and it costs one `if`."""
+    bad_dir = _migrations_plus(tmp_path, "099_pending.sql", "CREATE TABLE later (x);\n")
+    monkeypatch.setattr(db, "migrations_dir", lambda: bad_dir)
+    connection = db.connect(db_path, migrate=False)
+    try:
+        with pytest.raises(sqlite3.Error) as err:
+            db.apply_migrations(_CommitsThenFails(connection))  # type: ignore[arg-type]
+    finally:
+        connection.close()
+    assert "half_applied already exists" in str(err.value), (
+        f"the real error was replaced by its own cleanup: {err.value}"
+    )
+    assert "cannot rollback" not in str(err.value)
+
+
+def test_a_failing_migration_still_reports_its_own_error(
+    db_path: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """The ordinary failing migration, where the transaction IS still open and
+    the rollback is the right thing to do — the `if` must not have turned the
+    rollback off."""
+    bad_dir = _migrations_plus(
+        tmp_path, "099_fails.sql",
+        "CREATE TABLE will_fail (x);\nSELECT bogus_function_that_does_not_exist();\n",
+    )
+    monkeypatch.setattr(db, "migrations_dir", lambda: bad_dir)
+    connection = db.connect(db_path, migrate=False)
+    try:
+        with pytest.raises(sqlite3.Error) as err:
+            db.apply_migrations(connection)
+        assert "bogus_function_that_does_not_exist" in str(err.value)
+        # asserted on the LIVE connection, before it is closed: closing one
+        # discards an open transaction anyway, so a check made afterwards
+        # passes whether the rollback ran or not and pins nothing
+        assert not connection.in_transaction, "the transaction was left open"
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'will_fail'"
+        ).fetchone() is None, "the rollback did not happen — the guard disabled it"
+    finally:
+        connection.close()
+
+
 def test_backup_vacuum_into(db_path: Path, tmp_path: Path) -> None:
     connection = db.connect(db_path)
     dest = tmp_path / "backups" / "book.db"
