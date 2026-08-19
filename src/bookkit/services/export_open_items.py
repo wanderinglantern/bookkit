@@ -19,8 +19,14 @@ what the client still owes us, composed by services/export_rfi.py —
 omitted (not blank) when nothing is outstanding. Sheet 3 (Projects): every
 need on every live project, omitted (not blank) when the org has none.
 Sheet 4 (Schedule of Insurance): towerkit's SOI machinery per linked
-placement with a book-data fallback, covering only placements whose cover
-is still in force on the export date — omitted (not blank) when none is.
+placement with a book-data fallback, covering only placements whose cover is
+in force on the export date — incepted and not yet expired — and restating
+every row's own status, so a run-off layer inside a live programme says
+`Expired` rather than `Bound`. A linked file is USED only where it is
+vouched for as this account's (see _wrong_account); a file that is not, or
+that cannot be read, contributes no rows at all and its placement prints
+from book data under a heading that says so. Omitted (not blank) when
+nothing is in force.
 Sheet 1 opens on SCOPE_NOTE, the standing statement of what the report
 covers and what it withholds — invariant text, identical on every export.
 Determinism: `today` is a parameter, never the wall clock."""
@@ -35,12 +41,13 @@ from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 
-from towerkit.model import load_program
+from towerkit.model import Program, load_program
 from towerkit.soi import SoiRow, SoiSection, SoiStatus, build_soi
 
 from ..models import (
     INTERNAL_CATEGORY,
     AssigneeKind,
+    Org,
     Placement,
     PlacementStatus,
     Project,
@@ -49,7 +56,7 @@ from ..models import (
     reads_as_internal,
 )
 from ..money import MoneyParseError, cents_to_dollars, format_cents
-from ..repo import contacts, orgs, placements, submissions
+from ..repo import contacts, links, orgs, placements, submissions
 from ..repo import projects as projects_repo
 from ..repo import tasks as tasks_repo
 
@@ -466,6 +473,47 @@ def compose_projects(conn: sqlite3.Connection, org_id: str) -> list[SheetSection
 # --- sheet 3: Schedule of Insurance — towerkit's SOI machinery, per client ------
 
 _UNLINKED_CARRIER = "See policy documents"
+_UNPLACED_CARRIER = "To be placed"
+"""WHAT THE CARRIER COLUMN SAYS WHEN THE BOOK HAS NO CARRIERS — and it must
+depend on whether a policy EXISTS.
+
+`See policy documents` sends the reader to their file. On a row whose status
+is `To be placed` and whose effective date is next January there is no file
+to go to, so the sentence tells them to look for something that does not
+exist and they conclude they misfiled it — the sheet blames the reader for
+its own silence. `_UNPLACED_CARRIER` is towerkit's own words for the same
+fact one level down (`soi.carrier_text` prints exactly this for a layer with
+nobody on the risk), so the two surfaces answer alike.
+
+The split is on whether cover EXISTS OR EXISTED, not on whether it is in
+force: a mid-term cancellation (`lapsed` → `Expired`) had a policy and its
+documents are real."""
+
+_HAS_A_POLICY = frozenset({PlacementStatus.BOUND, PlacementStatus.LAPSED})
+
+
+def _book_data_carrier(status: PlacementStatus) -> str:
+    return _UNLINKED_CARRIER if status in _HAS_A_POLICY else _UNPLACED_CARRIER
+
+
+_DETAIL_UNAVAILABLE = (
+    "policy detail unavailable for this schedule; please contact your broker"
+)
+"""THE ONE THING A ROW BUILT FROM BOOK DATA ALONE MUST SAY when a program
+file was expected and not used.
+
+An unreadable file collapsed a six-layer tower to a single row carrying no
+limit, no policy number, no retention and no carrier, and NOTHING on the
+sheet said data had been lost: a moved file and a genuinely one-line
+programme rendered identically. This rides the section heading, above the
+row, so the reader cannot reach the blanks without passing it.
+
+CLIENT-FACING AND DELIBERATELY INCURIOUS. It never names the file, the path,
+or the other account a mislinked file belongs to — that is our filing, and
+one of those names belongs to a different client. The operator gets the
+precise reason instead, on the line that reports the write (`soi_problems`).
+The reader's situation is identical whichever cause it was — the schedule
+cannot state their layers — so it is one sentence, not three."""
 
 # WHAT THE BOOK KNOWS, IN THE WORDS THE CLIENT READS. towerkit's SoiStatus is
 # a display vocabulary of seven; bookkit's PlacementStatus reaches five of
@@ -527,6 +575,67 @@ def _expired(placement: Placement, today: date) -> bool:
     return placement.period_to < today.isoformat()
 
 
+def _not_yet_incepted(placement: Placement, today: date) -> bool:
+    """Has this policy year not STARTED yet as of `today`?
+
+    The mirror of `_expired`, and it is here for the same reason: a Schedule
+    of Insurance states the cover in force on the date it is exported, and a
+    future year rendered identically beside current cover reads as current
+    cover. `placements.for_org` orders by `period_to DESC`, so an unexcluded
+    2027 renewal is not merely present — it is the FIRST row the client
+    meets, above the programme they are actually insured under, saying
+    `Bound` next to an effective date five months away.
+
+    Decided on `period_from`, the same date the Effective column prints, for
+    the reason `_expired` gives about `period_to`: the sheet must not
+    contradict its own dates. It is the PROGRAM's start, never the earliest
+    layer's — a package whose Property line incepts in October must not
+    disappear in September while its GL has been running since July.
+
+    Incepting TODAY is in force: cover begins at the start of its first day,
+    so the comparison is strictly `>`, never `>=` — the mirror of _expired's
+    `<`. The two rules together make the window inclusive at both ends, so no
+    single day of a policy year falls between them.
+
+    A placement excluded here is not lost to the client: it is a renewal in
+    progress, and sheet 1 is where in-progress work is reported."""
+    return placement.period_from > today.isoformat()
+
+
+def _run_off(rows: tuple[SoiRow, ...], today: date) -> tuple[SoiRow, ...]:
+    """Every row states its OWN status as of `today`: a layer whose period has
+    ended says `Expired`, whatever the programme around it is doing.
+
+    THE MISSING HALF OF `_expired`. That rule is about EXCLUSION and is right
+    to be placement-level — a programme whose IM layer lapsed in March must
+    not vanish while its GL runs to October. But inclusion was never restated
+    per row, so the surviving programme printed its run-off layer as `Bound`,
+    with its premium in the `Bound cover` subtotal: an excess layer that
+    stopped existing seven weeks ago read as $10,000,000 xs $2,000,000 of
+    cover held today, and as money being paid for it. The Expiration column
+    on that same row said 06/30/2026 and nothing reconciled the two.
+
+    `SoiStatus.EXPIRED` exists for exactly this — towerkit documents it as
+    "bookkit only: soi.py has no notion of today", and `today` is a parameter
+    here. Because only BOUND is cover in force, restating the status also
+    moves the premium onto the `Unbound cover` subtotal, which is the number
+    the reader was adding up.
+
+    Applied LAST, after `_placement_status_applied`, and it only ever moves a
+    row away from bound: a run-off layer is expired whether the book calls
+    the placement bound, quoted or submitted. Same strict `<` as `_expired` —
+    cover runs to the end of its last day.
+
+    Harmless on a book-data row, whose expiration is the placement's own
+    `period_to` and therefore cannot be past (`_expired` excluded it), so the
+    rule is applied to every row uniformly rather than to a chosen subset
+    that could drift out of step."""
+    return tuple(
+        replace(row, status=SoiStatus.EXPIRED) if row.expiration < today else row
+        for row in rows
+    )
+
+
 def _premium_dollars(cents: int | None) -> int | None:
     """Placement premium cents → the SOI's whole-dollar premium column.
     Delegates to the guarded money boundary first; on its sub-dollar refusal
@@ -540,10 +649,29 @@ def _premium_dollars(cents: int | None) -> int | None:
         return cents // 100
 
 
-def _book_data_section(org_name: str, placement: Placement) -> SoiSection:
+def _book_limits(total_limit: int | None) -> str:
+    """The Limits cell of a book-data row: what the BOOK holds, said as the
+    aggregate it is.
+
+    A tower that could not be read still left `total_limit` in the book, and
+    printing nothing there threw away the one coverage number we had — the
+    D&O placement whose file had moved held $10,000,000 and rendered a blank
+    cell. It is `sum(layer.limit)` (towerkit's `Program.total_limit`), so it
+    is NOT one policy's limit and must never be printed bare beside rows that
+    are: on a package it adds a GL limit to a Property limit, and the sum of
+    those is not cover anybody holds. Naming it a total is what makes it
+    honest, and a book-data section is always the single summary row for a
+    whole programme, so there is no layer row here for it to be confused
+    with."""
+    return f"Total limits {format_cents(total_limit)}" if total_limit else ""
+
+
+def _book_data_section(
+    org_name: str, placement: Placement, note: str | None = None
+) -> SoiSection:
     """Minimal SOI section for a placement with no (readable) towerkit file —
-    program name, period, status, premium from book data, so the policy list
-    is complete, never silently partial.
+    program name, period, status, total limits and premium from book data, so
+    the policy list is complete, never silently partial.
 
     THE STATUS IS A ROW FIELD, NOT A LABEL SUFFIX. This section used to say
     it as `Legacy Property (Bound)` in the heading while a LINKED placement's
@@ -551,20 +679,29 @@ def _book_data_section(org_name: str, placement: Placement) -> SoiSection:
     less the client could tell whether it was real. Now both surfaces answer
     in the same Status column, and the answer is load-bearing rather than
     decorative: `SoiRow.is_bound` is what puts this premium under `Bound
-    cover` instead of `Unbound cover`."""
+    cover` instead of `Unbound cover`.
+
+    `note` is _DETAIL_UNAVAILABLE, present exactly when a program file was
+    EXPECTED here and was not used. Never on an unlinked placement: nothing
+    was lost there — the book is all there ever was, and a schedule that
+    apologised for every paper policy would teach the reader to skip the
+    sentence on the one row where a tower went missing."""
     row = SoiRow(
         insured=org_name,
         coverage=placement.program_name,
-        carrier=_UNLINKED_CARRIER,
+        carrier=_book_data_carrier(placement.status),
         policy_number="",
         effective=date.fromisoformat(placement.period_from),
         expiration=date.fromisoformat(placement.period_to),
-        limits="",
+        limits=_book_limits(placement.total_limit),
         retention="",
         premium=_premium_dollars(placement.total_premium),
         status=_SOI_STATUS[placement.status],
     )
-    return SoiSection(label=placement.program_name, rows=(row,))
+    label = placement.program_name
+    if note:
+        label = f"{label} — {note}"
+    return SoiSection(label=label, rows=(row,))
 
 
 def _placement_status_applied(
@@ -592,48 +729,199 @@ def _placement_status_applied(
     return tuple(replace(row, status=mapped) for row in rows)
 
 
-def compose_soi(conn: sqlite3.Connection, org_id: str, today: date) -> list[SoiSection]:
-    """build_soi sections for every LINKED placement still in force, each
-    under a program-name label (prefixing flattens the per-program nesting);
-    minimal book-data sections for UNLINKED, unreadable, or layerless ones.
+def _same_account_name(a: str, b: str) -> bool:
+    """Two account names for the same account? Case and surrounding/internal
+    whitespace only — NOTHING fuzzier.
 
-    EXPIRED POLICY YEARS ARE EXCLUDED (see `_expired`). A Schedule of
-    Insurance is a statement of cover in force; a prior year rendered
-    identically beside current cover reads as current cover, and the Status
-    column does not save the reader from that — `Bound` is true in the past
-    tense, and last year's programme was bound. Non-empty exactly when the org has a placement
-    that has not expired — the sheet-inclusion rule. An account whose cover
-    has ALL expired therefore gets no SOI sheet rather than a sheet with
-    headers and no policies: the same omitted-not-blank rule sheets 2 and 3
-    already follow, and the honest one, because there is no schedule to
-    print. It is never an empty sheet — write()'s `if soi_sections` guard is
-    what makes that true, and a test pins it."""
+    `repo/links.org_for_insured` sets the rule: "byte-identical match only —
+    anything fuzzier is a guess". This is that rule with the two differences
+    that are never a different company (a stray double space, a capitalised
+    LLC) folded out. It deliberately does NOT reconcile "Inc." with "Inc" or
+    strip a legal suffix: those are edits to a company's identity, and the
+    whole point of this comparison is that an identity we cannot vouch for
+    loses. Losing here costs the client a summary row instead of layer
+    detail; being wrong here ships their competitor's tower."""
+    return " ".join(a.split()).casefold() == " ".join(b.split()).casefold()
+
+
+def _wrong_account(
+    conn: sqlite3.Connection, org: Org, placement: Placement, program: Program
+) -> str | None:
+    """Does this program file belong to SOMEONE ELSE? The reason if so, in the
+    operator's words; None when the file is vouched for.
+
+    ORG IDS FIRST, NAMES ONLY WHERE THERE IS NO ID TO COMPARE. `program_link`
+    is a confirmed, user-made binding of one file path to one account, and
+    `sync.project` refuses to project a file that has none — so a linked,
+    projected placement always has the id to compare, and this is the same
+    comparison `owner_of` spends fourteen lines insisting on one column over.
+    The name path exists only for a `program_path` set outside that flow, and
+    it refuses on any disagreement rather than guessing.
+
+    A file confirmed to nobody and named for nobody we recognise is refused,
+    not accepted: the failure this guard exists to stop is a workbook headed
+    with one client's name whose every row — carriers, shares, limits,
+    deductibles, premiums — belongs to another, and the only evidence that
+    would have prevented it is evidence of WHOSE the file is."""
+    path = str(placement.program_path)
+    confirmed = links.org_for_path(conn, path)
+    if confirmed is not None:
+        if confirmed == org.id:
+            return None
+        try:
+            whose = orgs.get(conn, confirmed).name
+        except KeyError:  # the other account has since been removed
+            whose = confirmed
+        return f"the linked file is confirmed to {whose}, not this account"
+    if _same_account_name(program.insured, org.name):
+        return None
+    return (
+        f"the linked file names insured {program.insured!r}, this account is "
+        f"{org.name!r}, and no confirmed link says they are the same"
+    )
+
+
+def _linked_program(
+    conn: sqlite3.Connection, org: Org, placement: Placement
+) -> tuple[Program | None, str | None]:
+    """The program file behind one placement, and the operator-facing reason
+    it was NOT used. Exactly one of the two is ever set.
+
+    THE FILE IS REFUSED; THE EXPORT IS NOT. A wrong document is worse than a
+    missing one, so a file we cannot vouch for contributes no rows at all —
+    but the unit of the error is one placement's link, and scoping the
+    refusal to that unit is what makes it affordable. Raising instead would
+    take down the client's whole deliverable, tasks and information requests
+    included, over one bad link on one placement, and the operator's only
+    remedy would be to not send it. The placement still prints, from book
+    data, under _DETAIL_UNAVAILABLE.
+
+    NOT A BARE `except Exception`. That swallowed everything a read can raise
+    AND everything it cannot — a bug in this module, a KeyboardInterrupt in
+    the middle of a client deliverable — and turned all of it into one silent
+    empty row. `OSError` is the moved or unreadable file; `ValueError` is the
+    corrupt one (json.JSONDecodeError, UnicodeDecodeError and pydantic's
+    ValidationError are all ValueError). Anything else is not a file problem
+    and propagates, which is what an unknown failure on a client deliverable
+    should do."""
+    path = Path(str(placement.program_path))
+    try:
+        program = load_program(path)
+    except (OSError, ValueError) as exc:
+        return None, f"could not read {path}: {type(exc).__name__}: {exc}"
+    wrong = _wrong_account(conn, org, placement, program)
+    if wrong is not None:
+        return None, f"{wrong} — its layers were NOT exported"
+    return program, None
+
+
+def compose_soi(
+    conn: sqlite3.Connection,
+    org_id: str,
+    today: date,
+    problems: list[str] | None = None,
+) -> list[SoiSection]:
+    """build_soi sections for every VOUCHED-FOR linked placement in force,
+    each under a program-name label (prefixing flattens the per-program
+    nesting); minimal book-data sections for unlinked, refused, unreadable or
+    layerless ones.
+
+    COVER IN FORCE ON `today`, AT BOTH ENDS: expired policy years are
+    excluded (`_expired`) and so are years that have not incepted
+    (`_not_yet_incepted`) — see both for why, and why each is decided on the
+    date its own column prints. Within a surviving programme, every row
+    restates its own status, so a run-off layer says `Expired` rather than
+    riding its programme's `Bound` (`_run_off`). Non-empty exactly when the
+    org has a placement in force — the sheet-inclusion rule. An account with
+    none therefore gets no SOI sheet rather than a sheet with headers and no
+    policies: the same omitted-not-blank rule sheets 2 and 3 already follow,
+    and the honest one, because there is no schedule to print. It is never an
+    empty sheet — write()'s `if soi_sections` guard is what makes that true,
+    and a test pins it.
+
+    THE LABEL COMES FROM THE FILE WHEN THERE IS A FILE. `sync.project` writes
+    `program_name=program.program`, so on a projected placement the two agree
+    by construction and this changes nothing; where they disagree the book's
+    label is the stale one, and the file is the sole authority for program
+    structure (CLAUDE.md), so `2025 Property Program` can no longer head four
+    rows of General Liability, Auto, Umbrella and Inland Marine. A stale
+    LABEL is not grounds to discard a correct TOWER — that refusal is
+    reserved for a file belonging to a different account (`_wrong_account`) —
+    but the operator hears about it, because the placement wants re-projecting.
+
+    `problems` collects the operator-facing lines: nothing that reaches it
+    ever reaches the workbook. `soi_problems` is the convenience wrapper both
+    export surfaces call."""
     org = orgs.get(conn, org_id)
     out: list[SoiSection] = []
     for placement in placements.for_org(conn, org_id):
-        if _expired(placement, today):
+        if _expired(placement, today) or _not_yet_incepted(placement, today):
             continue
         sections: list[SoiSection] = []
+        note: str | None = None
         if placement.program_path:
-            try:
-                program = load_program(Path(placement.program_path))
-            except Exception:  # moved/unreadable file — fall back to book data
-                program = None
-            if program is not None:
+            program, problem = _linked_program(conn, org, placement)
+            if problem is not None:
+                note = _DETAIL_UNAVAILABLE
+                if problems is not None:
+                    problems.append(f"{placement.program_name}: {problem}")
+            elif program is not None:
+                if program.program != placement.program_name and problems is not None:
+                    problems.append(
+                        f"{placement.program_name}: the linked file calls this "
+                        f"programme {program.program!r} — the sheet used the "
+                        f"file's name; re-project to agree"
+                    )
                 mapped = _SOI_STATUS[placement.status]
                 sections = [
                     SoiSection(
-                        label=placement.program_name
+                        label=program.program
                         if section.label is None
-                        else f"{placement.program_name} — {section.label}",
-                        rows=_placement_status_applied(section.rows, mapped),
+                        else f"{program.program} — {section.label}",
+                        rows=_run_off(
+                            _placement_status_applied(section.rows, mapped), today
+                        ),
                     )
                     for section in build_soi(program)
                 ]
+                if not sections and problems is not None:
+                    problems.append(
+                        f"{placement.program_name}: the linked file has no "
+                        f"layers — the sheet shows book data only"
+                    )
         if not sections:
-            sections = [_book_data_section(org.name, placement)]
+            sections = [_book_data_section(org.name, placement, note)]
         out.extend(sections)
     return out
+
+
+def soi_problems(conn: sqlite3.Connection, org_id: str, today: date) -> list[str]:
+    """What the Schedule of Insurance could NOT state, for the operator, on
+    the line that reports the write.
+
+    The client's copy says one incurious sentence (_DETAIL_UNAVAILABLE) and
+    must not name a path or another account. This is the other half: the
+    person who can fix a moved file or a crossed link is told which placement,
+    what happened, and — for a mislinked file — whose it actually is. It never
+    enters the workbook, the same arrangement `withheld_note` already has.
+
+    Silence here is a real signal, because the failures it reports were all
+    silent before: an unreadable tower and a one-line programme printed
+    identically, and a file belonging to another client printed as this
+    one's."""
+    problems: list[str] = []
+    compose_soi(conn, org_id, today, problems)
+    return problems
+
+
+def soi_note(conn: sqlite3.Connection, org_id: str, today: date) -> str:
+    """`soi_problems` as the suffix both export surfaces append to
+    "wrote <path>", beside `withheld_note`. Empty when there is nothing to
+    say."""
+    problems = soi_problems(conn, org_id, today)
+    if not problems:
+        return ""
+    return " — schedule of insurance: " + "; ".join(problems)
 
 
 _COLUMNS: tuple[tuple[str, float], ...] = (
