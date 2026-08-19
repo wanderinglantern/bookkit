@@ -378,6 +378,12 @@ def withheld_note(conn: sqlite3.Connection, org_id: str) -> str:
     """The suffix both export surfaces append to "wrote <path>" — what the
     client did NOT get, and what looked like it would be withheld and was not.
 
+    It covers TASKS (sheet 1) and REQUEST ITEMS (sheet 2), because as of
+    2026-08-19 both sheets obey the internal rule and a withheld row that
+    nothing announces is exactly the silent deletion this line exists to
+    prevent. Four clauses, each present only when it has something to say, so
+    an account with nothing internal reads as it always did.
+
     An absence is not a signal to someone who has never seen the presence. The
     silence-means-it-worked version of this line taught nobody anything on
     their first internal task: "Internal Review" renders byte-identically to
@@ -386,10 +392,34 @@ def withheld_note(conn: sqlite3.Connection, org_id: str) -> str:
     without weakening the rule (a prefix match would silently drop "Internal
     audit support", a real client-facing task). Empty only when there is
     genuinely nothing to say."""
+    # Lazy, and lazy for the same reason write() is: export_rfi imports
+    # SheetSection and friends from this module at module level.
+    from .export_rfi import near_miss_items, withheld_items
+
     parts: list[str] = []
     held = len(withheld_internal(conn, org_id))
     if held:
         parts.append(f"{held} internal task{'' if held == 1 else 's'} withheld")
+    # Sheet 2 obeys the same rule as of 2026-08-19, so it owes the same line.
+    # Withholding an outstanding ASK is the costlier direction — a thing never
+    # asked for is never sent — so an added clause, never a silent drop. The
+    # clauses only appear when they have something to report, so an account
+    # with no internal RFI items reads exactly as it did before.
+    held_items = len(withheld_items(conn, org_id))
+    if held_items:
+        parts.append(
+            f"{held_items} internal request item{'' if held_items == 1 else 's'} withheld"
+        )
+    missed_items = near_miss_items(conn, org_id)
+    if missed_items:
+        labels = ", ".join(
+            f'"{c}"' for c in _dedupe_categories(i.category or "" for i in missed_items)
+        )
+        parts.append(
+            f"{len(missed_items)} request item"
+            f"{'' if len(missed_items) == 1 else 's'} categorised {labels} "
+            f"{'WAS' if len(missed_items) == 1 else 'WERE'} exported without that heading"
+        )
     missed = near_miss_internal(conn, org_id)
     if missed:
         labels = ", ".join(
@@ -675,11 +705,22 @@ categorised e.g. "Internal Review" that WAS exported — to the operator on the
 CLI and the TUI toast at the moment the file is written. It never enters the
 workbook and the client never sees it.
 
+IT SPEAKS FOR THE WORKBOOK, NOT FOR SHEET 1. It says "this report" and
+"items", and it is the only statement of the rule the client ever sees, so
+every sheet it covers has to obey it. It did not: sheet 2 shipped an item
+categorised `Internal` under a heading naming it, which made this sentence a
+false statement about the document containing it — worse than either half
+alone, because a reader who checks is told the wrong thing by the document
+itself. Fixed by extending the rule (services/export_rfi._client_safe), not
+by narrowing these words: the alternative was "…on this sheet", which buys a
+true sentence at the price of the same category meaning two different things
+one tab apart, and leaves the leak it describes in place.
+
 It rides sheet 1 as a leading label-only section, the same mechanism
 _RFI_HEADER_LABEL uses. Sheet 1 is the ONLY unconditionally present sheet, so
 one line there is exactly once per export; repeating it on sheets 2-4 would
-make it conditional and redundant, and none of those sheets carries tasks
-anyway. It also survives C5 (towerkit's per-sheet header block) landing
+make it conditional and redundant, and a rule stated twice invites the two
+statements to drift. It also survives C5 (towerkit's per-sheet header block) landing
 later: this is sheet BODY, not chrome, so a header block rendered above it
 pushes it down without duplicating it — a generic header block carries the
 account, the report name and the date, which is precisely what this sentence

@@ -190,3 +190,126 @@ def test_compose_only_scoped_to_the_given_org(conn) -> None:
     req_b = rfi.create_request(conn, org_b.id, "not mine", "2026-08-05")
     rfi.add_item(conn, req_b.id, "z")
     assert compose_information_requests(conn, org_a.id, TODAY) == []
+
+
+# --- the internal rule, on this sheet too --------------------------------------
+#
+# Sheet 1's SCOPE_NOTE says "Internal administrative items are not included"
+# and speaks for the whole workbook. This module had zero references to the
+# rule until 2026-08-19, so an item categorised `Internal` shipped here under
+# a heading naming it — making that sentence false about the document it
+# appears in. Both tiers of the rule apply: exact equality withholds the ROW,
+# a prefix suppresses the HEADING (models.is_internal_category /
+# reads_as_internal say why the two matches differ).
+
+
+def test_an_internal_item_never_reaches_the_clients_copy(conn) -> None:
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "audited financials", category="Financials")
+    rfi.add_item(conn, req.id, "pull prior loss runs from our file", category="Internal")
+
+    sections = compose_information_requests(conn, org.id, TODAY)
+    labels = [s.label for s in sections]
+    prompts = [row[0] for s in sections for row in s.rows]
+
+    assert labels == ["— — onboarding docs · Financials"]
+    assert prompts == ["audited financials"]
+
+
+def test_the_internal_match_is_exact_and_case_folded(conn) -> None:
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "one", category="internal")
+    rfi.add_item(conn, req.id, "two", category=" INTERNAL ")
+
+    assert compose_information_requests(conn, org.id, TODAY) == []
+
+
+def test_a_request_whose_only_outstanding_item_is_internal_is_omitted(conn) -> None:
+    """No empty heading, and its date takes no part in ordering the sheet —
+    the rule runs before the emptiness test, not after it."""
+    org = _client(conn)
+    hidden = rfi.create_request(conn, org.id, "our own chase list", "2026-08-01",
+                                due_on="2026-08-14")
+    rfi.add_item(conn, hidden.id, "reserve note", category="Internal")
+    real = rfi.create_request(conn, org.id, "Sompo questions", "2026-08-01",
+                              due_on="2026-09-01")
+    rfi.add_item(conn, real.id, "how many vehicles?")
+
+    sections = compose_information_requests(conn, org.id, TODAY)
+    assert [s.label for s in sections] == [
+        "— — Sompo questions · asked 1 Aug · due 1 Sep"
+    ]
+
+
+def test_a_heading_that_reads_internal_is_suppressed_but_its_rows_ship(conn) -> None:
+    """C9's half. Equality withholds the row; a prefix only withholds the
+    banner — "Internal Review" is a real client-facing ask and vanishing it
+    silently would be the unrecoverable failure."""
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "audited financials", category="Financials")
+    rfi.add_item(conn, req.id, "sign the audit letter", category="Internal Review")
+
+    sections = compose_information_requests(conn, org.id, TODAY)
+    labels = [s.label for s in sections]
+    prompts = [row[0] for s in sections for row in s.rows]
+
+    assert not any(label and "Internal" in label for label in labels)
+    assert "sign the audit letter" in prompts
+
+
+def test_a_suppressed_heading_files_its_rows_last_not_mid_list(conn) -> None:
+    """groupby only groups ADJACENT equals, so a blanked category left where
+    it sat would emit an unlabelled section BETWEEN two labelled ones — and an
+    unbannered row reads as belonging to whichever section printed above it."""
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "audited financials", category="Financials")
+    rfi.add_item(conn, req.id, "sign the audit letter", category="Internal Review")
+    rfi.add_item(conn, req.id, "safety manual", category="Safety")
+
+    sections = compose_information_requests(conn, org.id, TODAY)
+    assert [s.label for s in sections] == [
+        "— — onboarding docs · Financials",
+        "— — onboarding docs · Safety",
+        None,
+    ]
+    assert [row[0] for row in sections[-1].rows] == ["sign the audit letter"]
+
+
+def test_a_request_of_only_suppressed_headings_keeps_its_full_context(conn) -> None:
+    """With every category blanked the request falls back to its single
+    full-context section, exactly as an uncategorised request always has."""
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "sign the audit letter", category="Internal Review")
+
+    sections = compose_information_requests(conn, org.id, TODAY)
+    assert [s.label for s in sections] == ["— — onboarding docs · asked 5 Aug"]
+
+
+def test_the_operator_is_told_what_this_sheet_withheld(conn) -> None:
+    """Withholding an outstanding ASK is the costlier direction — a thing never
+    asked for is never sent — so it is never silent."""
+    from bookkit.services.export_open_items import withheld_note
+
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "reserve note", category="Internal")
+    rfi.add_item(conn, req.id, "sign the audit letter", category="Internal Review")
+
+    note = withheld_note(conn, org.id)
+    assert "1 internal request item withheld" in note
+    assert '1 request item categorised "Internal Review" WAS exported' in note
+
+
+def test_the_operator_note_is_unchanged_when_no_item_is_internal(conn) -> None:
+    from bookkit.services.export_open_items import withheld_note
+
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "audited financials", category="Financials")
+
+    assert withheld_note(conn, org.id) == ""
