@@ -1357,6 +1357,56 @@ def _scaffold_destination(conn: Any, org: Any, placement: Any) -> Any:
     return Path(roots[0]) / f"{slug}-{year}.json"
 
 
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/renew", response_class=HTMLResponse
+)
+def renew_confirm(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """Confirm-first, stating exactly what sync.renew does. Writes nothing.
+    (The account header's Renew stayed unrendered under D4 — it names no
+    placement; this control is placement-scoped.)"""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    from pathlib import Path
+
+    next_from, next_to = sync.renewal_period(placement)
+    file_name = Path(str(placement.program_path)).name if placement.program_path else ""
+    return TEMPLATES.TemplateResponse(
+        request, "account/_renew_confirm.html",
+        {
+            "placement": placement,
+            "next_from": next_from, "next_to": next_to,
+            "file_name": file_name,
+            "action": f"/accounts/{ref}/program/{placement_id}/renew",
+        },
+    )
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/renew", response_class=HTMLResponse
+)
+def renew_placement(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """sync.renew in one web batch: next period, prospective, the file cloned
+    and linked at birth. Answers with the WHOLE panel either way — a renewal
+    adds a program to the list, and this POST targets the panel, so a
+    refusal must come back as the panel with its error slot filled."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    try:
+        with batches_svc.open_batch(
+            conn, source="web", tool="renew_placement", org_id=org.id,
+            summary=f"renewed {placement.ref}",
+        ):
+            new_placement, new_path, diags = sync.renew(conn, placement_id)
+            if new_placement is None or not diags.ok:
+                first = diags.errors[0].message if diags.errors else "unknown error"
+                raise ValueError(f"renew refused: {first}")
+    except Exception as exc:
+        return _programs_panel(request, ref, org, error=str(exc))
+    return _programs_panel(request, ref, org)
+
+
 @router.get("/accounts/{ref}/program/{placement_id}/scaffold", response_class=HTMLResponse)
 def scaffold_confirm(request: Request, ref: str, placement_id: str) -> HTMLResponse:
     """The confirm step. Writes NOTHING — and shows the path, because where a

@@ -786,6 +786,68 @@ def test_a_made_up_line_is_refused(app_and_org, tmp_path):
     ]
 
 
+def _renew_url(org, placement):
+    return f"/accounts/{org.ref}/program/{placement.id}/renew"
+
+
+def test_renew_asks_first_and_names_the_consequences(app_and_org):
+    """The confirm writes nothing and says what renew DOES: next period
+    dates, and for a linked placement the towerkit file cloned and linked at
+    birth. (The account header's Renew button stayed unrendered under D4
+    because it names no target; this control is placement-scoped.)"""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    from bookkit.repo import placements as placements_repo
+
+    count_before = len(placements_repo.for_org(conn, org.id))
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    assert f'hx-get="{_renew_url(org, placement)}"' in page, "no renew control"
+
+    confirm = client.get(_renew_url(org, placement))
+
+    assert confirm.status_code == 200
+    assert "cloned" in confirm.text or "clone" in confirm.text
+    assert len(placements_repo.for_org(conn, org.id)) == count_before, (
+        "the confirm GET created something"
+    )
+
+
+def test_renew_rolls_the_placement_and_clones_the_file(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    from bookkit.repo import placements as placements_repo
+
+    before_ids = {p.id for p in placements_repo.for_org(conn, org.id)}
+
+    renewed = client.post(_renew_url(org, placement))
+
+    assert renewed.status_code == 200
+    new = [p for p in placements_repo.for_org(conn, org.id) if p.id not in before_ids]
+    assert len(new) == 1, "renew created no placement"
+    assert new[0].period_from > placement.period_from
+    assert new[0].program_path, "the renewal was not linked to a cloned file"
+    assert Path(new[0].program_path).exists()
+    assert 'id="programs-panel"' in renewed.text, "the new program is not shown"
+
+
+def test_a_refused_renew_keeps_the_panel(app_and_org):
+    """Renewing twice collides on the cloned file name; the second attempt
+    must refuse with the panel intact and the message in its error slot."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+
+    assert client.post(_renew_url(org, placement)).status_code == 200
+    refused = client.post(_renew_url(org, placement))
+
+    assert refused.status_code == 200
+    assert 'id="programs-panel"' in refused.text
+    assert "already exists" in refused.text
+
+
 def _layer_remove_url(org, placement, layer_id):
     return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/remove"
 

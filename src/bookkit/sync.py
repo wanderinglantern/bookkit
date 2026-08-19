@@ -625,6 +625,12 @@ def _plus_year_iso(iso: str) -> str:
         return d.replace(year=d.year + 1, day=28).isoformat()
 
 
+def renewal_period(placement: Placement) -> tuple[str, str]:
+    """The period renew() will stamp — for confirms that say what will happen
+    BEFORE it does, without reaching into this module's date helpers."""
+    return _plus_year_iso(placement.period_from), _plus_year_iso(placement.period_to)
+
+
 def renew(
     conn: sqlite3.Connection, placement_id: str
 ) -> tuple[Placement | None, Path | None, Diagnostics]:

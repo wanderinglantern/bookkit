@@ -28,6 +28,10 @@
               hx-target="#program-{{ placement.id }} .form-host"
               hx-swap="innerHTML">+ Add layer</button>
     {% endif %}
+    <button type="button" class="people-add"
+            hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/renew"
+            hx-target="#program-{{ placement.id }} .form-host"
+            hx-swap="innerHTML">Renew</button>
   </div>
   <div class="form-host"></div>
 
