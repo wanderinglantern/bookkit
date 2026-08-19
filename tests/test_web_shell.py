@@ -136,10 +136,14 @@ def test_serve_binds_loopback_only(db_path: Path, monkeypatch):
     no business creating or migrating that file."""
     import uvicorn
 
+    from bookkit.web import portguard
     from bookkit.web import serve as serve_mod
 
     seen: dict[str, object] = {}
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(kw))
+    # serve() reclaims the port before binding it, and 8931 may well be Grant's
+    # own running server: a test must never be the thing that stops it.
+    monkeypatch.setattr(portguard, "reclaim", lambda host, port, **kw: None)
 
     serve_mod.serve(db_path, 8931, open_browser=False)
 

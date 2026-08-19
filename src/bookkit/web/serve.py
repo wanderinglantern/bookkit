@@ -14,7 +14,14 @@ HOST = "127.0.0.1"
 def serve(db_path: Path | str | None, port: int, open_browser: bool = True) -> int:
     import uvicorn
 
+    from . import portguard
     from .app import create_app
+
+    try:
+        portguard.reclaim(HOST, port)
+    except portguard.PortHeld as refusal:
+        portguard.say(str(refusal))
+        return 1
 
     if open_browser:
         threading.Timer(0.7, webbrowser.open, args=(f"http://{HOST}:{port}/",)).start()
