@@ -68,7 +68,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from . import db
+from . import db, mcpsurface
 from .models import EventBatch, RfiItem, RfiRequest, is_internal_category
 from .services.renewals import RenewalItem
 
@@ -82,16 +82,12 @@ _DUP_CUTOFF = 87
 # same field. This is per-field, not a name-wide lookup: a name is not
 # globally 1:1 with a kind (task.description is a one-line "text"; project's
 # is a "textarea") so the kind has to live where the field is declared, not
-# be guessed from the name alone.
-_ENRICHABLE_ORG = {
-    "owner": "text", "industry": "text", "naics": "naics",
-    "hq_city": "text", "hq_country": "text", "website": "url",
-    "domain": "domain", "legal_name": "text", "notes": "textarea",
-}
-_ENRICHABLE_CONTACT = {
-    "email": "email", "phone": "phone", "mobile": "phone",
-    "title": "text", "linkedin": "linkedin", "notes": "textarea",
-}
+# be guessed from the name alone — which is why these are now DERIVED from
+# those declarations rather than restated here. mcpsurface owns the
+# derivation and the denylist; read that module, not this constant.
+_ENRICHABLE = mcpsurface.enrichable()
+_ENRICHABLE_ORG = _ENRICHABLE["org"]
+_ENRICHABLE_CONTACT = _ENRICHABLE["contact"]
 
 
 def build_server(db_path: Path | str | None = None) -> MCPServer:
@@ -241,6 +237,23 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         ref; on a miss the error lists the nearest candidates) to scope it.
         `include_closed` adds won/lost deals, which are excluded by default."""
         return _opportunities(ro, client=client, include_closed=include_closed)
+
+    @server.tool()
+    async def describe(kind: str | None = None) -> dict[str, Any]:
+        """What edit_field can write: every kind, its fields, their types and
+        the allowed values of any closed vocabulary. Call this BEFORE an edit
+        rather than discovering the surface by making a call you expect to
+        fail — a refusal costs a round trip and reads as an error in the
+        transcript. Omit `kind` for the whole surface, which also lists the
+        entities that are deliberately NOT editable and why (placements,
+        submissions, documents, appetites, interactions); pass one kind for
+        just that entity. `denied_fields` names the fields an entity has that
+        edit_field will refuse, with the reason each — several of those are
+        owned by a verb tool (opportunity_stage, task_complete,
+        request_item_received, member_deactivate) which is where to go
+        instead. Derived from the same declarations edit_field enforces, so
+        it cannot go stale."""
+        return mcpsurface.describe(kind)
 
     @server.tool()
     async def team_roster() -> dict[str, Any]:
@@ -1111,8 +1124,9 @@ def _clean_by_kind(kind: str, value: str) -> str:
     """The one cleaner map (bookkit.forms.spec.CLEANERS), keyed by KIND. A
     field NAME is not globally 1:1 with a kind — `description` is a one-line
     `text` on task and a `textarea` on project — so every caller must resolve
-    its own kind (from `_ENRICHABLE_ORG`/`_ENRICHABLE_CONTACT`, or from
-    `_EDITABLE`'s per-(entity, field) vtype) before reaching here."""
+    its own kind (from mcpsurface's derived per-(entity, field) value type)
+    before reaching here. Tuple value types are a closed vocabulary and go
+    through _clean_typed instead."""
     from .forms.spec import CLEANERS
     from .normalize import clean_text
 
@@ -1753,80 +1767,30 @@ def _request_item_waive(conn: sqlite3.Connection, item_ref: str) -> dict[str, An
             "request_ref": request.ref, "batch": batch.ref}
 
 
-# edit_field's allowlists: (kind → field → value type). Each string value
-# is the field's real KIND, exactly as forms/entities.py declares it for that
-# field on that entity — not a name-wide default. A field name is not
-# globally 1:1 with a kind: task.description is a one-line "text" (the
-# textarea is `detail`) while project.description IS the textarea; using the
-# same vtype for both silently flattened whichever one didn't match. "text"
-# routes through the cleaner map (bookkit.forms.spec.CLEANERS) like
-# enrich_field; "textarea" is stored verbatim; "money" parses to integer
-# cents; "date" through parse_human_date; "int" plain; a tuple is a closed
-# vocabulary and refusals list it. `notes` is "textarea" everywhere it
-# appears — every forms/entities.py declaration of it agrees, with no
-# exceptions. Deliberate absences are the contract: opportunity
-# stage/outcome/closed_at belong to opportunity_stage, and
-# project_need.status belongs to the queued needs→pipeline reconciler.
-def _editable() -> dict[str, dict[str, Any]]:
-    from .models import PROJECT_STATUSES, TEAM_ROLES
-
-    return {
-        "org": dict(_ENRICHABLE_ORG),
-        "contact": {
-            **_ENRICHABLE_CONTACT,
-            "first_name": "text", "last_name": "text",
-        },
-        "opportunity": {
-            "title": "text", "lines": "text", "target_premium": "money",
-            "target_effective": "date", "probability_pct": "int",
-            "source": "text", "incumbent_broker": "text",
-            "competitor": "text",
-            # no "notes" here: the opportunity table has no notes column and
-            # opportunity_form declares no such field. It was offered by this
-            # dict anyway, so edit_field advertised it as allowed and then
-            # failed at the DB layer on the first call — removed, not backed
-            # by a new column (that would be a feature, not a fix).
-        },
-        "project": {
-            "name": "text", "description": "textarea", "site": "text",
-            "status": PROJECT_STATUSES, "start_on": "date", "end_on": "date",
-            "notes": "textarea",
-        },
-        # need STATUS is deliberately absent: the queued needs→pipeline
-        # reconciler owns need-status semantics
-        "project_need": {
-            "line": "text", "needed_by": "date", "limit_cents": "money",
-            "premium_indication_cents": "money", "notes": "textarea",
-        },
-        "task": {
-            # description is a one-line summary (forms/entities.py:185); detail
-            # is the textarea (:201). Same-named field, different entity,
-            # different kind — the whole reason this is per-(entity, field).
-            "title": "text", "description": "text", "detail": "textarea",
-            "category": "text", "due_on": "date",
-        },
-        "team_member": {
-            "name": "text", "title": "text", "specialty": "text",
-            "email": "email", "phone": "phone", "notes": "textarea",
-        },
-        # role reuses team_assign's vocabulary so the two paths cannot drift.
-        # org_id / placement_id are deliberately absent: re-scoping moves two
-        # columns at once and single-field compare-and-set cannot do it.
-        "team_assignment": {
-            "role": TEAM_ROLES, "lines": "text", "notes": "textarea",
-        },
-        "rfi_request": {"title": "text", "due_on": "date", "notes": "textarea"},
-        "rfi_item": {
-            "prompt": "text", "category": "text", "due_on": "date",
-            "response": "textarea",
-        },
-    }
-
-
-_EDITABLE: dict[str, dict[str, Any]] = _editable()
+# edit_field's allowlist: (kind -> field -> value type), DERIVED from the
+# FormSpec builders in forms/entities.py and filtered by the denylist in
+# mcpsurface.py. Add a Field(...) to a builder and the TUI, the web AND this
+# surface get it; the denylist is what decides whether it should be reachable
+# here, one field at a time, each with its reason written down.
+#
+# Each value is the field's real KIND as its form declares it — per-field, not
+# a name-wide default, because a field NAME is not globally 1:1 with a kind:
+# task.description is a one-line "text" (the textarea is `detail`) while
+# project.description IS the textarea. "text" routes through the cleaner map
+# (bookkit.forms.spec.CLEANERS) like enrich_field; "textarea" is stored
+# verbatim; "money" parses to integer cents; "date" through parse_human_date;
+# "int" plain; a tuple is a closed vocabulary and refusals list it.
+#
+# THE DELIBERATE ABSENCES NOW LIVE IN mcpsurface.DENIED, with a reason each.
+# They used to be comments here, which is how the org entry came to be
+# `dict(_ENRICHABLE_ORG)` with nothing recording that as a decision.
+_EDITABLE: dict[str, dict[str, Any]] = mcpsurface.editable()
 
 # Fields that exist but are owned by a transition tool. The generic refusal
 # only lists what IS editable; these say where the caller should go instead.
+# WHY each of these is denied is in mcpsurface.DENIED, one sentence per field;
+# this table holds only the destination. tests/test_mcp_surface.py asserts
+# every key here is actually denied there, so the two cannot disagree.
 _EDIT_REDIRECTS: dict[tuple[str, str], str] = {
     ("team_member", "active"): "member_deactivate / member_reactivate",
     # status and received_on move together (services.rfi.mark_received), so
@@ -1834,6 +1798,13 @@ _EDIT_REDIRECTS: dict[tuple[str, str], str] = {
     # the generic "not editable; allowed: [...]" list and no idea where to go.
     ("rfi_item", "status"): "request_item_received / request_item_waive",
     ("rfi_item", "received_on"): "request_item_received",
+    ("task", "status"): "task_complete / task_reopen",
+    ("task", "completed_at"): "task_complete / task_reopen",
+    ("opportunity", "stage"): "opportunity_stage",
+    ("opportunity", "outcome"): "opportunity_stage",
+    ("opportunity", "closed_at"): "opportunity_stage",
+    ("opportunity", "loss_reason"): "opportunity_stage",
+    ("contact", "active"): "contact_remove",
 }
 
 
@@ -1968,6 +1939,12 @@ def _edit_field(
             raise ValueError(
                 f"{field!r} on a {kind} is not a field edit — use {redirect}"
             )
+        # a denied field says WHY, in the sentence mcpsurface records — a bare
+        # "allowed: [...]" list tells a model nothing about whether to look
+        # for another door or stop asking
+        reason = mcpsurface.denial_reason(kind, field)
+        if reason is not None:
+            raise ValueError(f"{field!r} is not editable on a {kind}: {reason}")
         raise ValueError(
             f"{field!r} is not editable on a {kind}; allowed: {sorted(allowed)}"
         )
@@ -2005,8 +1982,11 @@ def _enrich_field(
     conn: sqlite3.Connection, client: str, field: str, value: str,
     contact: str | None = None,
 ) -> dict[str, Any]:
-    """Fill-blanks-only: refuses to touch a field that already has a value
-    (edits happen in the TUI). Additive, single-field, event-logged."""
+    """Fill-blanks-only: refuses to touch a field that already has a value.
+    Additive, single-field, event-logged. The overwrite path is edit_field,
+    which takes `expecting` — the refusal below says so, because "edits happen
+    in the TUI" stopped being true and a refusal that names no next step is
+    the same dead end as a silent one."""
     from .repo import contacts as contacts_repo
     from .repo import orgs
 
@@ -2026,8 +2006,12 @@ def _enrich_field(
     if current:
         raise ValueError(
             f"{org.name}{' / ' + target.name if contact else ''} already has "
-            f"{field}={current!r} — fill-blanks-only, edits happen in the TUI")
-    cleaned = _clean_by_kind(allowed[field], value)
+            f"{field}={current!r} — enrich_field is fill-blanks-only; to "
+            f"overwrite deliberately use edit_field with expecting={current!r}")
+    # _clean_typed, not _clean_by_kind: the derived surface carries closed
+    # vocabularies (contact.role, org.status) as tuples, and _clean_by_kind
+    # would fall through to clean_text and write a value outside the list
+    cleaned = _clean_typed(allowed[field], field, value)
     with _open_batch(
         conn, tool="enrich_field", org_id=org.id,
         summary=f"set {field} on {org.name}"

@@ -503,10 +503,16 @@ def test_enrich_field_fills_blank_but_never_overwrites(server_db):
 
 
 def test_enrich_field_rejects_unknown_field(server_db):
+    """`kind` is a real org column that the denylist keeps off the derived
+    surface (mcpsurface.DENIED), so this also guards the denylist. It used to
+    read `status`, which is now derived-and-editable — and enrich still
+    refuses it, just for the other reason (a status is never blank)."""
     rw = db.connect(server_db)
     orgs.create(rw, name="Acme", kind="client")
     with pytest.raises(ValueError, match="not enrichable"):
-        mcpserver._enrich_field(rw, "Acme", "status", "active")
+        mcpserver._enrich_field(rw, "Acme", "kind", "market")
+    with pytest.raises(ValueError, match="not enrichable"):
+        mcpserver._enrich_field(rw, "Acme", "revenue", "lots")
 
 
 def test_enrich_field_normalizes_email_via_shared_cleaner(server_db):
