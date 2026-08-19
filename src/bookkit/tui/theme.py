@@ -21,6 +21,7 @@ __all__ = [
     "AMBER", "BG", "BLUE", "DIM", "FG", "GOLD", "GREEN", "PANEL", "RED", "RULE",
     "SURFACE", "BOOKKIT_THEME", "STATUS_STYLES", "status_text", "days_text",
     "date_text", "money_text", "dash", "lines_text", "right", "category_text",
+    "expiry_text", "market_text", "subjectivity_text",
 ]
 
 BOOKKIT_THEME = Theme(
@@ -86,6 +87,8 @@ STATUS_STYLES: dict[str, str] = {
     "outstanding": AMBER,
     "received": GREEN,
     "waived": DIM,
+    # quote subjectivities ('outstanding' and 'waived' are shared above)
+    "met": GREEN,
 }
 
 
@@ -162,6 +165,63 @@ def lines_text(
         else:
             text.append(f"{label} {days}d", style=DIM)
     return text
+
+
+def expiry_text(iso: str | None, days: int | None) -> Text:
+    """A quote's expiry cell: the DATE and its countdown, in one cell.
+
+    `days` must have been counted to `iso` by the caller's own object —
+    services.quotes.QuoteItem exposes both as properties off the same stored
+    column so they cannot come apart. Printing a date from one object beside
+    a count from another is what rendered a future date as "70d over" on four
+    surfaces (CLAUDE.md); one cell, one source, is the fix that generalises.
+
+    Every state carries a WORD, not only a colour: "expired", "expires today",
+    "5d left". A reader must never have to subtract dates in their head to
+    learn that terms have gone away.
+
+    Expiring today is NOT expired — a quote is good for the whole of its last
+    day, so day zero reads urgent, not lapsed."""
+    from ..services.quotes import EXPIRED, LIVE, UNDATED, expiry_state, expiry_word
+
+    state = expiry_state(days)
+    word = expiry_word(days)
+    if state == UNDATED or iso is None:
+        return Text(word, style=DIM)
+    if state == EXPIRED:
+        return Text(f"{iso} ◆ {word}", style=f"bold {RED}")
+    if state == LIVE:
+        return Text(f"{iso} · {word}", style=DIM)
+    return Text(f"{iso} ▲ {word}", style=f"bold {AMBER}" if days == 0 else AMBER)
+
+
+def market_text(market: str, person: str | None) -> Text:
+    """A market cell that names the human you would actually email.
+
+    "Travelers" is not a chase target; "Travelers ▸ Dana Reeve" is. One cell
+    rather than a new column because the surfaces that need it (Today's SLA
+    pane in a quarter of a 140-column grid, the navigator's SLA table, the
+    account's pipeline) have unequal headroom, and a column that crops on the
+    narrowest of them is a column that is not there."""
+    if not person:
+        return Text(market)
+    text = Text(market)
+    text.append(" ▸ ", style=RULE)
+    text.append(person, style=DIM)
+    return text
+
+
+def subjectivity_text(open_count: int, total: int) -> Text:
+    """"2 of 3 open" — both numbers, always.
+
+    A bare "2" cannot be told from "2 done", and 0 of 0 (nobody has recorded
+    any) is a different fact from 0 of 4 (all cleared, ready to bind) — the
+    second is good news and should read as such."""
+    if total == 0:
+        return Text("—", style=DIM, justify="right")
+    if open_count == 0:
+        return Text(f"✓ 0 of {total}", style=GREEN, justify="right")
+    return Text(f"{open_count} of {total} open", style=AMBER, justify="right")
 
 
 def right(label: str) -> Text:

@@ -368,12 +368,40 @@ class Submission(Row):
     status: SubmissionStatus = SubmissionStatus.OUT
     quoted_premium: int | None = None
     quoted_limit: int | None = None
+    quote_expires_on: str | None = None
     response_on: str | None = None
     decline_reason: str | None = None
     notes: str | None = None
     created_at: str
     updated_at: str
     deleted_at: str | None = None
+
+
+class Subjectivity(Row):
+    """Something a market requires before its quote is bindable.
+
+    Chasing these IS the three weeks between a quote arriving and a policy
+    being bound, which is the stretch the tool tracked nowhere. Shaped on
+    RfiItem, the other chaseable line item in the book."""
+
+    id: str
+    submission_id: str
+    description: str
+    due_on: str | None = None
+    status: str = "outstanding"
+    satisfied_on: str | None = None
+    notes: str | None = None
+    created_at: str
+    updated_at: str
+    deleted_at: str | None = None
+
+
+# Controlled but extensible, same pattern as TEAM_ROLES / RFI_ITEM_STATUSES.
+# 'met' rather than 'received': a subjectivity is a CONDITION satisfied, not a
+# document handed over — several are satisfied by an inspection happening or a
+# warranty being signed, with nothing to receive.
+SUBJECTIVITY_STATUSES = ("outstanding", "met", "waived")
+SUBJECTIVITY_OPEN_STATUS = "outstanding"
 
 
 class Document(Row):

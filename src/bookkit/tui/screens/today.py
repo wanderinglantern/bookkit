@@ -168,7 +168,11 @@ class TodayScreen(Screen):
         sla_table.add_columns("market", "account", "sent", right("out"))
         for late in sla.past_sla(conn, today):
             sla_table.add_row(
-                late.market.name,
+                # the underwriter, when one is recorded: the AE review's
+                # complaint was that this pane names "Travelers", which you
+                # cannot email. A market with no named person still renders
+                # exactly as it always did — the fact is added, never faked.
+                theme.market_text(late.market.name, late.underwriter_name),
                 late.account.name,
                 late.submission.sent_on,
                 days_text(-late.days_out),

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from ...models import Task
+    from ...models import Submission, Task
     from ..app import BookkitApp
 
 import subprocess
@@ -41,6 +41,7 @@ from ...repo import (
 from ...repo import rfi as rfi_repo
 from ...repo import tasks as tasks_repo
 from ...services import book
+from ...services import quotes as quotes_svc
 from .. import theme
 from ..theme import dash, date_text, days_text, money_text, right, status_text
 from ..widgets.entity_actions import batched_write as _batched
@@ -96,8 +97,9 @@ TAB_HINTS: dict[str, str] = {
         "[b]o[/b] need → opportunity · [b]tab[/b] projects ⇄ needs"
     ),
     "tab-pipeline": (
-        "[b]a[/b] opportunity · [b]e[/b] edit opp / record response · "
-        "[b]s[/b] submission · [b]tab[/b] opps ⇄ submissions"
+        "[b]a[/b] opportunity / subjectivity · [b]e[/b] edit opp / response / "
+        "subjectivity · [b]s[/b] submission · "
+        "[b]tab[/b] opps ⇄ submissions ⇄ subjectivities"
     ),
     "tab-documents": "[b]a[/b] add · [b]enter[/b] opens the file · [b]e[/b] edit account",
     "tab-open-items": (
@@ -477,6 +479,9 @@ class AccountScreen(Screen):
         self.current_org_id = org_id
         self._refresh_pending = False  # a refresh deferred while a cell edit is open
         self._rfi_request_id: str | None = None  # master row of the requests tab
+        # master row of the pipeline tab's submissions table, so the
+        # subjectivities detail only rebuilds when the cursor really moves
+        self._pipeline_submission_id: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(id="account-header")
@@ -520,6 +525,11 @@ class AccountScreen(Screen):
                     yield ListTable(id="pipeline-opps")
                     yield Static("SUBMISSIONS", classes="pane-title")
                     yield ListTable(id="pipeline-subs")
+                    # master/detail, the shape the projects and requests tabs
+                    # already use: the submission list is the index, the
+                    # subjectivities are the work between quote and bind.
+                    yield Static(id="pipeline-subj-title", classes="pane-title")
+                    yield ListTable(id="pipeline-subjs")
             with TabPane("7 Documents", id="tab-documents"):
                 yield ListTable(id="documents-table")
             with TabPane("8 Open items", id="tab-open-items"):
@@ -551,7 +561,8 @@ class AccountScreen(Screen):
         # stacked tables inside scrolling panes size to their rows instead of
         # splitting the viewport into slivers
         for table_id in ("ov-team", "ov-contacts", "ov-interactions", "ov-tasks",
-                         "ov-opps", "pipeline-opps", "pipeline-subs", "open-items-context"):
+                         "ov-opps", "pipeline-opps", "pipeline-subs",
+                         "pipeline-subjs", "open-items-context"):
             self.query_one(f"#{table_id}", ListTable).styles.height = "auto"
         # inline edits (i) parse existing values off the same fields the modal
         # form would show, keyed by the row's task id
@@ -767,6 +778,33 @@ class AccountScreen(Screen):
                 f"{row['market_name']} — {row['about']}",
                 date_text(row["sent_on"], days), status_text(row["status"]),
                 days_text(days), key=f"submission:{row['id']}",
+            )
+        # Quotes in hand and the subjectivities under them. Before this, a
+        # submission LEFT this list the moment the market answered and entered
+        # no other list anywhere — the AE review's "missing middle", and the
+        # reason three weeks of real work were invisible on every surface.
+        for quote in quotes_svc.for_org(conn, org_id, today=today):
+            # `left` rather than reusing `days` above: a quote's countdown can
+            # be None (no expiry recorded), which the submission clock cannot
+            left = quote.days_remaining
+            context.add_row(
+                Text("quote", style=theme.DIM),
+                f"{quote.market_name} — {quote.about}",
+                # one cell, one source: the date printed IS the date counted to
+                theme.expiry_text(quote.expires_on, left),
+                status_text(quote.submission.status),
+                days_text(left) if left is not None else dash(),
+                key=f"quote:{quote.submission.id}",
+            )
+        for row in submissions.outstanding_subjectivity_rows_for_org(conn, org_id):
+            left = days_until(row["due_on"], today) if row["due_on"] else None
+            context.add_row(
+                Text("subjectivity", style=theme.DIM),
+                f"{row['market_name']} — {row['description']}",
+                date_text(row["due_on"], left) if left is not None else dash(),
+                status_text(row["status"]),
+                days_text(left) if left is not None else dash(),
+                key=f"subjectivity:{row['id']}"
             )
 
     # -- requests (master) / items (detail) -------------------------------------
@@ -1036,23 +1074,84 @@ class AccountScreen(Screen):
             )
         table = self.query_one("#pipeline-subs", ListTable)
         table.clear(columns=True)
-        table.add_columns("market", "sent", "status", right("quoted"), "response")
+        # `expires` and `subj` are the two columns the AE review said the whole
+        # surface was missing: the tool tracked SENT and BOUND and nothing in
+        # between. The market cell names the underwriter, so the row you are
+        # chasing tells you who to chase.
+        table.add_columns(
+            "market", "sent", "status", right("quoted"), "response",
+            "expires", right("subj"),
+        )
+        today = date.today()
+
+        def add_submission(s: Submission) -> None:
+            uw = None
+            if s.underwriter_contact_id:
+                try:
+                    uw = contacts.get(conn, s.underwriter_contact_id).name
+                except KeyError:  # the person left; the submission did not
+                    uw = None
+            days = (
+                days_until(s.quote_expires_on, today)
+                if s.quote_expires_on else None
+            )
+            open_count, total = submissions.subjectivity_counts(conn, s.id)
+            table.add_row(
+                theme.market_text(orgs.get(conn, s.market_org_id).name, uw),
+                s.sent_on, _status(s.status),
+                money_text(s.quoted_premium),
+                s.response_on or dash(),
+                # the date and the countdown out of ONE cell, both read off
+                # s.quote_expires_on — never a date from here beside a count
+                # from somewhere else (CLAUDE.md, the "70d over" defect)
+                theme.expiry_text(s.quote_expires_on, days),
+                theme.subjectivity_text(open_count, total),
+                key=s.id,
+            )
+
         for p in placements.for_org(conn, org_id):
             for s in submissions.for_placement(conn, p.id):
-                table.add_row(
-                    orgs.get(conn, s.market_org_id).name, s.sent_on, _status(s.status),
-                    money_text(s.quoted_premium),
-                    s.response_on or dash(),
-                    key=s.id,
-                )
+                add_submission(s)
         for o in opportunities.for_org(conn, org_id):
             for s in submissions.for_opportunity(conn, o.id):
-                table.add_row(
-                    orgs.get(conn, s.market_org_id).name, s.sent_on, _status(s.status),
-                    money_text(s.quoted_premium),
-                    s.response_on or dash(),
-                    key=s.id,
-                )
+                add_submission(s)
+        self._fill_subjectivities(self._selected_key("pipeline-subs"))
+
+    def _fill_subjectivities(self, submission_id: str | None) -> None:
+        """The conditions attached to the submission under the cursor.
+
+        Empty is stated, not blank: an empty DataTable is a header over
+        nothing, and "no subjectivities recorded" is a different sentence from
+        "select a submission" — the first invites `a`, the second says the
+        cursor is in the wrong place."""
+        conn = self.app.conn
+        self._pipeline_submission_id = submission_id
+        title = self.query_one("#pipeline-subj-title", Static)
+        table = self.query_one("#pipeline-subjs", ListTable)
+        table.clear(columns=True)
+        table.add_columns("subjectivity", "due", right("in"), "status", "satisfied")
+        if submission_id is None:
+            title.update(f"[{theme.DIM}]SUBJECTIVITIES — select a submission above[/]")
+            return
+        rows = submissions.subjectivities_for(conn, submission_id)
+        if not rows:
+            title.update(
+                f"[{theme.DIM}]SUBJECTIVITIES — none recorded; a adds one[/]"
+            )
+            return
+        title.update("SUBJECTIVITIES")
+        today = date.today()
+        for subj in rows:
+            if subj.due_on:
+                days = days_until(subj.due_on, today)
+                due, due_in = date_text(subj.due_on, days), days_text(days)
+            else:
+                due, due_in = dash(), dash()
+            table.add_row(
+                subj.description, due, due_in, _status(subj.status),
+                subj.satisfied_on or dash(),
+                key=subj.id,
+            )
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         """The placements pane lays out at zero size until first shown; re-show
@@ -1109,6 +1208,12 @@ class AccountScreen(Screen):
                 self.show_project(key)
         elif event.data_table.id == "interactions-table" and event.row_key is not None:
             self._show_interaction(str(event.row_key.value or ""))
+        elif event.data_table.id == "pipeline-subs" and event.row_key is not None:
+            # j/k down the submission list re-points the subjectivities table,
+            # the same master/detail move rfi-requests makes below
+            key = str(event.row_key.value or "")
+            if key != self._pipeline_submission_id:
+                self._fill_subjectivities(key or None)
         elif event.data_table.id == "rfi-requests" and event.row_key is not None:
             # j/k down the request list re-points the items datasheet
             _, _, request_id = str(event.row_key.value or "").partition(":")
@@ -1596,12 +1701,33 @@ class AccountScreen(Screen):
                 ),
             )
         elif tab == "tab-pipeline":
-            self._push_form(
-                ef.opportunity_form(conn=conn),
-                lambda v: self.notify(
-                    f"created {ef.apply_opportunity(conn, v, org_id).ref}"
-                ),
-            )
+            # focus decides, exactly as it does on the projects tab: the
+            # subjectivities table is a detail of the submission above it, so
+            # `a` there adds to THAT submission rather than opening an
+            # unrelated opportunity form.
+            subjs = self.query_one("#pipeline-subjs", ListTable)
+            submission_id = self._selected_key("pipeline-subs")
+            if self.focused is subjs:
+                if submission_id is None:
+                    self.notify(
+                        "no submission selected — press tab to the submissions "
+                        "table and pick one first"
+                    )
+                    return
+                self._push_form(
+                    ef.subjectivity_form(),
+                    lambda v: self.notify(
+                        "subjectivity added: "
+                        f"{ef.apply_subjectivity(conn, v, submission_id).description}"
+                    ),
+                )
+            else:
+                self._push_form(
+                    ef.opportunity_form(conn=conn),
+                    lambda v: self.notify(
+                        f"created {ef.apply_opportunity(conn, v, org_id).ref}"
+                    ),
+                )
         elif tab == "tab-documents":
             self._push_form(
                 ef.document_form(),
@@ -1685,18 +1811,45 @@ class AccountScreen(Screen):
                 entity_actions.edit_placement(self, placements.get(conn, key))
         elif tab == "tab-pipeline":
             focused = self.focused
-            if focused is not None and focused.id == "pipeline-subs":
+            if focused is not None and focused.id == "pipeline-subjs":
+                subj_key = self._selected_key("pipeline-subjs")
+                # A REFUSAL SAYS SOMETHING (CLAUDE.md): returning in silence
+                # from a key the hint line names reads as a broken app. `a`
+                # on this same table already says so; `e` did not.
+                if not subj_key:
+                    self.notify(
+                        "no subjectivity selected — press a to add one, or tab "
+                        "to the submissions table to pick a different quote",
+                        severity="warning",
+                    )
+                    return
+                subj = submissions.get_subjectivity(conn, subj_key)
+                self._push_form(
+                    ef.subjectivity_form(subj),
+                    lambda v: ef.apply_subjectivity(
+                        conn, v, subj.submission_id, subj
+                    ),
+                )
+            elif focused is not None and focused.id == "pipeline-subs":
                 key = self._selected_key("pipeline-subs")
-                if key:
-                    sub = submissions.get(conn, key)
+                if not key:
+                    # the sibling branch's silence, and the same fix: an empty
+                    # submissions table is the commonest way to press e here
+                    self.notify(
+                        "no submission selected — press s to send one to a "
+                        "market first",
+                        severity="warning",
+                    )
+                    return
+                sub = submissions.get(conn, key)
 
-                    def response_saved(values: dict) -> None:
-                        ef.apply_response(conn, sub.id, values)
-                        if values.get("status") == "bound":
-                            # bound → offer to put the market on a layer
-                            self._offer_bind_to_layer(sub.id)
+                def response_saved(values: dict) -> None:
+                    ef.apply_response(conn, sub.id, values)
+                    if values.get("status") == "bound":
+                        # bound → offer to put the market on a layer
+                        self._offer_bind_to_layer(sub.id)
 
-                    self._push_form(ef.response_form(sub), response_saved)
+                self._push_form(ef.response_form(sub, conn), response_saved)
             else:
                 key = self._selected_key("pipeline-opps")
                 if key:

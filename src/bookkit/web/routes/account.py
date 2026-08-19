@@ -310,8 +310,14 @@ def _counts(conn: sqlite3.Connection, org: Org, open_work: int) -> dict[str, int
     contacts = contacts_repo.for_org(conn, org.id)
     interactions = interactions_repo.for_org(conn, org.id, limit=200)
     opportunities = opportunities_repo.for_org(conn, org.id, open_only=False)
+    # placement submissions counted too. They were not: the badge summed only
+    # submissions hanging off an OPPORTUNITY, so a renewal marketed to six
+    # carriers showed a Pipeline count of 0 while the tab listed six rows.
     submissions_count = sum(
         len(submissions_repo.for_opportunity(conn, o.id)) for o in opportunities
+    ) + sum(
+        len(submissions_repo.for_placement(conn, p.id))
+        for p in placements_repo.for_org(conn, org.id)
     )
     return {
         "program": len(placements_repo.for_org(conn, org.id)),

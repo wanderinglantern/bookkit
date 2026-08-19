@@ -280,8 +280,40 @@ def connect(
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA synchronous=NORMAL")
     if migrate:
+        snapshot_before_migrations(conn, db_path)
         apply_migrations(conn)
     return conn
+
+
+def snapshot_before_migrations(
+    conn: sqlite3.Connection, db_path: Path
+) -> Path | None:
+    """The rollback for a schema change, taken before the first one runs.
+
+    CLAUDE.md's rule is that a bulk write snapshots first (imports/commit.py
+    has done this since it was written) — a migration is the same bet with
+    worse odds, because it changes the SHAPE of the file and a half-applied
+    one is not something a user can unpick by hand. `connect(migrate=True)`
+    is where migrations actually run, on the TUI's, the CLI's, the web
+    layer's and the MCP server's first connection alike, so the snapshot
+    belongs here rather than in any one caller.
+
+    Returns the backup path, or None when there is nothing to protect:
+
+    - `:memory:` has no file to copy (every test connection);
+    - nothing pending means no schema change is about to happen — so an
+      ordinary open of an up-to-date book does NOT litter backups/;
+    - schema_version 0 is a database with no schema yet. 001_initial on an
+      empty file cannot destroy data that does not exist, and snapshotting
+      it would put an empty .bak beside every freshly created book.
+    """
+    if str(db_path) == ":memory:":
+        return None
+    if not pending_migrations(conn):
+        return None
+    if schema_version(conn) == 0:
+        return None
+    return snapshot(conn, db_path)
 
 
 def connect_readonly(path: Path | str | None = None) -> sqlite3.Connection:
@@ -361,7 +393,15 @@ def snapshot(conn: sqlite3.Connection, db_path: Path) -> Path:
 
 def backup(conn: sqlite3.Connection, dest: Path) -> Path:
     """VACUUM INTO copy — safe against a live WAL database — plus an integrity
-    check of the copy."""
+    check of the copy.
+
+    A copy that FAILS the check is deleted before the error is raised. It used
+    to be left where it landed, under an ordinary timestamped name, which is
+    the worst of both outcomes: the caller is told the backup failed, and the
+    person who comes looking for a rollback weeks later finds a file that
+    looks exactly like a good one. Nothing distinguishes a torn VACUUM from a
+    finished one at the filesystem level, so the only honest state is absence
+    — and the caller already knows, because this raises."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         raise FileExistsError(f"refusing to overwrite existing backup {dest}")
@@ -369,8 +409,12 @@ def backup(conn: sqlite3.Connection, dest: Path) -> Path:
     os.chmod(dest, 0o600)
     check = sqlite3.connect(dest)
     try:
-        if not integrity_check(check):
-            raise RuntimeError(f"backup {dest} failed integrity check")
+        ok = integrity_check(check)
     finally:
         check.close()
+    if not ok:
+        # after close(), so Windows and a locked file cannot turn a failed
+        # backup into a failed cleanup on top of it
+        dest.unlink(missing_ok=True)
+        raise RuntimeError(f"backup {dest} failed integrity check")
     return dest

@@ -71,6 +71,7 @@ ROW_HINTS = {
     "renewals": "[b]e[/b] edit · [b]r[/b] renew · [b]l[/b] layer · [b]enter[/b] opens account",
     "needs": "[b]enter[/b] opens account",
     "sla": "[b]enter[/b] opens account",
+    "quotes": "[b]enter[/b] opens account",
     "onboarding": "[b]enter[/b] resume onboarding",
     "requests": "[b]a[/b] add · [b]e[/b] edit · [b]enter[/b] opens account",
     "rfi": "[b]e[/b] edit request · [b]enter[/b] opens account",
@@ -109,13 +110,27 @@ def _walk(node: TreeNode) -> Iterator[TreeNode]:
         yield from _walk(child)
 
 
-def _attention_label(key: str, label: str, count: int) -> str:
-    """Attention leaves: red+◆ when overdue items exist, dim when empty."""
-    if count == 0:
+def _attention_label(
+    key: str, label: str, count: int, alert: bool = False, tail: str = ""
+) -> str:
+    """Attention leaves: red+◆ when overdue items exist, dim when empty.
+
+    `alert` is how a leaf that is not "overdue renewals" still says something
+    has already gone past — a LAPSED quote is money already lost, and a leaf
+    that reads the same whether the terms are live or gone would bury it.
+
+    `tail` is a SECOND number the leaf carries without summing it into the
+    first, because the two mean different things and adding them would lie
+    about both. The quotes leaf uses it for undated quotes: `· 4 (+2 no
+    expiry)` says four are on a clock and two have no clock at all. A leaf
+    with nothing dated but something undated is still not empty, so it does
+    not go dim — the count is the only honest 0 on the line."""
+    if count == 0 and not tail:
         return f"[{theme.DIM}]{label} · 0[/]"
-    if key == "overdue":
-        return f"[b {theme.RED}]◆ {label} · {count}[/]"
-    return f"{label} [{theme.DIM}]·[/] [b]{count}[/b]"
+    suffix = f" [{theme.DIM}]{tail}[/]" if tail else ""
+    if key == "overdue" or alert:
+        return f"[b {theme.RED}]◆ {label} · {count}[/]{suffix}"
+    return f"{label} [{theme.DIM}]·[/] [b]{count}[/b]{suffix}"
 
 
 class ConfirmRevertBatch(ModalScreen):
@@ -325,22 +340,45 @@ class NavigatorScreen(Screen):
 
         pending_onboarding = onboarding_svc.incomplete_clients(conn, today)
         chases = rfi_svc.outstanding_requests(conn, today, days=120)
+        # A quote with an expiry inside the window is precisely what this
+        # model exists to surface: a dated thing that needs an action before
+        # its date, and after which the terms are gone. It joins the ATTENTION
+        # set on the SAME 120-day window as everything else, and — like every
+        # other leaf — an already-expired quote never falls off it.
+        # The window itself is untouched; see services/quotes.py.
+        from ...services import quotes as quotes_svc
+
+        expiring_quotes = quotes_svc.expiring(conn, today, days=120)
+        # ...and the quotes NOBODY dated. Refusing to invent an expiry is
+        # right and stays; refusing to SHOW the item is a second decision,
+        # and this leaf used to make it by accident of the first — an undated
+        # quote left the past-SLA queue on the day it was answered and landed
+        # on no leaf, no Today pane and nothing that counts. They ride the
+        # same leaf as a tail rather than a ninth one: the work under them is
+        # the same chase, and the label keeps the two numbers apart so the
+        # dated count stays a count of clocks.
+        undated_quotes = quotes_svc.undated(conn, today)
         self._attention = {
             "overdue": overdue, "renewals": soon, "needs": needs,
             "tasks": due_tasks, "sla": late, "onboarding": pending_onboarding,
-            "rfi": chases,
+            "rfi": chases, "quotes": expiring_quotes + undated_quotes,
         }
+        lapsed = any(q.is_expired for q in expiring_quotes)
+        quote_tail = f"(+{len(undated_quotes)} no expiry)" if undated_quotes else ""
         att = tree.root.add(_section("ATTENTION"), expand=True, data=("att-root", None))
-        for key, label, count in (
-            ("overdue", "overdue renewals", len(overdue)),
-            ("renewals", "renewals ≤ 120d", len(soon)),
-            ("needs", "project needs due", len(needs)),
-            ("tasks", "tasks due", len(due_tasks)),
-            ("sla", "submissions past SLA", len(late)),
-            ("onboarding", "onboarding incomplete", len(pending_onboarding)),
-            ("rfi", "requests to chase", len(chases)),
+        for key, label, count, alert, tail in (
+            ("overdue", "overdue renewals", len(overdue), False, ""),
+            ("renewals", "renewals ≤ 120d", len(soon), False, ""),
+            ("needs", "project needs due", len(needs), False, ""),
+            ("tasks", "tasks due", len(due_tasks), False, ""),
+            ("sla", "submissions past SLA", len(late), False, ""),
+            ("quotes", "quotes expiring", len(expiring_quotes), lapsed, quote_tail),
+            ("onboarding", "onboarding incomplete", len(pending_onboarding), False, ""),
+            ("rfi", "requests to chase", len(chases), False, ""),
         ):
-            att.add_leaf(_attention_label(key, label, count), data=("att", key))
+            att.add_leaf(
+                _attention_label(key, label, count, alert, tail), data=("att", key)
+            )
 
         clients = orgs.list_orgs(conn, kind="client")
         overdue_orgs = {i.org.id for i in overdue}
@@ -721,9 +759,41 @@ class NavigatorScreen(Screen):
                 key = f"submission:{item.submission.id}"
                 self._row_org[key] = item.account.id
                 table.add_row(
-                    item.market.name, item.account.name,
+                    # the person, not just the carrier: "Travelers" is not
+                    # something you can email (AE review, 2026-08-18)
+                    theme.market_text(item.market.name, item.underwriter_name),
+                    item.account.name,
                     item.submission.sent_on,
                     days_text(-item.days_out), key=key,
+                )
+        elif which == "quotes":
+            table.add_columns(
+                "expires", right("in"), "account", "market", "program",
+                right("premium"), right("subj"),
+            )
+            for quote in self._attention["quotes"]:
+                key = f"quote:{quote.submission.id}"
+                self._row_org[key] = quote.org_id
+                left = quote.days_remaining
+                table.add_row(
+                    # expires_on and days_remaining are both properties of the
+                    # same QuoteItem, off the same stored column — the fix the
+                    # renewal countdown's "70d over" defect generalised
+                    theme.expiry_text(quote.expires_on, left),
+                    # NOT `left or 0`: an undated quote would render "0d" —
+                    # "expires today", the exact lie this feature exists to
+                    # prevent — and the leaf now carries undated quotes, so
+                    # that branch is live rather than defensive. A dash is
+                    # what account.py already prints for the same absence.
+                    days_text(left) if left is not None else dash(),
+                    quote.org_name,
+                    theme.market_text(quote.market_name, quote.underwriter_name),
+                    quote.about,
+                    money_text(quote.submission.quoted_premium),
+                    theme.subjectivity_text(
+                        quote.open_subjectivities, quote.total_subjectivities
+                    ),
+                    key=key,
                 )
         elif which == "onboarding":
             table.add_columns("account", "missing", "since")
