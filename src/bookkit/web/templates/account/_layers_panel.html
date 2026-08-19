@@ -29,11 +29,20 @@
         </thead>
         <tbody>
           {% for layer in layers %}
+            {# Each cell is ALREADY a full <td> (render_cell_display) — never
+               wrap one in another. A <td> inside a <td> is invalid HTML: the
+               parser closes the outer one empty and opens a real column for
+               the inner one, so every column after it drifts out from under
+               its header with no visible error (found 2026-08-18). #}
             <tr>
-              <td class="prose">{{ layer.name }}</td>
-              <td class="num">{{ layer.attach }}</td>
-              <td class="num">{{ layer.limit }}</td>
-              <td class="num">{{ layer.premium }}</td>
+              {{ layer.cells.name | safe }}
+              {{ layer.cells.attach_cents | safe }}
+              {% if layer.statutory %}
+                <td class="num">statutory</td>
+              {% else %}
+                {{ layer.cells.limit_cents | safe }}
+              {% endif %}
+              {{ layer.cells.premium_cents | safe }}
               <td class="num">{{ layer.signed_pct }}%</td>
               <td class="prose">
                 {% if layer.participants %}

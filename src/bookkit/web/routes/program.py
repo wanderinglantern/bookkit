@@ -18,57 +18,78 @@ the tab badge counted the placements it was claiming did not exist.
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ...money import format_cents_compact
+from ... import sync
+from ...forms.inline import LAYER_FIELDS
+from ...forms.spec import Field, initial_text, parse_value
 from ...repo import placements as placements_repo
+from ...services import program_files
 from ..app import TEMPLATES
-from .account import _conn, _context, _org, layers_for
+from ..forms_render import render_cell, render_cell_display
+from .account import _conn, _context, _org, _owned, layers_for
+
+_LAYER_CELLS: dict[str, Field] = {f.key: f for f in LAYER_FIELDS}
+
+# The column class a layer cell carries, in ONE place. Three literals — the
+# panel's first render, the display route htmx swaps back after a save, and the
+# editor — is how a cell loses its formatting the moment it is edited and the
+# column changes shape mid-session (fixed on the request items table,
+# 2026-08-19).
+_LAYER_CELL_CLASS: dict[str, str] = {
+    "name": "prose",
+    "attach_cents": "num",
+    "limit_cents": "num",
+    "premium_cents": "num",
+    "period_from": "num",
+    "period_to": "num",
+}
 
 router = APIRouter()
 
 
-def _money(cents: int | None) -> str:
-    """An em dash for UNRECORDED, never for zero.
+def _layer_row(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any]
+) -> dict[str, Any]:
+    """One layer, ready to render — the editable fields as CELLS, the derived
+    ones as plain text.
 
-    pipeline.py's _money treats 0 and None alike, which is right for a quote
-    premium — a quote with no premium recorded is not a quote for nothing.
-    It is WRONG for an attachment point: a primary layer attaches at $0, and
-    that is a fact about the tower, not a gap in the record. Rendering it as
-    an em dash tells a reader the attachment is unknown when it is known and
-    is zero (caught by looking at the rendered page, 2026-08-19).
+    MONEY IS SHOWN EXACT, not compact. A cell is one string for both the
+    display and the editor's pre-fill, and "$50M" parses back as $50,000,000 —
+    so a layer at $50,123,456 would lose $123,456 the first time anybody
+    clicked its cell and pressed Enter without typing. That is the same class
+    of bug as pre-filling a value the parser refuses (CLAUDE.md, the cents
+    rule): the difference is that this one saves successfully and destroys the
+    number quietly. Scannability loses to precision on an editable money
+    column.
 
-    So: None is "—", and every real number formats, zero included.
+    `signed_pct` and `statutory` stay plain: both are derived — signed is the
+    sum of the participants' shares — and a cell offering to edit a derived
+    value writes nothing and reads as broken.
     """
-    return "—" if cents is None else format_cents_compact(cents)
+    def cell(key: str) -> str:
+        field = _LAYER_CELLS[key]
+        return render_cell_display(
+            request, field, initial_text(field, layer.get(key)),
+            _layer_cell_action(ref, placement_id, layer["id"], key),
+            extra_class=_LAYER_CELL_CLASS.get(key, ""),
+        )
 
-
-def _layer_row(layer: dict[str, Any]) -> dict[str, Any]:
-    """One layer, formatted. Money becomes strings here rather than in the
-    template: there are no Jinja filters in this app, and arithmetic or
-    formatting inside a template is work no test can reach.
-
-    `signed_pct` and the participant shares are DERIVED (towerkit sums the
-    participants), which is why they are read-only even once phase 2 makes the
-    money and dates editable — a cell that edits a derived value writes
-    nothing and reads as broken.
-    """
     return {
         "id": layer["id"],
         "name": layer["name"],
-        "attach": _money(layer["attach_cents"]),
+        "cells": {key: cell(key) for key in _LAYER_CELLS},
         # A statutory layer carries benefits and NO dollar limit: towerkit
-        # forces limit == 0 and draws it off-scale. Printing "$0" here would
-        # render unlimited statutory cover as cover worth nothing — opposite
-        # facts that arithmetic alone makes identical.
-        "limit": "statutory" if layer["statutory"] else _money(layer["limit_cents"]),
-        # premium is the one column where zero and unrecorded really do read
-        # alike: towerkit stores None for "not priced yet", and a layer priced
-        # at exactly nothing is not a thing. layer_details already gives None.
-        "premium": _money(layer["premium_cents"]),
+        # forces limit == 0 and draws it off-scale. Printing "$0" would render
+        # unlimited statutory cover as cover worth nothing — opposite facts
+        # that arithmetic alone makes identical. So the limit CELL is replaced
+        # by the word, and the layer is not editable into or out of statutory
+        # from here.
+        "statutory": layer["statutory"],
         "signed_pct": layer["signed_pct"],
         "participants": layer["participants"],
     }
@@ -92,7 +113,9 @@ def _programs(request: Request, org: Any) -> list[dict[str, Any]]:
             {
                 "placement": placement,
                 "linked": bool(placement.program_path),
-                "layers": [_layer_row(layer) for layer in layers],
+                "layers": [
+                    _layer_row(request, org.ref, placement.id, layer) for layer in layers
+                ],
             }
         )
     return out
@@ -105,3 +128,152 @@ def program_tab(request: Request, ref: str) -> HTMLResponse:
     context = _context(conn, org, "program", request)
     context["programs"] = _programs(request, org)
     return TEMPLATES.TemplateResponse(request, "account/program.html", context)
+
+
+# --- editing a layer where it is read -----------------------------------------
+#
+# The inline-cell contract, third table to use it: GET .../cell/{key},
+# GET .../cell/{key}/edit, POST .../cell/{key}. The only difference from tasks
+# and request items is what sits behind the save — services.program_files.write
+# instead of a repo call, because the row being edited lives in a towerkit file
+# rather than a column.
+
+
+def _open_batch_web(conn: sqlite3.Connection, **kwargs: Any) -> Any:
+    """This surface's stamp on the shared write seam. The tool names are the
+    MCP server's own, so the changes list reads the same whichever surface made
+    the edit."""
+    from ...services import batches as batches_svc
+
+    return batches_svc.open_batch(conn, source="web", **kwargs)
+
+
+def _owned_layer(
+    request: Request, org: Any, placement_id: str, layer_id: str
+) -> tuple[Any, dict[str, Any]]:
+    """A layer is reached through TWO ids, so both are checked: the placement
+    is this account's, and the layer is that placement's file's. Without the
+    second, a layer could be edited under a placement it does not belong to —
+    and the row that came back would belong to a program the write never
+    touched."""
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    for layer in layers_for(request, conn, placement_id):
+        if layer["id"] == layer_id:
+            return placement, layer
+    raise HTTPException(status_code=404, detail=f"layer {layer_id} is not on {placement.ref}")
+
+
+def _layer_field(key: str) -> Field:
+    """Only what LAYER_FIELDS declares. signed_pct and statutory are derived,
+    and an editor for a derived value writes nothing and reads as broken."""
+    field = _LAYER_CELLS.get(key)
+    if field is None:
+        raise HTTPException(status_code=404, detail=f"{key} is not an editable layer field")
+    return field
+
+
+def _layer_cell_action(ref: str, placement_id: str, layer_id: str, key: str) -> str:
+    return f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/cell/{key}"
+
+
+def _layer_display_cell(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any], key: str
+) -> HTMLResponse:
+    field = _layer_field(key)
+    action = _layer_cell_action(ref, placement_id, layer["id"], key)
+    return HTMLResponse(
+        render_cell_display(
+            request, field, initial_text(field, layer.get(key)), action,
+            extra_class=_LAYER_CELL_CLASS.get(key, ""),
+        )
+    )
+
+
+def _layer_editor_cell(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any], key: str,
+    error: str | None = None, typed: str | None = None,
+) -> HTMLResponse:
+    field = _layer_field(key)
+    value = typed if typed is not None else initial_text(field, layer.get(key))
+    action = _layer_cell_action(ref, placement_id, layer["id"], key)
+    return HTMLResponse(
+        render_cell(
+            request, field, value, action, error=error,
+            extra_class=_LAYER_CELL_CLASS.get(key, ""),
+        )
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/cell/{key}",
+    response_class=HTMLResponse,
+)
+def layer_cell(
+    request: Request, ref: str, placement_id: str, layer_id: str, key: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    return _layer_display_cell(request, ref, placement_id, layer, key)
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/cell/{key}/edit",
+    response_class=HTMLResponse,
+)
+def layer_cell_edit(
+    request: Request, ref: str, placement_id: str, layer_id: str, key: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    return _layer_editor_cell(request, ref, placement_id, layer, key)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/cell/{key}",
+    response_class=HTMLResponse,
+)
+async def layer_cell_save(
+    request: Request, ref: str, placement_id: str, layer_id: str, key: str
+) -> HTMLResponse:
+    """One field, one write-through, one batch, one snapshot.
+
+    LAYER_FIELDS' keys are sync.update_layer's own keyword names, so the value
+    goes straight through with no translation table to drift.
+
+    A conflict arrives here as an ordinary refusal for now — the file moved
+    under this write and the message says so. The three-way Reload / Overwrite
+    / Keep editing is phase 5, deliberately: it deserves its own review rather
+    than riding in on a phase this size.
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    field = _layer_field(key)
+    raw = str((await request.form()).get(key, ""))
+
+    try:
+        value = parse_value(field, raw)
+    except ValueError as exc:
+        return _layer_editor_cell(request, ref, placement_id, layer, key, str(exc), raw)
+    if field.required and value in (None, ""):
+        return _layer_editor_cell(
+            request, ref, placement_id, layer, key, f"{field.label} is required", raw
+        )
+
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_edit",
+            summary=f"set {field.label} on {layer['name']}",
+            mutate=lambda: sync.update_layer(conn, placement.id, layer_id, **{key: value}),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:  # a refused write is a message, never a 500
+        return _layer_editor_cell(request, ref, placement_id, layer, key, str(exc), raw)
+
+    # Re-read rather than reusing `layer`: the memo is per REQUEST and this
+    # one has just written, so the cached parse is now the pre-image.
+    request.state.layer_details = {}
+    _, fresh = _owned_layer(request, org, placement_id, layer_id)
+    return _layer_display_cell(request, ref, placement_id, fresh, key)

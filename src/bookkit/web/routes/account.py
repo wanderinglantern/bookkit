@@ -117,7 +117,7 @@ def _org(request: Request, ref: str) -> Org:
 # in relationship.py, thirteen in work.py — and tests/test_web_scoping.py
 # drives every one of them.)
 
-_Owned = TypeVar("_Owned", Contact, Task, RfiRequest, RfiItem, Interaction)
+_Owned = TypeVar("_Owned", Contact, Task, RfiRequest, RfiItem, Interaction, Placement)
 
 
 def _not_here(kind: str, entity_id: str, org: Org) -> HTTPException:
@@ -129,7 +129,8 @@ def _not_here(kind: str, entity_id: str, org: Org) -> HTTPException:
 
 
 def _owner_org_ids(
-    conn: sqlite3.Connection, entity: Contact | Task | RfiRequest | RfiItem | Interaction
+    conn: sqlite3.Connection,
+    entity: Contact | Task | RfiRequest | RfiItem | Interaction | Placement,
 ) -> set[str]:
     """Which account(s) an entity belongs to — the ownership rule itself.
 
@@ -139,7 +140,7 @@ def _owner_org_ids(
     `task.org_id == org.id` alone would 404 rows the same page just rendered.
     An item belongs to whoever its request does — items carry no org of their
     own."""
-    if isinstance(entity, Contact | RfiRequest | Interaction):
+    if isinstance(entity, Contact | RfiRequest | Interaction | Placement):
         return {entity.org_id}
     if isinstance(entity, RfiItem):
         try:

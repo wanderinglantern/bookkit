@@ -174,7 +174,12 @@ def test_layer_money_is_formatted_not_raw_cents(app_and_org):
 def test_a_primary_layer_attaching_at_zero_says_zero(app_and_org):
     """An em dash means UNRECORDED. A primary layer attaches at $0 and that is
     a fact about the tower — rendering it as a dash tells the reader the
-    attachment is unknown when it is known and is zero."""
+    attachment is unknown when it is known and is zero.
+
+    The figure is exact rather than compact because these cells are editable
+    and one string serves both the display and the editor's pre-fill: "$50M"
+    parses back as $50,000,000 and would quietly destroy the odd dollars of a
+    layer at $50,123,456."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)[0]
@@ -185,9 +190,10 @@ def test_a_primary_layer_attaching_at_zero_says_zero(app_and_org):
     assert primaries, "the seeded book has no ground-up layer — test proves nothing"
 
     page = client.get(f"/accounts/{org.ref}/program").text
-    row = page.split(primaries[0]["name"], 1)[1][:400]
+    cell = _cell_text(page, placement, primaries[0]["id"], "attach_cents")
 
-    assert "$0" in row, "a $0 attachment rendered as unknown"
+    assert cell == "0", f"a $0 attachment rendered as {cell!r}"
+    assert "—" not in cell, "the attachment cell reads as unrecorded"
 
 
 # --- phase 2: the write seam --------------------------------------------------
@@ -235,3 +241,154 @@ def test_a_refusal_is_still_a_value_error():
     from bookkit.services.program_files import ProgramWriteRefused
 
     assert issubclass(ProgramWriteRefused, ValueError)
+
+
+# --- phase 2: editing a layer where it is read --------------------------------
+
+
+def _latest_batch(conn):
+    from bookkit.repo import batches as batches_repo
+
+    found = batches_repo.recent(conn, since="", limit=1)
+    return found[0] if found else None
+
+
+def _first_layer(conn, org):
+    placement = _linked(conn, org)[0]
+    return placement, sync.layer_details(conn, placement.id)[0]
+
+
+def _cell_text(page: str, placement, layer_id: str, key: str) -> str:
+    """The rendered text of one layer cell, found by its own action URL rather
+    than by slicing near a name — a fixed-width slice missed the value and
+    failed for the wrong reason once already."""
+    import re
+
+    action = f"/accounts/[^/]+/program/{placement.id}/layers/{layer_id}/cell/{key}"
+    match = re.search(rf'data-cell-action="{action}".*?>(.*?)</td>', page, re.S)
+    assert match, f"no {key} cell rendered for layer {layer_id}"
+    return re.sub(r"<[^>]+>", "", match.group(1)).strip()
+
+
+def _cell(org, placement, layer, key):
+    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer['id']}/cell/{key}"
+
+
+def test_a_layer_cell_offers_an_editor(app_and_org):
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    editor = client.get(_cell(org, placement, layer, "name") + "/edit")
+
+    assert editor.status_code == 200
+    assert layer["name"] in editor.text
+    assert "<input" in editor.text
+
+
+def test_editing_a_layer_writes_the_file_and_leaves_a_revertible_batch(app_and_org):
+    """THE SEAM, not the outcome. A response that merely looks right passes
+    even when the route wrote outside a batch and left no pre-image — which is
+    exactly what makes a program write unrevertible. So: the batch exists, it
+    is this surface's, it carries the MCP server's own tool name, the snapshot
+    is on disk, and the bytes changed."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    saved = client.post(_cell(org, placement, layer, "name"), data={"name": "Primary Casualty"})
+
+    assert saved.status_code == 200
+    assert path.read_bytes() != before, "the file on disk did not change"
+    batch = _latest_batch(conn)
+    assert batch is not None
+    assert batch.source == "web"
+    assert batch.tool == "program_layer_edit"
+    snapshot = path.parent / ".mcp-snapshots" / f"{batch.ref}.json"
+    assert snapshot.exists(), "no pre-image captured — this write cannot be reverted"
+    assert snapshot.read_bytes() == before
+
+
+def test_the_saved_value_comes_back_in_the_cell(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    saved = client.post(_cell(org, placement, layer, "name"), data={"name": "Renamed Layer"})
+
+    assert "Renamed Layer" in saved.text
+    assert sync.layer_details(conn, placement.id)[0]["name"] == "Renamed Layer"
+
+
+def test_a_sub_dollar_premium_is_refused_not_rounded(app_and_org):
+    """towerkit files carry whole dollars. Rounding here silently changes a
+    client's premium; refusing says so, and keeps what was typed."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        _cell(org, placement, layer, "premium_cents"), data={"premium_cents": "1,234.56"}
+    )
+
+    assert refused.status_code == 200
+    assert "1,234.56" in refused.text, "the typed value was not kept for correction"
+    assert path.read_bytes() == before, "the file was written anyway"
+
+
+def test_a_refused_layer_edit_leaves_no_batch_and_no_snapshot(app_and_org):
+    """A refusal that logged an undo unit would offer to revert a write that
+    never happened."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    before = _latest_batch(conn)
+
+    client.post(
+        _cell(org, placement, layer, "premium_cents"), data={"premium_cents": "1,234.56"}
+    )
+
+    after = _latest_batch(conn)
+    assert (after.ref if after else None) == (before.ref if before else None)
+
+
+def test_a_layer_under_another_account_is_not_reachable(app_and_org):
+    """Both ids are checked: the placement is this account's AND the layer is
+    that placement's. Without the second, a layer could be edited under a
+    placement it does not belong to."""
+    client, org = app_and_org
+    from bookkit.repo import orgs, placements
+
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    stranger = orgs.create(conn, kind="client", name="Someone Else Ltd")
+    # POINTED AT THE SAME FILE, so the layer id really does exist under their
+    # placement too. Without that the route 404s because the layer is missing
+    # rather than because it is not ours, and the test passes with the
+    # ownership check deleted — which it did, until a mutation showed it
+    # (2026-08-19). A guard test that cannot fail is not a guard.
+    theirs = placements.create(
+        conn, stranger.id, "Their Program", "2026-01-01", "2027-01-01",
+        program_path=placement.program_path,
+    )
+
+    poked = client.post(
+        f"/accounts/{org.ref}/program/{theirs.id}/layers/{layer['id']}/cell/name",
+        data={"name": "not mine"},
+    )
+
+    assert poked.status_code == 404
+    # and nothing was written to the file they share
+    assert sync.layer_details(conn, placement.id)[0]["name"] != "not mine"
+
+
+def test_a_derived_column_offers_no_editor(app_and_org):
+    """signed_pct is the sum of the participants' shares. A cell that offered
+    to edit it would write nothing and read as broken."""
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    assert client.get(_cell(org, placement, layer, "signed_pct") + "/edit").status_code == 404
