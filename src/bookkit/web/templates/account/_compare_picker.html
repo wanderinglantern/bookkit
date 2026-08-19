@@ -1,0 +1,22 @@
+{% extends "account/page.html" %}
+{% block panel %}
+  {# No unambiguous expiring partner — offer the account's other linked
+     programs, per the spec's posture: auto-detect, picker on ambiguity,
+     never a guess. Every choice is a link; nothing writes. #}
+  <div class="people-head">
+    <h2 class="people-label">Compare {{ proposed.program_name }} with…</h2>
+    <span class="people-count mono">{{ proposed.ref }}</span>
+    <span class="people-head-spacer"></span>
+    <a class="row-action-btn" href="/accounts/{{ header.org.ref }}/program">back to the program tab</a>
+  </div>
+  {% if candidates %}
+    <ul class="confirm-remove-notes">
+      {% for candidate in candidates %}
+        <li><a href="{{ action }}?with={{ candidate.id }}">{{ candidate.program_name }}
+          ({{ candidate.ref }}, {{ candidate.period_from }} → {{ candidate.period_to }})</a></li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="panel-empty"><p>no other linked program on this account to compare against — the expiring year's file has to be linked first.</p></div>
+  {% endif %}
+{% endblock %}

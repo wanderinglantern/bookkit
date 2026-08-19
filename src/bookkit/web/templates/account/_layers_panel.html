@@ -40,6 +40,9 @@
             hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/merge"
             hx-target="#program-{{ placement.id }} .form-host"
             hx-swap="innerHTML">Merge</button>
+    {% if linked %}
+      <a class="people-add" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/compare">Compare</a>
+    {% endif %}
   </div>
   <div class="form-host"></div>
 

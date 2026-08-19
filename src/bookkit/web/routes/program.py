@@ -2085,6 +2085,87 @@ async def scaffold_create(request: Request, ref: str, placement_id: str) -> HTML
     return _programs_panel(request, ref, org)
 
 
+# --- compare (spec D8 slice 5, phase 4) ----------------------------------------
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/compare", response_class=HTMLResponse
+)
+def compare_page(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """towerkit's compare_programs as the delta table the spec asks for.
+
+    The PAIR resolves by the renewal adjacency rule — same account, linked,
+    expiring period_to == this period_from — with a PICKER when that is
+    ambiguous or empty, never a guess (the spec's recommended posture,
+    mirroring sync.AmbiguousPlacement's). `?with={placement_id}` overrides.
+    Read-only; no tower graphic, per the spec's own recommend-against."""
+    from towerkit.compare import compare_programs
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    proposed = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    with_id = request.query_params.get("with")
+    action = f"/accounts/{ref}/program/{placement_id}/compare"
+    context = _context(conn, org, "program", request)
+
+    if not proposed.program_path:
+        context.update({"proposed": proposed, "candidates": [], "action": action})
+        return TEMPLATES.TemplateResponse(request, "account/_compare_picker.html", context)
+
+    siblings = [
+        p for p in placements_repo.for_org(conn, org.id)
+        if p.id != proposed.id and p.program_path
+    ]
+    if with_id:
+        expiring = _owned(conn, org, "placement", with_id, placements_repo.get)
+        if not expiring.program_path:
+            raise HTTPException(status_code=404, detail=f"{expiring.ref} has no program file")
+    else:
+        adjacent = [p for p in siblings if p.period_to == proposed.period_from]
+        if len(adjacent) != 1:
+            context.update(
+                {"proposed": proposed, "candidates": siblings, "action": action}
+            )
+            return TEMPLATES.TemplateResponse(
+                request, "account/_compare_picker.html", context
+            )
+        expiring = adjacent[0]
+
+    delta = compare_programs(
+        _loaded_program(expiring), _loaded_program(proposed)
+    )
+
+    def money(dollars: int | None) -> str:
+        return format_cents_compact(dollars * 100) if dollars else "—"
+
+    def share(bps: int | None) -> str:
+        return f"{bps / 100:g}%" if bps else "—"
+
+    context.update(
+        {
+            "proposed": proposed,
+            "expiring": expiring,
+            "limit_old": money(delta.limit_old),
+            "limit_new": money(delta.limit_new),
+            "premium_old": money(delta.premium_old),
+            "premium_new": money(delta.premium_new),
+            "premium_delta_pct": delta.premium_delta_pct,
+            "rows": [
+                {
+                    "carrier": row.carrier,
+                    "layer_name": row.layer_name,
+                    "status": row.status,
+                    "share": f"{share(row.share_old_bps)} → {share(row.share_new_bps)}",
+                    "line": f"{money(row.line_old)} → {money(row.line_new)}",
+                    "premium": f"{money(row.premium_old)} → {money(row.premium_new)}",
+                }
+                for row in delta.rows
+            ],
+        }
+    )
+    return TEMPLATES.TemplateResponse(request, "account/compare.html", context)
+
+
 # --- exports: the artifacts the terminal can make (phase 4) --------------------
 #
 # DOWNLOADS ARE PLAIN ANCHOR GETs answering Content-Disposition: attachment —

@@ -1,0 +1,47 @@
+{% extends "account/page.html" %}
+{% block panel %}
+  {# The Compare screen (spec D8 slice 5): towerkit's compare_programs as the
+     DELTA TABLE the design asks for — no side-by-side tower graphic, per the
+     spec's own "recommend against". Every figure below is towerkit's:
+     bookkit converts dollars to its display formatter and adds nothing. #}
+  <div class="people-head">
+    <h2 class="people-label">Compare — {{ proposed.program_name }}</h2>
+    <span class="people-count mono">{{ expiring.ref }} → {{ proposed.ref }}</span>
+    <span class="program-period mono">{{ expiring.period_from }} → {{ proposed.period_to }}</span>
+    <span class="people-head-spacer"></span>
+    <a class="row-action-btn" href="/accounts/{{ header.org.ref }}/program">back to the program tab</a>
+  </div>
+
+  <div class="lines-strip">
+    <span class="detail-label">total limit</span>
+    <span class="mono">{{ limit_old }} → {{ limit_new }}</span>
+    <span class="detail-label">total premium</span>
+    <span class="mono">{{ premium_old }} → {{ premium_new }}
+      {%- if premium_delta_pct is not none %} ({{ "%+.1f" | format(premium_delta_pct) }}%){% endif %}</span>
+  </div>
+
+  {% if rows %}
+    <div class="table-scroll">
+      <table class="rows rows-fit">
+        <thead>
+          <tr><th>Market</th><th>Layer</th><th>Status</th>
+              <th>Share</th><th>Line</th><th>Premium</th></tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr class="compare-{{ row.status | lower }}">
+              <td class="prose">{{ row.carrier }}</td>
+              <td class="prose">{{ row.layer_name }}</td>
+              <td><span class="compare-badge compare-badge-{{ row.status | lower }}">{{ row.status }}</span></td>
+              <td class="num">{{ row.share }}</td>
+              <td class="num">{{ row.line }}</td>
+              <td class="num">{{ row.premium }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="panel-empty"><p>the two programs share no seats to compare</p></div>
+  {% endif %}
+{% endblock %}

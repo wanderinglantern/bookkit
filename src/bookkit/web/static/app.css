@@ -2243,3 +2243,16 @@ table.rows tr.is-waived td {
 .towers-badge-ok { background: var(--good-wash); color: var(--good); }
 .towers-badge-warn { background: var(--warn-wash); color: var(--warn); }
 .towers-badge-error { background: var(--danger-wash); color: var(--danger); }
+
+/* --- the Compare delta table (phase 4) -------------------------------------- */
+
+.compare-badge {
+  font-size: var(--hint-size);
+  font-weight: 700;
+  border-radius: 3px;
+  padding: 0 0.4rem;
+}
+
+.compare-badge-renewed { background: var(--good-wash); color: var(--good); }
+.compare-badge-new { background: var(--accent-wash); color: var(--accent); }
+.compare-badge-lapsed { background: var(--danger-wash); color: var(--danger); }
