@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ... import sync
-from ...forms.entities import apply_placement, placement_form
+from ...forms.entities import apply_placement, apply_submission, placement_form, submission_form
 from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS, PLACEMENT_FIELDS
 from ...forms.spec import Field, initial_text, parse_value
 from ...money import format_cents_compact
@@ -1358,6 +1358,59 @@ def _scaffold_destination(conn: Any, org: Any, placement: Any) -> Any:
 
 
 @router.get(
+    "/accounts/{ref}/program/{placement_id}/submissions/new",
+    response_class=HTMLResponse,
+)
+def submission_new_form(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """The TUI's `s`, webside: send this program to a market. The whole-record
+    submission_form (market select, optional underwriter, sent date, notes)
+    renders into the section's form host."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    from ...repo import orgs as orgs_repo
+
+    if not orgs_repo.list_orgs(conn, kind="market"):
+        return _panel_refusal(
+            request, ref, org, placement_id,
+            "no markets on file — create one in the terminal app "
+            "(m, then a) before sending a submission",
+        )
+    spec = submission_form(conn)
+    action = f"/accounts/{ref}/program/{placement_id}/submissions"
+    return HTMLResponse(render_form(request, spec, action))
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/submissions", response_class=HTMLResponse
+)
+async def submission_create(
+    request: Request, ref: str, placement_id: str
+) -> HTMLResponse:
+    """Success answers HX-Redirect to the PIPELINE tab, where the submission
+    is actually visible — landing back on a tab that shows no trace of what
+    was just made is the dishonest option. Refusals re-render the form with
+    the input intact via the shared _save seam."""
+    from fastapi.responses import Response
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    spec = submission_form(conn)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = f"/accounts/{ref}/program/{placement_id}/submissions"
+    refused = _save(
+        request, org, spec, action, raw,
+        lambda values: apply_submission(conn, values, placement_id=placement_id),
+    )
+    if refused is not None:
+        return refused
+    return Response(
+        status_code=204, headers={"HX-Redirect": f"/accounts/{ref}/pipeline"}
+    )  # type: ignore[return-value]
+
+
+@router.get(
     "/accounts/{ref}/program/{placement_id}/renew", response_class=HTMLResponse
 )
 def renew_confirm(request: Request, ref: str, placement_id: str) -> HTMLResponse:
@@ -1426,7 +1479,7 @@ def scaffold_confirm(request: Request, ref: str, placement_id: str) -> HTMLRespo
 
 
 @router.post("/accounts/{ref}/program/{placement_id}/scaffold", response_class=HTMLResponse)
-def scaffold_create(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+async def scaffold_create(request: Request, ref: str, placement_id: str) -> HTMLResponse:
     """Create the towerkit file and link it.
 
     Every refusal comes back in the page and NAMES what to do: the file that
@@ -1449,7 +1502,12 @@ def scaffold_create(request: Request, ref: str, placement_id: str) -> HTMLRespon
             error=f"{placement.ref} already has a program file: "
             f"{placement.program_path}. Open it in towerkit.",
         )
-    destination = _scaffold_destination(conn, org, placement)
+    from pathlib import Path
+
+    typed = str((await request.form()).get("path", "")).strip()
+    destination = (
+        Path(typed).expanduser() if typed else _scaffold_destination(conn, org, placement)
+    )
     if destination is None:
         return _programs_panel(
             request, ref, org,

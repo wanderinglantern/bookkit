@@ -786,6 +786,93 @@ def test_a_made_up_line_is_refused(app_and_org, tmp_path):
     ]
 
 
+def test_scaffold_honours_a_typed_destination(app_and_org, tmp_path):
+    """The TUI's `t` lets you change where the file lands; the web confirm
+    showed the path and could not (parity gap, phase 2)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+
+    bare = placements_repo.create(
+        conn, org.id, "Scaffold Here", "2026-04-01", "2027-04-01"
+    )
+    custom = tmp_path / "elsewhere" / "custom-name.json"
+
+    made = client.post(
+        f"/accounts/{org.ref}/program/{bare.id}/scaffold", data={"path": str(custom)}
+    )
+
+    assert made.status_code == 200
+    assert custom.exists(), "the typed destination was ignored"
+    assert placements_repo.get(conn, bare.id).program_path == str(custom)
+
+
+def test_the_scaffold_confirm_offers_the_path_as_an_input(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    _configure_roots(conn, tmp_path)
+    from bookkit.repo import placements as placements_repo
+
+    bare = placements_repo.create(
+        conn, org.id, "Input Check", "2026-04-01", "2027-04-01"
+    )
+
+    confirm = client.get(f"/accounts/{org.ref}/program/{bare.id}/scaffold").text
+
+    assert 'name="path"' in confirm
+
+
+def _submission_url(org, placement):
+    return f"/accounts/{org.ref}/program/{placement.id}/submissions"
+
+
+def test_a_submission_is_sent_from_the_program_section(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import submissions as submissions_repo
+
+    market = orgs_repo.list_orgs(conn, kind="market")[0]
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    assert f'hx-get="{_submission_url(org, placement)}/new"' in page
+
+    form = client.get(f"{_submission_url(org, placement)}/new").text
+    assert "<select" in form and market.name in form
+
+    sent = client.post(
+        _submission_url(org, placement),
+        data={"market_org_id": market.id, "underwriter_contact_id": "",
+              "sent_on": "2026-08-19", "notes": ""},
+    )
+
+    # 204 + HX-Redirect, the same shape the revert POST uses: htmx follows
+    # the header; there is no body to swap
+    assert sent.status_code == 204
+    subs = [
+        sub for sub in submissions_repo.for_placement(conn, placement.id)
+        if sub.market_org_id == market.id
+    ]
+    assert subs, "no submission landed on the placement"
+    # success redirects to where the submission is VISIBLE — the pipeline tab
+    assert sent.headers.get("HX-Redirect", "").endswith(f"/accounts/{org.ref}/pipeline")
+
+
+def test_a_refused_submission_keeps_the_typed_notes(app_and_org):
+    client, org = app_and_org
+    placement = _linked(client.app.state.conn, org)[0]
+
+    refused = client.post(
+        _submission_url(org, placement),
+        data={"market_org_id": "", "underwriter_contact_id": "",
+              "sent_on": "2026-08-19", "notes": "half-typed context"},
+    ).text
+
+    assert "half-typed context" in refused
+    assert "required" in refused
+
+
 def _renew_url(org, placement):
     return f"/accounts/{org.ref}/program/{placement.id}/renew"
 
