@@ -164,7 +164,12 @@ def test_a_removed_contact_reads_as_unassigned_not_as_a_crash(conn, book) -> Non
 def test_the_editor_prefills_a_value_its_own_resolver_accepts_back(conn, book) -> None:
     """Opening a task and pressing save must not quietly downgrade a resolved
     assignee to freeform. Same rule as ENTRY ACCEPTS CENTS: a form that
-    pre-fills a value its own parser refuses corrupts the record on save."""
+    pre-fills a value its own parser refuses corrupts the record on save.
+
+    Driven through a COLLIDING name on purpose: a unique one round-trips
+    whether the prefill is qualified or not, so it would pass over a prefill
+    that is only accidentally acceptable."""
+    contacts.create(conn, book["market"].id, first_name="Rae", last_name="Okafor")
     t = tasks.create(conn, "chase the binder", org_id=book["client"].id)
     assignees.set_on_task(
         conn, t.id, "Rae Okafor — Atomic Industries", org_id=book["client"].id
@@ -213,6 +218,24 @@ def test_assigning_is_one_batch_and_reverts_all_of_it(conn, book) -> None:
 
 
 # --- the migration ----------------------------------------------------------
+
+
+def test_migration_013_is_additive_only() -> None:
+    """CLAUDE.md's rule and Grant's standing ruling: additive migrations only,
+    nothing rewrites existing rows. A DROP, an UPDATE or a table rebuild in
+    this file would take data with it and there is no undo. Same assertion
+    012 carries, on the same terms."""
+    migrations = Path(__file__).resolve().parent.parent / "migrations"
+    sql = (migrations / "013_task_assignee.sql").read_text()
+    body = " ".join(
+        line.strip().upper()
+        for line in sql.splitlines()
+        if line.strip() and not line.strip().startswith("--")
+    )
+    for forbidden in ("DROP ", "DELETE ", "UPDATE ", "RENAME ", "INSERT "):
+        assert forbidden not in body, f"013 is not additive: it contains {forbidden!r}"
+    for column in ("ASSIGNEE_KIND", "ASSIGNEE_ID", "ASSIGNEE_NAME"):
+        assert f"ALTER TABLE TASK ADD COLUMN {column}" in body
 
 
 def test_the_migration_is_additive_and_snapshots_the_book_first(
@@ -414,3 +437,110 @@ def test_the_assignees_NAME_never_reaches_the_client(conn, book, tmp_path) -> No
     ]
     assert not any("Dana Reyes" in v for v in values), "our colleague is named"
     assert not any("Jo Chen" in v for v in values), "the underwriter is named"
+
+
+# --- the add / edit form ----------------------------------------------------
+
+
+def _field(spec, key: str):
+    return {f.key: f for f in spec.fields}[key]
+
+
+def test_the_task_form_offers_the_assignee_on_both_halves(conn, book) -> None:
+    """CLAUDE.md: a vocabulary field completes from existing records, wired on
+    BOTH halves — the autocomplete dropdown and the ghost text. Both read
+    `Field.suggestions`, so this is the one thing that has to be there; a
+    field with an empty tuple renders as a bare box that teaches nobody the
+    picker exists."""
+    from bookkit.forms.entities import task_form
+
+    spec = task_form(conn=conn, default_org_id=book["client"].id)
+    assignee = _field(spec, "assignee")
+    assert assignee.suggestions == (
+        "Dana Reyes — our team",
+        "Jo Chen — Zurich",
+        "Rae Okafor — Atomic Industries",
+    ), assignee.suggestions
+
+
+def test_the_form_saves_a_picked_assignee_as_an_identity(conn, book) -> None:
+    """The create path. `assignee` is not a Task column, so a form that
+    handed it straight to the repo would raise — and one that dropped it
+    would lose the answer with nothing saying so."""
+    from bookkit.forms.entities import apply_task
+
+    task = apply_task(
+        conn,
+        {"title": "Return signed TRIA form",
+         "assignee": "Rae Okafor — Atomic Industries"},
+        org_id=book["client"].id,
+    )
+    assert task.assignee_kind is AssigneeKind.CONTACT
+    assert task.assignee_id == book["theirs"].id
+    assert task.assignee_name is None
+
+
+def test_the_form_reopens_on_the_person_it_saved(conn, book) -> None:
+    """Edit is the same form. It must pre-fill the assignee — an edit form
+    that opens blank on a filled field reads as "nobody is on this", and
+    saving it would then be true."""
+    from bookkit.forms.entities import apply_task, task_form
+
+    task = apply_task(
+        conn,
+        {"title": "Return signed TRIA form",
+         "assignee": "Rae Okafor — Atomic Industries"},
+        org_id=book["client"].id,
+    )
+    spec = task_form(task, conn=conn)
+    assert spec.initial["assignee"] == "Rae Okafor — Atomic Industries"
+
+
+def test_editing_a_task_offers_ITS_accounts_people_not_the_cursors(
+    conn, book
+) -> None:
+    """A task edited from a list that spans accounts (the navigator's
+    attention pane) must offer the contacts of the account the TASK belongs
+    to. Offering the last-looked-at account's people would put another
+    client's risk manager in the picker."""
+    from bookkit.forms.entities import apply_task, task_form
+
+    other = orgs.create(conn, name="Borealis Foods", kind="client")
+    contacts.create(conn, other.id, first_name="Sam", last_name="Ruiz")
+    task = apply_task(conn, {"title": "Confirm the values"}, org_id=other.id)
+
+    spec = task_form(task, conn=conn, default_org_id=book["client"].id)
+    labels = _field(spec, "assignee").suggestions
+    assert "Sam Ruiz — Borealis Foods" in labels
+    assert "Rae Okafor — Atomic Industries" not in labels
+
+
+def test_the_form_can_clear_an_assignee(conn, book) -> None:
+    """Blanking the field has to mean "nobody", not "leave it alone" —
+    forms.spec.dropped() strips a None so an optional blank does not
+    overwrite, which is right for every other field and wrong for this one."""
+    from bookkit.forms.entities import apply_task
+
+    task = apply_task(
+        conn, {"title": "Chase the binder", "assignee": "Dana Reyes — our team"},
+        org_id=book["client"].id,
+    )
+    assert task.assignee_id == book["ours"].id
+    cleared = apply_task(
+        conn, {"title": "Chase the binder", "assignee": None},
+        org_id=book["client"].id, existing=task,
+    )
+    assert (
+        cleared.assignee_kind, cleared.assignee_id, cleared.assignee_name
+    ) == (None, None, None)
+
+
+def test_an_unassigned_cell_prints_the_dash_and_not_a_blank() -> None:
+    """The same fix the renewals pane's `_cover` needed. Unassigned is a real
+    and common state — it is the DEFAULT — so the cell that says so has to
+    look like an empty field on purpose rather than like a rendering fault.
+    The dash is free."""
+    from bookkit.tui import theme
+
+    assert str(theme.assignee_text("")) == "—"
+    assert str(theme.assignee_text("Dana Reyes")) == "Dana Reyes"
