@@ -4,8 +4,10 @@ rendering left to towerkit (write() in this module glues to
 towerkit.render.table_xlsx / render.soi_xlsx; bookkit has no xlsx
 dependency). Sheet 1 (Open Items): org-level tasks split by category
 (SOV-style — except the Internal category, which is withheld from the
-client entirely: see compose's include_internal) plus a trailing General
-for uncategorized tasks and loose submissions, one section per placement
+client entirely, and any category that merely READS internal, whose rows
+ship but whose heading does not: see compose's include_internal) plus a
+trailing General for uncategorized tasks, the de-labelled rows, and loose
+submissions, one section per placement
 (its tasks + outstanding submissions), one per project (unmet needs) —
 always present, even when empty. OVERDUE LEADS, at both levels: sections
 carrying a past-due item sort first, most overdue first, and within every
@@ -44,6 +46,7 @@ from ..models import (
     Project,
     Task,
     is_internal_category,
+    reads_as_internal,
 )
 from ..money import MoneyParseError, cents_to_dollars, format_cents
 from ..repo import contacts, orgs, placements, submissions
@@ -218,8 +221,17 @@ def compose(
     future caller composing something client-facing inherits it without
     knowing this feature exists. A caller that wanted the internal rows and
     forgot to ask gets a visibly missing task; the other way round is a leak
-    nobody sees. Exactly one caller asks: MCP's per-client open_items."""
+    nobody sees. Exactly one caller asks: MCP's per-client open_items.
+
+    `include_internal` is the CLIENT-COPY SWITCH, and C9 rides it: on the
+    client path no section heading may read internal (models.reads_as_internal
+    — a prefix, because equality is already what withholds), and those rows are
+    filed under General instead. The MCP caller is reading Grant's book rather
+    than the deliverable, where the category is context and not a leak, so it
+    keeps its headings. One flag, one question — is this the client's copy —
+    so a future client-facing caller inherits both halves by default."""
     org = orgs.get(conn, org_id)
+    suppress_headings = not include_internal
     sections: list[ExportSection] = []
 
     org_tasks = tasks_repo.open_tasks_for_client(conn, org.id)
@@ -237,10 +249,26 @@ def compose(
     for t in org_tasks:
         if t.placement_id:
             continue
-        if t.category:
+        if t.category and not (suppress_headings and reads_as_internal(t.category)):
             label = category_labels.setdefault(t.category.lower(), t.category)
             by_category.setdefault(label, []).append(t)
         else:
+            # C9 — the heading, not the row. "Internal Review" ships (exact
+            # equality is what withholds, and that is the rule), but it used to
+            # ship under a banner literally naming it, which reads as a leak of
+            # our private list whatever the item beneath it says.
+            #
+            # THEY GO TO GENERAL, not under a headerless section, even though
+            # towerkit's renderer would accept one (TableSection.label is
+            # Optional and write()'s no-open-items fallback uses it). Sections
+            # render back to back with no separator and the row banding
+            # restarts per section, so unbannered rows read as belonging to
+            # whichever section printed above them — an "Internal Review" row
+            # filed under "Compliance", which is a worse lie than the banner
+            # was. General is also the honest description: a row whose category
+            # cannot be shown is, to this reader, uncategorized. `if
+            # general_rows` then keeps emitting nothing when there is nothing,
+            # and emits General when these rows are all an account has.
             uncategorized.append(t)
     by_placement: dict[str, list[Task]] = {}
     for t in org_tasks:

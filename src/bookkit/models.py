@@ -266,6 +266,32 @@ def is_internal_category(category: str | None) -> bool:
     return category is not None and category.strip().lower() == INTERNAL_CATEGORY.lower()
 
 
+def reads_as_internal(category: str | None) -> bool:
+    """PREFIX match on the trimmed, case-folded value: "Internal", "Internal
+    Review", "internal note" all count, "Client internal audit" does not.
+
+    A DIFFERENT JOB FROM is_internal_category, which is why the wider rule is
+    safe here and unsafe there. That one decides whether a ROW is withheld, so
+    over-reach silently deletes a real client-facing task from the deliverable
+    — unrecoverable, and invisible. This one decides only whether a SECTION
+    HEADING may be printed in the client's copy; the rows underneath survive
+    either way (export_open_items.compose files them under General). So the
+    cost of over-reach is a heading a client would have found unremarkable,
+    and the cost of under-reach is a banner reading "Internal Review" in the
+    client's workbook — which a client-side CFO called worse than the item
+    beneath it (C9, Grant 2026-08-18: suppress them).
+
+    That asymmetry is also why this stays a plain prefix rather than growing a
+    word boundary: "Internally managed" reads internal to the person we are
+    protecting from it, and suppressing its heading costs nothing.
+
+    Exact-internal satisfies this too — the wider rule contains the narrower
+    one — so compose() must withhold before it re-files."""
+    return category is not None and category.strip().lower().startswith(
+        INTERNAL_CATEGORY.lower()
+    )
+
+
 class Project(Row):
     id: str
     ref: str

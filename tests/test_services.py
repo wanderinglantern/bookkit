@@ -588,13 +588,20 @@ def test_internal_match_ignores_case_and_surrounding_space(conn):
 def test_internal_prefix_is_not_internal(conn):
     """D1: exact equality, not a prefix. "Internal Review" is a real
     client-facing broking category; excluding it would drop a task from the
-    deliverable with no signal anywhere. A wrong INCLUSION is loud (the
-    client sees a section header naming it); a wrong exclusion is silent."""
+    deliverable with no signal anywhere. THE ROW STILL SHIPS — that half is
+    unchanged and is what this test guards.
+
+    D1's other half — that a wrong inclusion is loud because "the client sees
+    a section header naming it" — was overturned by C9: the loudness landed on
+    the client, not on us, and a heading reading Internal is worse than the
+    item beneath it. So the heading is now suppressed and the row is filed
+    under General (see the C9 block below); the withholding rule itself is
+    untouched."""
     org = orgs.create(conn, name="Prefix Co", kind="client")
     tasks.create(conn, "walk the client through the audit", org_id=org.id,
                  category="Internal Review")
     sections = compose(conn, org.id, date(2026, 8, 12))
-    assert [s.label for s in sections] == ["Internal Review — Prefix Co"]
+    assert [s.label for s in sections] == ["General — Prefix Co"]
     assert sections[0].rows[0].item == "walk the client through the audit"
 
 
@@ -781,6 +788,156 @@ def test_is_internal_category_predicate():
     assert not is_internal_category("")
     assert not is_internal_category(None)
 
+
+# --- C9: no section heading in the client's copy may read "Internal" ---------
+
+
+def _rendered_sections(ws) -> list[tuple[str, list[str]]]:
+    """The sheet read back the way a client reads it: (section label, items).
+
+    A section label is rendered by towerkit's band_row, which writes column A
+    and leaves the rest of the row empty; a body row fills every column. So
+    the shape of the row IS the distinction, and reading it back this way is
+    what makes the assertion about what the CLIENT sees rather than about what
+    compose() returned. Row 1 is the column header and is skipped. A body row
+    before any label row raises here on purpose — that is the headerless
+    section this design rejected, and it must not appear silently."""
+    out: list[tuple[str, list[str]]] = []
+    for row in ws.iter_rows(min_row=2):
+        values = [c.value for c in row]
+        if all(v is None for v in values[1:]):
+            out.append((str(values[0]), []))
+        else:
+            out[-1][1].append(str(values[0]))
+    return out
+
+
+def _banner_fixture(conn):
+    """One account carrying every shape the rule has to separate."""
+    org = orgs.create(conn, name="Banner Co", kind="client")
+    tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    tasks.create(conn, "audit support", org_id=org.id, category="Internal Review")
+    tasks.create(conn, "reserve note", org_id=org.id, category=" internal note ")
+    tasks.create(conn, "walk the site", org_id=org.id, category="Client internal audit")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    tasks.create(conn, "misc", org_id=org.id)
+    return org
+
+
+def test_the_generated_workbook_has_no_section_label_reading_internal(conn, tmp_path):
+    """C9, load-bearing: drive a real workbook and read the rendered bands.
+
+    A task categorised exactly "Internal" is withheld already. "Internal
+    Review" ships — correctly, by the exact-match rule — and used to ship
+    under a banner literally naming it, which reads as a leak of our private
+    list whatever the item beneath it says. The rows stay; the heading goes."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    org = _banner_fixture(conn)
+    path = write(conn, org.id, tmp_path / "b.xlsx", date(2026, 8, 18))
+    sections = _rendered_sections(load_workbook(path).active)
+
+    labels = [label for label, _ in sections]
+    assert not any(label.strip().lower().startswith("internal") for label in labels), labels
+
+    # and the rows themselves are still there, and still counted
+    items = [item for _, rows in sections for item in rows]
+    assert sorted(items) == [
+        "audit support", "misc", "renew GL", "reserve note", "walk the site",
+    ], items
+    assert "our own file note" not in items  # the exact category, still withheld
+
+
+def test_the_de_labelled_rows_land_in_general(conn, tmp_path):
+    """Not a headerless block: towerkit renders sections back to back with no
+    separator and restarts its banding per section, so rows under no banner
+    read as belonging to whichever section printed above them — an "Internal
+    Review" row silently filed under "Compliance". They join General, which is
+    what a row whose category cannot be shown honestly is."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    org = _banner_fixture(conn)
+    path = write(conn, org.id, tmp_path / "g.xlsx", date(2026, 8, 18))
+    sections = dict(_rendered_sections(load_workbook(path).active))
+
+    assert sorted(sections["General — Banner Co"]) == [
+        "audit support", "misc", "reserve note",
+    ]
+    assert sections["Renewal — Banner Co"] == ["renew GL"]
+
+
+def test_the_suppression_is_a_prefix_not_a_contains(conn):
+    """"Client internal audit" is a real client-facing broking task and its
+    heading says nothing about our private list. Equality is already what
+    withholds, so this rule has to be wider than equality and narrower than
+    containment — exactly the prefix."""
+    org = _banner_fixture(conn)
+    labels = [s.label for s in compose(conn, org.id, date(2026, 8, 18))]
+    assert "Client internal audit — Banner Co" in labels
+    assert "Internal Review — Banner Co" not in labels
+    assert "internal note — Banner Co" not in labels
+
+
+def test_the_exact_internal_category_is_still_withheld_not_relabelled(conn):
+    """The two rules must not merge. Suppressing the heading moves rows;
+    withholding removes them. A task categorised exactly "Internal" must not
+    reappear in General wearing no label."""
+    org = orgs.create(conn, name="Still Co", kind="client")
+    tasks.create(conn, "our own file note", org_id=org.id, category="Internal")
+    tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
+    items = [r.item for s in compose(conn, org.id, date(2026, 8, 18)) for r in s.rows]
+    assert items == ["renew GL"]
+
+
+def test_general_appears_for_de_labelled_rows_alone(conn):
+    """compose() emits General only `if general_rows`. When the near-miss rows
+    are the ONLY rows on the account, that guard has to be satisfied by them —
+    otherwise suppressing the heading deletes the section and the rows with
+    it."""
+    org = orgs.create(conn, name="Only Co", kind="client")
+    tasks.create(conn, "audit support", org_id=org.id, category="Internal Review")
+    sections = compose(conn, org.id, date(2026, 8, 18))
+    assert [(s.label, [r.item for r in s.rows]) for s in sections] == [
+        ("General — Only Co", ["audit support"])
+    ]
+
+
+def test_our_own_copy_keeps_the_internal_headings(conn):
+    """include_internal is the client-copy switch, and C9 rides it: MCP's
+    open_items is Grant's book, not the deliverable, and a category is context
+    there rather than a leak."""
+    org = _banner_fixture(conn)
+    labels = [
+        s.label
+        for s in compose(conn, org.id, date(2026, 8, 18), include_internal=True)
+    ]
+    assert "Internal — Banner Co" in labels
+    assert "Internal Review — Banner Co" in labels
+
+
+def test_suppressing_the_heading_does_not_swallow_the_operators_line(conn, tmp_path):
+    """Two readers, two lines. withheld_note still names the near miss to us
+    at write time — the client's copy losing the banner is exactly why that
+    line matters more, not less — and it still never enters the workbook."""
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import withheld_note, write
+
+    org = _banner_fixture(conn)
+    note = withheld_note(conn, org.id)
+    assert note == (
+        ' — 1 internal task withheld; 3 tasks categorised "Client internal audit", '
+        '"internal note", "Internal Review" WERE exported '
+        '(only the exact category "Internal" is withheld)'
+    )
+
+    path = write(conn, org.id, tmp_path / "n.xlsx", date(2026, 8, 18))
+    values = [str(c.value) for row in load_workbook(path).active.iter_rows() for c in row]
+    assert not any("only the exact category" in v for v in values)
 
 # --- C8: the withholding rule, stated once, in fixed wording ----------------
 
