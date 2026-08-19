@@ -614,6 +614,26 @@ async def layer_add(request: Request, ref: str, placement_id: str) -> HTMLRespon
     return _panel(request, ref, org, placement_id)
 
 
+def _market_add_form(
+    request: Request, conn: sqlite3.Connection, base: str,
+    error: str | None = None, values: dict[str, str] | None = None,
+) -> HTMLResponse:
+    """The inline add form — and, on a refusal, the same form again with the
+    message and everything typed still in it (commit in place, at the anchor
+    the user is looking at rather than a form host above the tower)."""
+    return TEMPLATES.TemplateResponse(
+        request, "account/_market_add.html",
+        {"base": base, "fields": _participant_fields(conn), "error": error,
+         "values": values},
+    )
+
+
+def _market_add_button(request: Request, base: str) -> HTMLResponse:
+    return TEMPLATES.TemplateResponse(
+        request, "account/_market_add_button.html", {"base": base}
+    )
+
+
 @router.post(
     "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets",
     response_class=HTMLResponse,
@@ -625,12 +645,11 @@ async def market_add(
     conn = _conn(request)
     placement, layer = _owned_layer(request, org, placement_id, layer_id)
     raw = {k: str(v) for k, v in (await request.form()).items()}
-    action = f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets"
-    title = f"bind a market to {layer['name']}"
+    base = f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets"
     try:
         values = _parsed(PARTICIPANT_FIELDS, raw)
     except ValueError as exc:
-        return _refused_form(request, PARTICIPANT_FIELDS, action, title, str(exc), raw)
+        return _market_add_form(request, conn, base, str(exc), raw)
 
     try:
         program_files.write(
@@ -643,8 +662,10 @@ async def market_add(
             open_batch=_open_batch_web,
         )
     except Exception as exc:
-        return _refused_form(request, PARTICIPANT_FIELDS, action, title, str(exc), raw)
-    return _panel(request, ref, org, placement_id)
+        return _market_add_form(request, conn, base, str(exc), raw)
+    button = _market_add_button(request, base)
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(button) + _text(panel))
 
 
 def _market_field(key: str) -> Field:
@@ -652,6 +673,13 @@ def _market_field(key: str) -> Field:
     if field is None:
         raise HTTPException(status_code=404, detail=f"{key} is not an editable market field")
     return field
+
+
+def _participant_fields(conn: sqlite3.Connection) -> tuple[Field, ...]:
+    """PARTICIPANT_FIELDS with the carrier completing from existing market
+    names — the add form's copy of the rule _market_field_for_editor applies
+    to the carrier cell."""
+    return tuple(_market_field_for_editor(conn, f.key) for f in PARTICIPANT_FIELDS)
 
 
 def _market_field_for_editor(conn: sqlite3.Connection, key: str) -> Field:
@@ -757,6 +785,42 @@ def _seated(layer: dict[str, Any], index: int) -> dict[str, Any]:
             status_code=404, detail=f"no market {index} on {layer['name']}"
         ) from None
     return seat
+
+
+# LITERAL SEGMENTS BEFORE {index}: Starlette resolves in registration order,
+# so /markets/new and /markets/button must be registered before
+# /markets/{index} or the int coercion answers them with a 422 — the same
+# registration-order trap this module's docstring records for the tab route.
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/new",
+    response_class=HTMLResponse,
+)
+def market_add_form(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned_layer(request, org, placement_id, layer_id)
+    return _market_add_form(
+        request, conn,
+        f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets",
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/button",
+    response_class=HTMLResponse,
+)
+def market_add_button(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """What the inline form's cancel restores."""
+    org = _org(request, ref)
+    _owned_layer(request, org, placement_id, layer_id)
+    return _market_add_button(
+        request,
+        f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets",
+    )
 
 
 @router.get(
@@ -952,22 +1016,6 @@ def layer_add_form(request: Request, ref: str, placement_id: str) -> HTMLRespons
     return _mini_form(
         request, _layer_add_fields(),
         f"/accounts/{ref}/program/{placement_id}/layers", "new layer",
-    )
-
-
-@router.get(
-    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/new",
-    response_class=HTMLResponse,
-)
-def market_add_form(
-    request: Request, ref: str, placement_id: str, layer_id: str
-) -> HTMLResponse:
-    org = _org(request, ref)
-    _, layer = _owned_layer(request, org, placement_id, layer_id)
-    return _mini_form(
-        request, PARTICIPANT_FIELDS,
-        f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets",
-        f"bind a market to {layer['name']}",
     )
 
 

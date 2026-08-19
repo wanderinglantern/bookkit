@@ -669,6 +669,52 @@ def test_market_remove_asks_first_and_the_get_writes_nothing(app_and_org):
     assert path.read_bytes() == before, "the confirm GET wrote to the file"
 
 
+def _markets_base(org, placement, layer_id):
+    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/markets"
+
+
+def test_market_add_opens_in_the_row_not_a_form_host(app_and_org):
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    base = _markets_base(org, placement, layer["id"])
+    assert f'hx-get="{base}/new"' in page
+    assert 'hx-target="closest .market-add"' in page, "+ market still posts elsewhere"
+
+    form = client.get(f"{base}/new").text
+    assert 'class="market-add"' in form
+    assert "<datalist" in form, "the carrier input offers no completion"
+
+
+def test_market_add_cancel_restores_the_button(app_and_org):
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    button = client.get(f"{_markets_base(org, placement, layer['id'])}/button")
+
+    assert button.status_code == 200
+    assert "+ market" in button.text
+
+
+def test_a_refused_market_add_keeps_the_typed_carrier_in_place(app_and_org):
+    """Commit in place, at the anchor: the refusal re-renders the inline form
+    with the input intact — never a panel swap, never a fragment somewhere
+    else on the page."""
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    refused = client.post(
+        _markets_base(org, placement, layer["id"]),
+        data={"carrier": "Half Typed Re", "share_pct": ""},
+    ).text
+
+    assert 'value="Half Typed Re"' in refused
+    assert "share is required" in refused
+    assert f'id="program-{placement.id}"' not in refused, "the refusal swapped a panel"
+
+
 def test_market_keep_restores_the_chip(app_and_org):
     client, org = app_and_org
     placement, layer, index, seat = _first_seat(client.app.state.conn, org)

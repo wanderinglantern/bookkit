@@ -72,10 +72,9 @@
                      a reader most needs to catch. #}
                   <span class="unplaced">To be placed</span>
                 {% endif %}
-                <button type="button" class="row-action-btn"
-                        hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/new"
-                        hx-target="#program-{{ placement.id }} .form-host"
-                        hx-swap="innerHTML">+ market</button>
+                {% with base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/layers/" ~ layer.id ~ "/markets" %}
+                  {% include "account/_market_add_button.html" %}
+                {% endwith %}
               </td>
             </tr>
           {% endfor %}
