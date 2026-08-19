@@ -560,6 +560,22 @@ async def test_the_account_pipeline_tab_shows_the_expiry_and_the_chase(
         assert subjs.row_count == 1
 
 
+def test_the_pipeline_badge_counts_placement_submissions_too(
+    conn: sqlite3.Connection,
+) -> None:
+    """The tab badge summed only submissions hanging off an OPPORTUNITY, so a
+    renewal marketed to six carriers showed a Pipeline count of 0 while the
+    tab listed six rows. Found while building the tab that made the rows
+    visible in the first place."""
+    from bookkit.web.routes.account import _counts
+
+    client, market, placement = _book(conn)
+    org = orgs.get(conn, client)
+    submissions.create(conn, market, "2026-07-01", placement_id=placement)
+    submissions.create(conn, market, "2026-07-02", placement_id=placement)
+    assert _counts(conn, org, open_work=0)["pipeline"] == 2
+
+
 def test_the_web_pipeline_tab_reads_the_expiry_in_words(
     tmp_path: Path, frozen_clock: date
 ) -> None:
