@@ -81,6 +81,41 @@ async def test_todays_renewals_still_say_what_renews_without_lines(
         assert "Casualty" in painted, "unlinked renewals name nothing at all"
 
 
+def test_a_renewal_with_neither_lines_nor_a_program_says_so() -> None:
+    """The last column of the pane, and the one already at risk of clipping —
+    so when it has nothing to print it must print the em dash, not nothing.
+    The code this replaced said `item.lines or dash()` and got that half
+    right; the rewrite kept the fallback chain and lost the dash, so a
+    placement with an empty program_name rendered a blank cell, which reads as
+    a rendering fault rather than as an absence. The dash is free."""
+    from bookkit.models import Org, Placement
+    from bookkit.services.renewals import RenewalItem
+    from bookkit.tui.screens.today import _cover
+
+    stamps = {"created_at": "2026-08-14T09:00:00+00:00",
+              "updated_at": "2026-08-14T09:00:00+00:00"}
+    org = Org(
+        id="o1", ref="ACC-0001", kind="client", name="Nameless Co",
+        status="active", **stamps,
+    )
+    placement = Placement(
+        id="p1", ref="PLC-0001", org_id="o1", program_name="", status="bound",
+        period_from="2026-01-01", period_to="2026-12-31", **stamps,
+    )
+    blank = RenewalItem(placement=placement, org=org, days_remaining=30, bucket="0-30")
+    assert str(_cover(blank)) == "\u2014", repr(str(_cover(blank)))
+    # the stand-in still wins when there IS one
+    named = RenewalItem(
+        placement=Placement(
+            id="p2", ref="PLC-0002", org_id="o1", program_name="2025 Casualty Program",
+            status="bound", period_from="2026-01-01", period_to="2026-12-31",
+            **stamps,
+        ),
+        org=org, days_remaining=30, bucket="0-30",
+    )
+    assert str(_cover(named)) == "Casualty"
+
+
 # --- the account Overview tab: the label describes what is under it ---------
 
 

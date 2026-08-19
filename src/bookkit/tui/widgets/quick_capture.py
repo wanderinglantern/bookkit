@@ -37,6 +37,21 @@ DRAFT_KEY = "quick_capture"
 # account scores 45. High enough that a typo is refused and named rather than
 # resolved into the wrong person's file.
 ATTENDEE_MATCH = 80
+# ...and how far clear of the runner-up the winner has to be. An EXACT tie is
+# the rare case (two people called Chen); the common one on a real account is
+# two similar-but-different names, where the winner leads by a couple of
+# points and the loser is a different human being. Measured, WRatio over
+# default_process:
+#     "J Smith"            Jon Smith 87.5 / Jonathan Smith 85.5   gap  2.0
+#     "Michel Brennan"     Michael 96.6   / Michelle 93.3         gap  3.2
+#     "Rosa Delgado-Vance" Rosa Delgado 90.0 / Robert D-V 84.2    gap  5.8
+# — every one of those picked the wrong person silently. Against that, when
+# the full name IS typed the gap is never small: the tightest pair of
+# genuinely distinct names measured is Michael vs Michelle Brennan at 9.7,
+# and typing either in full leads by that much. 8 sits in the empty band
+# between the two populations, on the cautious side of it: everything that
+# guessed wrong is refused, and a name typed out in full still resolves.
+ATTENDEE_MARGIN = 8
 
 
 class QuickCapture(ModalScreen):
@@ -45,15 +60,23 @@ class QuickCapture(ModalScreen):
         Binding("escape", "cancel", "Cancel (keeps draft)"),
         Binding("ctrl+s", "save", "Save", priority=True),
     ]
-    # only the field list scrolls — the title and the save/cancel hint are
-    # pinned so they never leave the screen on short terminals
+    # Only the field list scrolls — the title and the save/cancel hint are
+    # pinned so they never leave the screen on short terminals.
+    #
+    # `max-height: 55vh` on the fields USED to break that promise, exactly as
+    # it did on FormModal: it measures against the VIEWPORT while the box is
+    # capped at 80% by bookkit.tcss, and the two add up rather than nesting.
+    # The overflow is not scrollable, it is gone — at 140x45 neither "who was
+    # there" nor the roster under it was painted at all, and at 80x24 the note
+    # went with them. `1fr` makes the scroller absorb whatever is left after
+    # the chrome instead of claiming its own slice of the screen.
     DEFAULT_CSS = """
     QuickCapture .modal-box {
         height: auto;
     }
     QuickCapture .modal-fields {
-        height: auto;
-        max-height: 55vh;
+        height: 1fr;
+        min-height: 3;
     }
     """
 
@@ -96,10 +119,31 @@ class QuickCapture(ModalScreen):
             yield Button("Save", variant="primary", id="qc-save")
 
     def on_mount(self) -> None:
-        # the account matches scroll inside 6 rows so subject and note stay
-        # within reach — the app-wide 10-row cap buried the actual note fields
-        # (inline style: the tcss .modal-box OptionList rule outranks DEFAULT_CSS)
-        self.query_one("#qc-org-options", OptionList).styles.max_height = 6
+        # Everything below is an INLINE style, and has to be: bookkit.tcss is
+        # app-level CSS and outranks a widget's DEFAULT_CSS in Textual however
+        # specific the selector, so `QuickCapture .field-label {…}` is read and
+        # discarded. Inline is the only lever that wins.
+        #
+        # `height: 1fr` on the fields put the Save button back inside the box,
+        # but it did not put the last two fields on the screen: this is the
+        # densest modal in the app, and its content stacked 41 rows into the
+        # 26-row viewport a 45-row terminal leaves it. `who was there` began at
+        # row 26 and the roster at row 31 — the two things this modal grew
+        # last were the two nobody could see. What goes is the CHROME, not the
+        # field.
+        #
+        # The account matches scroll inside 5 rows rather than 6 (the app-wide
+        # 10-row cap had already buried the note fields once). 5 is the LARGEST
+        # value that still leaves the roster on a 45-row terminal — measured:
+        # at 6 the roster falls off, at 5 it does not — and the account is
+        # usually pre-filled from the screen you pressed `n` on anyway.
+        self.query_one("#qc-org-options", OptionList).styles.max_height = 5
+        # A blank line above every label buys readability in a six-row form
+        # and costs a whole field in a fourteen-row one. The roster loses its
+        # too, so it reads as the caption of the field it describes.
+        for label in self.query(".field-label"):
+            label.styles.margin = 0
+        self.query_one("#qc-who-known", Static).styles.margin = 0
         self._orgs = orgs.list_orgs(self.app.conn)
         self._restore_draft()
         org_input = self.query_one("#qc-org", Input)
@@ -139,9 +183,19 @@ class QuickCapture(ModalScreen):
         )
 
     def _contacts(self) -> list:
-        """Live contacts only. Removing someone takes them off attendee lists
-        while the interaction_contact rows survive for an undelete, so a
-        removed person must not be offerable for a NEW one."""
+        """Contacts who are still at the client, and still on the book.
+
+        Two different filters, and it is worth being exact about which does
+        what. A REMOVED contact is excluded by `base.alive()`, which
+        contacts.for_org applies unconditionally — removal takes them off
+        attendee lists while the interaction_contact rows survive for an
+        undelete, so a removed person must not be offerable for a NEW one.
+        What the `active_only=True` default adds on top is the person who has
+        not been removed but has LEFT: `active = 0`, still on the account's
+        file because their history is, and not somebody who can have been in
+        the room this morning. Naming them would be a plausible-looking lie
+        on the client's record, which is the one thing this field exists to
+        stop."""
         if not self.selected_org_id:
             return []
         return contacts.for_org(self.app.conn, self.selected_org_id)
@@ -172,7 +226,7 @@ class QuickCapture(ModalScreen):
                     f"no contact on this account matches {name!r} — "
                     "add them on the account first, or clear the field"
                 )
-            if len(best) > 1 and best[0][0] == best[1][0]:
+            if len(best) > 1 and best[0][0] - best[1][0] < ATTENDEE_MARGIN:
                 tied = " and ".join(c.name for _, c in best[:2])
                 return [], f"{name!r} matches {tied} — type more of the name"
             if best[0][1].id not in ids:

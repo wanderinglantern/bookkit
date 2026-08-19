@@ -46,12 +46,18 @@ def _cover(item: renewals.RenewalItem) -> Text:
     read alike, and under a `cover` header the word "Program" is the header's
     job, not the cell's. "2025 Casualty Program" → "Casualty", which sits in
     the same register as "GL, AL, IM" instead of a file title. It is DIM, so
-    a stand-in never reads as projected data."""
+    a stand-in never reads as projected data.
+
+    With neither — no projected lines and no program name — the cell is an em
+    dash, not blank. The pre-fix code said `item.lines or dash()` and that half
+    of it was right: an empty last column reads as a rendering fault, while a
+    dash says "this row has nothing to put here", and the dash is free."""
     if item.lines:
         return Text(item.lines)
     label = book._program_label(item.placement.program_name)
     head = label[: -len("program")].strip() if label.lower().endswith("program") else label
-    return Text(head or label, style=theme.DIM)
+    stand_in = head or label
+    return Text(stand_in, style=theme.DIM) if stand_in else dash()
 
 
 class TodayScreen(Screen):

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from textual.widgets import Input
+from textual.widgets import Input, Static
 
 from bookkit.repo import batches as batches_repo
 from bookkit.repo import contacts as contacts_repo
@@ -199,3 +199,136 @@ async def test_capture_with_nobody_named_still_saves(snapshot_db: Path) -> None:
 
         entry = _logged(conn, org, "Note to self")
         assert interactions_repo.attendees(conn, entry.id) == []
+
+
+# --- the near tie, which is the case that actually happens -------------------
+
+
+def _account_with_roster(conn, name: str, roster: list[tuple[str, str]]):
+    """An account whose contact list is exactly what the test says it is —
+    the seeded accounts carry their own people, and a margin test measured
+    against a roster it did not choose measures nothing."""
+    org = orgs_repo.create(conn, kind="client", name=name, status="active")
+    for first, last in roster:
+        contacts_repo.create(conn, org.id, first_name=first, last_name=last)
+    return org
+
+
+async def _refused(pilot, app: BookkitApp, org, *, who: str, subject: str) -> bool:
+    before = len(interactions_repo.for_org(app.conn, org.id))
+    await _open(pilot, app, org, who=who, subject=subject)
+    await pilot.press("ctrl+s")
+    await pilot.pause()
+    still_open = isinstance(app.screen, QuickCapture)
+    unwritten = len(interactions_repo.for_org(app.conn, org.id)) == before
+    return still_open and unwritten
+
+
+async def test_a_name_that_two_people_NEARLY_answer_to_is_refused_too(
+    snapshot_db: Path,
+) -> None:
+    """The exact tie is the rare case. The common one is two similar names on
+    one account, where the winner leads by two or three points — and an
+    equality test (`best[0][0] == best[1][0]`) does not fire on it at all, so
+    the wrong person went onto the client's file in writing, silently.
+
+    Every pair below was measured picking the WRONG person before the margin:
+    Jon 87.5 / Jonathan 85.5, Michael 96.6 / Michelle 93.3, Rosa Delgado 90.0
+    / Robert Delgado-Vance 84.2.
+    """
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        conn = app.conn
+
+        smiths = _account_with_roster(
+            conn, "Zephyrine Cold Storage", [("Jon", "Smith"), ("Jonathan", "Smith")]
+        )
+        assert await _refused(pilot, app, smiths, who="J Smith", subject="Jay"), (
+            "'J Smith' resolved to one of Jon/Jonathan Smith on a 2-point lead"
+        )
+        await pilot.press("escape")
+        await pilot.pause()
+
+        brennans = _account_with_roster(
+            conn, "Quillfeather Aggregates",
+            [("Michael", "Brennan"), ("Michelle", "Brennan")],
+        )
+        assert await _refused(
+            pilot, app, brennans, who="Michel Brennan", subject="Mich"
+        ), "'Michel Brennan' resolved to Michael or Michelle on a 3-point lead"
+        await pilot.press("escape")
+        await pilot.pause()
+
+        delgados = _account_with_roster(
+            conn, "Umbral Freight Systems",
+            [("Rosa", "Delgado"), ("Robert", "Delgado-Vance")],
+        )
+        assert await _refused(
+            pilot, app, delgados, who="Rosa Delgado-Vance", subject="Del"
+        ), "'Rosa Delgado-Vance' resolved to Rosa Delgado on a 6-point lead"
+
+
+async def test_the_margin_still_lets_a_name_typed_in_full_through(
+    snapshot_db: Path,
+) -> None:
+    """The other half of the margin, and the reason it is 8 and not 15: a
+    refusal the user cannot clear is as useless as a wrong guess. Michael and
+    Michelle Brennan are the closest pair of genuinely different names
+    measured, and typing either IN FULL leads by 9.7 — so the full name has to
+    resolve, on the same roster the test above refuses a fragment of."""
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        conn = app.conn
+        org = _account_with_roster(
+            conn, "Quillfeather Aggregates",
+            [("Michael", "Brennan"), ("Michelle", "Brennan")],
+        )
+        michelle = next(
+            c for c in contacts_repo.for_org(conn, org.id) if c.first_name == "Michelle"
+        )
+
+        await _open(pilot, app, org, who="Michelle Brennan", subject="Named in full")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        entry = _logged(conn, org, "Named in full")
+        assert [c.id for c in interactions_repo.attendees(conn, entry.id)] == [
+            michelle.id
+        ]
+
+
+async def test_a_contact_who_has_left_cannot_be_put_in_the_room(
+    snapshot_db: Path,
+) -> None:
+    """`for_org` filters twice and the two filters answer different questions.
+    base.alive() drops the REMOVED contact and it runs unconditionally, so the
+    removed-contact test above passes with or without `active_only`. What
+    active_only=True genuinely gates is the person who left the client and was
+    never removed — active = 0, still on the file because their history is,
+    and not somebody who can have been in a meeting this morning."""
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        conn = app.conn
+        org = _account_with_contacts(conn)
+        departed = contacts_repo.create(
+            conn, org.id, first_name="Halvard", last_name="Ochterlony"
+        )
+        contacts_repo.update(conn, departed.id, active=0)
+        # still on the account's file — this is not a removal
+        assert any(
+            c.id == departed.id
+            for c in contacts_repo.for_org(conn, org.id, active_only=False)
+        )
+        before = len(interactions_repo.for_org(conn, org.id))
+
+        await _open(pilot, app, org, who="Halvard Ochterlony", subject="Departed")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert isinstance(app.screen, QuickCapture), "a departed contact was matched"
+        assert len(interactions_repo.for_org(conn, org.id)) == before
+        # and the roster does not offer them either
+        assert "Halvard" not in str(app.screen.query_one("#qc-who-known", Static).render())
