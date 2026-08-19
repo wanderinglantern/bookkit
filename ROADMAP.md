@@ -756,3 +756,40 @@ resist shortening them.** The follow-up-task *offer*.
 Conventions rather than defects, flagged as such by the reviewer: quote expiries and subjectivities,
 marketing a layer to several carriers at indicative shares before binding, chasing issuance for
 months post-bind, stewardship as an annual deliverable.
+
+---
+
+## C15 answered: model the states (2026-08-18)
+
+**Grant: model it — an optional states list.** Not free text in `limits_detail`.
+
+So the Schedule of Insurance's statutory row reads **`Statutory - State Limits`** (his phrase) and
+the states are carried as **data**, not prose.
+
+### What this touches, in order
+
+1. **`towerkit.model`** — an optional `states` field on a layer. Additive and optional, because
+   the canonical file format is the source of truth and **a zero-diff round trip is tested**.
+   `model._ordered`'s hand-written key order has to learn about it or that test breaks — that is
+   the one thing that will bite silently.
+2. **`towerkit.validate`** — the check that makes modelling worth it over free text: **ND, OH, WA
+   and WY are monopolistic** and cannot be covered by a private policy, so a statutory layer
+   naming one is an error. Refuse it the way the validator already refuses `statutory-line-shared`.
+3. **`towerkit.soi.limits_text`** (`soi.py:38`) — render the phrase plus the states. Note the
+   existing first line, `if layer.limits_detail: return layer.limits_detail`, short-circuits
+   everything: decide what happens when a file carries BOTH `limits_detail` prose and a `states`
+   list, or the two will disagree and the prose will silently win.
+4. **bookkit** — nothing, unless the states should reach `sync.layer_details`. They are a rendering
+   fact for the SOI, not a tower-geometry fact, so probably not. Check before adding a key.
+
+### Watch
+
+- **Only statutory layers should carry states.** A states list on a dollar-limited layer is
+  meaningless and the validator should say so, or the field becomes a general-purpose note by
+  accident.
+- **This is a file-format change**, so it wants the same care as any migration: a program written
+  by the new code must still load in an older checkout, which additive-and-optional gives for free,
+  and the round-trip test is the proof.
+- The rest of C10's first half is unchanged and still unbuilt: Part B's three real limits instead
+  of one unqualified figure, `Included with Part A` rather than `$0.00`, and the captive retention
+  stated once rather than on both WC rows.
