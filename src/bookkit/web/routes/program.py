@@ -1143,8 +1143,10 @@ def scaffold_create(request: Request, ref: str, placement_id: str) -> HTMLRespon
     if placement.program_path:
         return _refusal(
             request,
+            # No "unlink it first": unlink exists on no surface yet (phase
+            # 2) and a refusal must never name a verb the app cannot do.
             f"{placement.ref} already has a program file: {placement.program_path}. "
-            f"Open it in towerkit, or unlink it first.",
+            f"Open it in towerkit.",
         )
     destination = _scaffold_destination(conn, org, placement)
     if destination is None:

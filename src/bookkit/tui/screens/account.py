@@ -486,7 +486,7 @@ class AccountScreen(Screen):
         Binding("1", "show_tab('tab-overview')", "Overview", show=False),
         Binding("2", "show_tab('tab-contacts')", "Contacts", show=False),
         Binding("3", "show_tab('tab-interactions')", "Interactions", show=False),
-        Binding("4", "show_tab('tab-placements')", "Placements", show=False),
+        Binding("4", "show_tab('tab-placements')", "Programs", show=False),
         Binding("5", "show_tab('tab-projects')", "Projects", show=False),
         Binding("6", "show_tab('tab-pipeline')", "Pipeline", show=False),
         Binding("7", "show_tab('tab-documents')", "Documents", show=False),
@@ -528,7 +528,8 @@ class AccountScreen(Screen):
                     yield ListTable(id="interactions-table")
                     with VerticalScroll(id="interaction-detail-pane"):
                         yield Static(id="interaction-detail")
-            with TabPane("4 Placements", id="tab-placements"):
+            # "Programs" to the user, tab-placements in code (D3, 2026-08-19)
+            with TabPane("4 Programs", id="tab-placements"):
                 with Horizontal():
                     with Vertical(id="placement-side"):
                         yield ListTable(id="placements-table")
@@ -2035,7 +2036,7 @@ class AccountScreen(Screen):
         """Roll the selected placement into next period; file-backed ones get
         next year's towerkit file cloned and linked at birth."""
         if self._active_tab() != "tab-placements":
-            self.notify("r renews the selected placement (placements tab)", severity="warning")
+            self.notify("r renews the selected program (programs tab)", severity="warning")
             return
         key = self._acting_key("placements-table")
         if key is None:
@@ -2146,7 +2147,7 @@ class AccountScreen(Screen):
                     f"renewed, but {len(diags.errors)} term(s) NOT applied — "
                     f"{diags.errors[0]}"
                 )
-            return "renewed with pasted terms — review in the placements tab"
+            return "renewed with pasted terms — review in the programs tab"
 
         self.app.push_screen(PasteImportModal("paste renewal terms", stage, commit))
 
@@ -2159,7 +2160,7 @@ class AccountScreen(Screen):
         from ..widgets.forms import FormModal
 
         if self._active_tab() != "tab-placements":
-            self.notify("t scaffolds a tower file (placements tab)", severity="warning")
+            self.notify("t scaffolds a tower file (programs tab)", severity="warning")
             return
         key = self._acting_key("placements-table")
         if key is None:
@@ -2205,7 +2206,7 @@ class AccountScreen(Screen):
     def _selected_linked_placement(self):
         """The selected placement when it has a program file, else None+notify."""
         if self._active_tab() != "tab-placements":
-            self.notify("layer keys work on the placements tab", severity="warning")
+            self.notify("layer keys work on the programs tab", severity="warning")
             return None
         key = self._acting_key("placements-table")
         if key is None:
@@ -2521,7 +2522,7 @@ class AccountScreen(Screen):
         """Merge the selected (duplicate) placement into another of this org's
         placements — submissions, tasks, and documents move with it."""
         if self._active_tab() != "tab-placements":
-            self.notify("x merges the selected placement (placements tab)", severity="warning")
+            self.notify("x merges the selected program (programs tab)", severity="warning")
             return
         key = self._acting_key("placements-table")
         if key is None:

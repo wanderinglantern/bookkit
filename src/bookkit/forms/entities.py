@@ -264,7 +264,9 @@ def placement_form(
 ) -> FormSpec:
     program_sugg = tuple(vocab.program_names(conn)) if conn else ()
     return FormSpec(
-        "edit placement" if existing else "new placement",
+        # "program", not "placement", in anything a user reads (D3,
+        # 2026-08-19) — placement stays the code/DB term.
+        "edit program" if existing else "new program",
         [
             Field("program_name", "program name", required=True,
                   suggestions=program_sugg),

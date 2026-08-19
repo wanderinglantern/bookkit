@@ -104,7 +104,7 @@ enter on a placement shows its tower.
 enter on a document opens the file.""",
     ),
     (
-        "placements tab",
+        "programs tab",
         """\
 j/k switches the previewed programme; the
 header names the selection.
