@@ -793,3 +793,73 @@ the states are carried as **data**, not prose.
 - The rest of C10's first half is unchanged and still unbuilt: Part B's three real limits instead
   of one unqualified figure, `Included with Part A` rather than `$0.00`, and the captive retention
   stated once rather than on both WC rows.
+
+---
+
+# Overnight plan, 2026-08-18 — Grant's four answers and my standing rulings
+
+He is leaving this running overnight. Everything below is settled; nothing here waits on him.
+
+## His four answers
+
+**1. The missing middle: options 1 + 3 + 4 together — NOT the full cycle.**
+A `quoted` status and a **quote expiry date**, plus **subjectivities** per quote, plus wiring the
+declared-but-unused `submission.underwriter_contact_id`. Deliberately *not* modelling
+presented → client-decision. So the shape is: a market answers, the quote becomes visible with an
+expiry that can lapse, the subjectivities are chaseable, and Today can name a person to email.
+
+**2. Assignee: TASK ONLY** — against the AE's recommendation to span task, RFI and submission.
+His call, recorded as such. **The AE's *storage* correction still applies**, because that was about
+correctness, not scope: `assignee_kind` + `assignee_id` when the picker resolved, freeform
+`assignee_name` when it did not, and the export reads the KIND. String-matching a name to derive
+You/Us means typing "Sam" for "Sam Garcia" silently flips a client-facing column. Suggestion sources
+are team members, the account's contacts, **and contacts on market orgs** — my earlier claim that
+underwriters are not records in the book was wrong and is corrected above.
+
+**3. MCP: derive the field table, with the denylist — and SHOW HIM THE DENYLIST.** His words: *"let
+me know the denylist so i can edit and modify — that can be in the morning."* So the denylist is a
+deliverable in its own right, not an implementation detail: one declarative module, every entry
+carrying its reason, laid out so he can strike lines out over coffee. Build it by walking every
+currently-unreachable field and recording which are deliberate.
+
+**4. Unbound rows on the Schedule of Insurance: SEPARATE SUBTOTAL, clearly labelled.** Bound cover
+totals on its own line; unbound totals separately beneath it. Not excluded, not hidden, not removed
+from the sheet.
+
+## Standing rulings — mine, so the night does not stall
+
+- **C9, where the de-labelled rows go:** into the uncategorised/General section. Not a headerless
+  section (`compose()` cannot express one without changing its own guards) and not a neutral
+  invented heading (a second vocabulary to keep straight). Suppression matches on **prefix**, since
+  exact match is already what withholds.
+- **C5, the header block's identity data:** bookkit has no "my firm" concept and I will not invent
+  one inline. Build it **settings-backed** (`repo/settings` already exists and carries program
+  roots), seeded with visible placeholders. Grant fills in firm, name and contact once; every sheet
+  and the filename read from there. A placeholder that says `<set your firm name>` is honest; a
+  hardcoded guess is not.
+- **C13, FEIN on a client-facing sheet: capture it, do not print it.** Optional field on the named
+  insured, absent from the client workbook unless he asks. It identifies a legal entity to a tax
+  authority and its value to the reader of a schedule is near zero. Reversible either way; this is
+  the safe direction.
+- **MCP parity ledger destination:** entity × verb over `repo.base.ENTITY_TABLES`, with an explicit
+  `DEFERRED` dict carrying reasons. I am NOT declaring "MCP should reach everything the TUI does" —
+  the ledger's job tonight is to make the gaps visible and machine-checked, and the destination is
+  a decision the filled-in ledger will let him make in one sitting.
+- **Nothing destructive.** Every migration additive and optional; a snapshot before any migration
+  runs; no rewrite of existing data anywhere. If a change cannot be made additively, it waits.
+- **Every branch gated by me** — full suite, mypy, ruff, plus `uv build --wheel` where package data
+  moves — and reviewed before merge. A green suite has not once been sufficient on this build.
+
+## Sequencing tonight
+
+towerkit is a single shared checkout, so its work is strictly sequential. bookkit's collides on
+`models.py` / migrations / `forms/`, so the assignee waits for the submission work rather than
+racing it.
+
+1. **Missing middle** (bookkit) — quoted + expiry + subjectivities + underwriter contact.
+2. **SOI truth** (towerkit) — per-row status, separate unbound subtotal, and C10's statutory
+   package: `Statutory - State Limits`, Part B's three real limits, `Included with Part A`, the
+   captive retention stated once.
+3. **MCP derivation + the denylist he wants to read** + `describe()` + the parity ledger.
+4. Then, as those land: the assignee; the states model with the monopolistic check; C9; the
+   renewal date and calendar tab; the format pass; slice 1 phase B.
