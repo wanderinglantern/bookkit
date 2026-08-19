@@ -918,3 +918,71 @@ a dead control behind in the meantime.
 Quick capture never writes the `interaction_contact` link, so the participant column the web
 timeline renders will be **permanently blank in real use**. A column that looks built and cannot
 ever fill is worse than an absent one.
+
+---
+
+## Handover: what bookkit must change once towerkit's SOI status lands (2026-08-18)
+
+towerkit branch `soi-status-and-statutory` (`4f13120`, `3f49724`) gives `SoiRow` a real per-row
+status and splits the section subtotal into bound and unbound. **Gated by me: 637 passed, ruff and
+mypy clean.** Under review. Once it merges, bookkit must do the following or the marker stays
+backwards.
+
+**Cross-repo impact, measured**: with that branch checked out, bookkit's export suites give exactly
+**one** failure — `tests/test_services.py:951`, a verbatim SOI header-row assertion needing
+`"Status"` inserted after `"Line of Coverage"`. Everything else passes, which confirms
+`TableSection.totals` defaulting to `()` leaves bookkit's own sheets byte-unchanged.
+
+### The status vocabulary is SEVEN, not the five I briefed
+
+`Bound`, `Partially bound`, `Proposed`, `To be placed` (towerkit-derived) and `Quoted`,
+`Submitted`, `Expired` (bookkit-only). `Proposed` is forced: `Placement` is a program-level enum
+with only `bound`/`proposed`, and mapping it to `To be placed` would be wrong because that phrase
+already means "participant-less layer" — a proposed program can carry a full carrier panel, so the
+row would read carrier `Zenith`, status `To be placed`.
+
+**`Partially bound` is the implementer's own addition, offered to be struck.** Its argument:
+`validate.py` reports unclosed shares as a *warning*, so a 60%-placed layer renders and exports
+today, and printing `Bound` on a 40%-open layer is the same class of statement this whole change
+exists to fix. **My ruling: keep it**, pending the reviewer's independent call. The fact is already
+in the model (`Layer.signed_bps`) and it is not counted as bound cover.
+
+### The three edits, in `services/export_open_items.py`
+
+1. **Add the mapping** near `_UNLINKED_CARRIER` (~line 392): bookkit's `PlacementStatus`
+   (prospective / submitted / quoted / bound / lapsed) → `towerkit.soi.SoiStatus`, with `lapsed`
+   → `Expired` and `prospective` → `To be placed`.
+2. **`_book_data_section` (~line 429) — delete the label hack, set the field.** This is C2. The row
+   gains `status=...`; the section label loses its `f"… ({_status_label(...)})"` suffix entirely.
+   **`_status_label` itself stays** — tasks, needs and projects still use it.
+3. **`compose_soi` (~line 450), linked branch.** Rows from `build_soi` already carry a
+   towerkit-derived per-layer status, which is *better* than the placement's — it can say
+   `To be placed` for one layer of an otherwise bound program. So override **only** when the book
+   knows something the file cannot: if the placement's mapped status is not `BOUND`, replace it on
+   every row via `dataclasses.replace` (`SoiRow` is frozen).
+4. The docstring at ~457 still justifies the suffix with `"(Bound)" is true in the past tense`.
+   Reword it; the reason expired years are excluded is unchanged.
+
+**Interim behaviour if bookkit ships nothing**: it compiles and runs — book-data rows get a blank
+Status cell and their premium lands under `Unbound cover`. Understated, never overstated. But it is
+wrong for genuinely bound unlinked placements, so this is not a resting state.
+
+### Two C10 items were refused as data questions, correctly
+
+- **Employers Liability's three limits** (each accident / disease each employee / disease policy
+  limit) cannot be expressed: `Layer` carries exactly one `limit`. `Sublimit` is a cap *within* a
+  limit, not one of three coordinate limits, and using it would be a lie in the schema to get a
+  string onto a sheet.
+- **`Included with Part A`**: which layer a premium is included *with* is not expressible, and
+  hard-coding "Part A" would teach towerkit a Workers Comp concept, which its CLAUDE.md forbids in
+  as many words. **The harmful half shipped generically**: a zero premium renders `Included` rather
+  than `$0.00`, for any layer.
+
+**Both want the same canonical-format change** — optional named amounts and an optional
+`premiumDetail` string on `Layer`, the existing `limitsDetail`/`retentionDetail` pattern — and
+should land **together with C15's `states` field**, since all three touch `_LAYER_KEYS` and the
+zero-diff round trip. Doing them separately costs the same work three times.
+
+**The third C10 item DID land in full**: the captive retention is stated once, threaded through the
+sheet in display order. The committed fixture already had that bug — a shared SIR printed on both
+the GL and AL primaries.
