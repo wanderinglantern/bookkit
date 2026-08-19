@@ -37,7 +37,8 @@
     <div class="table-scroll">
       <table class="rows rows-fit">
         <thead>
-          <tr><th>Layer</th><th>Attaches</th><th>Limit</th><th>Premium</th>
+          <tr><th class="row-expand-col"></th>
+              <th>Layer</th><th>Attaches</th><th>Limit</th><th>Premium</th>
               <th>Signed</th><th>Markets</th></tr>
         </thead>
         <tbody>
@@ -48,6 +49,16 @@
                the inner one, so every column after it drifts out from under
                its header with no visible error (found 2026-08-18). #}
             <tr>
+              {# The chevron opens the layer's long tail (policy no + dates)
+                 as a row below — [data-row-expand] in form-host.js makes it
+                 a toggle by swallowing the second click before htmx sees
+                 it. #}
+              <td class="row-expand">
+                <button type="button" class="row-action-btn" data-row-expand
+                        title="policy number and dates"
+                        hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/details"
+                        hx-target="closest tr" hx-swap="afterend">&#9656;</button>
+              </td>
               {{ layer.cells.name | safe }}
               {{ layer.cells.attach_cents | safe }}
               {% if layer.statutory %}

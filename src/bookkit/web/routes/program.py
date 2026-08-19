@@ -351,6 +351,16 @@ def _text(response: Any) -> str:
     return bytes(body).decode()
 
 
+# The three long-tail keys live in the DETAILS ROW (a span inside a colspan
+# td), not the table proper — their cells must be spans or the parser drops
+# the swapped-back <td> outright (no table-row ancestor at the swap point).
+_DETAIL_KEYS = frozenset({"policy_number", "period_from", "period_to"})
+
+
+def _layer_cell_tag(key: str) -> str:
+    return "span" if key in _DETAIL_KEYS else "td"
+
+
 def _layer_field(key: str) -> Field:
     """Only what LAYER_FIELDS declares. signed_pct and statutory are derived,
     and an editor for a derived value writes nothing and reads as broken."""
@@ -385,6 +395,7 @@ def _layer_display_cell(
     return HTMLResponse(
         render_cell_display(
             request, field, _display_text(field, layer.get(key)), action,
+            tag=_layer_cell_tag(key),
             extra_class=_LAYER_CELL_CLASS.get(key, ""),
         )
     )
@@ -400,8 +411,39 @@ def _layer_editor_cell(
     return HTMLResponse(
         render_cell(
             request, field, value, action, error=error,
+            tag=_layer_cell_tag(key),
             extra_class=_LAYER_CELL_CLASS.get(key, ""),
         )
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/details",
+    response_class=HTMLResponse,
+)
+def layer_details_row(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """The chevron's row: policy number and the policy dates, editable through
+    the same cell routes the table's own columns use."""
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+
+    def cell(key: str) -> str:
+        field = _layer_field(key)
+        return render_cell_display(
+            request, field, _display_text(field, layer.get(key)),
+            _layer_cell_action(ref, placement_id, layer_id, key),
+            tag="span", extra_class=_LAYER_CELL_CLASS.get(key, ""),
+        )
+
+    return TEMPLATES.TemplateResponse(
+        request, "account/_layer_details.html",
+        {
+            "policy_cell": cell("policy_number"),
+            "from_cell": cell("period_from"),
+            "to_cell": cell("period_to"),
+        },
     )
 
 

@@ -1,0 +1,24 @@
+{# One layer's long tail — policy number and the policy dates — as a row the
+   chevron inserts under the layer (hx-swap="afterend"). Three more table
+   columns would have crowded the scannable four; a row one click away keeps
+   the fields REACHABLE, which they were not: the routes existed and nothing
+   rendered them (review finding F6, 2026-08-19).
+
+   The cells arrive pre-rendered as SPANS: a <td> swapped back at this depth
+   (inside the colspan cell) has no table-row ancestor at the swap point and
+   the HTML parser drops it outright, value and all — see macros/cell.html.
+
+   Any panel refresh (every save returns the panel out of band) replaces the
+   whole section and closes this row. Accepted: it is one click away, and
+   re-seating open expanders server-side buys little. Close is delegated
+   ([data-row-close], form-host.js) — no inline onclick, per the house rule
+   inline-cell.js records. #}
+<tr class="layer-details">
+  <td class="row-expand"></td>
+  <td colspan="6" class="prose">
+    <span class="detail-label">policy no</span>{{ policy_cell | safe }}
+    <span class="detail-label">policy effective</span>{{ from_cell | safe }}
+    <span class="detail-label">policy expiry</span>{{ to_cell | safe }}
+    <button type="button" class="row-action-btn" data-row-close>close</button>
+  </td>
+</tr>

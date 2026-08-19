@@ -669,6 +669,56 @@ def test_market_remove_asks_first_and_the_get_writes_nothing(app_and_org):
     assert path.read_bytes() == before, "the confirm GET wrote to the file"
 
 
+def _details_url(org, placement, layer_id):
+    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/details"
+
+
+def test_layer_details_row_carries_the_three_hidden_fields(app_and_org):
+    """policy number and the policy dates were editable by URL and invisible
+    in the UI — the exact 'route nothing can reach' smell the 2026-08-19
+    review round already caught once on the share edit (F6)."""
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    row = client.get(_details_url(org, placement, layer["id"])).text
+
+    for key in ("policy_number", "period_from", "period_to"):
+        assert f'data-field="{key}"' in row, f"{key} still unreachable"
+    assert row.lstrip().startswith("<tr"), "the details fragment is not a row"
+
+
+def test_every_layer_row_offers_its_details(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    for layer in sync.layer_details(conn, placement.id):
+        assert f'hx-get="{_details_url(org, placement, layer["id"])}"' in page
+
+
+def test_a_detail_cell_saves_as_a_span_not_a_td(app_and_org):
+    """The details row's cells live in a <td>, so their own element is a
+    <span> — a <td> swapped back in its place would be dropped outright by
+    the HTML parser (no table-row ancestor at the swap point), taking the
+    saved value's display with it."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    saved = client.post(
+        _cell(org, placement, layer, "policy_number"), data={"policy_number": "POL-777"}
+    )
+
+    assert saved.status_code == 200
+    assert saved.text.lstrip().startswith("<span"), "detail cell came back as a td"
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert fresh["policy_number"] == "POL-777"
+
+
 def _markets_base(org, placement, layer_id):
     return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/markets"
 
