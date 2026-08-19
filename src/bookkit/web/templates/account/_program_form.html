@@ -1,0 +1,26 @@
+{# A field tuple as a form — the ghost-row add for layers and markets.
+
+   Not a FormSpec: this sub-project adds no whole-record form builders (spec
+   D7). The fields are the same Field objects the inline cells use, so the
+   parser, the placeholder and the refusal wording are shared with them and a
+   value typed here is read exactly as one typed into a cell.
+
+   The response targets this placement's whole panel rather than a row: a
+   program write can move more than the thing that caused it — a market's
+   share changes the layer's signed percentage — so no partial swap is honest. #}
+<form class="program-form" hx-post="{{ action }}"
+      hx-target="closest .program" hx-swap="outerHTML">
+  <h3 class="program-form-title">{{ title }}</h3>
+  {% for f in fields %}
+    <label class="field">
+      <span class="field-label">{{ f.label }}</span>
+      <input type="text" name="{{ f.key }}" placeholder="{{ f.placeholder or '' }}"
+             {% if f.required %}required{% endif %}>
+    </label>
+  {% endfor %}
+  <div class="program-form-actions">
+    <button type="submit" class="btn-pill btn-pill-primary">Save</button>
+    <button type="button" class="btn-pill"
+            onclick="this.closest('.form-host').innerHTML = ''">Cancel</button>
+  </div>
+</form>

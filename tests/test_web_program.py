@@ -392,3 +392,154 @@ def test_a_derived_column_offers_no_editor(app_and_org):
     placement, layer = _first_layer(client.app.state.conn, org)
 
     assert client.get(_cell(org, placement, layer, "signed_pct") + "/edit").status_code == 404
+
+
+# --- phase 2: adding a layer, and working the markets on one ------------------
+
+
+def _markets(org, placement, layer_id):
+    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/markets"
+
+
+def test_adding_a_layer_appends_it_pending(app_and_org):
+    """A new layer is created unplaced — markets join as they bind. towerkit's
+    word for that state is 'To be placed'."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    top = max(
+        layer["attach_cents"] + layer["limit_cents"]
+        for layer in sync.layer_details(conn, placement.id)
+    )
+
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={
+            "name": "3rd Excess",
+            "attach_cents": str(top // 100),
+            "limit_cents": "5,000,000",
+            "premium_cents": "",
+        },
+    )
+
+    assert added.status_code == 200
+    names = [layer["name"] for layer in sync.layer_details(conn, placement.id)]
+    assert "3rd Excess" in names
+    fresh = next(
+        layer for layer in sync.layer_details(conn, placement.id)
+        if layer["name"] == "3rd Excess"
+    )
+    assert fresh["participants"] == []
+    batch = _latest_batch(conn)
+    assert batch.source == "web" and batch.tool == "program_layer_add"
+
+
+def test_a_layer_that_would_leave_a_gap_is_refused_and_says_so(app_and_org):
+    """towerkit refuses a gap as firmly as an overlap, and the refusal names
+    the layers it is between — that message is the whole value of not writing
+    it."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={
+            "name": "Floating Excess",
+            "attach_cents": "900,000,000",
+            "limit_cents": "5,000,000",
+            "premium_cents": "",
+        },
+    )
+
+    assert refused.status_code == 200
+    assert "GAP" in refused.text or "gap" in refused.text
+    assert path.read_bytes() == before
+
+
+def test_binding_a_market_onto_a_layer(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    # A layer of our own with nothing on it, so the share is ours to give. The
+    # first seeded layer may be fully signed, and skipping on that would make
+    # this test protect nothing on the day it mattered.
+    top = max(
+        ly["attach_cents"] + ly["limit_cents"]
+        for ly in sync.layer_details(conn, placement.id)
+    )
+    assert sync.add_layer(
+        conn, placement.id, "Bind Target", [], top, 5_000_000_00
+    ).ok
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["name"] == "Bind Target"
+    )
+
+    bound = client.post(
+        _markets(org, placement, layer["id"]),
+        data={"carrier": "Berkshire", "share_pct": "40"},
+    )
+
+    assert bound.status_code == 200
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert "Berkshire" in [p["carrier"] for p in fresh["participants"]]
+    assert _latest_batch(conn).tool == "program_bind"
+
+
+def test_over_signing_a_layer_is_refused_and_the_file_is_untouched(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        _markets(org, placement, layer["id"]),
+        data={"carrier": "Overshare Re", "share_pct": "100"},
+    )
+
+    assert refused.status_code == 200
+    assert path.read_bytes() == before
+    assert "Overshare Re" not in path.read_text()
+
+
+def test_a_markets_share_is_corrected_in_place(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    assert layer["participants"], "the first layer has no market to correct"
+    was = layer["participants"][0]["share_pct"]
+
+    saved = client.post(
+        f"{_markets(org, placement, layer['id'])}/0/cell/share_pct",
+        data={"share_pct": str(was / 2)},
+    )
+
+    assert saved.status_code == 200
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert fresh["participants"][0]["share_pct"] == was / 2
+
+
+def test_a_market_is_taken_off_a_layer_and_the_layer_survives(app_and_org):
+    """Losing a layer because its last market fell away would destroy the
+    tower's shape."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    assert layer["participants"], "the first layer has no market to remove"
+    carrier = layer["participants"][0]["carrier"]
+
+    removed = client.post(f"{_markets(org, placement, layer['id'])}/0/remove")
+
+    assert removed.status_code == 200
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert carrier not in [p["carrier"] for p in fresh["participants"]]
+    assert fresh["name"] == layer["name"], "the layer went with the market"

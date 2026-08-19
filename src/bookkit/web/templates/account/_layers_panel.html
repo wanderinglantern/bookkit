@@ -11,14 +11,21 @@
    Three empty states, not one: "no file linked", "a file with no layers" and
    "layers present" are three different facts, and collapsing the first two is
    how the stub came to lie. #}
-<section class="program" id="program-{{ placement.id }}">
+<section class="program" id="program-{{ placement.id }}"{% if oob %} hx-swap-oob="true"{% endif %}>
   <div class="people-head">
     <h2 class="people-label">{{ placement.program_name }}</h2>
     <span class="people-count mono">{{ placement.ref }}</span>
     <span class="people-head-spacer"></span>
     <span class="program-period mono">{{ placement.period_from }} → {{ placement.period_to }}</span>
     <span class="status-{{ placement.status }}">{{ placement.status }}</span>
+    {% if linked %}
+      <button type="button" class="people-add"
+              hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/new"
+              hx-target="#program-{{ placement.id }} .form-host"
+              hx-swap="innerHTML">+ Add layer</button>
+    {% endif %}
   </div>
+  <div class="form-host"></div>
 
   {% if layers %}
     <div class="table-scroll">
@@ -47,7 +54,13 @@
               <td class="prose">
                 {% if layer.participants %}
                   {% for part in layer.participants %}
-                    <span class="market">{{ part.carrier }} <span class="market-share">{{ part.share_pct }}%</span></span>
+                    <span class="market">{{ part.carrier }} <span class="market-share">{{ part.share_pct }}%</span>
+                      <button type="button" class="row-action-btn"
+                              title="Take {{ part.carrier }} off {{ layer.name }} — the layer stays"
+                              hx-post="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/{{ loop.index0 }}/remove"
+                              hx-target="#program-{{ placement.id }}"
+                              hx-swap="outerHTML">remove</button>
+                    </span>
                   {% endfor %}
                 {% else %}
                   {# towerkit's own word for open capacity. A blank cell would
@@ -55,6 +68,10 @@
                      a reader most needs to catch. #}
                   <span class="unplaced">To be placed</span>
                 {% endif %}
+                <button type="button" class="row-action-btn"
+                        hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/new"
+                        hx-target="#program-{{ placement.id }} .form-host"
+                        hx-swap="innerHTML">+ market</button>
               </td>
             </tr>
           {% endfor %}

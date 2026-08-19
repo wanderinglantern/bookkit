@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ... import sync
-from ...forms.inline import LAYER_FIELDS
+from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS
 from ...forms.spec import Field, initial_text, parse_value
 from ...repo import placements as placements_repo
 from ...services import program_files
@@ -277,3 +277,257 @@ async def layer_cell_save(
     request.state.layer_details = {}
     _, fresh = _owned_layer(request, org, placement_id, layer_id)
     return _layer_display_cell(request, ref, placement_id, fresh, key)
+
+
+# --- adding a layer, and working the markets on one ---------------------------
+#
+# Creating a row does not fit the inline-cell contract — there is no existing
+# cell to click into — so these are forms posting into the panel, the same
+# pattern contacts and request items already use for their adds.
+#
+# A market is addressed by its INDEX within its layer, not by its carrier name.
+# A name is the thing being edited (a market can be corrected to its right
+# name), and carrier names carry spaces and slashes that would have to survive
+# a URL. Index is also what towerkit's own editor uses for retentions and
+# sublimits. Every write re-renders the whole panel, so an index is never
+# stale by the time it is used.
+
+
+def _layer_add_fields() -> tuple[Field, ...]:
+    """A new layer's facts. `name`, `attach` and `limit` are required by
+    sync.add_layer; premium is optional because a layer is routinely placed
+    before it is priced."""
+    return (
+        _LAYER_CELLS["name"],
+        _LAYER_CELLS["attach_cents"],
+        _LAYER_CELLS["limit_cents"],
+        _LAYER_CELLS["premium_cents"],
+    )
+
+
+def _parsed(fields: tuple[Field, ...], raw: dict[str, str]) -> dict[str, Any]:
+    """Parse a whole small form, refusing on the first bad value. Mirrors
+    forms.spec.parse_values without the FormSpec wrapper, since these forms are
+    field tuples rather than whole-record specs (D7: this sub-project adds no
+    FormSpec builders)."""
+    values: dict[str, Any] = {}
+    for field in fields:
+        value = parse_value(field, raw.get(field.key))
+        if field.required and value in (None, ""):
+            raise ValueError(f"{field.label} is required")
+        values[field.key] = value
+    return values
+
+
+def _panel(request: Request, ref: str, org: Any, placement_id: str) -> HTMLResponse:
+    """Re-render this placement's whole panel. A program write can move more
+    than the cell that caused it — a market's share changes the layer's signed
+    percentage, and adding a layer changes the table — so no single-cell swap
+    is honest here."""
+    request.state.layer_details = {}
+    conn = _conn(request)
+    placement = placements_repo.get(conn, placement_id)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_layers_panel.html",
+        {
+            "header": {"org": org},
+            "placement": placement,
+            "linked": bool(placement.program_path),
+            "layers": [
+                _layer_row(request, ref, placement_id, layer)
+                for layer in layers_for(request, conn, placement_id)
+            ],
+            "oob": True,
+        },
+    )
+
+
+def _refusal(request: Request, message: str) -> HTMLResponse:
+    """A refused program write, rendered where the form was. Deliberately not
+    a 4xx: htmx swaps 2xx only, and a refusal the user cannot read is the
+    silent failure this codebase keeps finding."""
+    return TEMPLATES.TemplateResponse(
+        request, "account/_program_refusal.html", {"message": message}
+    )
+
+
+@router.post("/accounts/{ref}/program/{placement_id}/layers", response_class=HTMLResponse)
+async def layer_add(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    try:
+        values = _parsed(_layer_add_fields(), raw)
+    except ValueError as exc:
+        return _refusal(request, str(exc))
+
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_add",
+            summary=f"added layer {values['name']}",
+            mutate=lambda: sync.add_layer(
+                conn, placement_id, values["name"], [],
+                attach_cents=values["attach_cents"],
+                limit_cents=values["limit_cents"],
+                premium_cents=values["premium_cents"],
+            ),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _refusal(request, str(exc))
+    return _panel(request, ref, org, placement_id)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets",
+    response_class=HTMLResponse,
+)
+async def market_add(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    try:
+        values = _parsed(PARTICIPANT_FIELDS, raw)
+    except ValueError as exc:
+        return _refusal(request, str(exc))
+
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_bind",
+            summary=f"{values['carrier']} on {layer['name']}",
+            mutate=lambda: sync.add_participant(
+                conn, placement_id, layer_id, values["carrier"], values["share_pct"]
+            ),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _refusal(request, str(exc))
+    return _panel(request, ref, org, placement_id)
+
+
+def _seated(layer: dict[str, Any], index: int) -> dict[str, Any]:
+    try:
+        seat: dict[str, Any] = layer["participants"][index]
+    except IndexError:
+        raise HTTPException(
+            status_code=404, detail=f"no market {index} on {layer['name']}"
+        ) from None
+    return seat
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/{index}/cell/{key}",
+    response_class=HTMLResponse,
+)
+async def market_cell_save(
+    request: Request, ref: str, placement_id: str, layer_id: str, index: int, key: str
+) -> HTMLResponse:
+    """Corrected IN PLACE — never removed and re-added. The two writes are
+    separate mutations with a validator run between them, so the intermediate
+    state is a layer short of its share and a refusal on the second half
+    leaves it that way (sync.update_participant carries the same note)."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    seat = _seated(layer, index)
+    field = next((f for f in PARTICIPANT_FIELDS if f.key == key), None)
+    if field is None:
+        raise HTTPException(status_code=404, detail=f"{key} is not an editable market field")
+
+    raw = str((await request.form()).get(key, ""))
+    try:
+        value = parse_value(field, raw)
+        if field.required and value in (None, ""):
+            raise ValueError(f"{field.label} is required")
+    except ValueError as exc:
+        return _refusal(request, str(exc))
+
+    changes: dict[str, Any] = (
+        {"share_bps": value} if key == "share_pct" else {"new_carrier": value}
+    )
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_edit",
+            summary=f"corrected {seat['carrier']} on {layer['name']}",
+            mutate=lambda: sync.update_participant(
+                conn, placement_id, layer_id, seat["carrier"], **changes
+            ),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _refusal(request, str(exc))
+    return _panel(request, ref, org, placement_id)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/{index}/remove",
+    response_class=HTMLResponse,
+)
+def market_remove(
+    request: Request, ref: str, placement_id: str, layer_id: str, index: int
+) -> HTMLResponse:
+    """The LAYER survives, unplaced. See sync.remove_participant."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    seat = _seated(layer, index)
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_edit",
+            summary=f"took {seat['carrier']} off {layer['name']}",
+            mutate=lambda: sync.remove_participant(
+                conn, placement_id, layer_id, seat["carrier"]
+            ),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _refusal(request, str(exc))
+    return _panel(request, ref, org, placement_id)
+
+
+# --- the two ghost-row forms --------------------------------------------------
+
+
+def _mini_form(
+    request: Request, fields: tuple[Field, ...], action: str, title: str
+) -> HTMLResponse:
+    return TEMPLATES.TemplateResponse(
+        request, "account/_program_form.html",
+        {"fields": fields, "action": action, "title": title},
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/new", response_class=HTMLResponse
+)
+def layer_add_form(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    org = _org(request, ref)
+    _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return _mini_form(
+        request, _layer_add_fields(),
+        f"/accounts/{ref}/program/{placement_id}/layers", "new layer",
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/new",
+    response_class=HTMLResponse,
+)
+def market_add_form(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    return _mini_form(
+        request, PARTICIPANT_FIELDS,
+        f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets",
+        f"bind a market to {layer['name']}",
+    )
