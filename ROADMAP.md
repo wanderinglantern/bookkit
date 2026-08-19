@@ -1015,3 +1015,51 @@ zero-diff round trip. Doing them separately costs the same work three times.
 **The third C10 item DID land in full**: the captive retention is stated once, threaded through the
 sheet in display order. The committed fixture already had that bug — a shared SIR printed on both
 the GL and AL primaries.
+
+---
+
+## C4 built — the assignee, and what a name collision does (2026-08-18)
+
+Branch `task-assignee`. Task only, per Grant. The AE's storage correction applied in full:
+`assignee_kind` + `assignee_id` when the picker resolved somebody, freeform `assignee_name`
+when it did not, and the client's Owner column reads the **kind**. Migration 013, additive,
+three nullable columns and one index; `db.snapshot_before_migrations` already covers the
+rollback and needed nothing added.
+
+### The collision answer, since it had to be decided before building
+
+Two people can share a name and one of them can be ours while the other is the client's —
+the exact pair that would flip a client-facing column. Resolving to an id at pick time does
+**not** make the question moot, because the field is freeform by requirement: you can always
+type past the picker. So:
+
+- every suggestion is offered **qualified** — `Sam Garcia — our team`,
+  `Sam Garcia — Atomic Industries` — and an exact match on that label resolves unambiguously
+  whichever way the collision falls;
+- a **bare name resolves only when it names exactly one candidate**. Two Sam Garcias resolve
+  to neither — the answer to an ambiguous identity is to refuse it, not to take the first row,
+  which is the bug `repo/team.py`'s uniqueness guard exists to stop;
+- anything unresolved is stored as a freeform name with no kind, and **no kind renders `Us`**.
+
+So a collision degrades to *ours*, never to *yours*. The two directions are not symmetric:
+telling a client we own something they actually owe us is an overclaim they will correct;
+telling them they owe us something we own is a false demand on a document they read.
+
+`assignee_kind` is `team | contact` — **not** `client_contact` / `market_contact`. You/Us is
+decided at export time by comparing the contact's org id to the account being exported, so
+`contacts.reassign_org` on a market merge cannot leave a stale side behind.
+
+### Where it appears, and the one place it does not
+
+- Account screen → Open Items tab: column + inline cell. Measured 92 cells of 140.
+- Navigator → per-account tasks pane: column + inline cell. Measured 91 of 94.
+- Web → Work tab: column + inline cell, vocabulary scoped to the account.
+- Add/edit task form on both surfaces, `Field.suggestions` on both halves.
+
+**Not on the navigator's cross-account attention-tasks pane, and that is a width refusal.**
+That pane is ~94 cells and its existing SIX columns already need **99** — it overflows on
+`main`, before this feature, in exactly the way `tests/test_reachable.py` describes for Today's
+renewals. A seventh needs 109. `task_inline(..., assignee_at=None)` keeps the inline map off
+the column that pane does not have, so `i` cannot open an editor into nothing.
+**Open, and Grant's call:** fitting it means dropping one of `account`, `detail` or
+`description` from that pane first — and that pane is over its edge either way.
