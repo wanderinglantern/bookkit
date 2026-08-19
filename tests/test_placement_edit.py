@@ -157,3 +157,45 @@ def test_tui_edit_placement_routes_through_the_service():
     src = Path("src/bookkit/tui/widgets/entity_actions.py").read_text()
     assert "placement_edit.apply" in src, "the TUI does not use the service"
     assert "update_program" not in src, "the TUI still carries its own split"
+
+
+def test_a_file_writing_batch_refuses_the_row_only_revert(linked):
+    """The undo-corruption class the phase-2 review caught: a TUI form batch
+    with a title-derived tool ("edit_plc-0001") sailed past revert()'s
+    program_ guard, so `u` rolled back program_name and source_sha256 on the
+    ROW while the towerkit file kept the change — a silent cache/file split
+    whose next symptom is a false write-through conflict. File-writing TUI
+    forms now stamp program_* tools; this asserts the guard actually bites."""
+    from bookkit.db import utc_now
+
+    conn, _, placement, path = linked
+    with batches_svc.open_batch(
+        conn, source="tui", tool="program_edit",
+        summary=f"edited {placement.ref}", org_id=placement.org_id,
+    ):
+        placement_edit.apply(conn, placement, {"program_name": "Renamed By TUI"})
+    batch = batches_repo.most_recent(conn)
+    assert batch is not None and batch.tool == "program_edit"
+
+    with pytest.raises(ValueError, match="program"):
+        batches_svc.revert(conn, batch.ref, utc_now())
+
+    # nothing moved: the file and the row still agree
+    from towerkit.model import load_program
+
+    assert load_program(path).program == "Renamed By TUI"
+    assert placements.get(conn, placement.id).program_name == "Renamed By TUI"
+
+
+def test_every_file_writing_tui_form_stamps_a_program_tool():
+    """The seam check for the fix above: a bare FormModal(spec, commit=commit)
+    whose commit writes a towerkit file gets the title-derived tool and slips
+    the revert guard. The two modules that push file-writing forms must pass
+    explicit program_* BatchSpecs."""
+    ea = Path("src/bookkit/tui/widgets/entity_actions.py").read_text()
+    acct = Path("src/bookkit/tui/screens/account.py").read_text()
+
+    assert '"program_edit"' in ea, "edit_placement lost its program_ tool"
+    assert '"program_layer_edit"' in ea, "edit_layer lost its program_ tool"
+    for tool in ('"program_layer_add"', '"program_layer_edit"', '"program_bind"'):
+        assert tool in acct, f"account.py lost {tool}"

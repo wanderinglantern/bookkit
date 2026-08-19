@@ -2300,7 +2300,7 @@ class AccountScreen(Screen):
         web has had since phase 1 and the TUI could not make at all: a wrong
         share typed here could only be fixed in the browser."""
         from ... import sync
-        from ...forms.spec import Field, FormSpec
+        from ...forms.spec import BatchSpec, Field, FormSpec
         from ...repo import vocab
         from ..widgets.forms import FormModal
 
@@ -2354,7 +2354,17 @@ class AccountScreen(Screen):
             self.notify(f"corrected {carrier} on {layer['name']}")
             self.refresh_data()
 
-        self.app.push_screen(FormModal(spec, commit=commit), done)
+        self.app.push_screen(
+            FormModal(
+                spec, commit=commit,
+                batch=BatchSpec(
+                    "program_layer_edit",
+                    f"corrected {carrier} on {layer['name']}",
+                    org_id=placement.org_id,
+                ),
+            ),
+            done,
+        )
 
     def _confirm_remove_seat(self, placement, layer_id: str, carrier: str) -> None:
         from ... import sync
@@ -2460,7 +2470,7 @@ class AccountScreen(Screen):
 
     def action_add_layer(self) -> None:
         from ... import sync
-        from ...forms.spec import FormSpec
+        from ...forms.spec import BatchSpec, FormSpec
         from ..widgets.forms import FormModal
 
         placement = self._selected_linked_placement()
@@ -2507,7 +2517,18 @@ class AccountScreen(Screen):
             self.notify(f"added {values['name']} (to be placed)")
             self.refresh_data()
 
-        self.app.push_screen(FormModal(spec, commit=commit), done)
+        # program_ tool, explicitly: this write lands in the towerkit file,
+        # and the title-derived default would let `u` revert the projection
+        # rows under it (see entity_actions.edit_placement's note).
+        self.app.push_screen(
+            FormModal(
+                spec, commit=commit,
+                batch=BatchSpec(
+                    "program_layer_add", "added a layer", org_id=placement.org_id
+                ),
+            ),
+            done,
+        )
 
     def action_open_towerkit(self) -> None:
         """Suspend bookkit, open the linked file in towerkit's editor, and
@@ -2574,7 +2595,7 @@ class AccountScreen(Screen):
     def _offer_bind_to_layer(self, submission_id: str) -> None:
         """A market bound: offer to put them on a layer at their share."""
         from ... import sync
-        from ...forms.spec import FormSpec
+        from ...forms.spec import BatchSpec, FormSpec
         from ...money import MoneyParseError, parse_share_bps
         from ..widgets.forms import FormModal
         from ..widgets.picker import Picker
@@ -2624,7 +2645,17 @@ class AccountScreen(Screen):
                 )
                 self.refresh_data()
 
-            self.app.push_screen(FormModal(spec, commit=commit), done)
+            self.app.push_screen(
+                FormModal(
+                    spec, commit=commit,
+                    batch=BatchSpec(
+                        "program_bind",
+                        f"{market.name} on {layer['name']}",
+                        org_id=placement.org_id,
+                    ),
+                ),
+                done,
+            )
 
         options = [
             (

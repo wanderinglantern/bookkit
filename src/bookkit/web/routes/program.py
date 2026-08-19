@@ -1447,8 +1447,12 @@ def renew_placement(request: Request, ref: str, placement_id: str) -> HTMLRespon
     conn = _conn(request)
     placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
     try:
+        # program_ tool: a plain row revert of a renew would delete the new
+        # placement while the CLONED FILE stayed on disk, and the next sync
+        # would silently recreate it — refuse-first is the honest answer
+        # until a real renew-revert (which must delete the clone) exists.
         with batches_svc.open_batch(
-            conn, source="web", tool="renew_placement", org_id=org.id,
+            conn, source="web", tool="program_renew", org_id=org.id,
             summary=f"renewed {placement.ref}",
         ):
             new_placement, new_path, diags = sync.renew(conn, placement_id)
