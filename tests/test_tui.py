@@ -92,6 +92,32 @@ async def test_account_placements_tower(seeded_db: Path) -> None:
         assert carriers.row_count > 0
 
 
+async def test_a_placement_with_no_recorded_sha_does_not_claim_to_be_in_sync(
+    seeded_db: Path,
+) -> None:
+    """`✓ in sync` asserted a comparison that never happened: with
+    source_sha256 NULL there is nothing to compare the file against, and the
+    old `if placement.source_sha256 and ...` fell through to the in-sync
+    branch. Same inverted guard sync.write_through carried (2026-08-18) — the
+    screen told the broker the file was verified while bookkit had never
+    read it."""
+    conn = db.connect(seeded_db)
+    org = orgs.find_by_name(conn, "Atomic Industries, Inc.")
+    conn.execute(
+        "UPDATE placement SET source_sha256 = NULL WHERE program_path IS NOT NULL"
+    )
+    conn.close()
+    app = BookkitApp(seeded_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.open_account(org.id)
+        await pilot.pause()
+        state = str(app.screen.query_one("#sync-state").render())
+        assert "in sync" not in state, (
+            f"an unverified file was reported as verified: {state!r}"
+        )
+        assert "never projected" in state
+
+
 async def test_quick_capture_end_to_end(seeded_db: Path) -> None:
     app = BookkitApp(seeded_db)
     async with app.run_test(size=(120, 40)) as pilot:

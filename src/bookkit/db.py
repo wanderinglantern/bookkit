@@ -401,20 +401,44 @@ def backup(conn: sqlite3.Connection, dest: Path) -> Path:
     person who comes looking for a rollback weeks later finds a file that
     looks exactly like a good one. Nothing distinguishes a torn VACUUM from a
     finished one at the filesystem level, so the only honest state is absence
-    — and the caller already knows, because this raises."""
+    — and the caller already knows, because this raises.
+
+    REAL CORRUPTION RAISES; IT DOES NOT RETURN FALSE. `PRAGMA integrity_check`
+    on a torn copy comes back as `sqlite3.DatabaseError: database disk image
+    is malformed`, so a cleanup written as `if not ok:` alone is never reached
+    on the failure it exists for — the exception propagates straight past it
+    and a 216-byte file stays on disk under an ordinary backup name
+    (2026-08-18). Every path out of here that is not a finished, verified copy
+    now removes `dest` first, because this is the rollback for every migration
+    and every `seed --force`.
+
+    The two stages are caught separately so the VACUUM's own error keeps its
+    type: a backups directory that is not writable must still surface as the
+    `sqlite3.Error` the caller (and `test_a_failed_snapshot_aborts_the_migration`)
+    expects, not as a RuntimeError about an integrity check that never ran."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         raise FileExistsError(f"refusing to overwrite existing backup {dest}")
-    conn.execute("VACUUM INTO ?", (str(dest),))
-    os.chmod(dest, 0o600)
-    check = sqlite3.connect(dest)
     try:
-        ok = integrity_check(check)
-    finally:
-        check.close()
+        conn.execute("VACUUM INTO ?", (str(dest),))
+        os.chmod(dest, 0o600)
+    except BaseException:
+        # a VACUUM that raised part-way still leaves whatever it managed to
+        # write; dest did not exist a moment ago, so removing it is safe
+        dest.unlink(missing_ok=True)
+        raise
+    try:
+        check = sqlite3.connect(dest)
+        try:
+            ok = integrity_check(check)
+        finally:
+            # closed before any unlink, so Windows and a locked file cannot
+            # turn a failed backup into a failed cleanup on top of it
+            check.close()
+    except Exception as exc:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError(f"backup {dest} failed integrity check: {exc}") from exc
     if not ok:
-        # after close(), so Windows and a locked file cannot turn a failed
-        # backup into a failed cleanup on top of it
         dest.unlink(missing_ok=True)
         raise RuntimeError(f"backup {dest} failed integrity check")
     return dest

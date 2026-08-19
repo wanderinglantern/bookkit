@@ -247,19 +247,69 @@ def test_the_snapshot_is_taken_before_the_migration_not_after(
         copy.close()
 
 
-def test_a_backup_that_fails_its_integrity_check_is_not_left_behind(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+class _TornVacuum:
+    """A connection whose `VACUUM INTO` lands only PART of the copy — the disk
+    filled, the process was killed, the network mount dropped. It runs the real
+    VACUUM INTO and then truncates the result, so what the filesystem is left
+    holding is a genuine prefix of a genuine database.
+
+    Nothing about the integrity check is stubbed. That is the whole point: the
+    previous version of this test monkeypatched `integrity_check` to return
+    False, and SQLite never does that on a malformed file — it RAISES
+    `sqlite3.DatabaseError`. A cleanup that lives inside `if not ok:` is
+    therefore never reached, so the old test passed while the bug was live."""
+
+    KEPT_BYTES = 216  # the size the reviewer's orphaned copy actually landed at
+
+    def __init__(self, source: sqlite3.Connection) -> None:
+        self._source = source
+
+    def execute(self, sql: str, params: tuple[str, ...] = ()) -> None:
+        assert "VACUUM INTO" in sql, sql
+        dest = Path(params[0])
+        scratch = dest.with_name(dest.name + ".whole")
+        self._source.execute("VACUUM INTO ?", (str(scratch),))
+        dest.write_bytes(scratch.read_bytes()[: self.KEPT_BYTES])
+        scratch.unlink()
+
+
+def test_a_torn_backup_does_not_survive_on_disk(tmp_path: Path) -> None:
     """A torn VACUUM INTO leaves a file that looks exactly like a good backup:
     same directory, same timestamped name, same mode. The caller is told it
     failed; the person who comes looking for a rollback three weeks later is
-    not. Absence is the only state that distinguishes it."""
+    not. Absence is the only state that distinguishes it.
+
+    This mechanism is the rollback for every migration and every `seed --force`,
+    so the branch that deletes the bad copy has to fire on what actually
+    happens, not on a case SQLite cannot produce."""
+    path = tmp_path / "book.db"
+    conn = db.connect(path)
+    orgs.create(conn, name="Atomic Industries", kind="client")
+
+    dest = tmp_path / "backups" / "book.db.torn.bak"
+    with pytest.raises(RuntimeError, match="integrity check"):
+        db.backup(_TornVacuum(conn), dest)  # type: ignore[arg-type]
+    conn.close()
+
+    left = dest.stat().st_size if dest.exists() else 0
+    assert not dest.exists(), (
+        f"a corrupt backup was left where a good one goes — {left} bytes under "
+        f"an ordinary backup name, indistinguishable from a usable rollback"
+    )
+
+
+def test_a_backup_that_merely_reports_not_ok_is_also_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other branch. Some damage does come back as a row rather than a
+    raise, and both paths have to end with no file — kept as a second test
+    rather than folded in, because they are two different code paths."""
     path = tmp_path / "book.db"
     conn = db.connect(path)
     orgs.create(conn, name="Atomic Industries", kind="client")
 
     monkeypatch.setattr(db, "integrity_check", lambda _conn: False)
-    dest = tmp_path / "backups" / "book.db.torn.bak"
+    dest = tmp_path / "backups" / "book.db.notok.bak"
     with pytest.raises(RuntimeError, match="integrity check"):
         db.backup(conn, dest)
     conn.close()

@@ -29,6 +29,7 @@ from towerkit.model import (
     Placement as TkPlacement,
 )
 
+from . import sync
 from .models import Contact
 from .repo import (
     contacts,
@@ -311,7 +312,21 @@ def _seed(
             program = _demo_program(org.name, placement.period_from, placement.period_to, rng)
             dump_program(program, path)
             links.confirm(conn, str(path), org.id, org.name)
-            placements.update(conn, placement.id, program_path=str(path))
+            # PROJECT, do not just point at the file. Setting program_path on
+            # its own left source_sha256 NULL forever — seed was the only
+            # writer that did — and a NULL sha used to disable the
+            # write-conflict guard entirely, so every seeded book would
+            # write through an out-of-band edit silently. It also left
+            # proj_layer / proj_participant / proj_retention completely empty,
+            # so a seeded demo book showed a program file with no tower under
+            # it. project() sets the path, the sha, synced_at and the whole
+            # proj_* cache in one go (2026-08-18).
+            diags = sync.project(conn, path, placement_id=placement.id)
+            if not diags.ok:
+                raise ValueError(
+                    f"seed wrote a program file it cannot project: {path} — "
+                    f"{'; '.join(str(e) for e in diags.errors)}"
+                )
             program_files += 1
 
     return {
