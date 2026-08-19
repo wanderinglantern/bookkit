@@ -151,6 +151,28 @@ def test_foreign_keys_are_denied_by_rule():
         assert not keys, f"{kind} exposes foreign keys: {keys}"
 
 
+def test_a_denied_field_is_refused_with_its_reason(surface_db):
+    """A refusal says something. "not editable; allowed: [...]" tells a model
+    nothing about whether to look for another door or stop asking; the reason
+    from the denylist does."""
+    from bookkit.repo import orgs
+
+    rw = db.connect(surface_db)
+    orgs.create(rw, name="Acme", kind="client")
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(rw, "org", "Acme", "kind", "market", expecting="client")
+    message = str(err.value)
+    assert "not editable" in message
+    assert "markets list" in message, "the refusal dropped the denylist reason"
+
+    with pytest.raises(ValueError) as err:
+        mcpserver._edit_field(
+            rw, "org", "Acme", "parent_org_id", "somewhere", expecting=None
+        )
+    assert "Foreign keys re-scope" in str(err.value)
+    rw.close()
+
+
 def test_system_columns_are_denied_by_rule():
     for fields in mcpsurface.editable().values():
         assert not (set(fields) & mcpsurface.SYSTEM_COLUMNS)
@@ -335,6 +357,13 @@ def test_describe_reports_exactly_what_edit_field_enforces():
         assert set(described["kinds"][kind]["fields"]) == set(fields)
     assert "select" == described["kinds"]["org"]["fields"]["status"]["type"]
     assert "lost" in described["kinds"]["org"]["fields"]["status"]["values"]
+
+
+def test_describe_names_the_denied_fields_and_where_to_go_instead():
+    described = mcpsurface.describe("task")
+    assert "task.status" in described["denied_fields"]
+    assert "task_complete" in described["denied_fields"]["task.status"]
+    assert "task.priority" not in described["denied_fields"]
 
 
 def test_describe_names_the_entities_that_are_not_editable():
