@@ -38,7 +38,7 @@ def app_and_org(snapshot_db: Path):
     request = rfi_repo.create_request(conn, org.id, "Loss run refresh", "2026-08-10")
     rfi_repo.add_item(conn, request.id, "loss runs 2021-2025", category="Financials")
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         yield client, org, request
 
 

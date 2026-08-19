@@ -85,7 +85,7 @@ def two_accounts(tmp_path: Path):
     conn.close()
 
     app = create_app(path)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         yield client, mine, theirs
 
 

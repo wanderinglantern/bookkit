@@ -64,7 +64,7 @@ def app_and_org(snapshot_db: Path):
     from bookkit.repo import orgs
     from bookkit.services import renewals
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         conn = app.state.conn
         clients = orgs.list_orgs(conn, kind="client")
         # The renewal test only has teeth if the picked account has a live
