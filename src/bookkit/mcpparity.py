@@ -118,16 +118,20 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "list including undated and future-due, with refs.",
     ),
     ("task", "update"): (
-        ("edit_field", "task_complete", "task_reopen"),
+        ("edit_field", "task_complete", "task_reopen", "task_assign"),
         "status and completed_at move together and belong to the two verbs. "
         "`priority` is a field edit and now actually writes: the form's "
         "select options are strings and the column is an int, so every write "
         "was refused with 'holds 2, not what you expected (\'2\')' until "
-        "mcpsurface.IntChoices reconciled the two (2026-08-18). ASSIGNEE IS "
-        "THE REAL GAP: `assignee` is one typed string that becomes three "
-        "columns, repo/assignees.py owns them, and no MCP tool takes it — a "
-        "task can be assigned in the TUI and on the web and not here. That "
-        "needs an assign verb, not a field edit (mcpsurface.NOT_A_COLUMN).",
+        "mcpsurface.IntChoices reconciled the two (2026-08-18). ASSIGNEE WAS "
+        "THE REAL GAP and is CLOSED (2026-08-19): it is one typed string that "
+        "becomes three columns, so it needed a VERB rather than a field edit "
+        "— task_assign, plus an `assignee` argument on task_create that never "
+        "blocks the task. It stays denied on edit_field for the same reason as "
+        "before. The gap was not academic: an assistant that could not file an "
+        "assigned open item filed an INFORMATION REQUEST instead — a question "
+        "put to a client, which appears in their workbook. A capability gap "
+        "the model routes around is worse than one it reports.",
     ),
     # --- placement ---
     ("placement", "read"): (
@@ -275,6 +279,34 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         ("edit_field", "request_item_received", "request_item_waive"),
         "status OWNS received_on, so both belong to the verbs.",
     ),
+    ("rfi_request", "delete"): (
+        ("request_remove",),
+        "CLOSED 2026-08-19 — the day this cell's own prediction came true. An "
+        "MCP call filed an RFI Grant never asked for (it could not create the "
+        "TASK he wanted, having no way to assign one, so it improvised a "
+        "different record type) and nothing on any surface could take it "
+        "back: rfi_repo.delete_request had sat there with no caller since the "
+        "feature shipped. request_remove is for a request filed in ERROR — it "
+        "goes, with its items, in one revertible batch. A request WITHDRAWN "
+        "is still a different fact and still `cancelled_at`; the un-cancel "
+        "verb this cell used to ask for remains unbuilt and wanted. Refused "
+        "once any item is answered, because deleting the question deletes the "
+        "client's answer with it.",
+    ),
+    ("rfi_item", "delete"): (
+        ("request_item_remove",),
+        "One ask filed in error. The REQUEST survives even when this was its "
+        "last item: a request with no items is an ask not yet written down "
+        "(services.rfi.is_open says so), which is not the same as a withdrawn "
+        "one. Refused once the item is answered — waive it instead.\n\n"
+        "SUPERSEDES the earlier ruling that 'a real delete is probably not "
+        "wanted' because waive keeps the row for the audit trail. That was "
+        "right about a live ask and wrong about a mistake: waive says 'we "
+        "asked for this and it is not coming', which is a false statement "
+        "about an item nobody ever asked for. An audit trail of things that "
+        "did not happen is not an audit trail. The event log keeps the "
+        "removal either way, and the batch puts it back.",
+    ),
 }
 
 # (entity, verb) -> why it is not on the surface. Nothing here is a promise to
@@ -304,11 +336,6 @@ DEFERRED: dict[tuple[str, str], str] = {
         "The TUI drops a task (status='dropped') rather than deleting it and "
         "MCP has neither. task_complete is the normal end; if 'drop' should "
         "exist here it is a verb, not a delete."
-    ),
-    ("rfi_item", "delete"): (
-        "request_item_waive is the 'this is never coming' path and it keeps "
-        "the row, which is the right answer for an audit trail. A real delete "
-        "is probably not wanted."
     ),
     # --- unbuilt, and arguably should be ---
     ("interaction", "update"): (
@@ -343,13 +370,6 @@ DEFERRED: dict[tuple[str, str], str] = {
         "adds an item to a request that already exists — so an underwriter's "
         "follow-up question cannot be filed against the request it belongs "
         "to. The TUI has this ('a' on the items table)."
-    ),
-    ("rfi_request", "delete"): (
-        "Withdrawal is `cancelled_at` (blank = live, a date = withdrawn), and "
-        "the denylist keeps that off edit_field because a date cannot be "
-        "cleared through it. So a request filed in error cannot be withdrawn "
-        "here. A `request_cancel` verb that could also un-cancel is the "
-        "shape this wants."
     ),
     ("submission", "create"): (
         "REAL GAP, and the AE review's top-ranked one. Nothing on this "

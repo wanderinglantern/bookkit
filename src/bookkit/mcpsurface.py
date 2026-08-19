@@ -237,11 +237,11 @@ NOT_A_COLUMN: dict[tuple[str, str], str] = {
         "— and repo/assignees.py is the only thing that writes them "
         "(forms.entities.apply_task pops `assignee` before the repo call). "
         "`base.update(conn, 'task', id, {'assignee': ...})` would write a "
-        "column that does not exist. So a task can be assigned in the TUI "
-        "and on the web but not through MCP: that is a real, named gap "
-        "(mcpparity's task/update cell records it), not an oversight, and "
-        "closing it means an assign verb that takes the same typed string "
-        "and hands it to repo.assignees.columns — not a field edit."
+        "column that does not exist, which is why it is denied HERE and always "
+        "will be. It is no longer unreachable: `task_assign` and "
+        "`task_create(assignee=...)` take the same typed string and hand it to "
+        "repo.assignees.columns (2026-08-19). Denied field, present verb — the "
+        "shape this entry always said the answer was."
     ),
 }
 
