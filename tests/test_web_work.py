@@ -588,3 +588,69 @@ def test_an_unresolvable_assignee_is_kept_as_typed(app_and_org) -> None:
     stored = tasks_repo.get(conn, task.id)
     assert stored.assignee_kind is None and stored.assignee_id is None
     assert stored.assignee_name == "Marisa at Lockton"
+
+
+# --- a posted select must name one of the form's own options ------------------
+
+
+def test_an_item_status_outside_the_vocabulary_is_refused(app_and_org):
+    """The reviewer's second reproduction. `status="NOT_A_STATUS"` was
+    storable, and an item that is neither outstanding nor received reads as
+    closed: the request drops off every attention queue, silently, because
+    nothing downstream expects a value outside the vocabulary."""
+    from bookkit.repo import rfi as rfi_repo
+
+    client, org, request = app_and_org
+    conn = client.app.state.conn
+    before = len(rfi_repo.items_for_request(conn, request.id))
+
+    response = client.post(
+        f"/accounts/{org.ref}/requests/{request.id}/items/new",
+        data={"prompt": "loss runs 2026", "kind": "question",
+              "status": "NOT_A_STATUS"},
+    )
+
+    assert response.status_code == 200
+    assert "form-error" in response.text
+    # commit-in-place: what was typed comes back, and nothing was written
+    assert "loss runs 2026" in response.text
+    assert len(rfi_repo.items_for_request(conn, request.id)) == before
+
+
+def test_an_item_status_inside_the_vocabulary_still_saves(app_and_org):
+    from bookkit.models import RFI_ITEM_STATUSES
+    from bookkit.repo import rfi as rfi_repo
+
+    client, org, request = app_and_org
+    conn = client.app.state.conn
+    assert "waived" in RFI_ITEM_STATUSES
+
+    response = client.post(
+        f"/accounts/{org.ref}/requests/{request.id}/items/new",
+        data={"prompt": "certificate of insurance", "kind": "question",
+              "status": "waived"},
+    )
+
+    assert response.status_code == 200
+    items = rfi_repo.items_for_request(conn, request.id)
+    saved = next(i for i in items if i.prompt == "certificate of insurance")
+    assert saved.status == "waived"
+
+
+def test_a_task_priority_outside_the_vocabulary_is_refused(app_and_org):
+    """Not only the RFI form: the guard is in forms.spec.parse_value, so every
+    select on every form on both surfaces inherits it."""
+    from bookkit.repo import tasks as tasks_repo
+
+    client, org, _request = app_and_org
+    conn = client.app.state.conn
+    before = len(tasks_repo.open_tasks_for_client(conn, org.id))
+
+    response = client.post(
+        f"/accounts/{org.ref}/tasks/new",
+        data={"title": "escalate", "priority": "99"},
+    )
+
+    assert response.status_code == 200
+    assert "form-error" in response.text
+    assert len(tasks_repo.open_tasks_for_client(conn, org.id)) == before

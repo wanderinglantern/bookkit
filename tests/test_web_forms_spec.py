@@ -122,3 +122,87 @@ def test_mcp_has_no_second_cleaner_map():
 
     source = (Path(bookkit.__file__).parent / "mcpserver.py").read_text()
     assert "_FIELD_CLEANERS" not in source, "the duplicate cleaner map is back"
+
+
+# --- a select's value is checked against its own options ----------------------
+#
+# parse_value had no `select` branch at all, so the server stored whatever was
+# posted. Both halves of that hole are here: a vocabulary that must be one of
+# a fixed set, and an account-scoped picker whose options ARE a query. The
+# route-level reproductions live in tests/test_web_scoping.py (cross-account
+# placement) and tests/test_web_work.py (a status outside the vocabulary).
+
+_STATUSES = (("outstanding", "outstanding"), ("received", "received"),
+             ("waived", "waived"))
+
+
+def test_a_vocabulary_select_refuses_a_value_it_never_offered():
+    """`status="NOT_A_STATUS"` was storable, which makes an open request read
+    as closed and drop off every attention queue — silently, because nothing
+    downstream expects a value outside the vocabulary."""
+    field = Field("status", "status", "select", _STATUSES)
+    with pytest.raises(ValueError) as caught:
+        parse_value(field, "NOT_A_STATUS")
+    # a vocabulary is `(s, s)`, so the offered set is worth naming
+    assert "outstanding" in str(caught.value)
+
+
+def test_a_vocabulary_select_accepts_its_own_options():
+    field = Field("status", "status", "select", _STATUSES)
+    assert parse_value(field, "waived") == "waived"
+
+
+def test_a_scoped_select_refuses_an_id_it_never_offered():
+    """The account-scoped half. The options are a QUERY — this account's
+    placements — so membership in them is the account scope check, and there
+    is nothing else correct to compare against."""
+    mine = Field("placement_id", "about placement", "select",
+                 (("PLC-0001 — Atomic casualty", "plc-mine"),), optional_select=True)
+    with pytest.raises(ValueError) as caught:
+        parse_value(mine, "plc-theirs")
+    # opaque ids are noise in a refusal, and not ours to print back
+    assert "plc-mine" not in str(caught.value)
+
+
+def test_a_scoped_select_accepts_a_value_it_offered():
+    mine = Field("placement_id", "about placement", "select",
+                 (("PLC-0001 — Atomic casualty", "plc-mine"),), optional_select=True)
+    assert parse_value(mine, "plc-mine") == "plc-mine"
+
+
+def test_a_blank_optional_select_is_still_none():
+    """The check must not turn 'nothing chosen' into a refusal — every scoped
+    picker on request_form is optional_select."""
+    field = Field("placement_id", "about placement", "select",
+                  (("PLC-0001", "plc-mine"),), optional_select=True)
+    assert parse_value(field, "") is None
+
+
+def test_a_select_with_no_options_stores_nothing():
+    """A picker whose query came back empty offered nothing, so nothing it is
+    handed can have come from it."""
+    with pytest.raises(ValueError):
+        parse_value(Field("placement_id", "about placement", "select"), "plc-anything")
+
+
+def test_the_select_refusal_names_its_field_through_parse_values():
+    spec = FormSpec("new item", [Field("status", "status", "select", _STATUSES)])
+    with pytest.raises(FieldError) as caught:
+        parse_values(spec, {"status": "NOT_A_STATUS"})
+    assert caught.value.field_key == "status"
+    assert caught.value.message.startswith("status:")
+
+
+def test_the_two_writers_of_a_vocabulary_now_agree():
+    """mcpserver._clean_typed always checked a closed vocabulary; the forms
+    did not. Two writers of the same field disagreeing about whether the value
+    is checked is the shape this codebase already fought once with the cleaner
+    map — so this pins that they refuse the same value."""
+    from bookkit import mcpserver
+
+    vocabulary = ("outstanding", "received", "waived")
+    with pytest.raises(ValueError):
+        mcpserver._clean_typed(vocabulary, "status", "NOT_A_STATUS")
+    with pytest.raises(ValueError):
+        parse_value(Field("status", "status", "select",
+                          tuple((s, s) for s in vocabulary)), "NOT_A_STATUS")

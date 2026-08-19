@@ -316,3 +316,69 @@ def test_an_item_whose_request_was_removed_404s_instead_of_500ing(two_accounts):
     assert received.status_code == 404
     assert cell.status_code == 404
     assert rfi_repo.get_item(conn, orphan.id).received_on is None
+
+
+# --- the BODY half: a select's options are the other account's boundary -------
+#
+# The eighteen route families above check the URL's two claims. The url is only
+# half the request: `request_form` scopes its placement/project options to the
+# account, and nothing compared the SUBMITTED value against them, so the
+# reviewer posted another account's placement onto this account's request and
+# it rendered on this account's Work tab. The guard now lives in
+# forms.spec.parse_value, where the field is declared, not per route — see
+# forms.spec.checked_option.
+
+
+def test_a_posted_placement_cannot_name_another_accounts_row(two_accounts):
+    """The reviewer's reproduction: ACC-0003's placement posted onto an
+    ACC-0001 request."""
+    client, mine, theirs = two_accounts
+    ref, request_row = mine["org"].ref, mine["request"]
+    conn = client.app.state.conn
+
+    response = client.post(
+        f"/accounts/{ref}/requests/{request_row.id}/edit",
+        data={"title": request_row.title, "requested_on": request_row.requested_on,
+              "placement_id": theirs["placement"].id},
+    )
+
+    # commit-in-place: the form comes back with the refusal, nothing is written
+    assert response.status_code == 200
+    assert "form-error" in response.text
+    assert rfi_repo.get_request(conn, request_row.id).placement_id is None
+
+
+def test_a_posted_placement_of_this_account_still_saves(two_accounts):
+    """The guard is membership in the options the account's own query built,
+    so this account's own placement must still go through — otherwise the fix
+    is just a broken field."""
+    client, mine, _theirs = two_accounts
+    ref, request_row = mine["org"].ref, mine["request"]
+    conn = client.app.state.conn
+
+    response = client.post(
+        f"/accounts/{ref}/requests/{request_row.id}/edit",
+        data={"title": request_row.title, "requested_on": request_row.requested_on,
+              "placement_id": mine["placement"].id},
+    )
+
+    assert response.status_code == 200
+    assert rfi_repo.get_request(conn, request_row.id).placement_id == mine["placement"].id
+
+
+def test_a_posted_market_cannot_name_a_row_the_form_never_offered(two_accounts):
+    """`market_org_id` offers markets. A CLIENT org id is a live row that the
+    picker never held, so the same check refuses it — the options are the
+    authority, not the table."""
+    client, mine, theirs = two_accounts
+    ref, request_row = mine["org"].ref, mine["request"]
+    conn = client.app.state.conn
+
+    response = client.post(
+        f"/accounts/{ref}/requests/{request_row.id}/edit",
+        data={"title": request_row.title, "requested_on": request_row.requested_on,
+              "market_org_id": theirs["org"].id},
+    )
+
+    assert response.status_code == 200
+    assert rfi_repo.get_request(conn, request_row.id).market_org_id is None
