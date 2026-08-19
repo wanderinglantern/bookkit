@@ -97,6 +97,10 @@
   {% else %}
     <div class="panel-empty">
       <p>no program file linked — nothing to draw or edit yet</p>
+      <button type="button" class="people-add"
+              hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/scaffold"
+              hx-target="#programs-panel .form-host"
+              hx-swap="innerHTML">Create a program file</button>
     </div>
   {% endif %}
 </section>

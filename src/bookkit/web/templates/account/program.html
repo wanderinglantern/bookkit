@@ -1,18 +1,4 @@
 {% extends "account/page.html" %}
 {% block panel %}
-  {# The stub this replaces printed the addable-list empty state
-     unconditionally, while the tab badge counted the placements it was
-     claiming did not exist — so an account with two programs read as an
-     account with none (Grant, on his own book, 2026-08-19). #}
-  {% if programs %}
-    {% for program in programs %}
-      {% with placement = program.placement, layers = program.layers, linked = program.linked %}
-        {% include "account/_layers_panel.html" %}
-      {% endwith %}
-    {% endfor %}
-  {% else %}
-    <div class="panel-empty">
-      <p>no programs on this account</p>
-    </div>
-  {% endif %}
+  {% include "account/_programs_panel.html" %}
 {% endblock %}

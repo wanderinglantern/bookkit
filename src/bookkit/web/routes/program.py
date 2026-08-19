@@ -25,13 +25,15 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ... import sync
+from ...forms.entities import apply_placement, placement_form
 from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS
 from ...forms.spec import Field, initial_text, parse_value
 from ...repo import placements as placements_repo
+from ...services import batches as batches_svc
 from ...services import program_files
 from ..app import TEMPLATES
-from ..forms_render import render_cell, render_cell_display
-from .account import _conn, _context, _org, _owned, layers_for
+from ..forms_render import render_cell, render_cell_display, render_form
+from .account import _conn, _context, _org, _owned, _save, layers_for
 
 _LAYER_CELLS: dict[str, Field] = {f.key: f for f in LAYER_FIELDS}
 
@@ -119,6 +121,22 @@ def _programs(request: Request, org: Any) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _programs_panel(
+    request: Request, ref: str, org: Any, *, error: str | None = None
+) -> HTMLResponse:
+    """The whole tab body. Creating a placement and scaffolding a file both
+    change the LIST rather than one row of it, so neither can honestly swap a
+    single panel."""
+    request.state.layer_details = {}
+    return TEMPLATES.TemplateResponse(
+        request, "account/_programs_panel.html",
+        {
+            "header": {"org": org}, "error": error,
+            "programs": _programs(request, org),
+        },
+    )
 
 
 @router.get("/accounts/{ref}/program", response_class=HTMLResponse)
@@ -606,3 +624,110 @@ def market_add_form(
         f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets",
         f"bind a market to {layer['name']}",
     )
+
+
+# --- phase 3: creating a program ----------------------------------------------
+#
+# Two steps, because they are two facts. A PLACEMENT is the bookkit record of a
+# program you are working; a towerkit FILE is the tower's structure. A
+# placement can exist for weeks before anyone draws its tower, and scaffolding
+# is what turns the second into a thing on disk — which is why it gets a
+# confirmation of its own.
+
+
+@router.get("/accounts/{ref}/program/placements/new", response_class=HTMLResponse)
+def placement_new_form(request: Request, ref: str) -> HTMLResponse:
+    _org(request, ref)  # the 404 guard; this form needs nothing else off it
+    spec = placement_form(conn=_conn(request))
+    action = f"/accounts/{ref}/program/placements"
+    return HTMLResponse(render_form(request, spec, action))
+
+
+@router.post("/accounts/{ref}/program/placements", response_class=HTMLResponse)
+async def placement_create(request: Request, ref: str) -> HTMLResponse:
+    """The whole-record form seam, unchanged — placement_form already existed
+    for the TUI, so this adds no builder (spec D7: this sub-project adds none).
+    A refusal re-renders the form with the input intact, via _save."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    spec = placement_form(conn=conn)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = f"/accounts/{ref}/program/placements"
+    refused = _save(
+        request, org, spec, action, raw,
+        lambda values: apply_placement(conn, values, org.id),
+    )
+    return refused or _programs_panel(request, ref, org)
+
+
+def _scaffold_destination(conn: Any, org: Any, placement: Any) -> Any:
+    """Where a new program file goes, by the same rule the TUI's `t` uses —
+    first configured root, `<two-word-slug>-<period year>.json`. Mirrored
+    rather than reinvented so a file scaffolded from either surface lands in
+    the same place with the same name."""
+    from pathlib import Path
+
+    roots = sync.configured_roots(conn)
+    if not roots:
+        return None
+    slug = "-".join(org.name.lower().split()[:2]).strip(",.")
+    year = placement.period_from[:4]
+    return Path(roots[0]) / f"{slug}-{year}.json"
+
+
+@router.get("/accounts/{ref}/program/{placement_id}/scaffold", response_class=HTMLResponse)
+def scaffold_confirm(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """The confirm step. Writes NOTHING — and shows the path, because where a
+    file lands is the part a person can only check beforehand."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_scaffold_confirm.html",
+        {
+            "header": {"org": org},
+            "placement": placement,
+            "destination": _scaffold_destination(conn, org, placement),
+            "existing": placement.program_path,
+        },
+    )
+
+
+@router.post("/accounts/{ref}/program/{placement_id}/scaffold", response_class=HTMLResponse)
+def scaffold_create(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """Create the towerkit file and link it.
+
+    Every refusal comes back in the page and NAMES what to do: the file that
+    already exists, or the setting that has not been made. A destructive-ish
+    control that answers with a status code produces no swap and no message at
+    all under htmx."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+
+    if placement.program_path:
+        return _refusal(
+            request,
+            f"{placement.ref} already has a program file: {placement.program_path}. "
+            f"Open it in towerkit, or unlink it first.",
+        )
+    destination = _scaffold_destination(conn, org, placement)
+    if destination is None:
+        return _refusal(
+            request,
+            "no program file location is set yet — configure the program roots "
+            "first (`,` on Today in the terminal app), then scaffold.",
+        )
+
+    try:
+        with batches_svc.open_batch(
+            conn, source="web", tool="scaffold_tower", org_id=org.id,
+            summary=f"scaffolded a program file for {placement.ref}",
+        ):
+            made, diags = sync.scaffold_program(conn, placement_id, destination)
+            if made is None or not diags.ok:
+                first = diags.errors[0].message if diags.errors else "unknown error"
+                raise ValueError(f"scaffold refused: {first}")
+    except Exception as exc:
+        return _refusal(request, str(exc))
+    return _programs_panel(request, ref, org)

@@ -1,0 +1,29 @@
+{# Every placement on the account. Its own root with an id, so creating a
+   placement or scaffolding a file can swap the whole tab body — both change
+   the LIST, not one row in it.
+
+   The stub this replaces printed the addable-list empty state unconditionally
+   while the tab badge counted the placements it was claiming did not exist. #}
+<div id="programs-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="people-head">
+    <h2 class="people-label">Programs</h2>
+    <span class="people-count">{{ programs | length }}</span>
+    <span class="people-head-spacer"></span>
+    <button type="button" class="people-add"
+            hx-get="/accounts/{{ header.org.ref }}/program/placements/new"
+            hx-target="#programs-panel .form-host" hx-swap="innerHTML">+ New program</button>
+  </div>
+  <div class="form-host"></div>
+
+  {% if programs %}
+    {% for program in programs %}
+      {% with placement = program.placement, layers = program.layers, linked = program.linked %}
+        {% include "account/_layers_panel.html" %}
+      {% endwith %}
+    {% endfor %}
+  {% else %}
+    <div class="panel-empty">
+      <p>no programs on this account</p>
+    </div>
+  {% endif %}
+</div>
