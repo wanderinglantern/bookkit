@@ -91,6 +91,29 @@ Then, in order, and none of it blocked on Grant:
 - **Nothing destructive.** Every migration additive and optional, a snapshot before any migration
   runs, no rewrite of existing data. If it cannot be additive, it waits for morning.
 
+## 4b. RULING: towerkit work goes in its own git worktree, not the shared checkout
+
+**This bit twice tonight.** bookkit resolves `../towerkit` to the single checkout at
+`/Users/grantgreeson/Developer/towerkit`, so whatever branch an agent leaves checked out there is
+what *every* bookkit worktree compiles against. Twice a bookkit gate came back red with
+`tests/test_services.py::test_write_three_tab_order_and_headers` failing — both times purely because
+a towerkit agent had the SOI branch checked out and bookkit was seeing a Status column its test did
+not expect. Both times the bookkit branch under test was clean.
+
+**From now on: towerkit implementers and reviewers work in a `git worktree`**, leaving
+`/Users/grantgreeson/Developer/towerkit` itself parked on `main`. The SOI reviewer did exactly this
+unprompted — it created a throwaway worktree to diff main against the branch — and it worked
+perfectly.
+
+Why this is right rather than merely convenient: during development bookkit *should not* see
+towerkit's in-progress branch. It should see `main`, and pick up the change when it merges. The
+shared checkout was accidentally coupling two repos' working states.
+
+**How to tell a contaminated gate from a real one**, if it happens again before this is adopted
+everywhere: `uv run --no-sync python -c "from towerkit import soi; print(hasattr(soi,'SoiStatus'))"`
+from bookkit tells you what bookkit is actually compiling against, and
+`git -C /Users/grantgreeson/Developer/towerkit branch --show-current` tells you why.
+
 ## 5. Process — the parts that have actually caught things
 
 - **Gate every branch yourself**: full suite, `mypy src`, `ruff check src tests`, plus
