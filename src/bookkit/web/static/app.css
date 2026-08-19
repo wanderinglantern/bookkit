@@ -2220,3 +2220,26 @@ table.rows tr.is-waived td {
 .line-arrow {
   padding: 0 0.25rem;
 }
+
+/* --- the Towers page (phase 4) ---------------------------------------------- */
+
+.towers-body {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 1.5rem 3rem;
+}
+
+.towers-entry {
+  margin-bottom: 2.5rem;
+}
+
+.towers-badge {
+  font-size: var(--hint-size);
+  font-weight: 700;
+  border-radius: 3px;
+  padding: 0 0.4rem;
+}
+
+.towers-badge-ok { background: var(--good-wash); color: var(--good); }
+.towers-badge-warn { background: var(--warn-wash); color: var(--warn); }
+.towers-badge-error { background: var(--danger-wash); color: var(--danger); }

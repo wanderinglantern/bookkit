@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Towers — bookkit{% endblock %}
+{% block content %}
+  {% set section = "towers" %}
+  {% include "partials/topbar.html" %}
+
+  <div class="book-header">
+    <h1 class="book-title">Towers</h1>
+    <span class="book-subtitle">{{ entries | length }} drawn program{{ "s" if entries | length != 1 else "" }} across the book</span>
+  </div>
+
+  <div class="towers-body">
+    {% if entries %}
+      {% for entry in entries %}
+        <section class="towers-entry">
+          <div class="people-head">
+            <h2 class="people-label">
+              <a href="/accounts/{{ entry.org_ref }}/program">{{ entry.account }}</a>
+              — {{ entry.placement.program_name }}
+            </h2>
+            <span class="people-count mono">{{ entry.placement.ref }}</span>
+            <span class="program-period mono">{{ entry.placement.period_from }} → {{ entry.placement.period_to }}</span>
+            <span class="status-{{ entry.placement.status }}">{{ entry.placement.status }}</span>
+            <span class="towers-badge towers-badge-{{ entry.badge_kind }}">{{ entry.badge }}</span>
+          </div>
+          {% if entry.tower %}
+            {% with tower = entry.tower, caption = entry.placement.program_name ~ " · " ~ entry.placement.ref %}
+              {% include "account/_tower_panel.html" %}
+            {% endwith %}
+          {% else %}
+            {# the drawing is withheld, the reasons are not #}
+            <ul class="confirm-remove-notes">
+              {% for problem in entry.problems %}<li>{{ problem }}</li>{% endfor %}
+              {% if not entry.problems %}<li>the file could not be drawn — open it in towerkit</li>{% endif %}
+            </ul>
+          {% endif %}
+        </section>
+      {% endfor %}
+    {% else %}
+      <div class="panel-empty"><p>no linked programs yet — scaffold one from an account's Program tab</p></div>
+    {% endif %}
+  </div>
+{% endblock %}
