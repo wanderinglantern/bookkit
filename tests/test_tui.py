@@ -3485,7 +3485,10 @@ def test_the_web_work_tab_lists_the_task_the_navigator_now_counts(
     ref = orgs_repo.get(conn, org_id).ref
     conn.close()
 
-    client = TestClient(create_app(seeded_db))
+    # base_url is loopback because web.origin.OriginGuard refuses a forged Host
+    # (TestClient's default is "testserver"). Same reason every other web test
+    # passes it — see tests/test_web_shell.py.
+    client = TestClient(create_app(seeded_db), base_url="http://127.0.0.1")
     html = client.get(f"/accounts/{ref}/work").text
     assert "Chase the binder" in html, "the web dropped the placement-only task"
     # the panel prints its own count beside the heading — the same number the
