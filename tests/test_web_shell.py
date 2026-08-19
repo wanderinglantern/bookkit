@@ -609,3 +609,22 @@ def test_the_generated_palette_is_revalidated_every_load(client):
 
     assert response.status_code == 200
     assert "no-cache" in response.headers.get("cache-control", "")
+
+
+def test_form_host_hygiene_script_is_wired(snapshot_db):
+    """One open editor per section (F2): the behaviour lives in
+    static/form-host.js. The suite has no JS runtime, so the honest
+    server-side assertions are that the page loads it and the server serves
+    it — a missing script tag is exactly how the behaviour would silently
+    vanish."""
+    from fastapi.testclient import TestClient
+
+    from bookkit.web.app import create_app
+
+    with TestClient(create_app(snapshot_db), base_url="http://127.0.0.1") as client:
+        page = client.get("/book")
+        asset = client.get("/static/form-host.js")
+
+    assert "/static/form-host.js" in page.text
+    assert asset.status_code == 200
+    assert "htmx:beforeSwap" in asset.text

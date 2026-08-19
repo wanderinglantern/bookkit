@@ -69,12 +69,10 @@
           <div class="contact-actions">
             {% if row.is_primary %}
               <span class="row-action-static">Primary contact</span>
-            {% else %}
-              <span class="row-action" aria-disabled="true"
-                    title="Not wired yet — marking a contact primary is a later task">Make primary</span>
             {% endif %}
-            <span class="row-action" aria-disabled="true"
-                  title="Not wired yet — logging an interaction is a later task">Log interaction</span>
+            {# Make-primary and log-interaction rendered here as pending
+               spans until D4 (2026-08-19): unbuilt is unrendered. They
+               return as live controls when their routes land. #}
             {# Remove is LIVE (.row-action-btn, not the muted .row-action the
                two above use): a real <button> that opens the confirm step
                into this card's own .form-host below. Never a bare hx-post —

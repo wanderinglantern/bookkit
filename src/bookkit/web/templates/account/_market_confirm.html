@@ -1,0 +1,18 @@
+{# The in-place confirm for taking a market off a layer. Swapped over the
+   chip (closest .market, outerHTML), so the question sits exactly where the
+   answer will land — never in a form host somewhere else on the page.
+
+   GET rendered this and wrote NOTHING; only the [take off] POST writes.
+   [keep] re-fetches the chip from GET {base} — a fragment route, so a
+   cancel never costs a whole-panel render. The message names the two facts
+   a person needs before answering: the layer survives, and R reverts it. #}
+<span class="market market-confirm" role="alert">
+  {% if error %}<span class="cell-error-msg">{{ error }}</span>{% endif %}
+  take {{ seat.carrier }} off {{ layer_name }}? the layer stays, and the change list can revert it
+  <button type="button" class="row-action-btn row-action-danger"
+          hx-post="{{ base }}/remove"
+          hx-target="closest .market" hx-swap="outerHTML">take off</button>
+  <button type="button" class="row-action-btn"
+          hx-get="{{ base }}"
+          hx-target="closest .market" hx-swap="outerHTML">keep</button>
+</span>

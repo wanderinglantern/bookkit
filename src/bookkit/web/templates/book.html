@@ -7,13 +7,10 @@
     <h1 class="book-title">The book</h1>
     <span class="book-subtitle">{{ count }} account{{ "s" if count != 1 else "" }} · {{ total_premium }} bound premium</span>
     <span class="book-header-spacer"></span>
-    {# Rendered per the design (a filter belongs in the header) but not
-       wired this task — a real <input> a user can type into and nothing
-       happens is a worse "looks live, is dead" bug than a static pill that
-       says so up front, so this stays a span, never an <input>. #}
-    <span class="book-filter-pill" aria-disabled="true" title="Filtering is not wired yet — a later task">filter by name / owner / status…</span>
-    <span class="btn-pill btn-pill-primary" aria-disabled="true" title="Not wired yet — creating an account is a later task">New account</span>
-    <span class="btn-pill" aria-disabled="true" title="Not wired yet — the XLSX export needs a file-download response the web spec does not cover yet">Export workbook</span>
+    {# Filter, New account and Export workbook rendered here as pending
+       pills until D4 (2026-08-19): unbuilt is unrendered — the parity
+       ledger is the roadmap, not the UI. Each returns live with its
+       route. A dead <input> stays banned for the old reason too. #}
   </div>
 
   <div class="book-body">

@@ -37,7 +37,8 @@
     <div class="table-scroll">
       <table class="rows rows-fit">
         <thead>
-          <tr><th>Layer</th><th>Attaches</th><th>Limit</th><th>Premium</th>
+          <tr><th class="row-expand-col"></th>
+              <th>Layer</th><th>Attaches</th><th>Limit</th><th>Premium</th>
               <th>Signed</th><th>Markets</th></tr>
         </thead>
         <tbody>
@@ -48,6 +49,16 @@
                the inner one, so every column after it drifts out from under
                its header with no visible error (found 2026-08-18). #}
             <tr>
+              {# The chevron opens the layer's long tail (policy no + dates)
+                 as a row below — [data-row-expand] in form-host.js makes it
+                 a toggle by swallowing the second click before htmx sees
+                 it. #}
+              <td class="row-expand">
+                <button type="button" class="row-action-btn" data-row-expand
+                        title="policy number and dates"
+                        hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/details"
+                        hx-target="closest tr" hx-swap="afterend">&#9656;</button>
+              </td>
               {{ layer.cells.name | safe }}
               {{ layer.cells.attach_cents | safe }}
               {% if layer.statutory %}
@@ -58,38 +69,23 @@
               {{ layer.cells.premium_cents | safe }}
               <td class="num">{{ layer.signed_pct }}%</td>
               <td class="prose">
-                {% if layer.participants %}
-                  {% for part in layer.participants %}
-                    {# Editable, because a share and a carrier name are both
-                       corrected in practice — and because a route nothing can
-                       reach is a route nobody tests honestly: the share-edit
-                       test passed by POSTing the URL directly while no UI
-                       rendered it (found by review, 2026-08-19). #}
-                    <span class="market"
-                          hx-target="#program-{{ placement.id }} .form-host" hx-swap="innerHTML">
-                      <span class="market-cell" tabindex="0"
-                            hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/{{ loop.index0 }}/edit/carrier"
-                            hx-trigger="click, keyup[key=='Enter']">{{ part.carrier }}</span>
-                      <span class="market-cell market-share" tabindex="0"
-                            hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/{{ loop.index0 }}/edit/share_pct"
-                            hx-trigger="click, keyup[key=='Enter']">{{ part.share_pct }}%</span>
-                      <button type="button" class="row-action-btn"
-                              title="Take {{ part.carrier }} off {{ layer.name }} — the layer stays"
-                              hx-post="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/{{ loop.index0 }}/remove"
-                              hx-target="#program-{{ placement.id }} .form-host"
-                              hx-swap="innerHTML">remove</button>
-                    </span>
-                  {% endfor %}
+                {% if layer.market_chips %}
+                  {# Each chip is PRE-RENDERED (_market_chip.html via
+                     routes/program._market_chip_html): two inline cells and
+                     a confirm-first remove, the same editing grammar as the
+                     layer cells to the left — a market used to open its
+                     editor in the section form host, above the tower,
+                     nowhere near the click (F1, 2026-08-19). #}
+                  {% for chip in layer.market_chips %}{{ chip | safe }}{% endfor %}
                 {% else %}
                   {# towerkit's own word for open capacity. A blank cell would
                      assert nothing, and "nobody is on this layer" is the fact
                      a reader most needs to catch. #}
                   <span class="unplaced">To be placed</span>
                 {% endif %}
-                <button type="button" class="row-action-btn"
-                        hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/markets/new"
-                        hx-target="#program-{{ placement.id }} .form-host"
-                        hx-swap="innerHTML">+ market</button>
+                {% with base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/layers/" ~ layer.id ~ "/markets" %}
+                  {% include "account/_market_add_button.html" %}
+                {% endwith %}
               </td>
             </tr>
           {% endfor %}

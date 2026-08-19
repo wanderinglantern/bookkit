@@ -2,6 +2,34 @@
 
 All notable changes to bookkit, newest date first.
 
+## 2026-08-19
+
+### Changed
+- Rework the web Program tab's editing grammar: a market's carrier and share
+  are inline cells on the chip (same contract as layer cells, with tab-hop
+  and blur-cancel), + market is an in-row form with carrier completion, and
+  removing a market asks first, in place.
+- Money cells on the web display compact ("$25M") while their editors keep
+  pre-filling the exact figure (D5).
+- One user-facing word: "program" — the TUI tab, form titles and messages
+  stop alternating with "placement" (D3).
+- Unbuilt web controls are no longer drawn as disabled placeholders: the
+  account header's + Task is a real link (Work tab, form open), and Renew,
+  Log interaction, Assign, the six unrouted nav items, the Search pill and
+  the book-page filter/New account/Export pills unrender until their routes
+  land (D4).
+
+### Added
+- A details row per layer on the web Program tab making policy number and
+  policy dates reachable and editable.
+- tests/test_web_dead_controls.py: no admitted-dead chrome, every rendered
+  action resolves to a real route, every editable layer field is reachable.
+- Opening a web form now closes other open forms that hold no typed input.
+
+### Fixed
+- The web market share editor pre-filled percent through a bps formatter, so
+  a 40% seat pre-filled "0.4" and an unedited save would have written 0.4%.
+
 ## 2026-08-14
 
 ### Added

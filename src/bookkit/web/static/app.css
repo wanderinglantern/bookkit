@@ -2088,3 +2088,78 @@ table.rows tr.is-waived td {
   color: var(--muted);
   font-style: italic;
 }
+
+/* --- the Program tab's in-row editing (phase 1, 2026-08-19) ----------------
+   Markets are chips of two inline cells; their add and remove happen at the
+   chip, never in a form host. The chevron column opens a layer's long tail
+   (policy no + dates) as a details row. */
+
+.market {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin-right: 0.6rem;
+  white-space: nowrap;
+}
+
+.market .cell {
+  display: inline-block;
+  padding: 0 0.15rem;
+}
+
+.market-confirm {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.market-add {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.market-add-form {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.market-add-form input {
+  font: inherit;
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  width: 11rem;
+}
+
+.market-add-form input[name="share_pct"] {
+  width: 5rem;
+}
+
+.row-expand-col {
+  width: 1.6rem;
+}
+
+.row-expand {
+  padding-right: 0;
+}
+
+.layer-details td {
+  background: var(--hover);
+}
+
+.detail-label {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0.3rem 0 0.9rem;
+}
+
+.detail-label:first-child {
+  margin-left: 0;
+}

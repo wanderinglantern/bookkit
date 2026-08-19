@@ -168,7 +168,11 @@ def test_layer_money_is_formatted_not_raw_cents(app_and_org):
     right-hand side was always true and the test passed with the formatter
     replaced by str(). Review caught it by mutation. It now checks a non-zero
     figure, in a named cell, and asserts the formatted form is present as well
-    as the raw one absent."""
+    as the raw one absent.
+
+    DISPLAY IS COMPACT AS OF D5 (2026-08-19): the cell shows "$5M", matching
+    the tower drawing above it, and the editor pre-fills the exact figure —
+    see test_money_editor_prefill_stays_exact for the other half."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)[0]
@@ -183,8 +187,27 @@ def test_layer_money_is_formatted_not_raw_cents(app_and_org):
     )
 
     assert cell != str(priced["limit_cents"]), "raw cents rendered"
-    assert "," in cell, f"money rendered without thousands separators: {cell!r}"
-    assert cell == format_cents(priced["limit_cents"]).lstrip("$")
+    from bookkit.money import format_cents_compact
+
+    assert cell == format_cents_compact(priced["limit_cents"])
+
+
+def test_money_editor_prefill_stays_exact(app_and_org):
+    """The half of D5 that keeps the old invariant alive: the editor's
+    pre-fill is the exact figure, because a compact string ("$50M") parses
+    back lossily and an unedited save would destroy the odd dollars."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    priced = next(
+        layer for layer in sync.layer_details(conn, placement.id)
+        if layer["limit_cents"]
+    )
+
+    editor = client.get(_cell(org, placement, priced, "limit_cents") + "/edit").text
+
+    exact = format_cents(priced["limit_cents"]).lstrip("$")
+    assert f'value="{exact}"' in editor
 
 
 def test_a_primary_layer_attaching_at_zero_says_zero(app_and_org):
@@ -192,10 +215,7 @@ def test_a_primary_layer_attaching_at_zero_says_zero(app_and_org):
     a fact about the tower — rendering it as a dash tells the reader the
     attachment is unknown when it is known and is zero.
 
-    The figure is exact rather than compact because these cells are editable
-    and one string serves both the display and the editor's pre-fill: "$50M"
-    parses back as $50,000,000 and would quietly destroy the odd dollars of a
-    layer at $50,123,456."""
+    Compact display (D5) renders it "$0" — a figure, not a dash."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)[0]
@@ -208,7 +228,7 @@ def test_a_primary_layer_attaching_at_zero_says_zero(app_and_org):
     page = client.get(f"/accounts/{org.ref}/program").text
     cell = _cell_text(page, placement, primaries[0]["id"], "attach_cents")
 
-    assert cell == "0", f"a $0 attachment rendered as {cell!r}"
+    assert cell == "$0", f"a $0 attachment rendered as {cell!r}"
     assert "—" not in cell, "the attachment cell reads as unrecorded"
 
 
@@ -550,6 +570,9 @@ def test_a_markets_share_is_corrected_in_place(app_and_org):
         ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
     )
     assert fresh["participants"][0]["share_pct"] == was / 2
+    # a share moves the layer's signed % and can re-seat other rows, so the
+    # cell comes back WITH the panel out of band, like a layer cell save
+    assert 'hx-swap-oob="true"' in saved.text
 
 
 def test_a_market_is_taken_off_a_layer_and_the_layer_survives(app_and_org):
@@ -569,6 +592,191 @@ def test_a_market_is_taken_off_a_layer_and_the_layer_survives(app_and_org):
     )
     assert carrier not in [p["carrier"] for p in fresh["participants"]]
     assert fresh["name"] == layer["name"], "the layer went with the market"
+
+
+def _first_seat(conn, org):
+    """A (placement, layer, index, seat) with at least one market bound."""
+    for placement in _linked(conn, org):
+        for layer in sync.layer_details(conn, placement.id):
+            if layer["participants"]:
+                return placement, layer, 0, layer["participants"][0]
+    raise AssertionError("the seeded book has no bound market anywhere")
+
+
+def _market_cell(org, placement, layer_id, index, key):
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/layers/{layer_id}/markets/{index}/cell/{key}"
+    )
+
+
+def test_share_editor_prefills_the_actual_percent(app_and_org):
+    """40% must pre-fill '40', not '0.4'. The old mini-form fed the seat's
+    PERCENT into initial_text, whose share kind formats BPS — so a 40% seat
+    pre-filled 0.4 and an unedited save would have cut the share 100x. The
+    same silent-destruction class as the cents rule in CLAUDE.md."""
+    client, org = app_and_org
+    placement, layer, index, seat = _first_seat(client.app.state.conn, org)
+
+    editor = client.get(
+        _market_cell(org, placement, layer["id"], index, "share_pct") + "/edit"
+    ).text
+
+    assert f'value="{seat["share_pct"]:g}"' in editor
+
+
+def test_carrier_editor_offers_existing_market_names(app_and_org):
+    """Vocabulary completes from existing records (CLAUDE.md): freehand
+    carrier spelling is how 'Zurich Insurance Group' vs 'Zurich' drift
+    starts, and the TUI already wires Field.suggestions for this."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+    from bookkit.repo import vocab
+
+    editor = client.get(
+        _market_cell(org, placement, layer["id"], index, "carrier") + "/edit"
+    ).text
+
+    names = vocab.market_names(conn)
+    assert names, "the seeded book names no markets — test proves nothing"
+    assert "<datalist" in editor
+    assert names[0] in editor
+
+
+def test_market_remove_asks_first_and_the_get_writes_nothing(app_and_org):
+    """The remove control fetches an IN-PLACE confirm; only the confirm's
+    POST writes. Contacts and interactions already confirm — a market seat
+    is the same severity of removal."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    base = _market_cell(org, placement, layer["id"], index, "carrier").rsplit(
+        "/cell", 1
+    )[0]
+    assert f'hx-get="{base}/remove"' in page, "remove is not a confirm fetch"
+    assert f'hx-post="{base}/remove"' not in page, "remove still writes on one click"
+
+    confirm = client.get(f"{base}/remove")
+
+    assert confirm.status_code == 200
+    assert seat["carrier"] in confirm.text
+    assert "the layer stays" in confirm.text
+    assert path.read_bytes() == before, "the confirm GET wrote to the file"
+
+
+def _details_url(org, placement, layer_id):
+    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/details"
+
+
+def test_layer_details_row_carries_the_three_hidden_fields(app_and_org):
+    """policy number and the policy dates were editable by URL and invisible
+    in the UI — the exact 'route nothing can reach' smell the 2026-08-19
+    review round already caught once on the share edit (F6)."""
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    row = client.get(_details_url(org, placement, layer["id"])).text
+
+    for key in ("policy_number", "period_from", "period_to"):
+        assert f'data-field="{key}"' in row, f"{key} still unreachable"
+    assert row.lstrip().startswith("<tr"), "the details fragment is not a row"
+
+
+def test_every_layer_row_offers_its_details(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    for layer in sync.layer_details(conn, placement.id):
+        assert f'hx-get="{_details_url(org, placement, layer["id"])}"' in page
+
+
+def test_a_detail_cell_saves_as_a_span_not_a_td(app_and_org):
+    """The details row's cells live in a <td>, so their own element is a
+    <span> — a <td> swapped back in its place would be dropped outright by
+    the HTML parser (no table-row ancestor at the swap point), taking the
+    saved value's display with it."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    saved = client.post(
+        _cell(org, placement, layer, "policy_number"), data={"policy_number": "POL-777"}
+    )
+
+    assert saved.status_code == 200
+    assert saved.text.lstrip().startswith("<span"), "detail cell came back as a td"
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert fresh["policy_number"] == "POL-777"
+
+
+def _markets_base(org, placement, layer_id):
+    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/markets"
+
+
+def test_market_add_opens_in_the_row_not_a_form_host(app_and_org):
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    base = _markets_base(org, placement, layer["id"])
+    assert f'hx-get="{base}/new"' in page
+    assert 'hx-target="closest .market-add"' in page, "+ market still posts elsewhere"
+
+    form = client.get(f"{base}/new").text
+    assert 'class="market-add"' in form
+    assert "<datalist" in form, "the carrier input offers no completion"
+
+
+def test_market_add_cancel_restores_the_button(app_and_org):
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    button = client.get(f"{_markets_base(org, placement, layer['id'])}/button")
+
+    assert button.status_code == 200
+    assert "+ market" in button.text
+
+
+def test_a_refused_market_add_keeps_the_typed_carrier_in_place(app_and_org):
+    """Commit in place, at the anchor: the refusal re-renders the inline form
+    with the input intact — never a panel swap, never a fragment somewhere
+    else on the page."""
+    client, org = app_and_org
+    placement, layer = _first_layer(client.app.state.conn, org)
+
+    refused = client.post(
+        _markets_base(org, placement, layer["id"]),
+        data={"carrier": "Half Typed Re", "share_pct": ""},
+    ).text
+
+    assert 'value="Half Typed Re"' in refused
+    assert "share is required" in refused
+    assert f'id="program-{placement.id}"' not in refused, "the refusal swapped a panel"
+
+
+def test_market_keep_restores_the_chip(app_and_org):
+    client, org = app_and_org
+    placement, layer, index, seat = _first_seat(client.app.state.conn, org)
+    base = _market_cell(org, placement, layer["id"], index, "carrier").rsplit(
+        "/cell", 1
+    )[0]
+
+    chip = client.get(base)
+
+    assert chip.status_code == 200
+    assert seat["carrier"] in chip.text
+    assert f'data-cell-action="{base}/cell/carrier"' in chip.text
 
 
 # --- what the review caught -----------------------------------------------
@@ -665,7 +873,8 @@ def test_a_placement_with_no_file_says_so_rather_than_an_errno(app_and_org):
 def test_a_market_can_be_reached_for_editing_from_the_page(app_and_org):
     """market_cell_save existed and nothing rendered a way to it: the share
     test passed by POSTing the URL directly, which is not evidence a broker
-    can correct a share."""
+    can correct a share. Markets ride the CELL contract now (F1): the way in
+    is a data-cell-action on the chip itself, same as a layer cell."""
     import re
 
     client, org = app_and_org
@@ -673,8 +882,10 @@ def test_a_market_can_be_reached_for_editing_from_the_page(app_and_org):
 
     page = client.get(f"/accounts/{org.ref}/program").text
 
-    assert re.search(r"markets/\d+/edit/share_pct", page), "no way in from the page"
-    assert re.search(r"markets/\d+/edit/carrier", page)
+    assert re.search(
+        r'data-cell-action="[^"]*markets/\d+/cell/share_pct"', page
+    ), "no way in from the page"
+    assert re.search(r'data-cell-action="[^"]*markets/\d+/cell/carrier"', page)
 
 
 def test_a_layer_edit_refreshes_the_rows_it_moved(app_and_org):
@@ -931,6 +1142,47 @@ def test_a_conflict_offers_three_ways_out_rather_than_an_error(app_and_org):
     assert "reload" in body
     assert "overwrite" in body
     assert "keep editing" in body
+
+
+def test_a_conflict_on_a_detail_key_is_a_span_with_the_three_ways(app_and_org):
+    """The details-row cells are spans; the conflict fragment used to be a
+    hardcoded <td>, which the parser DROPS at that swap point (no table-row
+    ancestor) — the field silently blanked with no Reload/Overwrite/Keep at
+    all (fresh-eyes review, 2026-08-19)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    _touch_out_of_band(placement)
+
+    refused = client.post(
+        _cell(org, placement, layer, "policy_number"), data={"policy_number": "POL-1"}
+    )
+
+    assert refused.status_code == 200
+    body = refused.text
+    assert body.lstrip().startswith("<span"), "conflict came back as a parser-dropped td"
+    assert "</span>" in body and "<td" not in body
+    for choice in ("Reload", "Overwrite", "Keep editing"):
+        assert choice in body
+    assert 'hx-target="closest span"' in body
+
+
+def test_a_refused_scaffold_keeps_the_programs_panel(app_and_org):
+    """The scaffold confirm's POST targets #programs-panel with outerHTML, so
+    a refusal that answers with a bare fragment REPLACES the whole panel —
+    every placement's rows, the tower, the add control and the panel's own id
+    (fresh-eyes review, 2026-08-19). The refusal must come back as the panel
+    with the message in its error slot."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]  # already has a file -> guaranteed refusal
+
+    refused = client.post(f"/accounts/{org.ref}/program/{placement.id}/scaffold")
+
+    assert refused.status_code == 200
+    assert 'id="programs-panel"' in refused.text, "the refusal swapped the panel away"
+    assert "already has a program file" in refused.text
+    assert placement.program_name in refused.text, "the panel came back without its rows"
 
 
 def test_a_conflict_writes_nothing(app_and_org):

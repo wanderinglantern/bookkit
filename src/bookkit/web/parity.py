@@ -69,7 +69,13 @@ IMPLEMENTED: dict[str, str] = {
         "is one batch with a pre-image, and a CONFLICT (the file moved under "
         "the edit) renders a three-way — Reload / Overwrite / Keep editing — "
         "rather than the same one-line refusal an invalid value gets. "
-        "Correcting or removing a market rides the same seam."
+        "Markets ride the SAME cell contract as of phase 1 (2026-08-19): a "
+        "seat's carrier and share are inline cells on the chip, addressed by "
+        "index (.../markets/{index}/cell/{key}), remove fetches an in-place "
+        "confirm, and + market is an in-row form with carrier completion. "
+        "The layer's long tail (policy number, policy dates) opens as a "
+        "details row — every LAYER_FIELDS key is reachable, asserted by "
+        "tests/test_web_dead_controls.py."
     ),
     "add_layer": (
         "BUILT 2026-08-19. POST .../program/{placement_id}/layers appends a "
@@ -120,7 +126,11 @@ PENDING: dict[str, str] = {
         "a plain DB write (repo/submissions.create, no towerkit involvement) — "
         "not built on the web yet"
     ),
-    "renew_placement": "placements tab — later slice, needs towerkit writes (sync.renew)",
+    "renew_placement": (
+        "programs tab — phase 2 of the 2026-08-19 web-program plan wires the "
+        "header's Renew (sync.renew, confirm-first); until then the button is "
+        "not rendered (D4: unbuilt is unrendered)"
+    ),
     "open_towerkit": (
         "two flows behind one key. Opening a program in towerkit is a later "
         "slice; on the projects tab this same key runs _need_to_opportunity "
@@ -159,10 +169,10 @@ PENDING: dict[str, str] = {
         "this entry until they do."
     ),
     "mark_primary": (
-        "rendered as a pending row action on the contacts table "
-        "(_contacts_panel.html, aria-disabled) — not wired; the rest of a "
-        "contact's fields are now editable (see inline_edit), this one write "
-        "specifically is not built yet"
+        "not built on the web; the pending aria-disabled span it used to "
+        "render was removed under D4 (2026-08-19, unbuilt is unrendered) — "
+        "the rest of a contact's fields are editable (see inline_edit), this "
+        "one write specifically is not"
     ),
     "paste_items": (
         "deferred by decision, not yet reached: bulk paste-import needs a "
