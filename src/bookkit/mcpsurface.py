@@ -35,7 +35,8 @@ WHAT IS DELIBERATELY NOT DERIVED, and must not be:
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from types import UnionType
+from typing import Any, Union, get_args, get_origin
 
 from .forms.entities import (
     assignment_form,
@@ -220,6 +221,18 @@ NOT_A_COLUMN: dict[tuple[str, str], str] = {
         "Same: a market_profile column, written by orgs.set_market_profile, "
         "not by an org field write."
     ),
+    ("task", "assignee"): (
+        "One typed string that becomes THREE task columns — assignee_kind + "
+        "assignee_id for a resolved person, assignee_name for a freeform one "
+        "— and repo/assignees.py is the only thing that writes them "
+        "(forms.entities.apply_task pops `assignee` before the repo call). "
+        "`base.update(conn, 'task', id, {'assignee': ...})` would write a "
+        "column that does not exist. So a task can be assigned in the TUI "
+        "and on the web but not through MCP: that is a real, named gap "
+        "(mcpparity's task/update cell records it), not an oversight, and "
+        "closing it means an assign verb that takes the same typed string "
+        "and hands it to repo.assignees.columns — not a field edit."
+    ),
 }
 
 
@@ -257,6 +270,32 @@ DENIED: dict[tuple[str, str], str] = {
         "Moves with `status`: task_complete stamps both, task_reopen clears "
         "both. Set alone it produces a task that is open and has a "
         "completion date, which every count on Today reads differently."
+    ),
+    # WHO IS CHASING IT is a three-column move-together set (models.Task:
+    # "never set them field by field, or a stale id can outlive a kind and
+    # the pair stops meaning anything"). Only assignee_id was denied, and
+    # only by the accident of ending in `_id` — a single
+    # Field("assignee_name", ...) on any form would have made the other two
+    # writable and produced exactly the corruption that comment warns about.
+    # Denied by name, with the reason, BEFORE someone adds that field.
+    ("task", "assignee_kind"): (
+        "One of three columns that only mean anything together — kind + id "
+        "for a resolved person, name for a freeform one, all NULL for "
+        "unassigned. repo/assignees.py writes the set in one call and is the "
+        "only thing that may. Setting kind alone leaves an id pointing into "
+        "the wrong table, or a kind with nothing under it."
+    ),
+    ("task", "assignee_id"): (
+        "Same three-column set. The foreign-key rule already catches this "
+        "name, but only by accident of its suffix — the real reason is that "
+        "it moves with assignee_kind and assignee_name, and a stale id "
+        "outliving its kind is the failure models.Task names in a comment."
+    ),
+    ("task", "assignee_name"): (
+        "Same three-column set, and the one with no suffix to hide behind: "
+        "a freeform name written while assignee_kind/assignee_id still hold "
+        "a resolved person gives one task two different owners, and every "
+        "reader picks a different one."
     ),
     # -- opportunity --
     ("opportunity", "stage"): (
@@ -342,22 +381,97 @@ ALSO_EDITABLE: dict[tuple[str, str], tuple[Any, str]] = {
 # =============================================================================
 
 
-def _value_type(field: Field) -> Any:
+class IntChoices(tuple[str, ...]):
+    """A closed vocabulary whose COLUMN is an integer.
+
+    A select's options are strings on both surfaces — a Textual `Select` and
+    an HTML `<option>` both carry text — while `task.priority` is an `int`
+    column. Derived as a plain tuple, the surface advertised a `str` for a
+    column that stores an `int`, and edit_field's compare-and-set then
+    refused every write with
+
+        task.priority holds 2, not what you expected ('2')
+
+    two values a reader cannot tell apart, so a model retries forever:
+    expecting=None is refused as not-blank and every legal expecting is
+    refused as a mismatch. `forms.entities.apply_task` has always done the
+    `int(...)` on the way to the repo; MCP had no equivalent. Carrying the
+    coercion on the TYPE, derived from the column, is what stops the next
+    int-backed select repeating it — the derivation reconciles it, nobody has
+    to remember to.
+
+    A tuple subclass on purpose: `_clean_typed`'s vocabulary check and
+    `describe`'s select rendering both key off `isinstance(vtype, tuple)` and
+    keep working unchanged.
+    """
+
+
+# What `mcpserver._clean_typed` hands `base.update`, per declared field kind.
+# Anything not named here falls through to `_clean_by_kind`, which returns a
+# str. Used only to CHECK the derivation against the column types —
+# tests/test_mcp_surface.py fails on any pair that does not line up.
+PRODUCED_TYPES: dict[str, type] = {
+    "money": int,   # parse_money_cents
+    "int": int,     # int()
+    "date": str,    # an ISO date string
+}
+
+
+def produced_type(vtype: Any) -> type:
+    """The python type a cleaned value arrives at the column AS."""
+    if isinstance(vtype, IntChoices):
+        return int
+    if isinstance(vtype, tuple):
+        return str
+    return PRODUCED_TYPES.get(vtype, str)
+
+
+def column_type(kind: str, field: str) -> type:
+    """The python type a column STORES, Optional unwrapped and enums reduced
+    to the primitive they subclass (OrgStatus is a StrEnum, so `str`)."""
+    annotation = MODELS[kind].model_fields[field].annotation
+    if get_origin(annotation) in (Union, UnionType):
+        real = [a for a in get_args(annotation) if a is not type(None)]
+        annotation = real[0] if real else annotation
+    # bool before int: bool IS a subclass of int and would otherwise vanish
+    for primitive in (bool, str, int, float):
+        if isinstance(annotation, type) and issubclass(annotation, primitive):
+            return primitive
+    return object
+
+
+def _value_type(field: Field, stored_as: type) -> Any:
     """A field's value type as `mcpserver._clean_typed` consumes it: the
     declared kind for everything scalar, and a tuple of the legal values for a
-    select — so a refusal can list the vocabulary instead of writing junk."""
+    select — so a refusal can list the vocabulary instead of writing junk.
+
+    `stored_as` is the column's own type, and it is not decoration: a select
+    over an int column becomes IntChoices, which cleans to an int. Without
+    that reconciliation the surface promises a type the column will not take,
+    and the failure lands on the model as an unreadable refusal rather than
+    on us as a red test."""
     if field.kind == "select":
-        return tuple(value for _, value in field.options)
+        options = tuple(value for _, value in field.options)
+        return IntChoices(options) if stored_as is int else options
     return field.kind
 
 
 def denial_reason(kind: str, field: str) -> str | None:
-    """Why this field is not editable, or None if it is (or is unknown)."""
+    """Why this field is not editable, or None if it is (or is unknown).
+
+    THE SPECIFIC REASON WINS. The per-field entries are consulted before the
+    two category rules, because `task.assignee_id` denied as "foreign keys
+    re-scope a record" is true and useless: it is really denied because it
+    moves with assignee_kind and assignee_name, and a caller told the FK
+    story will go looking for an unassign/assign pair that does not exist."""
+    specific = NOT_A_COLUMN.get((kind, field)) or DENIED.get((kind, field))
+    if specific is not None:
+        return specific
     if field in SYSTEM_COLUMNS:
         return SYSTEM_COLUMNS_REASON
     if field.endswith(FOREIGN_KEY_SUFFIX):
         return FOREIGN_KEY_REASON
-    return NOT_A_COLUMN.get((kind, field)) or DENIED.get((kind, field))
+    return None
 
 
 def editable() -> dict[str, dict[str, Any]]:
@@ -371,15 +485,39 @@ def editable() -> dict[str, dict[str, Any]]:
             if denial_reason(kind, field.key) is not None:
                 continue
             if field.key not in columns:
-                # not a column of this entity and nobody wrote down why —
-                # refuse to advertise it rather than fail at the DB layer
+                # Not a column of this entity and nobody wrote down why.
+                # Refusing to advertise it is right — it would fail at the DB
+                # layer — but a SILENT drop is how task.assignee became a
+                # capability the TUI and the web have, MCP does not, and no
+                # denylist line, ledger cell or describe output mentioned.
+                # unexplained_non_columns() below is asserted empty, so the
+                # next one lands as a red test naming the field.
                 continue
-            fields[field.key] = _value_type(field)
+            fields[field.key] = _value_type(field, column_type(kind, field.key))
         for (also_kind, also_field), (vtype, _) in ALSO_EDITABLE.items():
             if also_kind == kind:
                 fields[also_field] = vtype
         surface[kind] = fields
     return surface
+
+
+def unexplained_non_columns() -> dict[str, list[str]]:
+    """kind -> form fields that are not columns of that entity and that
+    NOT_A_COLUMN does not explain. Asserted empty: a form field MCP cannot
+    write is a capability the other two surfaces have and this one does not,
+    and that has to be a written-down decision rather than a `continue`."""
+    out: dict[str, list[str]] = {}
+    for kind, builder in BUILDERS.items():
+        columns = MODELS[kind].model_fields
+        stray = [
+            field.key
+            for field in builder().fields
+            if field.key not in columns
+            and denial_reason(kind, field.key) is None
+        ]
+        if stray:
+            out[kind] = stray
+    return out
 
 
 # Blank-fill (`enrich_field`) runs over the SAME derived set as deliberate
@@ -394,6 +532,25 @@ ENRICHABLE_KINDS = ("org", "contact")
 def enrichable() -> dict[str, dict[str, Any]]:
     surface = editable()
     return {kind: surface[kind] for kind in ENRICHABLE_KINDS}
+
+
+# HOW A VALUE IS TYPED, in one place, because two descriptions of the same
+# argument disagreed. `describe`'s note said "money is cents" while
+# edit_field's own docstring said dollars — and describe is the one a model is
+# told to call FIRST, so the wrong one was the loud one: a model wanting a
+# $5,000,000 limit passes 500000000 and writes $500,000,000. The parser
+# (money.parse_money_cents) takes DOLLARS — "2m", "$1,500,000", "1,234.56" —
+# and bookkit stores the cents. mcpserver registers edit_field with this
+# string interpolated into its description, so there is no second copy to rot.
+VALUE_RULES = (
+    "edit_field is a compare-and-set: `expecting` must match what the field "
+    "holds now, and expecting=None asserts it is blank. MONEY IS ENTERED IN "
+    "DOLLARS, not cents — '2m', '$1,500,000', '1,234.56' — and stored as "
+    "integer cents, so pass what a human would say and never multiply by a "
+    "hundred yourself. Dates are anything parse_human_date accepts except a "
+    "bare 1-2 digit number, which is refused rather than read as a day of "
+    "the month. A select refuses a value outside its list."
+)
 
 
 def describe(kind: str | None = None) -> dict[str, Any]:
@@ -437,10 +594,5 @@ def describe(kind: str | None = None) -> dict[str, Any]:
         for (denied_kind, field), reason in sorted(DENIED.items())
         if kind is None or denied_kind == kind
     }
-    out["note"] = (
-        "edit_field is a compare-and-set: `expecting` must match what the "
-        "field holds now, and expecting=None asserts it is blank. Money is "
-        "cents, dates are anything parse_human_date accepts except a bare "
-        "number, and a select refuses a value outside its list."
-    )
+    out["note"] = VALUE_RULES
     return out

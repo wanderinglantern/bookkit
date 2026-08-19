@@ -60,7 +60,7 @@ single-client stdio usage.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
@@ -360,14 +360,18 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
     ) -> dict[str, Any]:
         """Fill ONE blank field on a client org (or, with `contact`, on one of
         its contacts) — additive and event-logged. Fill-blanks-only: refuses
-        if the field is already set, naming the current value — edits to an
-        already-populated field happen in the TUI, not here. `client`
-        resolves the same way as every other client-scoped tool. `value` is
-        normalized through the same cleaner the forms use for that field
-        (email/phone/url/domain/naics) before being stored. Enrichable org
-        fields: owner, industry, naics, hq_city, hq_country, website, domain,
-        legal_name, notes. Enrichable contact fields: email, phone, mobile,
-        title, linkedin, notes."""
+        if the field is already set, naming the current value and the
+        `expecting` to pass edit_field instead; overwriting is that tool's
+        job, not a thing this surface cannot do. `client` resolves the same
+        way as every other client-scoped tool. `value` is normalized through
+        the same cleaner the forms use for that field (email/phone/url/
+        domain/naics) before being stored, and a closed vocabulary refuses a
+        value outside its list. WHICH FIELDS: call `describe("org")` or
+        `describe("contact")` — enrich runs over exactly the set edit_field
+        writes, derived from the form declarations, so a list retyped here
+        would be a second field table in prose and would rot the way the
+        first one did (it already had: it named nine org fields and missed
+        name and status, and both contact names and role)."""
         return _enrich_field(rw, client, field, value, contact=contact)
 
     @server.tool()
@@ -628,7 +632,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         you'. The request closes when nothing is left outstanding."""
         return _request_item_waive(rw, item_ref)
 
-    @server.tool()
+    @server.tool(description=_EDIT_FIELD_DESCRIPTION)
     async def edit_field(
         kind: str,
         ref: str,
@@ -637,17 +641,11 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         expecting: str | None = None,
         client: str | None = None,
     ) -> dict[str, Any]:
-        """Deliberately OVERWRITE one field — compare-and-set. `expecting`
-        must be the value a read just showed you (same human form: money as
-        dollars, dates as displayed); a mismatch refuses and names what the
-        field really holds, writing nothing. expecting omitted asserts the
-        field is BLANK (use enrich_field for routine blank-filling). `kind`
-        is org|contact|opportunity|project|project_need|task|team_member|
-        team_assignment|rfi_request|rfi_item; `ref` is the exact name
-        (org/contact/team_member — contact also needs `client`) or the
-        exact ref/id a read returned — for team_assignment, the
-        `assignment_id` that team_roster returns. Stage moves are
-        opportunity_stage, never this."""
+        """Registered with `description=_EDIT_FIELD_DESCRIPTION` (module
+        level), which ends with `mcpsurface.VALUE_RULES` — the same sentence
+        `describe` serves as its note. The two used to be hand-written and
+        disagreed about whether money was dollars or cents, and describe is
+        the one a model is told to call first."""
         return _edit_field(rw, kind, ref, field, value,
                            expecting=expecting, client=client)
 
@@ -1001,10 +999,22 @@ def _activity_delete(conn: sqlite3.Connection, interaction_ref: str) -> dict[str
     The get() first is not redundant: base.soft_delete issues an UPDATE that
     matches zero rows for an unknown or already-deleted id and still logs an
     event, so it would report success for a delete that deleted nothing.
-    interactions.get filters on aliveness and raises KeyError instead."""
+    interactions.get filters on aliveness and raises KeyError, which this
+    turns into a refusal naming where a real ref comes from."""
     from .repo import interactions
 
-    interaction = interactions.get(conn, interaction_ref)  # KeyError → tool error
+    try:
+        interaction = interactions.get(conn, interaction_ref)
+    except KeyError:
+        # THE FIFTH BARE KeyError, on the path log_activity's own docstring
+        # names as the only way to correct a mis-logged interaction: there is
+        # no interaction kind in edit_field, so a model sent here by that
+        # sentence and met with `interaction <id> not found` has no next step.
+        raise ValueError(
+            f"no activity {interaction_ref!r} — read recent_activity for that "
+            f"client and use the `interaction_ref` it returns (an activity "
+            f"already deleted is gone from it; `u` in the TUI puts one back)"
+        ) from None
     with _open_batch(
         conn, tool="activity_delete", org_id=interaction.org_id,
         summary=f"deleted activity: {interaction.subject}",
@@ -1812,6 +1822,25 @@ _EDIT_REDIRECTS: dict[tuple[str, str], str] = {
 }
 
 
+# ONE OWNER FOR THE VALUE RULES. The money/date/select sentence lives in
+# mcpsurface.VALUE_RULES and is interpolated here, so edit_field's description
+# and describe's note are the same string rather than two hand-written
+# accounts of one argument. They were two, and they contradicted each other.
+_EDIT_FIELD_DESCRIPTION = (
+    "Deliberately OVERWRITE one field — compare-and-set. `expecting` must be "
+    "the value a read just showed you; a mismatch refuses and names what the "
+    "field really holds, writing nothing. expecting omitted asserts the field "
+    "is BLANK (use enrich_field for routine blank-filling). `kind` is "
+    "org|contact|opportunity|project|project_need|task|team_member|"
+    "team_assignment|rfi_request|rfi_item; `ref` is the exact name "
+    "(org/contact/team_member — contact also needs `client`) or the exact "
+    "ref/id a read returned — for team_assignment, the `assignment_id` that "
+    "team_roster returns. Stage moves are opportunity_stage, never this. "
+    "Call `describe` for the fields of a kind and their types.\n\n"
+    + mcpsurface.VALUE_RULES
+)
+
+
 def _clean_typed(vtype: Any, field: str, value: str | None) -> Any:
     """One cleaning rule for value AND expecting, so the model compares in
     the same human forms a read returned."""
@@ -1834,8 +1863,31 @@ def _clean_typed(vtype: Any, field: str, value: str | None) -> Any:
     if isinstance(vtype, tuple):
         if value not in vtype:
             raise ValueError(f"{field!r} must be one of {list(vtype)}, not {value!r}")
-        return value
+        # a select over an INT column (task.priority): the options are strings
+        # because every select's options are, but the column is not, and a
+        # str written to it makes compare-and-set refuse '2' for holding 2.
+        # mcpsurface.IntChoices carries that coercion off the column type.
+        return int(value) if isinstance(vtype, mcpsurface.IntChoices) else value
     return _clean_by_kind(vtype, value)
+
+
+def _as_expecting(vtype: Any, value: Any) -> str:
+    """The stored value rendered as the string `expecting` would take back.
+
+    A REFUSAL THAT NAMES A RETRY MUST NAME ONE THAT WORKS. `{value!r}` on an
+    enum column prints `<OrgStatus.PROSPECT: 'prospect'>`, and a model that
+    follows the instruction literally passes that repr and is refused again,
+    now by the vocabulary check — the dead end this codebase treats as worse
+    than silence. org.status is the surface's only enum-typed column and it
+    became reachable with the derivation.
+    """
+    if value is None:
+        return "None"
+    if vtype == "money":
+        from .money import format_cents
+
+        return repr(format_cents(int(value)))
+    return repr(str(value))
 
 
 def _edit_target(
@@ -1918,6 +1970,31 @@ def _edit_target(
     raise ValueError(f"cannot edit kind {kind!r}; editable: {sorted(_EDITABLE)}")
 
 
+def _guard_org_rename(
+    conn: sqlite3.Connection, org_id: str, new_name: str
+) -> None:
+    """Delegates to repo/orgs, which owns the rule (see its docstring for the
+    resolver corruption it stops). It has to be CALLED here as well as living
+    there because `_edit_field` writes through `base.update` generically, not
+    through `orgs.update` — the repo guard covers the TUI and the web, which
+    both rename via forms.entities.apply_org, and this line covers MCP."""
+    from .repo import orgs
+
+    orgs.guard_name(conn, new_name, org_id)
+
+
+# GUARDS ON IDENTITY, keyed by the field that carries it. A name is what every
+# other tool resolves on, so a rename onto a name already in use makes every
+# later lookup land on the wrong row — CLAUDE.md records that failure for team
+# members, and org.name became writable with the derivation and had nothing.
+# A table rather than a chain of ifs, because the next identity column should
+# be one line and an argument about the reason, not a fourth branch.
+_RENAME_GUARDS: dict[tuple[str, str], Callable[[sqlite3.Connection, str, Any], None]] = {
+    ("team_member", "name"): _guard_member_rename,
+    ("org", "name"): _guard_org_rename,
+}
+
+
 def _edit_field(
     conn: sqlite3.Connection,
     kind: str,
@@ -1960,18 +2037,21 @@ def _edit_field(
     if expecting is None:
         if not blank:
             raise ValueError(
-                f"{kind}.{field} is not blank — it holds {current!r}; pass "
-                f"expecting=<that value> to overwrite deliberately"
+                f"{kind}.{field} is not blank — it holds "
+                f"{_as_expecting(vtype, current)}; pass expecting=<that "
+                f"value> to overwrite deliberately"
             )
     elif blank or current != expected:
         raise ValueError(
-            f"{kind}.{field} holds {current!r}, not what you expected "
-            f"({expected!r}) — re-read the record and retry"
+            f"{kind}.{field} holds {_as_expecting(vtype, current)}, not what "
+            f"you expected ({_as_expecting(vtype, expected)}) — re-read the "
+            f"record and retry"
         )
 
     cleaned = _clean_typed(vtype, field, value)
-    if kind == "team_member" and field == "name":
-        _guard_member_rename(conn, entity_id, cleaned)
+    guard = _RENAME_GUARDS.get((kind, field))
+    if guard is not None:
+        guard(conn, entity_id, cleaned)
     with _open_batch(
         conn, tool="edit_field", org_id=org_id,
         summary=f"edited {kind}.{field} on {ref}",
@@ -2008,10 +2088,15 @@ def _enrich_field(
         raise ValueError(f"{field!r} is not enrichable on a {kind}; allowed: {sorted(allowed)}")
     current = getattr(target, field)
     if current:
+        # _as_expecting, not {current!r}: the derived surface put org.status —
+        # the one enum-typed column — into this map, and a repr names an
+        # `expecting` (<OrgStatus.PROSPECT: 'prospect'>) the vocabulary check
+        # would then refuse. A refusal must name a retry that works.
+        shown = _as_expecting(allowed[field], current)
         raise ValueError(
             f"{org.name}{' / ' + target.name if contact else ''} already has "
-            f"{field}={current!r} — enrich_field is fill-blanks-only; to "
-            f"overwrite deliberately use edit_field with expecting={current!r}")
+            f"{field}={shown} — enrich_field is fill-blanks-only; to "
+            f"overwrite deliberately use edit_field with expecting={shown}")
     # _clean_typed, not _clean_by_kind: the derived surface carries closed
     # vocabularies (contact.role, org.status) as tuples, and _clean_by_kind
     # would fall through to clean_text and write a value outside the list
