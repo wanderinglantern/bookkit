@@ -1144,6 +1144,47 @@ def test_a_conflict_offers_three_ways_out_rather_than_an_error(app_and_org):
     assert "keep editing" in body
 
 
+def test_a_conflict_on_a_detail_key_is_a_span_with_the_three_ways(app_and_org):
+    """The details-row cells are spans; the conflict fragment used to be a
+    hardcoded <td>, which the parser DROPS at that swap point (no table-row
+    ancestor) — the field silently blanked with no Reload/Overwrite/Keep at
+    all (fresh-eyes review, 2026-08-19)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    _touch_out_of_band(placement)
+
+    refused = client.post(
+        _cell(org, placement, layer, "policy_number"), data={"policy_number": "POL-1"}
+    )
+
+    assert refused.status_code == 200
+    body = refused.text
+    assert body.lstrip().startswith("<span"), "conflict came back as a parser-dropped td"
+    assert "</span>" in body and "<td" not in body
+    for choice in ("Reload", "Overwrite", "Keep editing"):
+        assert choice in body
+    assert 'hx-target="closest span"' in body
+
+
+def test_a_refused_scaffold_keeps_the_programs_panel(app_and_org):
+    """The scaffold confirm's POST targets #programs-panel with outerHTML, so
+    a refusal that answers with a bare fragment REPLACES the whole panel —
+    every placement's rows, the tower, the add control and the panel's own id
+    (fresh-eyes review, 2026-08-19). The refusal must come back as the panel
+    with the message in its error slot."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]  # already has a file -> guaranteed refusal
+
+    refused = client.post(f"/accounts/{org.ref}/program/{placement.id}/scaffold")
+
+    assert refused.status_code == 200
+    assert 'id="programs-panel"' in refused.text, "the refusal swapped the panel away"
+    assert "already has a program file" in refused.text
+    assert placement.program_name in refused.text, "the panel came back without its rows"
+
+
 def test_a_conflict_writes_nothing(app_and_org):
     client, org = app_and_org
     conn = client.app.state.conn

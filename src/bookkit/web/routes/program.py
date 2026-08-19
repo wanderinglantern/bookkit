@@ -248,6 +248,9 @@ def _conflict(
             "typed": typed,
             "message": message,
             "layer": layer,
+            # A detail key's cell is a span; a literal <td> swapped into the
+            # details row is parser-dropped and the three-way never appears.
+            "tag": _layer_cell_tag(key),
         },
     )
 
@@ -611,17 +614,6 @@ def _refused_form(
             "fields": fields, "action": action, "title": title,
             "error": message, "values": typed,
         },
-    )
-
-
-def _refusal(request: Request, message: str) -> HTMLResponse:
-    """A refused write with no form behind it — the market remove button.
-
-    Deliberately 200: htmx swaps 2xx only, and a refusal the user cannot read
-    is the silent failure this codebase keeps finding. It lands in the
-    placement's .form-host, never over the panel."""
-    return TEMPLATES.TemplateResponse(
-        request, "account/_program_refusal.html", {"message": message}
     )
 
 
@@ -1141,19 +1133,23 @@ def scaffold_create(request: Request, ref: str, placement_id: str) -> HTMLRespon
     placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
 
     if placement.program_path:
-        return _refusal(
-            request,
-            # No "unlink it first": unlink exists on no surface yet (phase
-            # 2) and a refusal must never name a verb the app cannot do.
-            f"{placement.ref} already has a program file: {placement.program_path}. "
-            f"Open it in towerkit.",
+        # The confirm's POST targets #programs-panel with outerHTML, so a
+        # refusal MUST come back as the panel (with the message in its error
+        # slot) — a bare fragment would replace the whole panel, id and all,
+        # and no later swap could restore it (fresh-eyes review, 2026-08-19).
+        # No "unlink it first": unlink exists on no surface yet (phase 2) and
+        # a refusal must never name a verb the app cannot do.
+        return _programs_panel(
+            request, ref, org,
+            error=f"{placement.ref} already has a program file: "
+            f"{placement.program_path}. Open it in towerkit.",
         )
     destination = _scaffold_destination(conn, org, placement)
     if destination is None:
-        return _refusal(
-            request,
-            "no program file location is set yet — configure the program roots "
-            "first (`,` on Today in the terminal app), then scaffold.",
+        return _programs_panel(
+            request, ref, org,
+            error="no program file location is set yet — configure the program "
+            "roots first (`,` on Today in the terminal app), then scaffold.",
         )
 
     try:
@@ -1166,5 +1162,5 @@ def scaffold_create(request: Request, ref: str, placement_id: str) -> HTMLRespon
                 first = diags.errors[0].message if diags.errors else "unknown error"
                 raise ValueError(f"scaffold refused: {first}")
     except Exception as exc:
-        return _refusal(request, str(exc))
+        return _programs_panel(request, ref, org, error=str(exc))
     return _programs_panel(request, ref, org)

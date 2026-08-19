@@ -5,6 +5,12 @@
    The stub this replaces printed the addable-list empty state unconditionally
    while the tab badge counted the placements it was claiming did not exist. #}
 <div id="programs-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {# The panel's own refusal slot: a scaffold refusal comes back as the whole
+     panel with this filled, because the confirm's POST targets the panel by
+     id — a fragment answer would swap the panel away (review, 2026-08-19).
+     The context key existed and NOTHING rendered it, which is a silent
+     refusal wearing a working seam. #}
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
   <div class="people-head">
     <h2 class="people-label">Programs</h2>
     <span class="people-count">{{ programs | length }}</span>
