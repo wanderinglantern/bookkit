@@ -45,6 +45,13 @@ def client_and_org(snapshot_db: Path):
         yield client, org
 
 
+def _market_ref(client):
+    from bookkit.repo import orgs as orgs_repo
+
+    markets = orgs_repo.list_orgs(client.app.state.conn, kind="market")
+    return markets[0].ref if markets else None
+
+
 def _pages(org) -> list[str]:
     return [
         "/book",
@@ -52,6 +59,7 @@ def _pages(org) -> list[str]:
         "/search?q=Atomic",
         "/capture",
         "/team",
+        "/markets",
         "/today",
         "/calendar",
         "/towers",

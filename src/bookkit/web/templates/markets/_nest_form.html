@@ -1,0 +1,30 @@
+{# Nest under a master company (the TUI's `N`) — organizational only:
+   aliases and towers keep the issuing entity (orgs.set_parent's contract).
+   Both TUI paths in one form: pick an existing master (or "no parent" to
+   unnest), OR type a new master's name to create it on the spot — the
+   AXA XL case. When both are given the new name wins, matching the TUI,
+   where "create new master…" is its own branch of the picker. #}
+<form class="entity-form" method="post" action="/markets/{{ market.ref }}/nest"
+      hx-post="/markets/{{ market.ref }}/nest"
+      hx-target="closest .form-host" hx-swap="innerHTML">
+  <h2 class="form-title">nest {{ market.name }} under…</h2>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <div class="field">
+    <label for="f-nest-parent">master company</label>
+    <select id="f-nest-parent" name="parent">
+      <option value="">— no parent (unnest) —</option>
+      {% for o in options %}
+        <option value="{{ o.id }}"{% if o.id == market.parent_org_id %} selected{% endif %}>{{ o.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="f-nest-new">…or create a new master company</label>
+    <input type="text" id="f-nest-new" name="new_master" value=""
+           placeholder="master company name">
+  </div>
+  <div class="form-actions">
+    <button type="submit">Save</button>
+    <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+  </div>
+</form>

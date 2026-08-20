@@ -1,0 +1,57 @@
+{# Appetite — the market detail's first table. Whole-form add/edit (the
+   TUI's `a` and `e` use appetite_form, not cells: line + level + money
+   bounds + territories save together), confirm-first removal (`D`).
+   Colour is signal, not decoration: every appetite level prints its own
+   word beside the ink (_APPETITE_CLASS in routes/markets.py, the TUI's
+   APPETITE_STYLES). Money displays compact here because these cells are
+   never edited in place — the edit form pre-fills exact via initial_text.
+
+   #appetite-panel is this partial's own root — same OOB reasoning as
+   _contacts_panel: a successful add/edit returns this panel out-of-band
+   while the primary swap clears the .form-host the form posted from. #}
+<div id="appetite-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <div class="people-head">
+    <h2 class="people-label">Appetite</h2>
+    <span class="people-count">{{ rows | length }}</span>
+    <span class="people-head-spacer"></span>
+    <button type="button" class="people-add"
+            hx-get="/markets/{{ market.ref }}/appetite/new"
+            hx-target="#appetite-panel .form-host" hx-swap="innerHTML">+ Add appetite</button>
+  </div>
+  <div class="form-host"></div>
+  {% if rows %}
+    <div class="table-scroll">
+      <table class="rows">
+        <thead>
+          <tr><th>Line</th><th>Appetite</th><th class="num">Min premium</th>
+              <th class="num">Max limit</th><th>Territories</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td>{{ row.line }}</td>
+              <td class="{{ row.appetite_class }}">{{ row.appetite }}</td>
+              <td class="num">{{ row.min_premium }}</td>
+              <td class="num">{{ row.max_limit }}</td>
+              <td>{{ row.territories }}</td>
+              <td class="row-actions-cell">
+                <button type="button" class="row-action-btn"
+                        hx-get="/markets/{{ market.ref }}/appetite/{{ row.id }}/edit"
+                        hx-target="#appetite-panel .form-host" hx-swap="innerHTML">Edit</button>
+                <button type="button" class="row-action-btn"
+                        title="Remove this appetite line — soft, one revertible change"
+                        hx-get="/markets/{{ market.ref }}/appetite/{{ row.id }}/remove"
+                        hx-target="#appetite-panel .form-host" hx-swap="innerHTML">Remove</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="panel-empty">
+      <p>empty — add the first row</p>
+    </div>
+  {% endif %}
+</div>

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{{ market.name }} — markets — bookkit{% endblock %}
+{% block content %}
+  {% set topbar_section = "markets" %}
+  {% include "partials/topbar.html" %}
+
+  <div class="book-header">
+    <a class="back-link" href="/markets">← Markets</a>
+    <h1 class="book-title">{{ market.name }}</h1>
+    <span class="book-subtitle">
+      {{ kind_label }}{% if rating %} · AM Best {{ rating }}{% endif %}{% if parent %} · nested under {{ parent.name }}{% endif %}{% if rate and rate.decided %} · quote {{ quote_rate }} · bind {{ bind_rate }} (of {{ rate.decided }} decided, {{ rate.pending }} still out){% endif %}
+    </span>
+    <span class="book-header-spacer"></span>
+    {# The list screen's own row actions, here where the row is the page:
+       e edit · N nest under master · x merge duplicate. Each opens into
+       the header's form host below; a refusal re-renders there in place. #}
+    <button type="button" class="row-action-btn"
+            hx-get="/markets/{{ market.ref }}/edit"
+            hx-target="#market-head-host" hx-swap="innerHTML">Edit</button>
+    <button type="button" class="row-action-btn"
+            hx-get="/markets/{{ market.ref }}/nest"
+            hx-target="#market-head-host" hx-swap="innerHTML">Nest under…</button>
+    <button type="button" class="row-action-btn"
+            hx-get="/markets/{{ market.ref }}/merge"
+            hx-target="#market-head-host" hx-swap="innerHTML">Merge duplicate…</button>
+  </div>
+
+  <div class="markets-body">
+    {% if aliases %}
+      <p class="market-aliases muted">also written as: {{ aliases | join(", ") }}</p>
+    {% endif %}
+    <div id="market-head-host" class="form-host"></div>
+
+    {{ appetite_panel | safe }}
+    <div class="work-section-gap"></div>
+    {{ uw_panel | safe }}
+    <div class="work-section-gap"></div>
+    {{ aliases_panel | safe }}
+    <div class="work-section-gap"></div>
+
+    <div class="people-head">
+      <h2 class="people-label">Current submissions</h2>
+      <span class="people-count">{{ submissions | length }}</span>
+    </div>
+    {% if submissions %}
+      <div class="table-scroll">
+        <table class="rows">
+          <thead>
+            <tr><th>Sent</th><th>Status</th><th class="num">Quoted</th><th>Response</th></tr>
+          </thead>
+          <tbody>
+            {% for s in submissions %}
+              <tr>
+                <td class="num">{{ s.sent_on }}</td>
+                <td>{{ s.status }}</td>
+                <td class="num">{{ s.quoted }}</td>
+                <td class="num">{{ s.response_on }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="panel-empty"><p>nothing sent to this market</p></div>
+    {% endif %}
+    <div class="work-section-gap"></div>
+
+    <div class="people-head">
+      <h2 class="people-label">On the tower — renewing next 90 days</h2>
+      <span class="people-count">{{ exposure | length }}</span>
+    </div>
+    {% if exposure %}
+      <div class="table-scroll">
+        <table class="rows">
+          <thead>
+            {# status, because a QUOTED tower is exposure worth seeing but is
+               not placed business — rendering both alike had the TUI's copy
+               of this table reading $650K where the book's bound-only total
+               read nothing. "As written" is the file's own carrier spelling
+               when it differs from the org name. #}
+            <tr><th>Account</th><th>Expiry</th><th>Program</th><th>Layer</th>
+                <th>Status</th><th>As written</th>
+                <th class="num">Share</th><th class="num">Premium</th></tr>
+          </thead>
+          <tbody>
+            {% for r in exposure %}
+              <tr>
+                <td><a href="/accounts/{{ r.org_ref }}">{{ r.org_name }}</a></td>
+                <td class="num">{{ r.period_to }}</td>
+                <td>{{ r.program_name }}</td>
+                <td>{{ r.layer_name }}</td>
+                <td>{{ r.status }}</td>
+                <td class="muted">{{ r.carrier }}</td>
+                <td class="num">{{ r.share }}</td>
+                <td class="num">{{ r.premium }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="panel-empty"><p>not on any tower renewing in the next 90 days</p></div>
+    {% endif %}
+  </div>
+{% endblock %}
