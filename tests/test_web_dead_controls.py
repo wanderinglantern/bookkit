@@ -87,6 +87,11 @@ def test_every_rendered_action_resolves(client_and_org):
     checked = 0
     for page in _pages(org):
         html = client.get(page).text
+        # a form's action follows its method; only method="get" forms exist
+        # outside htmx, and the topbar search is one (gap 3)
+        get_form_actions = set(
+            re.findall(r'<form[^>]*method="get"[^>]*action="([^"]+)"', html)
+        ) | set(re.findall(r'<form[^>]*action="([^"]+)"[^>]*method="get"', html))
         for attr, method in (
             ("hx-get", "GET"),
             ("hx-post", "POST"),
@@ -94,6 +99,8 @@ def test_every_rendered_action_resolves(client_and_org):
             ("action", "POST"),
         ):
             for url in re.findall(rf'{attr}="([^"]+)"', html):
+                if attr == "action" and url in get_form_actions:
+                    method = "GET"  # noqa: PLW2901
                 path = url.split("?")[0].split("#")[0]
                 if not path.startswith("/"):
                     continue
