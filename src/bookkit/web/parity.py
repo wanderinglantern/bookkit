@@ -435,15 +435,20 @@ SCREENS: dict[str, str] = {
         "still forces the terminal on day one. Top of the audit's gap list."
     ),
     "today": (
-        "DEFERRED — the daily brief (tasks due, renewals, stale accounts, "
-        "past-SLA) is design sub-project 2 (2026-08-17-web-frontend-design "
-        "\u00a7Decomposition); nothing on the web shows the day's work yet."
+        "PRESENT — GET /today (the web's front door: / redirects to it). "
+        "The TUI's four panes AND the Navigator's eight attention leaves in "
+        "one page — overdue first and never off the list — plus done-from-"
+        "the-list for tasks and the cross-account changes list with Revert."
     ),
     "navigator": (
-        "DEFERRED — the attention tree (overdue never falls off) is design "
-        "sub-project 2; /book's next-renewal column is the only shadow of it."
+        "PARTIAL — attention and the changes list folded into /today; the "
+        "accounts tree is /book, the drawn programs /towers. Still TUI-only: "
+        "the batch before-and-after diff (enter on a change) and force-revert."
     ),
-    "calendar": "DEFERRED — the 12-month renewal grid; design sub-project 2.",
+    "calendar": (
+        "PRESENT — GET /calendar: months across, accounts down, status-"
+        "coloured chips at each expiry, overdue in its own leading column."
+    ),
     "markets": (
         "DEFERRED — market CRUD, appetite, underwriters, aliases, merge/nest "
         "have NO web surface; the web submission form dead-ends against it "

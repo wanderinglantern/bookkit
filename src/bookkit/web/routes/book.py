@@ -124,7 +124,9 @@ def _row(conn: sqlite3.Connection, org: Org) -> dict[str, Any]:
 
 @router.get("/", include_in_schema=False)
 def index() -> RedirectResponse:
-    return RedirectResponse(url="/book", status_code=307)
+    # /today, not /book (audit gap #1): the day's work is the front door,
+    # the same call the TUI made when Today became its default screen
+    return RedirectResponse(url="/today", status_code=307)
 
 
 @router.get("/book", response_class=HTMLResponse)

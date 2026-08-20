@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Calendar — bookkit{% endblock %}
+{% block content %}
+  {% set section = "calendar" %}
+  {% include "partials/topbar.html" %}
+
+  <div class="book-header">
+    <h1 class="book-title">Calendar</h1>
+    <span class="book-subtitle">renewals, twelve months out — overdue never falls off</span>
+  </div>
+
+  <div class="towers-body">
+    {% if rows %}
+      <div class="table-scroll">
+        <table class="rows calendar-grid">
+          <thead>
+            <tr>
+              <th>Account</th>
+              <th class="overdue-col">overdue</th>
+              {% for month in months %}<th class="num">{{ month.label }}</th>{% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              <tr>
+                <td class="prose">
+                  {% if refs.get(row.org.id) %}
+                    <a href="/accounts/{{ refs[row.org.id] }}/program">{{ row.org.name }}</a>
+                  {% else %}{{ row.org.name }}{% endif %}
+                </td>
+                <td class="overdue-col">
+                  {% for item in row.overdue %}
+                    <span class="cal-chip cal-overdue" title="{{ item.placement.program_name }} — renewed {{ item.renewal_on }}, {{ -item.days_remaining }}d over">◆ {{ -item.days_remaining }}d</span>
+                  {% endfor %}
+                </td>
+                {% for month in months %}
+                  <td class="num">
+                    {% for item in row.cells[month.key] %}
+                      {# status colour + the DAY, and the word in the title —
+                         colour is signal, never the only carrier #}
+                      <span class="cal-chip status-{{ item.placement.status }}"
+                            title="{{ item.placement.program_name }} — {{ item.placement.status }}, renews {{ item.renewal_on }} ({{ item.lines or 'unlinked' }})">{{ item.renewal_on[8:] }}</span>
+                    {% endfor %}
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="panel-empty"><p>no renewals inside a year</p></div>
+    {% endif %}
+  </div>
+{% endblock %}

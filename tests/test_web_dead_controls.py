@@ -48,6 +48,9 @@ def client_and_org(snapshot_db: Path):
 def _pages(org) -> list[str]:
     return [
         "/book",
+        "/today",
+        "/calendar",
+        "/towers",
         f"/accounts/{org.ref}/program",
         f"/accounts/{org.ref}/relationship",
         f"/accounts/{org.ref}/work",

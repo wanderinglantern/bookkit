@@ -37,7 +37,9 @@ def test_the_root_path_lands_somewhere_useful(app_and_conn):
     client, _ = app_and_conn
     response = client.get("/", follow_redirects=False)
     assert response.status_code in (302, 307)
-    assert response.headers["location"] == "/book"
+    # /today since the audit's gap #1 landed: the day's work is the front
+    # door, matching the TUI's own default screen
+    assert response.headers["location"] == "/today"
     landed = client.get("/")
     assert landed.status_code == 200
     assert "The book" in landed.text

@@ -2280,3 +2280,42 @@ table.rows tr.is-waived td {
   color: var(--muted);
   word-break: break-all;
 }
+
+/* --- Today and the calendar (audit gap #1) ---------------------------------- */
+
+.today-section {
+  margin-bottom: 2rem;
+}
+
+.count-danger {
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+
+.overdue-cell {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.calendar-grid td {
+  vertical-align: middle;
+}
+
+.cal-chip {
+  display: inline-block;
+  font-size: var(--hint-size);
+  font-weight: 700;
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  margin: 0 0.1rem 0.1rem 0;
+  cursor: default;
+}
+
+.cal-overdue {
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+
+.overdue-col {
+  border-right: 2px solid var(--hairline);
+}
