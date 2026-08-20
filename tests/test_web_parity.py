@@ -247,3 +247,24 @@ def test_every_towerkit_edit_op_is_accounted_for():
         f"unaccounted towerkit ops: {public - set(TOWERKIT_EDIT_OPS)}; "
         f"stale ledger entries: {set(TOWERKIT_EDIT_OPS) - public}"
     )
+
+
+def test_every_tui_screen_is_in_the_screen_ledger():
+    """The audit's structural fix: a WHOLE screen could be web-absent and no
+    ledger turned red — the account-action, sync-verb and towerkit-op guards
+    all look below screen level. Discovered from the screens package, so a
+    new TUI screen joins the parity question the day it exists."""
+    from pathlib import Path
+
+    from bookkit.web.parity import SCREENS
+
+    modules = {
+        p.stem
+        for p in Path("src/bookkit/tui/screens").glob("*.py")
+        if p.stem != "__init__"
+    }
+    missing = modules - set(SCREENS)
+    assert not missing, f"TUI screens with no parity entry: {missing}"
+    app_level = {"quick_capture_app_key", "sync_and_settings_app_keys"}
+    stale = set(SCREENS) - modules - app_level
+    assert not stale, f"screen ledger entries with no screen: {stale}"

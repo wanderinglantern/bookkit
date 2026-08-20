@@ -240,13 +240,17 @@ def test_four_tabs_render_with_real_counts(app_and_org):
     assert _tab_badge(response.text, "Pipeline").isdigit()
 
 
+# The team rail's copy changed 2026-08-19 (audit): "empty — add the first
+# row" is the spec's ADDABLE-list phrase, and the rail's Assign control is
+# unrendered under D4 — copy that implies an add the page does not offer is
+# the same dishonesty class. The canonical phrase returns WITH the control.
 @pytest.mark.parametrize(
     "tab,heading_text",
     [
-        ("program", "empty — add the first row"),
-        ("relationship", "empty — add the first row"),
+        ("program", "no team assigned yet"),
+        ("relationship", "no team assigned yet"),
         ("work", "no open tasks — add one"),
-        ("pipeline", "empty — add the first row"),
+        ("pipeline", "no team assigned yet"),
     ],
 )
 def test_each_tab_renders_its_empty_state_and_marks_itself_current(app_and_org, tab, heading_text):
@@ -276,15 +280,26 @@ def test_right_rail_sections_present(app_and_org):
         assert heading in response.text, f"missing right-rail section: {heading}"
 
 
-def test_documents_empty_state_copy(app_and_org):
-    """The design source (Account View.dc.html) wins over the visual-direction
-    spec's paraphrase where they disagree — its copy is 'No documents yet'
-    (capital N), not the spec doc's lowercase rendering."""
+def test_documents_rail_tells_the_truth(app_and_org):
+    """The rail used to render a HARD-CODED 'No documents yet' whatever the
+    account held, plus a drop-target promise nothing handled (2026-08-19
+    audit) — a false statement about data. Empty says so (the design
+    source's capital-N copy survives); documents LIST."""
     client, org = app_and_org
-    response = client.get(f"/accounts/{org.ref}/relationship")
-    assert "No documents yet" in response.text
-    assert "Drop a binder, loss run or SOV here — BookKit records the path, not the file." \
-        in response.text
+    conn = client.app.state.conn
+    from bookkit.repo import documents as documents_repo
+
+    empty = client.get(f"/accounts/{org.ref}/relationship").text
+    if not documents_repo.for_org(conn, org.id):
+        assert "No documents yet" in empty
+        assert "Drop a binder" not in empty, "the unhandled drop target is back"
+
+    documents_repo.add(conn, org.id, "2026 Binder", "/docs/binder.pdf", kind="binder")
+
+    listed = client.get(f"/accounts/{org.ref}/relationship").text
+    assert "2026 Binder" in listed
+    assert "/docs/binder.pdf" in listed
+    assert "No documents yet" not in listed, "the stub still lies beside real data"
 
 
 # --- the tower rows (Task 17) ------------------------------------------------
@@ -759,12 +774,15 @@ def test_a_fully_signed_layer_is_not_a_hole(divergent_tower, monkeypatch):
 
 
 def test_team_and_recent_changes_empty_states_use_canonical_copy(app_and_org):
-    """TEAM is addable (the Assign link adds to it) — the spec's addable-list
-    phrasing. RECENT CHANGES having nothing yet isn't a problem — the spec's
-    attention-list phrasing, not invented copy."""
+    """RECENT CHANGES having nothing yet isn't a problem — the spec's
+    attention-list phrasing. TEAM stopped using the addable-list phrase
+    (2026-08-19 audit): its Assign control is unrendered under D4, and copy
+    that implies an add the page does not offer is the dishonesty class the
+    empty-state rules exist to prevent."""
     client, org = app_and_org
     response = client.get(f"/accounts/{org.ref}/relationship")
-    assert "empty — add the first row" in response.text  # TEAM (no assignments seeded)
+    assert "no team assigned yet" in response.text  # TEAM (no assignments seeded)
+    assert "empty — add the first row" not in response.text
     assert "nothing here — that's good" in response.text  # RECENT CHANGES
 
 

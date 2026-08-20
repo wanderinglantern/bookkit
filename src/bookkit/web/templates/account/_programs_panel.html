@@ -15,6 +15,11 @@
     <h2 class="people-label">Programs</h2>
     <span class="people-count">{{ programs | length }}</span>
     <span class="people-head-spacer"></span>
+    {# ACCOUNT-scoped, so it lives on the account-level head: the audit
+       caught this anchor gated inside a linked placement's export strip,
+       where an account with no linked program could never reach it — the
+       exact built-but-not-accessible class (2026-08-19). #}
+    <a class="people-add" href="/accounts/{{ header.org.ref }}/export/open-items.xlsx">open items XLSX</a>
     <button type="button" class="people-add"
             hx-get="/accounts/{{ header.org.ref }}/program/placements/new"
             hx-target="#programs-panel .form-host" hx-swap="innerHTML">+ New program</button>

@@ -4,7 +4,22 @@ All notable changes to bookkit, newest date first.
 
 ## 2026-08-19
 
+### Fixed
+- The open-items workbook link moved to the account-level programs head —
+  it was gated inside a linked placement's export strip, unreachable for
+  accounts without one (parity audit).
+- The account rail's Documents section renders the account's real documents
+  instead of a hard-coded "No documents yet"; the unhandled drop-target
+  promise is gone, and the team rail's empty state stops implying an add
+  the page does not offer.
+- Three parity-ledger entries corrected (new_submission and renew_placement
+  were built but still marked pending; the delete_row entry denied the
+  web's request-item removal).
+
 ### Added
+- A screen-level parity ledger (web/parity.SCREENS), discovered from the
+  TUI screens package, so a whole screen with no web answer finally turns
+  the suite red — the audit's structural finding.
 - Web downloads: tower SVG and PDF, the schematic workbook, and the client
   open-items workbook — plain links, rendered through towerkit's own
   renderers, closing the file-download gap the web spec deferred.
