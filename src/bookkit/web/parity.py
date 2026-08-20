@@ -15,6 +15,29 @@ catches the next one."""
 
 from __future__ import annotations
 
+# App-level TUI surfaces (not AccountScreen actions — global keys the App
+# itself binds) -> their web coverage. Started 2026-08-20 with quick capture;
+# a surface lands here as PRESENT with its route, or with why it is not.
+SCREENS: dict[str, str] = {
+    "quick_capture_app_key": (
+        "PRESENT — GET/POST /capture (routes/capture.py), the TUI's app-level "
+        "`n`. Reached from the top bar's global '+ Log' on every page and the "
+        "account header's '+ Log interaction' (GET /capture?org={ref} "
+        "preselects the account). Attendee resolution is the SHARED "
+        "services.capture.resolve_attendees (the TUI widget was rewired "
+        "through it the same commit); the log is one batch "
+        "(source='web', tool='log_interaction' — interaction + attendee links "
+        "one undo unit); a follow-up phrase OFFERS a task on a page of its "
+        "own, created via POST /capture/task inside its own batch "
+        "(tool='task_add' — deliberately unlike the TUI's ConfirmTask, which "
+        "writes unbatched: a latent TUI bug, not a precedent). Divergences: "
+        "an unparseable date is refused with forms.spec.date_refusal where "
+        "the TUI silently substitutes today, and the account picker is a "
+        "select over CLIENT orgs where the TUI fuzzy-matches every org — "
+        "logging against a market still needs the TUI."
+    ),
+}
+
 # action name -> the web route that covers it
 IMPLEMENTED: dict[str, str] = {
     "show_tab": "GET /accounts/{ref}/{tab} — Program/Relationship/Work/Pipeline, "
@@ -110,11 +133,13 @@ PENDING: dict[str, str] = {
         "one through the whole interaction_form modal — and a web-only inline "
         "set would fork the surfaces on the axis that module exists to keep "
         "unified, so the design prototype's dashed underline on the subject is "
-        "deliberately not built (R49). Interaction CREATION is not here either: "
-        "forms.entities has an edit builder and no create builder, because "
+        "deliberately not built (R49). Interaction CREATION is not here either, "
+        "and as of 2026-08-20 that is because it EXISTS where it belongs: "
         "logging one is quick capture's job (account matching, the follow-up-"
-        "task offer). Org-level edit_here (falling through to _edit_org) is "
-        "still not built, so the action as a whole stays PENDING"
+        "task offer), and the web's quick capture is GET/POST /capture — see "
+        "SCREENS['quick_capture_app_key']. Org-level edit_here (falling "
+        "through to _edit_org) is still not built, so the action as a whole "
+        "stays PENDING"
     ),
     "new_submission": (
         "a plain DB write (repo/submissions.create, no towerkit involvement) — "

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Log interaction — bookkit{% endblock %}
+{% block content %}
+  {% include "partials/topbar.html" %}
+
+  <div class="capture-page">
+    {# A plain full-page form POST, no htmx: capture belongs to no panel, and
+       its refusal re-renders this whole page (200) with every field intact
+       and the message here at the top — see routes/capture.py. #}
+    <form class="entity-form capture-form" method="post" action="/capture">
+      <h1 class="form-title">Log interaction</h1>
+      {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+
+      <div class="field">
+        <label for="c-org">account <span class="req">*</span></label>
+        <select id="c-org" name="org_id">
+          <option value=""></option>
+          {% for org in clients %}
+            <option value="{{ org.id }}"{% if form.org_id == org.id %} selected{% endif %}>{{ org.name }} ({{ org.ref }})</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="c-type">type</label>
+        <select id="c-type" name="type">
+          {% for t in types %}
+            <option value="{{ t }}"{% if form.type == t %} selected{% endif %}>{{ t.replace("_", " ") }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="field">
+        {# text, never type=date: a native date input bypasses
+           parse_human_date's refusal of ambiguous entry (macros/form.html
+           carries the same rule). #}
+        <label for="c-occurred">date</label>
+        <input type="text" id="c-occurred" name="occurred" value="{{ form.occurred }}"
+               placeholder="today · fri · +2w · 2026-10-15">
+      </div>
+
+      <div class="field">
+        <label for="c-subject">subject</label>
+        <input type="text" id="c-subject" name="subject" value="{{ form.subject }}"
+               placeholder="what happened">
+      </div>
+
+      <div class="field">
+        <label for="c-who">who was there (optional)</label>
+        <input type="text" id="c-who" name="who" value="{{ form.who }}"
+               placeholder="names, comma separated — this account's contacts"
+               {% if roster %}list="l-who"{% endif %}>
+        {% if roster %}
+          <datalist id="l-who">
+            {% for name in roster %}<option value="{{ name }}"></option>{% endfor %}
+          </datalist>
+          {# the roster, because you cannot type a name you do not know —
+             the same hint line the TUI modal renders under this field #}
+          <p class="capture-roster">on this account: {{ roster | join(" · ") }}</p>
+        {% elif form.org_id %}
+          <p class="capture-roster">no contacts on this account yet</p>
+        {% endif %}
+      </div>
+
+      <div class="field">
+        <label for="c-note">note</label>
+        <textarea id="c-note" name="note" rows="6">{{ form.note }}</textarea>
+      </div>
+
+      <div class="form-actions">
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}

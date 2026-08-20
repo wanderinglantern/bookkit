@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 import json
 from datetime import date
 
-from rapidfuzz import fuzz, utils
+from rapidfuzz import fuzz
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
@@ -30,28 +30,10 @@ from ...services import batches as batches_svc
 from ...services import capture
 
 DRAFT_KEY = "quick_capture"
-# rapidfuzz WRatio, out of 100, over default_process — which lowercases and
-# strips punctuation. WITHOUT it "rosa" scores 73 against "Rosa Delgado" and
-# 90 with a capital R, so a name typed in a hurry would be refused for its
-# case. "delgado", "Rosa D" and the full name all score >= 85; a name off this
-# account scores 45. High enough that a typo is refused and named rather than
-# resolved into the wrong person's file.
-ATTENDEE_MATCH = 80
-# ...and how far clear of the runner-up the winner has to be. An EXACT tie is
-# the rare case (two people called Chen); the common one on a real account is
-# two similar-but-different names, where the winner leads by a couple of
-# points and the loser is a different human being. Measured, WRatio over
-# default_process:
-#     "J Smith"            Jon Smith 87.5 / Jonathan Smith 85.5   gap  2.0
-#     "Michel Brennan"     Michael 96.6   / Michelle 93.3         gap  3.2
-#     "Rosa Delgado-Vance" Rosa Delgado 90.0 / Robert D-V 84.2    gap  5.8
-# — every one of those picked the wrong person silently. Against that, when
-# the full name IS typed the gap is never small: the tightest pair of
-# genuinely distinct names measured is Michael vs Michelle Brennan at 9.7,
-# and typing either in full leads by that much. 8 sits in the empty band
-# between the two populations, on the cautious side of it: everything that
-# guessed wrong is refused, and a name typed out in full still resolves.
-ATTENDEE_MARGIN = 8
+# The "who was there" fuzzy thresholds (match floor, runner-up margin) and the
+# measurements behind them live with the loop in services.capture — the web's
+# capture form runs the same resolution, and two copies of a threshold are two
+# thresholds the moment either is tuned.
 
 
 class QuickCapture(ModalScreen):
@@ -200,39 +182,6 @@ class QuickCapture(ModalScreen):
             return []
         return contacts.for_org(self.app.conn, self.selected_org_id)
 
-    def _resolve_attendees(self, typed: str) -> tuple[list[str], str | None]:
-        """Names → contact ids, or a sentence saying why not.
-
-        Refuses rather than guesses, twice over: a name that matches nobody is
-        a typo or a person who is not a contact yet, and a name two people
-        answer to would otherwise put the wrong one in the room, in writing,
-        on the client's file. Same rule repo/team.py enforces on member names."""
-        roster = self._contacts()
-        ids: list[str] = []
-        for raw in typed.split(","):
-            name = raw.strip()
-            if not name:
-                continue
-            scored = sorted(
-                (
-                    (fuzz.WRatio(name, c.name, processor=utils.default_process), c)
-                    for c in roster
-                ),
-                key=lambda pair: -pair[0],
-            )
-            best = [(score, c) for score, c in scored if score >= ATTENDEE_MATCH]
-            if not best:
-                return [], (
-                    f"no contact on this account matches {name!r} — "
-                    "add them on the account first, or clear the field"
-                )
-            if len(best) > 1 and best[0][0] - best[1][0] < ATTENDEE_MARGIN:
-                tied = " and ".join(c.name for _, c in best[:2])
-                return [], f"{name!r} matches {tied} — type more of the name"
-            if best[0][1].id not in ids:
-                ids.append(best[0][1].id)
-        return ids, None
-
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "qc-org":
             self._refresh_options(event.value)
@@ -301,7 +250,11 @@ class QuickCapture(ModalScreen):
         if not payload["subject"] and not payload["note"]:
             self.notify("nothing to save", severity="error")
             return
-        attendees, refusal = self._resolve_attendees(payload["who"])
+        # Names → contact ids through the shared rule in services.capture, so
+        # this surface and the web cannot drift on who a typed name resolves to.
+        attendees, refusal = capture.resolve_attendees(
+            self.app.conn, payload["org_id"], payload["who"]
+        )
         if refusal is not None:
             # commit-in-place: the modal stays open with every field intact.
             # Dropping the name silently is the bug this field exists to fix;

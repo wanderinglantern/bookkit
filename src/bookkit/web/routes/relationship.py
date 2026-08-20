@@ -25,10 +25,12 @@ bookkit.forms.inline owns which fields are inline-editable for both surfaces
 and declares no INTERACTION_FIELDS — the TUI edits an interaction through that
 same modal. A web-only inline set would fork the two surfaces on exactly the
 axis that module exists to keep unified, so the prototype's dashed underline
-on the subject is dropped. Creation is absent for the matching reason:
-forms.entities has an interaction EDIT builder and no create builder, because
-logging one is quick capture's job (account matching, the follow-up-task
-offer), so the header's "+ Log interaction" pill stays inert."""
+on the subject is dropped. Creation is absent from THIS tab for the matching
+reason: forms.entities has an interaction EDIT builder and no create builder,
+because logging one is quick capture's job (account matching, the follow-up-
+task offer) — which the web now has (GET/POST /capture, routes/capture.py),
+so the header's "+ Log interaction" pill is a real link there with this
+account preselected."""
 
 from __future__ import annotations
 
@@ -219,13 +221,13 @@ def _timeline_context(request: Request, org: Org, type_filter: str | None) -> di
             f"clear the filter to see all {len(entries)}"
         )
     else:
-        # NOT "empty — add the first row": the web has no create control for
-        # interactions (quick capture owns logging one), so that sentence names
-        # a button that is not there. NOT "nothing here — that's good" either —
-        # this is not an attention list, and an account nobody has spoken to is
-        # not good news. Factual, promising nothing, until the header's
-        # "+ Log interaction" pill is wired (Grant's ruling, 2026-08-18).
-        empty = "no interactions logged"
+        # NOT "empty — add the first row": the add control for interactions is
+        # the header's "+ Log interaction" (quick capture owns logging one),
+        # not a row-adder in this panel. NOT "nothing here — that's good"
+        # either — this is not an attention list, and an account nobody has
+        # spoken to is not good news. The pill is wired as of 2026-08-20
+        # (GET /capture?org={ref}), so the sentence can now name it.
+        empty = "no interactions logged — use + Log interaction above"
     return {
         "timeline_rows": [_timeline_row(request, org.ref, e, query) for e in shown],
         "timeline_count": len(shown),

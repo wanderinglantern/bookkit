@@ -20,6 +20,10 @@
     {% endfor %}
   </nav>
   <span class="topbar-spacer"></span>
+  {# Global quick capture — the TUI's app-level `n`, reachable from every
+     page. A real link, not a nav section: /capture is a flow you enter and
+     leave, not a place you are. #}
+  <a class="btn-pill btn-pill-primary topbar-log" href="/capture">+ Log</a>
   <div class="search-pill"><span>Search</span></div>
   {% if last_undo and undo_action %}
     {# Wired as of Task 15b: the same POST the rail's per-change Revert

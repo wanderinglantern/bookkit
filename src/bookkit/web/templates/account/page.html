@@ -20,12 +20,13 @@
       {% endif %}
       <span class="header-spacer"></span>
       <div class="header-actions">
-        {# Inert this task: none of these write yet (log interaction, add
-           task, renew, the overflow menu all land in later tasks).
-           aria-disabled + title on each — a pending treatment, not a live
-           one, per Grant's bar: a control that looks live and is dead is
-           worse than one that looks pending. #}
-        <span class="btn-pill btn-pill-primary" aria-disabled="true" title="Not wired yet — logging an interaction is a later task">+ Log interaction</span>
+        {# "+ Log interaction" is REAL as of 2026-08-20 — it was removed
+           under D4 while inert and returns as a link into the web's quick
+           capture with this account preselected (routes/capture.py). The
+           rest stay pending: aria-disabled + title on each, per Grant's
+           bar — a control that looks live and is dead is worse than one
+           that looks pending. #}
+        <a class="btn-pill btn-pill-primary" href="/capture?org={{ header.org.ref }}">+ Log interaction</a>
         <span class="btn-pill" aria-disabled="true" title="Not wired yet — adding a task is a later task">+ Task</span>
         <span class="btn-pill" aria-disabled="true" title="Not wired yet — renewing is a later task">Renew</span>
         <span class="btn-pill btn-pill-icon" aria-disabled="true" title="Not wired yet — the overflow menu is a later task">···</span>
