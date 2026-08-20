@@ -873,6 +873,151 @@ def test_a_refused_submission_keeps_the_typed_notes(app_and_org):
     assert "required" in refused
 
 
+def _terms_base(org, placement, kind):
+    return f"/accounts/{org.ref}/program/{placement.id}/{kind}"
+
+
+def test_the_terms_strip_renders_retentions_and_sublimits(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    assert sync.add_retention(
+        conn, placement.id, ["gl"], "deductible", amount_cents=250_000_00
+    ).ok
+    assert sync.add_sublimit(conn, placement.id, "Flood", 1_000_000_00, ["gl"]).ok
+    assert sync.project(conn, Path(placement.program_path), placement_id=placement.id).ok
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert "DEDUCTIBLE" in page.upper()
+    assert "$250K" in page
+    assert "Flood" in page
+    assert f'hx-get="{_terms_base(org, placement, "retentions")}/new"' in page
+    assert f'hx-get="{_terms_base(org, placement, "sublimits")}/new"' in page
+
+
+def test_a_retention_edits_in_row_with_subset_honest_lines(app_and_org, tmp_path):
+    """The edit form's applies-to is CHECKBOXES: a retention can span a
+    subset of lines, and a single-select would silently widen it."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    assert sync.add_retention(
+        conn, placement.id, ["gl"], "deductible", amount_cents=250_000_00
+    ).ok
+    assert sync.project(conn, Path(placement.program_path), placement_id=placement.id).ok
+    index = sync.program_terms(conn, placement.id)["retentions"][-1]["index"]
+
+    form = client.get(f"{_terms_base(org, placement, 'retentions')}/{index}/edit").text
+    assert 'type="checkbox"' in form
+    assert 'checked' in form
+
+    saved = client.post(
+        f"{_terms_base(org, placement, 'retentions')}/{index}",
+        data={"type": "sir", "amount": "500,000", "line": ["gl", "cy"]},
+    )
+
+    assert saved.status_code == 200
+    fresh = sync.program_terms(conn, placement.id)["retentions"][index]
+    assert fresh["type"] == "sir"
+    assert fresh["amount_cents"] == 500_000_00
+    assert sorted(fresh["applies_to"]) == ["cy", "gl"]
+
+
+def test_a_retention_remove_confirms_in_place(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    assert sync.add_retention(
+        conn, placement.id, ["gl"], "deductible", amount_cents=250_000_00
+    ).ok
+    assert sync.project(conn, Path(placement.program_path), placement_id=placement.id).ok
+    index = sync.program_terms(conn, placement.id)["retentions"][-1]["index"]
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    confirm = client.get(f"{_terms_base(org, placement, 'retentions')}/{index}/remove")
+    assert confirm.status_code == 200
+    assert path.read_bytes() == before
+
+    removed = client.post(f"{_terms_base(org, placement, 'retentions')}/{index}/remove")
+    assert removed.status_code == 200
+    assert sync.program_terms(conn, placement.id)["retentions"] == []
+
+
+def test_a_sublimit_adds_in_row(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+
+    added = client.post(
+        f"{_terms_base(org, placement, 'sublimits')}",
+        data={"name": "Wind", "amount": "750,000", "line": ["cy"]},
+    )
+
+    assert added.status_code == 200
+    sub = sync.program_terms(conn, placement.id)["sublimits"][-1]
+    assert sub["name"] == "Wind"
+    assert sub["amount_cents"] == 750_000_00
+    assert sub["applies_to"] == ["cy"]
+
+
+def test_a_bad_terms_amount_refuses_in_place(app_and_org, tmp_path):
+    client, org = app_and_org
+    placement = _two_line_placement(client, org, tmp_path)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        f"{_terms_base(org, placement, 'retentions')}",
+        data={"type": "deductible", "amount": "250,000.50", "line": ["gl"]},
+    )
+
+    assert refused.status_code == 200
+    assert path.read_bytes() == before
+    assert "amount" in refused.text or "dollar" in refused.text
+
+
+def test_hand_built_refusals_never_reflect_markup(app_and_org):
+    """_panel_refusal and _refusal_page are hand-built HTML — no template,
+    no autoescape — and refusal messages can quote user-typed content
+    (towerkit diagnostics quote line and layer names verbatim). htmx
+    re-executes swapped script tags, so an unescaped message is reflected
+    XSS (fresh-eyes review, phase 4). The unknown-line URL vector the review
+    named is pre-empted by _line_name's 404, but the seam itself must
+    escape: any future caller inherits the safety, not the hole."""
+    from bookkit.web.routes.program import _panel_refusal, _refusal_page
+
+    client, org = app_and_org
+    payload = "<script>alert(1)</script>"
+
+    for response in (
+        _panel_refusal(None, org.ref, org, "x", payload),
+        _refusal_page(None, payload, "/accounts/x/program"),
+    ):
+        body = bytes(response.body).decode()
+        assert "<script>" not in body
+        assert "&lt;script&gt;" in body
+
+
+def test_line_chips_reorder_the_columns(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    order = [lid for lid, _ in sync.program_lines(conn, placement.id)]
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    assert f'hx-post="{_lines_base(org, placement)}/{order[0]}/move"' in page
+
+    moved = client.post(
+        f"{_lines_base(org, placement)}/{order[0]}/move", data={"delta": "1"}
+    )
+
+    assert moved.status_code == 200
+    fresh = [lid for lid, _ in sync.program_lines(conn, placement.id)]
+    assert fresh[0] == order[1] and fresh[1] == order[0]
+
+
 def _merge_url(org, placement):
     return f"/accounts/{org.ref}/program/{placement.id}/merge"
 

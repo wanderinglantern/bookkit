@@ -1,0 +1,13 @@
+{# In-place confirm for removing a term. GET rendered this; only the POST
+   writes. Terms carry no children, so the blast is just the term itself —
+   named, with the revert reminder. #}
+<span class="term-chip term-confirm" role="alertdialog" aria-label="Remove {{ label }}">
+  {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+  remove {{ label }}? the change list can revert it
+  <button type="button" class="row-action-btn row-action-danger"
+          hx-post="{{ base }}/{{ term.index }}/remove"
+          hx-target="closest .term-chip" hx-swap="outerHTML">remove</button>
+  <button type="button" class="row-action-btn"
+          hx-get="{{ base }}/{{ term.index }}/chip"
+          hx-target="closest .term-chip" hx-swap="outerHTML">keep</button>
+</span>

@@ -15,7 +15,8 @@
      when its route lands, not before; the parity ledger is the roadmap, not
      the UI. The Search pill went for the same reason. #}
   <nav class="topbar-nav">
-    <a href="/book" class="topbar-nav-item is-current-section">Book</a>
+    <a href="/book" class="topbar-nav-item{% if section != "towers" %} is-current-section{% endif %}">Book</a>
+    <a href="/towers" class="topbar-nav-item{% if section == "towers" %} is-current-section{% endif %}">Towers</a>
   </nav>
   <span class="topbar-spacer"></span>
   {% if last_undo and undo_action %}

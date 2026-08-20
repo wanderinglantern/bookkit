@@ -750,3 +750,105 @@ def test_follows_underlying_hands_the_attachment_to_the_tower(linked) -> None:
     layer = next(ly for ly in load_program(path).layers if ly.id == "gl-excess")
     assert layer.follows_underlying is True
     assert layer.attach == 3_000_000, "heal_follows did not re-seat the follower"
+
+
+# --- phase 4: retentions, sublimits, line order, restack -----------------------
+
+
+def test_retention_lifecycle_add_edit_remove(linked) -> None:
+    conn, _, placement, path = linked
+
+    diags = sync.add_retention(
+        conn, placement.id, ["gl"], "deductible", amount_cents=250_000_00
+    )
+    assert diags.ok, diags.errors
+    program = load_program(path)
+    index = len(program.retentions) - 1
+    assert program.retentions[index].amount == 250_000
+    assert str(program.retentions[index].type) == "deductible"
+
+    diags = sync.edit_retention(
+        conn, placement.id, index, type="sir", amount_cents=500_000_00
+    )
+    assert diags.ok, diags.errors
+    retention = load_program(path).retentions[index]
+    assert retention.amount == 500_000
+    assert str(retention.type) == "sir"
+    assert retention.applies_to == ["gl"], "an untouched field moved"
+
+    count_before = len(load_program(path).retentions)
+    assert sync.remove_retention(conn, placement.id, index).ok
+    assert len(load_program(path).retentions) == count_before - 1
+
+
+def test_retention_bad_index_refuses_with_file_untouched(linked) -> None:
+    conn, _, placement, path = linked
+    before = path.read_bytes()
+
+    diags = sync.edit_retention(conn, placement.id, 99, amount_cents=1_00)
+
+    assert not diags.ok
+    assert path.read_bytes() == before
+
+
+def test_retention_sub_dollar_amount_is_refused(linked) -> None:
+    conn, _, placement, path = linked
+    before = path.read_bytes()
+
+    diags = sync.add_retention(conn, placement.id, ["gl"], "deductible", amount_cents=250_000_50)
+
+    assert not diags.ok
+    assert path.read_bytes() == before
+
+
+def test_sublimit_lifecycle(linked) -> None:
+    conn, _, placement, path = linked
+
+    assert sync.add_sublimit(
+        conn, placement.id, "Flood", 1_000_000_00, ["gl"]
+    ).ok
+    program = load_program(path)
+    index = len(program.sublimits) - 1
+    assert program.sublimits[index].name == "Flood"
+    assert program.sublimits[index].amount == 1_000_000
+
+    assert sync.edit_sublimit(
+        conn, placement.id, index, amount_cents=2_000_000_00
+    ).ok
+    assert load_program(path).sublimits[index].amount == 2_000_000
+    assert load_program(path).sublimits[index].name == "Flood"
+
+    assert sync.remove_sublimit(conn, placement.id, index).ok
+    assert all(s.name != "Flood" for s in load_program(path).sublimits)
+
+
+def test_move_line_reorders_and_off_the_end_is_a_noop(linked) -> None:
+    conn, _, placement, path = linked
+    order = [ln.id for ln in load_program(path).lines]
+    assert len(order) >= 2
+
+    assert sync.move_line(conn, placement.id, order[0], +1).ok
+    moved = [ln.id for ln in load_program(path).lines]
+    assert moved[0] == order[1] and moved[1] == order[0]
+
+    # off the end: towerkit's contract is a no-op, not an error
+    assert sync.move_line(conn, placement.id, moved[-1], +1).ok
+    assert [ln.id for ln in load_program(path).lines] == moved
+
+
+def test_program_terms_reads_what_the_editors_need(linked) -> None:
+    conn, _, placement, path = linked
+    assert sync.add_retention(
+        conn, placement.id, ["gl"], "deductible", amount_cents=250_000_00
+    ).ok
+    assert sync.add_sublimit(conn, placement.id, "Flood", 1_000_000_00, ["gl"]).ok
+
+    terms = sync.program_terms(conn, placement.id)
+
+    retention = terms["retentions"][-1]
+    assert retention["type"] == "deductible"
+    assert retention["amount_cents"] == 250_000_00
+    assert retention["applies_to"] == ["gl"]
+    sublimit = terms["sublimits"][-1]
+    assert sublimit["name"] == "Flood"
+    assert sublimit["amount_cents"] == 1_000_000_00

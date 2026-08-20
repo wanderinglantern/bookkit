@@ -43,9 +43,16 @@ from rapidfuzz import fuzz, process
 # tests/test_conventions.py::test_sync_delegates_program_structure_to_towerkit.
 from towerkit.edit import add_layer as edit_add_layer
 from towerkit.edit import add_line as edit_add_line
+from towerkit.edit import add_retention as edit_add_retention
+from towerkit.edit import add_sublimit as edit_add_sublimit
+from towerkit.edit import edit_retention as edit_edit_retention
+from towerkit.edit import edit_sublimit as edit_edit_sublimit
 from towerkit.edit import heal_follows, slugify, unique_id
+from towerkit.edit import move_line as edit_move_line
 from towerkit.edit import remove_layer as edit_remove_layer
 from towerkit.edit import remove_line as edit_remove_line
+from towerkit.edit import remove_retention as edit_remove_retention
+from towerkit.edit import remove_sublimit as edit_remove_sublimit
 from towerkit.edit import rename_line as edit_rename_line
 from towerkit.model import SCHEMA_ID, Program, dump_program, load_program
 from towerkit.model import Layer as TkModelLayer
@@ -941,6 +948,146 @@ def remove_line(
     return _mutate(conn, placement_id, mutate)
 
 
+def _check_index(items: list[Any], index: int, what: str) -> None:
+    """towerkit's _at raises IndexError, which _mutate does not catch — the
+    pre-check turns a bad index into the ordinary refusal shape."""
+    if not 0 <= index < len(items):
+        raise ValueError(f"no {what} at index {index} (there are {len(items)})")
+
+
+def add_retention(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    applies_to: list[str],
+    type: str,
+    amount_cents: int,
+    aggregate_cents: int | None = None,
+) -> Diagnostics:
+    """A retention under the tower (deductible / SIR / captive). Amounts are
+    cents on the wire, whole dollars in the file, like every money field."""
+
+    def mutate(program: Program) -> None:
+        edit_add_retention(
+            program,
+            applies_to,
+            type,
+            _require_dollars(amount_cents, "amount"),
+            aggregate=(
+                _require_dollars(aggregate_cents, "aggregate")
+                if aggregate_cents is not None
+                else None
+            ),
+        )
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def edit_retention(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    index: int,
+    *,
+    applies_to: list[str] | None = None,
+    type: str | None = None,
+    amount_cents: int | None = None,
+) -> Diagnostics:
+    """None means leave alone — vehicle and notes ride through untouched,
+    the same preservation rule towerkit's own edit_retention keeps.
+    Retentions have no ids; the index is towerkit's own addressing, and
+    every web write re-renders the panel so an index is never stale."""
+
+    def mutate(program: Program) -> None:
+        _check_index(list(program.retentions), index, "retention")
+        edit_edit_retention(
+            program,
+            index,
+            applies_to=applies_to,
+            type=type,
+            amount=(
+                _require_dollars(amount_cents, "amount")
+                if amount_cents is not None
+                else None
+            ),
+        )
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def remove_retention(
+    conn: sqlite3.Connection, placement_id: str, index: int
+) -> Diagnostics:
+    def mutate(program: Program) -> None:
+        _check_index(list(program.retentions), index, "retention")
+        edit_remove_retention(program, index)
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def add_sublimit(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    name: str,
+    amount_cents: int,
+    applies_to: list[str],
+) -> Diagnostics:
+    def mutate(program: Program) -> None:
+        edit_add_sublimit(
+            program, name, _require_dollars(amount_cents, "amount"), applies_to
+        )
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def edit_sublimit(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    index: int,
+    *,
+    name: str | None = None,
+    amount_cents: int | None = None,
+    applies_to: list[str] | None = None,
+) -> Diagnostics:
+    def mutate(program: Program) -> None:
+        _check_index(list(program.sublimits), index, "sublimit")
+        edit_edit_sublimit(
+            program,
+            index,
+            name=name,
+            amount=(
+                _require_dollars(amount_cents, "amount")
+                if amount_cents is not None
+                else None
+            ),
+            applies_to=applies_to,
+        )
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def remove_sublimit(
+    conn: sqlite3.Connection, placement_id: str, index: int
+) -> Diagnostics:
+    def mutate(program: Program) -> None:
+        _check_index(list(program.sublimits), index, "sublimit")
+        edit_remove_sublimit(program, index)
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def move_line(
+    conn: sqlite3.Connection, placement_id: str, line_id: str, delta: int
+) -> Diagnostics:
+    """Column order in the drawing. A move off either end is towerkit's
+    documented NO-OP, not an error — the write still round-trips (canonical
+    dump, re-project), which is harmless and keeps one code path."""
+
+    def mutate(program: Program) -> None:
+        _find_line(program, line_id)
+        edit_move_line(program, line_id, delta)
+
+    return _mutate(conn, placement_id, mutate)
+
+
 def set_statutory(
     conn: sqlite3.Connection,
     placement_id: str,
@@ -1184,6 +1331,43 @@ def layer_details(conn: sqlite3.Connection, placement_id: str) -> list[dict[str,
             }
         )
     return out
+
+
+def program_terms(
+    conn: sqlite3.Connection, placement_id: str
+) -> dict[str, list[dict[str, Any]]]:
+    """The tower's terms — retentions and sublimits — with everything their
+    editors need; money in cents (bookkit-native), applies_to as line ids.
+    Index order is towerkit's own addressing for these (they carry no ids),
+    and every web write re-renders the panel so an index is never stale."""
+    placement = placements.get(conn, placement_id)
+    empty: dict[str, list[dict[str, Any]]] = {"retentions": [], "sublimits": []}
+    if not placement.program_path:
+        return empty
+    try:
+        program = load_program(Path(placement.program_path))
+    except Exception:
+        return empty
+    return {
+        "retentions": [
+            {
+                "index": i,
+                "type": str(r.type),
+                "amount_cents": dollars_to_cents(r.amount),
+                "applies_to": list(r.applies_to),
+            }
+            for i, r in enumerate(program.retentions)
+        ],
+        "sublimits": [
+            {
+                "index": i,
+                "name": s.name,
+                "amount_cents": dollars_to_cents(s.amount),
+                "applies_to": list(s.applies_to),
+            }
+            for i, s in enumerate(program.sublimits)
+        ],
+    }
 
 
 def line_labels(program_path: str | None) -> str:

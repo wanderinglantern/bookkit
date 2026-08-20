@@ -1,0 +1,7 @@
+{# The collapsed add control — one file, two renderers (first paint, cancel),
+   the market-add rule. #}
+<span class="term-chip term-add">
+  <button type="button" class="row-action-btn"
+          hx-get="{{ base }}/new"
+          hx-target="closest .term-chip" hx-swap="outerHTML">+ {{ singular }}</button>
+</span>

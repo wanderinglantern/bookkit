@@ -147,6 +147,7 @@ def _programs(request: Request, org: Any) -> list[dict[str, Any]]:
                 "placement": placement,
                 "placement_cells": _placement_cells(request, org.ref, placement),
                 "line_chips": _line_chips(request, org.ref, placement),
+                "term_chips": _term_chips(request, org.ref, placement),
                 "linked": bool(placement.program_path),
                 "layers": [
                     _layer_row(request, org.ref, placement.id, layer) for layer in layers
@@ -548,6 +549,38 @@ async def line_cell_save(
         )
     except Exception as exc:
         return editor(str(exc))
+    request.state.layer_details = {}
+    return _panel(request, ref, org, placement_id)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/lines/{line_id}/move",
+    response_class=HTMLResponse,
+)
+async def line_move(
+    request: Request, ref: str, placement_id: str, line_id: str
+) -> HTMLResponse:
+    """Column order in the drawing (phase 4). A move off either end is
+    towerkit's documented no-op; either way the panel comes back, so the
+    chips and the tower's columns always agree."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    name = _line_name(conn, placement_id, line_id)
+    try:
+        delta = int(str((await request.form()).get("delta", "0")))
+    except ValueError:
+        delta = 0
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_line_edit",
+            summary=f"moved line {name}",
+            mutate=lambda: sync.move_line(conn, placement_id, line_id, delta),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _panel_refusal(request, ref, org, placement_id, str(exc))
     request.state.layer_details = {}
     return _panel(request, ref, org, placement_id)
 
@@ -1263,6 +1296,7 @@ def _panel(request: Request, ref: str, org: Any, placement_id: str) -> HTMLRespo
             "placement": placement,
             "placement_cells": _placement_cells(request, ref, placement),
             "line_chips": _line_chips(request, ref, placement),
+            "term_chips": _term_chips(request, ref, placement),
             "linked": bool(placement.program_path),
             "layers": [
                 _layer_row(request, ref, placement_id, layer)
@@ -1730,8 +1764,16 @@ def _panel_refusal(
     request: Request, ref: str, org: Any, placement_id: str, message: str
 ) -> HTMLResponse:
     """A refusal for a form-host control with no form to re-render — said in
-    the form host itself, never a status code htmx would drop."""
-    return HTMLResponse(f'<p class="form-error" role="alert">{message}</p>')
+    the form host itself, never a status code htmx would drop.
+
+    ESCAPED BY HAND because this is a hand-built response, not a template:
+    Jinja's autoescape never sees it, and a refusal message can carry
+    user-controlled text (a line id from the URL path, quoted verbatim by
+    sync's refusals) — htmx re-executes swapped script tags (fresh-eyes
+    review, phase 4)."""
+    from markupsafe import escape
+
+    return HTMLResponse(f'<p class="form-error" role="alert">{escape(message)}</p>')
 
 
 def _mini_form(
@@ -2049,3 +2091,563 @@ async def scaffold_create(request: Request, ref: str, placement_id: str) -> HTML
     except Exception as exc:
         return _programs_panel(request, ref, org, error=str(exc))
     return _programs_panel(request, ref, org)
+
+
+# --- compare (spec D8 slice 5, phase 4) ----------------------------------------
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/compare", response_class=HTMLResponse
+)
+def compare_page(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """towerkit's compare_programs as the delta table the spec asks for.
+
+    The PAIR resolves by the renewal adjacency rule — same account, linked,
+    expiring period_to == this period_from — with a PICKER when that is
+    ambiguous or empty, never a guess (the spec's recommended posture,
+    mirroring sync.AmbiguousPlacement's). `?with={placement_id}` overrides.
+    Read-only; no tower graphic, per the spec's own recommend-against."""
+    from towerkit.compare import compare_programs
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    proposed = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    with_id = request.query_params.get("with")
+    action = f"/accounts/{ref}/program/{placement_id}/compare"
+    context = _context(conn, org, "program", request)
+
+    if not proposed.program_path:
+        context.update({"proposed": proposed, "candidates": [], "action": action})
+        return TEMPLATES.TemplateResponse(request, "account/_compare_picker.html", context)
+
+    siblings = [
+        p for p in placements_repo.for_org(conn, org.id)
+        if p.id != proposed.id and p.program_path
+    ]
+    if with_id:
+        expiring = _owned(conn, org, "placement", with_id, placements_repo.get)
+        if not expiring.program_path:
+            raise HTTPException(status_code=404, detail=f"{expiring.ref} has no program file")
+    else:
+        adjacent = [p for p in siblings if p.period_to == proposed.period_from]
+        if len(adjacent) != 1:
+            context.update(
+                {"proposed": proposed, "candidates": siblings, "action": action}
+            )
+            return TEMPLATES.TemplateResponse(
+                request, "account/_compare_picker.html", context
+            )
+        expiring = adjacent[0]
+
+    delta = compare_programs(
+        _loaded_program(expiring), _loaded_program(proposed)
+    )
+
+    from ...money import dollars_to_cents
+
+    def money(dollars: int | None) -> str:
+        # towerkit's delta speaks dollars; the ONE conversion rule applies
+        # even for display (CLAUDE.md: conversion only in sync.py / money.py)
+        return format_cents_compact(dollars_to_cents(dollars)) if dollars else "—"
+
+    def share(bps: int | None) -> str:
+        return f"{bps / 100:g}%" if bps else "—"
+
+    context.update(
+        {
+            "proposed": proposed,
+            "expiring": expiring,
+            "limit_old": money(delta.limit_old),
+            "limit_new": money(delta.limit_new),
+            "premium_old": money(delta.premium_old),
+            "premium_new": money(delta.premium_new),
+            "premium_delta_pct": delta.premium_delta_pct,
+            "rows": [
+                {
+                    "carrier": row.carrier,
+                    "layer_name": row.layer_name,
+                    "status": row.status,
+                    "share": f"{share(row.share_old_bps)} → {share(row.share_new_bps)}",
+                    "line": f"{money(row.line_old)} → {money(row.line_new)}",
+                    "premium": f"{money(row.premium_old)} → {money(row.premium_new)}",
+                }
+                for row in delta.rows
+            ],
+        }
+    )
+    return TEMPLATES.TemplateResponse(request, "account/compare.html", context)
+
+
+# --- exports: the artifacts the terminal can make (phase 4) --------------------
+#
+# DOWNLOADS ARE PLAIN ANCHOR GETs answering Content-Disposition: attachment —
+# no htmx: browsers handle a download navigation natively and a swap contract
+# adds nothing (DECISIONS.md, 2026-08-19). Artifacts render into a per-request
+# temp dir through towerkit's OWN renderers — the agreement rule end to end:
+# every word in the SVG, the PDF and the schematic came off the renderer.
+# The open-items workbook CALLS services.export_open_items and never touches
+# it (Grant has in-flight edits to that module).
+
+
+def _refusal_page(request: Request, message: str, back: str) -> HTMLResponse:
+    """A download link's refusal is a NAVIGATION, not a swap — answer with a
+    small readable page and a way back, never a bare status code. Escaped by
+    hand: no template, no autoescape (same rule as _panel_refusal)."""
+    from markupsafe import escape
+
+    return HTMLResponse(
+        f'<p class="form-error" role="alert">{escape(message)}</p>'
+        f'<p><a href="{escape(back)}">back to the program tab</a></p>'
+    )
+
+
+def _attachment(content: bytes, filename: str, media_type: str) -> Any:
+    from fastapi.responses import Response
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _loaded_program(placement: Any) -> Any:
+    from pathlib import Path as _Path
+
+    from towerkit.model import load_program
+
+    return load_program(_Path(str(placement.program_path)))
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/export/tower.svg",
+    response_class=HTMLResponse,
+)
+def export_tower_svg(request: Request, ref: str, placement_id: str) -> Any:
+    return _export_tower(request, ref, placement_id, "svg", "image/svg+xml")
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/export/tower.pdf",
+    response_class=HTMLResponse,
+)
+def export_tower_pdf(request: Request, ref: str, placement_id: str) -> Any:
+    return _export_tower(request, ref, placement_id, "pdf", "application/pdf")
+
+
+def _export_tower(
+    request: Request, ref: str, placement_id: str, fmt: str, media_type: str
+) -> Any:
+    import tempfile
+    from pathlib import Path as _Path
+
+    org = _org(request, ref)
+    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    if not placement.program_path:
+        return _refusal_page(
+            request,
+            f"{placement.ref} has no program file linked — nothing to draw yet",
+            f"/accounts/{ref}/program",
+        )
+    # Agg BEFORE towerkit's renderer imports pyplot: the default macOS
+    # backend wants a display a server thread does not have.
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from towerkit.render.mpl_program import render_program
+    from towerkit.theme import load_theme
+
+    program = _loaded_program(placement)
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = render_program(
+            program, load_theme(), _Path(tmp), placement.ref, formats=[fmt]
+        )
+        content = paths[0].read_bytes()
+    return _attachment(content, f"{placement.ref}-tower.{fmt}", media_type)
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/export/schematic.xlsx",
+    response_class=HTMLResponse,
+)
+def export_schematic(request: Request, ref: str, placement_id: str) -> Any:
+    import tempfile
+    from pathlib import Path as _Path
+
+    org = _org(request, ref)
+    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    if not placement.program_path:
+        return _refusal_page(
+            request,
+            f"{placement.ref} has no program file linked — nothing to draw yet",
+            f"/accounts/{ref}/program",
+        )
+    # new_workbook, never the spreadsheet library directly: workbook I/O
+    # stays behind towerkit's helpers (the conventions suite greps for the
+    # library's name outside imports/), the same seam
+    # services/export_open_items composes through
+    from towerkit.render.schematic_xlsx import add_schematic_sheet
+    from towerkit.render.table_xlsx import finalize_workbook, new_workbook
+    from towerkit.theme import load_theme
+
+    program = _loaded_program(placement)
+    wb = new_workbook()
+    add_schematic_sheet(wb, program, load_theme())
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _Path(tmp) / "schematic.xlsx"
+        finalize_workbook(wb, out)
+        content = out.read_bytes()
+    return _attachment(
+        content,
+        f"{placement.ref}-schematic.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@router.get("/accounts/{ref}/export/open-items.xlsx", response_class=HTMLResponse)
+def export_open_items_workbook(request: Request, ref: str) -> Any:
+    """The TUI's `x`, webside — the same services.export_open_items.write the
+    terminal calls, so the two surfaces can never produce different books."""
+    import tempfile
+    from datetime import date as _date
+    from pathlib import Path as _Path
+
+    from ...services import export_open_items as export_svc
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = export_svc.write(
+            conn, org.id, _Path(tmp) / f"{org.ref}-open-items.xlsx", _date.today()
+        )
+        content = out.read_bytes()
+    return _attachment(
+        content,
+        f"{org.ref}-open-items.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# --- the terms strip: retentions and sublimits (phase 4) -----------------------
+#
+# One route family serves both kinds through a {kind} path parameter,
+# REGISTERED LAST ON PURPOSE: Starlette matches /program/{placement_id}/{kind}
+# before FastAPI validates the enum, so EVERY literal sibling — today:
+# /renew, /merge, /scaffold, /compare, /layers, /lines, /submissions, /cell,
+# /export/... — must be registered FIRST to win. This list is the invariant's
+# one home: when you add a /program/{placement_id}/<one-segment> route, add
+# it ABOVE this block AND name it here, or a future reorder will shadow it
+# into 422s.
+
+from enum import StrEnum as _StrEnum  # noqa: E402
+
+
+class TermKind(_StrEnum):
+    retentions = "retentions"
+    sublimits = "sublimits"
+
+
+_TERM_AMOUNT_FIELD = Field("amount", "amount", "money", required=True)
+_TERM_SINGULAR = {"retentions": "retention", "sublimits": "sublimit"}
+
+
+def _terms_base(ref: str, placement_id: str, kind: str) -> str:
+    return f"/accounts/{ref}/program/{placement_id}/{kind}"
+
+
+def _term_lines(conn: sqlite3.Connection, placement_id: str) -> list[dict[str, str]]:
+    return [
+        {"id": lid, "name": str(name)}
+        for lid, name in sync.program_lines(conn, placement_id)
+    ]
+
+
+def _line_names(conn: sqlite3.Connection, placement_id: str, ids: list[str]) -> str:
+    names = dict(sync.program_lines(conn, placement_id))
+    return ", ".join(str(names.get(lid, lid)) for lid in ids)
+
+
+def _term_label(
+    conn: sqlite3.Connection, placement_id: str, kind: str, term: dict[str, Any]
+) -> str:
+    lines = _line_names(conn, placement_id, term["applies_to"])
+    amount = format_cents_compact(term["amount_cents"])
+    head = term["type"].upper() if kind == "retentions" else term["name"]
+    return f"{head} {amount} · {lines}"
+
+
+def _term_chip_html(
+    request: Request, ref: str, placement_id: str, kind: str, term: dict[str, Any]
+) -> str:
+    conn = _conn(request)
+    template = TEMPLATES.env.get_template("account/_term_chip.html")
+    return template.render(
+        base=_terms_base(ref, placement_id, kind),
+        term=term,
+        label=_term_label(conn, placement_id, kind, term),
+    )
+
+
+def _term_chips(request: Request, ref: str, placement: Any) -> dict[str, list[str]] | None:
+    if not placement.program_path:
+        return None
+    conn = _conn(request)
+    terms = sync.program_terms(conn, placement.id)
+    return {
+        kind: [
+            _term_chip_html(request, ref, placement.id, kind, term)
+            for term in terms[kind]
+        ]
+        for kind in ("retentions", "sublimits")
+    }
+
+
+def _term_by_index(
+    conn: sqlite3.Connection, placement_id: str, kind: str, index: int
+) -> dict[str, Any]:
+    terms = sync.program_terms(conn, placement_id)[kind]
+    if not 0 <= index < len(terms):
+        raise HTTPException(status_code=404, detail=f"no {kind[:-1]} at index {index}")
+    return terms[index]
+
+
+def _term_form(
+    request: Request, ref: str, placement_id: str, kind: str,
+    action: str, values: dict[str, Any], error: str | None = None,
+) -> HTMLResponse:
+    conn = _conn(request)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_term_form.html",
+        {
+            "kind": kind, "action": action,
+            "cancel_url": f"{_terms_base(ref, placement_id, kind)}/button",
+            "lines": _term_lines(conn, placement_id),
+            "values": values, "error": error,
+        },
+    )
+
+
+def _term_add_button(
+    request: Request, ref: str, placement_id: str, kind: str
+) -> HTMLResponse:
+    return TEMPLATES.TemplateResponse(
+        request, "account/_term_add_button.html",
+        {"base": _terms_base(ref, placement_id, kind), "singular": _TERM_SINGULAR[kind]},
+    )
+
+
+async def _term_values(request: Request, kind: str) -> dict[str, Any]:
+    form = await request.form()
+    return {
+        "type": str(form.get("type", "")),
+        "name": str(form.get("name", "")),
+        "amount": str(form.get("amount", "")),
+        "line": [str(v) for v in form.getlist("line")],
+    }
+
+
+def _parse_term(kind: str, values: dict[str, Any]) -> tuple[int, list[str]]:
+    """(amount_cents, line ids) — refusing in the broker's language."""
+    amount = parse_value(_TERM_AMOUNT_FIELD, values["amount"])
+    if amount in (None, ""):
+        raise ValueError("amount is required")
+    if not values["line"]:
+        raise ValueError("pick at least one line of cover")
+    if kind == "sublimits" and not values["name"].strip():
+        raise ValueError("the sublimit needs a name")
+    return int(amount), values["line"]
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/{kind}/new", response_class=HTMLResponse
+)
+def term_add_form(
+    request: Request, ref: str, placement_id: str, kind: TermKind
+) -> HTMLResponse:
+    org = _org(request, ref)
+    _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return _term_form(
+        request, ref, placement_id, kind.value,
+        _terms_base(ref, placement_id, kind.value),
+        {"line": []},
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/{kind}/button", response_class=HTMLResponse
+)
+def term_add_button(
+    request: Request, ref: str, placement_id: str, kind: TermKind
+) -> HTMLResponse:
+    org = _org(request, ref)
+    _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return _term_add_button(request, ref, placement_id, kind.value)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/{kind}", response_class=HTMLResponse
+)
+async def term_add(
+    request: Request, ref: str, placement_id: str, kind: TermKind
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    values = await _term_values(request, kind.value)
+    action = _terms_base(ref, placement_id, kind.value)
+    try:
+        amount_cents, line_ids = _parse_term(kind.value, values)
+        if kind.value == "retentions":
+            mutate = lambda: sync.add_retention(  # noqa: E731
+                conn, placement_id, line_ids, values["type"], amount_cents
+            )
+        else:
+            mutate = lambda: sync.add_sublimit(  # noqa: E731
+                conn, placement_id, values["name"].strip(), amount_cents, line_ids
+            )
+        program_files.write(
+            conn, placement,
+            tool="program_term_add",
+            summary=f"added a {_TERM_SINGULAR[kind.value]}",
+            mutate=mutate,
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _term_form(request, ref, placement_id, kind.value, action, values, str(exc))
+    button = _term_add_button(request, ref, placement_id, kind.value)
+    panel = _panel(request, ref, org, placement_id)
+    return HTMLResponse(_text(button) + _text(panel))
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/{kind}/{index}/chip",
+    response_class=HTMLResponse,
+)
+def term_chip(
+    request: Request, ref: str, placement_id: str, kind: TermKind, index: int
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    term = _term_by_index(conn, placement_id, kind.value, index)
+    return HTMLResponse(_term_chip_html(request, ref, placement_id, kind.value, term))
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/{kind}/{index}/edit",
+    response_class=HTMLResponse,
+)
+def term_edit_form(
+    request: Request, ref: str, placement_id: str, kind: TermKind, index: int
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    term = _term_by_index(conn, placement_id, kind.value, index)
+    values = {
+        "type": term.get("type", ""),
+        "name": term.get("name", ""),
+        "amount": initial_text(_TERM_AMOUNT_FIELD, term["amount_cents"]),
+        "line": list(term["applies_to"]),
+    }
+    return _term_form(
+        request, ref, placement_id, kind.value,
+        f"{_terms_base(ref, placement_id, kind.value)}/{index}",
+        values,
+    )
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/{kind}/{index}",
+    response_class=HTMLResponse,
+)
+async def term_edit(
+    request: Request, ref: str, placement_id: str, kind: TermKind, index: int
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    _term_by_index(conn, placement_id, kind.value, index)
+    values = await _term_values(request, kind.value)
+    action = f"{_terms_base(ref, placement_id, kind.value)}/{index}"
+    try:
+        amount_cents, line_ids = _parse_term(kind.value, values)
+        if kind.value == "retentions":
+            mutate = lambda: sync.edit_retention(  # noqa: E731
+                conn, placement_id, index,
+                type=values["type"], amount_cents=amount_cents, applies_to=line_ids,
+            )
+        else:
+            mutate = lambda: sync.edit_sublimit(  # noqa: E731
+                conn, placement_id, index,
+                name=values["name"].strip(), amount_cents=amount_cents,
+                applies_to=line_ids,
+            )
+        program_files.write(
+            conn, placement,
+            tool="program_term_edit",
+            summary=f"edited a {_TERM_SINGULAR[kind.value]}",
+            mutate=mutate,
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _term_form(request, ref, placement_id, kind.value, action, values, str(exc))
+    request.state.layer_details = {}
+    return _panel(request, ref, org, placement_id)
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/{kind}/{index}/remove",
+    response_class=HTMLResponse,
+)
+def term_remove_confirm(
+    request: Request, ref: str, placement_id: str, kind: TermKind, index: int
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "placement", placement_id, placements_repo.get)
+    term = _term_by_index(conn, placement_id, kind.value, index)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_term_remove_confirm.html",
+        {
+            "base": _terms_base(ref, placement_id, kind.value),
+            "term": term,
+            "label": _term_label(conn, placement_id, kind.value, term),
+        },
+    )
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/{kind}/{index}/remove",
+    response_class=HTMLResponse,
+)
+def term_remove(
+    request: Request, ref: str, placement_id: str, kind: TermKind, index: int
+) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    term = _term_by_index(conn, placement_id, kind.value, index)
+    label = _term_label(conn, placement_id, kind.value, term)
+    try:
+        if kind.value == "retentions":
+            mutate = lambda: sync.remove_retention(conn, placement_id, index)  # noqa: E731
+        else:
+            mutate = lambda: sync.remove_sublimit(conn, placement_id, index)  # noqa: E731
+        program_files.write(
+            conn, placement,
+            tool="program_term_remove",
+            summary=f"removed {label}",
+            mutate=mutate,
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return TEMPLATES.TemplateResponse(
+            request, "account/_term_remove_confirm.html",
+            {
+                "base": _terms_base(ref, placement_id, kind.value),
+                "term": term, "label": label, "error": str(exc),
+            },
+        )
+    request.state.layer_details = {}
+    return _panel(request, ref, org, placement_id)

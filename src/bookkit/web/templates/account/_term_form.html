@@ -1,0 +1,33 @@
+{# The in-row term form — add (index none) and edit (prefilled) share it.
+
+   APPLIES-TO IS CHECKBOXES, not a select: a retention can span a SUBSET of
+   the program's lines, and a single-select with an "all lines" catch-all
+   would silently widen a two-of-three-lines term on its next edit. #}
+<span class="term-chip term-form">
+  <form class="market-add-form" hx-post="{{ action }}"
+        hx-target="closest .term-chip" hx-swap="outerHTML">
+    {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+    {% if kind == "retentions" %}
+      <select name="type" aria-label="retention type" required>
+        {% for t in ("deductible", "sir", "captive") %}
+          <option value="{{ t }}"{% if values.get("type") == t %} selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+    {% else %}
+      <input type="text" name="name" aria-label="sublimit name" placeholder="sublimit"
+             value="{{ values.get('name', '') }}" required>
+    {% endif %}
+    <input type="text" name="amount" aria-label="amount" placeholder="250,000"
+           value="{{ values.get('amount', '') }}" required>
+    {% for line in lines %}
+      <label class="term-line">
+        <input type="checkbox" name="line" value="{{ line.id }}"
+               {% if line.id in values.get("line", []) %}checked{% endif %}>{{ line.name }}
+      </label>
+    {% endfor %}
+    <button type="submit" class="row-action-btn">save</button>
+    <button type="button" class="row-action-btn"
+            hx-get="{{ cancel_url }}"
+            hx-target="closest .term-chip" hx-swap="outerHTML">cancel</button>
+  </form>
+</span>

@@ -4,7 +4,13 @@
    plus its remove control, which fetches an in-place confirm naming the
    layers that die with the line. #}
 <span class="line-chip">
+  <button type="button" class="row-action-btn line-arrow" title="move left"
+          hx-post="{{ base }}/move" hx-vals='{"delta": "-1"}'
+          hx-target="closest .line-chip" hx-swap="outerHTML">&#9666;</button>
   {{ name_cell | safe }}
+  <button type="button" class="row-action-btn line-arrow" title="move right"
+          hx-post="{{ base }}/move" hx-vals='{"delta": "1"}'
+          hx-target="closest .line-chip" hx-swap="outerHTML">&#9656;</button>
   <button type="button" class="row-action-btn"
           title="Remove {{ name }} — layers covering only this line go with it"
           hx-get="{{ base }}/remove"
