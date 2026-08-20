@@ -9,6 +9,11 @@
           hx-post="{{ base }}/move" hx-vals='{"delta": "-1"}'
           hx-target="closest .line-chip" hx-swap="outerHTML">&#9666;</button>
   {{ name_cell | safe }}
+  {# The COLUMN LABEL this line prints in the layer table's header. towerkit
+     derives one from the name when it is unset (Line.column_label), so the
+     em-dash here means "derived", not "missing" — the title says so, because
+     an empty-looking cell beside a name is otherwise read as a bug. #}
+  <span class="chip-abbr" title="column label — blank means towerkit derives it from the name">{{ abbr_cell | safe }}</span>
   <button type="button" class="chip-arrow" title="Move {{ name }} right"
           aria-label="Move {{ name }} right"
           hx-post="{{ base }}/move" hx-vals='{"delta": "1"}'

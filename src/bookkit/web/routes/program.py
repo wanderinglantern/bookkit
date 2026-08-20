@@ -19,12 +19,13 @@ the tab badge counted the placements it was claiming did not exist.
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ... import sync
+from ... import sync, towerfields
 from ...forms.entities import apply_placement, apply_submission, placement_form, submission_form
 from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS, PLACEMENT_FIELDS
 from ...forms.spec import Field, initial_text, parse_value
@@ -47,6 +48,12 @@ from .account import (
 )
 
 _LAYER_CELLS: dict[str, Field] = {f.key: f for f in LAYER_FIELDS}
+# The add form's amount input, parsed by bookkit's own money field so that
+# "1.5m", "250k" and "1,234.56" mean here exactly what they mean in the layer's
+# own limit cell. The EDIT of the same value goes through towerfields (it is
+# `named_limit.amount` on towerkit's surface); this one is the row that does not
+# exist yet, so there is no entry to derive it from.
+_NAMED_LIMIT_AMOUNT: Field = Field("amount", "amount", "money", required=True)
 _PLACEMENT_CELLS: dict[str, Field] = {f.key: f for f in PLACEMENT_FIELDS}
 
 # The column class a layer cell carries, in ONE place. Three literals — the
@@ -217,6 +224,26 @@ def _section_html(
         moved_from=linked.moved_from,
         last_synced=_last_synced(conn, placement.id) if linked.error else None,
         tower=_tower_for(linked),
+        # D6. Only for a linked placement: there is no file to hold either of
+        # these otherwise, and a cell that refuses every save is worse than no
+        # cell.
+        program_notes=(
+            _field_display(
+                request, ref, placement, "program", "notes", _addr(None, None)
+            )
+            if placement.program_path
+            else None
+        ),
+        render_cells=(
+            {
+                shown: _field_display(
+                    request, ref, placement, "program", name, _addr(None, None)
+                )
+                for shown, name in _RENDER_OPTIONS
+            }
+            if placement.program_path
+            else {}
+        ),
         layers=[_layer_row(request, ref, placement.id, layer) for layer in layers],
         refocus=refocus,
         expanded=expanded,
@@ -451,9 +478,18 @@ def _line_chip_html(
         _line_cell_action(ref, placement_id, line_id),
         tag="span", extra_class="line-name",
     )
+    placement = placements_repo.get(_conn(request), placement_id)
     template = TEMPLATES.env.get_template("account/_line_chip.html")
     return template.render(
-        base=f"{_lines_base(ref, placement_id)}/{line_id}", name=name, name_cell=cell
+        base=f"{_lines_base(ref, placement_id)}/{line_id}",
+        name=name,
+        name_cell=cell,
+        # D6, through the derived seam. The NAME is a bespoke cell because
+        # renaming a line cascades its id through every appliesTo — bookkit's
+        # own rule; the column label is a plain scalar and has none.
+        abbr_cell=_field_display(
+            request, ref, placement, "line", "abbr", _addr(line_id, None)
+        ),
     )
 
 
@@ -805,7 +841,7 @@ def _conflict(
             "field": _layer_field(key),
             "typed": typed,
             "message": message,
-            "layer": layer,
+            "subject": layer["name"],
             # A detail key's cell is a span; a literal <td> swapped into the
             # details row is parser-dropped and the three-way never appears.
             "tag": _layer_cell_tag(key),
@@ -991,13 +1027,48 @@ def _details_row(
             tag="span", extra_class=_LAYER_CELL_CLASS.get(key, ""),
         )
 
+    def tower_cell(kind: str, name: str, addr: str) -> str:
+        """A derived towerkit field, rendered by the same seam that saves it.
+
+        Built HERE rather than in the template so the details row cannot
+        acquire a second way of addressing a field — the row is re-rendered by
+        three producers already (the chevron, every structure write, and the
+        panel's `expanded`), and a fourth spelling of the URL is how one of
+        them starts pointing somewhere the others do not."""
+        placement = placements_repo.get(conn, placement_id)
+        return _field_display(request, ref, placement, kind, name, addr)
+
     base = f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}"
+    named = sync.named_limits_of(conn, placement_id, layer_id)
     return TEMPLATES.TemplateResponse(
         request, "account/_layer_details.html",
         {
             "policy_cell": cell("policy_number"),
             "from_cell": cell("period_from"),
             "to_cell": cell("period_to"),
+            # D6: the coverage facts a broker states on a quote and towerkit
+            # prints on the SOI and the schematic. Reachable only from
+            # towerkit's own editor until now — "built but not accessible"
+            # (statutory, 2026-08-19), which is a bug class, not a gap.
+            "tower_cells": {
+                name: tower_cell("layer", name, _addr(layer_id, None))
+                for name in (
+                    "states", "limitsDetail", "retentionDetail",
+                    "premiumDetail", "notes",
+                )
+            },
+            "named_limits": [
+                {
+                    "index": item["index"],
+                    "name_cell": tower_cell(
+                        "named_limit", "name", _addr(layer_id, item["index"])
+                    ),
+                    "amount_cell": tower_cell(
+                        "named_limit", "amount", _addr(layer_id, item["index"])
+                    ),
+                }
+                for item in named
+            ],
             "base": base,
             "remove_url": f"{base}/remove",
             "lines": [
@@ -2403,9 +2474,22 @@ def _export_tower(
     from towerkit.theme import load_theme
 
     program = _loaded_program(conn, placement)
+    # THE PROGRAM'S OWN SAVED CHART OPTIONS, which this route ignored until D6:
+    # it always rendered with the library defaults, so a broker who had turned
+    # premiums off in towerkit's editor got them back on every download bookkit
+    # produced — and, with the settings now editable here, the chart strip
+    # would have been a set of controls that provably changed nothing.
+    # towerkit's own CLI reads them the same way (cli.py `_cmd_render`),
+    # including the theme.
+    stored = program.render
+    theme_path = _Path(stored.theme) if stored and stored.theme else None
     with tempfile.TemporaryDirectory() as tmp:
         paths = render_program(
-            program, load_theme(), _Path(tmp), placement.ref, formats=[fmt]
+            program, load_theme(theme_path), _Path(tmp), placement.ref, formats=[fmt],
+            show_totals=stored.show_totals if stored else True,
+            show_premiums=stored.show_premiums if stored else True,
+            cell_premiums=bool(stored and stored.cell_premiums),
+            cell_dates=bool(stored and stored.cell_dates),
         )
         content = paths[0].read_bytes()
     return _attachment(content, f"{placement.ref}-tower.{fmt}", media_type)
@@ -2593,6 +2677,7 @@ async def _term_values(request: Request, kind: str) -> dict[str, Any]:
         "name": str(form.get("name", "")),
         "amount": str(form.get("amount", "")),
         "line": [str(v) for v in form.getlist("line")],
+        "notes": str(form.get("notes", "")),
     }
 
 
@@ -2649,11 +2734,13 @@ async def term_add(
         amount_cents, line_ids = _parse_term(kind.value, values)
         if kind.value == "retentions":
             mutate = lambda: sync.add_retention(  # noqa: E731
-                conn, placement_id, line_ids, values["type"], amount_cents
+                conn, placement_id, line_ids, values["type"], amount_cents,
+                notes=values["notes"].strip() or None,
             )
         else:
             mutate = lambda: sync.add_sublimit(  # noqa: E731
-                conn, placement_id, values["name"].strip(), amount_cents, line_ids
+                conn, placement_id, values["name"].strip(), amount_cents, line_ids,
+                notes=values["notes"].strip() or None,
             )
         program_files.write(
             conn, placement,
@@ -2697,6 +2784,7 @@ def term_edit_form(
         "name": term.get("name", ""),
         "amount": initial_text(_TERM_AMOUNT_FIELD, term["amount_cents"]),
         "line": list(term["applies_to"]),
+        "notes": term.get("notes") or "",
     }
     return _term_form(
         request, ref, placement_id, kind.value,
@@ -2724,12 +2812,17 @@ async def term_edit(
             mutate = lambda: sync.edit_retention(  # noqa: E731
                 conn, placement_id, index,
                 type=values["type"], amount_cents=amount_cents, applies_to=line_ids,
+                # The form always carries the box, so an empty one is a CLEAR
+                # and not an omission — which is exactly the distinction
+                # `set_notes` exists to make.
+                notes=values["notes"].strip() or None, set_notes=True,
             )
         else:
             mutate = lambda: sync.edit_sublimit(  # noqa: E731
                 conn, placement_id, index,
                 name=values["name"].strip(), amount_cents=amount_cents,
                 applies_to=line_ids,
+                notes=values["notes"].strip() or None, set_notes=True,
             )
         program_files.write(
             conn, placement,
@@ -2799,3 +2892,485 @@ def term_remove(
         )
     forget_program_reads(request)
     return _panel(request, ref, org, placement_id)
+
+
+# --- towerkit's derived field surface, as cells ---------------------------------
+#
+# Everything above is a route per FIELD: its own path, its own parse, its own
+# refusal. That is the right shape where bookkit has a rule of its own (a
+# placement cell writes through to a column AND a file; a layer's money is
+# cents here and dollars there).
+#
+# It is the wrong shape for a plain towerkit scalar, and D6 is the proof:
+# seventeen fields reachable only from towerkit's own editor, behind the TUI's
+# `o`, which a browser does not have — five of which grew while every parity
+# test stayed green. Seventeen more hand-written routes would be seventeen
+# places to edit the day towerkit grows an eighteenth.
+#
+# So these three routes serve EVERY field towerkit publishes. What they cannot
+# derive is WHERE a field goes on the page — that is a design decision, not a
+# property of the model — so `_PLACED` states it, once, and a field that is
+# not in it has no cell here and says so. Parsing, refusing, clearing, bounds
+# and guards all come from towerkit (`towerfields`, `sync.set_tower_field`);
+# only placement is ours.
+
+
+@dataclass(frozen=True)
+class _Placed:
+    """Where one derived field is PUT, and what its save answers with.
+
+    `tag` is the cell's element and is NOT cosmetic: a `<td>` swapped back
+    inside the details row's colspan cell has no table-row ancestor at the
+    swap point and the HTML parser drops it outright, value and all
+    (macros/cell.html). Everything in the details row is a span.
+
+    `answers` is "cell" when the write changes only the value the user typed,
+    and "panel" when it changes something the section renders elsewhere — a
+    line's column label re-letters every layer table header, so answering with
+    the cell alone would leave the headers stale until a refresh.
+    """
+
+    tag: str
+    answers: str = "cell"
+    css: str = ""
+
+
+# The placement table. Adding a row here is what makes a towerkit field
+# editable in the browser; `tests/test_web_parity.py` checks every key against
+# `mcpsurface.SURFACE` (so a field towerkit renames turns red rather than
+# 404ing at a user) and against the field ledger (so a field that is BUILT
+# cannot still be described there as planned — that drift has shipped three
+# times).
+_PLACED: dict[str, _Placed] = {
+    # The layer's long tail, in the details row the chevron opens.
+    "layer.states": _Placed(tag="span"),
+    "layer.limitsDetail": _Placed(tag="span"),
+    "layer.retentionDetail": _Placed(tag="span"),
+    "layer.premiumDetail": _Placed(tag="span"),
+    "layer.notes": _Placed(tag="span"),
+    # The column label a line prints in the layer table's header. Every header
+    # re-letters, so the whole section answers.
+    "line.abbr": _Placed(tag="span", answers="panel"),
+    # A note about the programme as a whole, on the section header.
+    "program.notes": _Placed(tag="span", css="prose"),
+    # The several figures a policy states where `limit` states one. They have
+    # no ids — towerkit addresses them by the position a read reported, which
+    # is why the address carries the layer AND the index.
+    "named_limit.name": _Placed(tag="span"),
+    "named_limit.amount": _Placed(tag="span", css="num"),
+    # The saved chart options. They answer with their own cell and NOT the
+    # panel: they change the exported SVG/PDF and the SOI schematic, and the
+    # drawing on this page is towerkit's `render/web.py` geometry, which takes
+    # no options — re-rendering the section would redraw a picture that cannot
+    # have changed and cost the user their place for nothing.
+    "program.render.theme": _Placed(tag="span"),
+    "program.render.showTotals": _Placed(tag="span"),
+    "program.render.showPremiums": _Placed(tag="span"),
+    "program.render.cellPremiums": _Placed(tag="span"),
+    "program.render.cellDates": _Placed(tag="span"),
+    "program.render.soiSchematic": _Placed(tag="span"),
+}
+
+# The order the chart strip prints them in, and the words it prints. Derived
+# labels would give "show totals" / "cell premiums", which say what the JSON
+# key is rather than what the option does to the thing it governs.
+_RENDER_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("totals", "render.showTotals"),
+    ("premiums", "render.showPremiums"),
+    ("premium per cell", "render.cellPremiums"),
+    ("dates per cell", "render.cellDates"),
+    ("SOI schematic", "render.soiSchematic"),
+    ("theme", "render.theme"),
+)
+
+
+def _field_key(kind: str, name: str) -> str:
+    """The form-field name a derived cell posts under, and its `data-field`.
+
+    Qualified by kind BECAUSE it has to be unique within one record scope:
+    inline-cell.js finds the next Tab target and the post-swap refocus target
+    by `data-field` within the enclosing `<tr>`, and two cells sharing the
+    name would send the caret to whichever came first.
+    """
+    return f"{kind}.{name}"
+
+
+def _field_entry(kind: str, name: str) -> Any:
+    try:
+        return towerfields.resolve(kind, name)
+    except towerfields.FieldRefused as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _field_placed(kind: str, name: str) -> _Placed:
+    spot = _PLACED.get(_field_key(kind, name))
+    if spot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{kind}.{name} is writable, but this page has no cell for it",
+        )
+    return spot
+
+
+_NO_PART = "_"
+
+
+def _addr(target: str | None, index: int | None) -> str:
+    """The address as ONE path segment: always `<target>:<index>`, with `_` for
+    a half this kind does not use.
+
+    ONE segment rather than query parameters because macros/cell.html builds
+    the editor's URL as `action + "/edit"` — a base carrying `?target=…` would
+    produce `…?target=x/edit` and fetch nothing.
+
+    BOTH HALVES ARE ALWAYS PRESENT, which is not tidiness. The first spelling
+    of this used a bare id for a target and `i3` for a position, so the two
+    were told apart by a leading "i" — and every real book has a line whose id
+    IS "im" (inland marine, the line CLAUDE.md names as the reason a tower's
+    earliest end is not its programme's end). Its column-label cell parsed as
+    "index m", lost its target, and took the whole Program tab down with it.
+    There is no safe leading character to pick out of user-supplied ids.
+    """
+    return f"{target or _NO_PART}:{_NO_PART if index is None else index}"
+
+
+def _unaddr(addr: str) -> tuple[str | None, int | None]:
+    target, _, position = addr.partition(":")
+    return (
+        None if target in ("", _NO_PART) else target,
+        int(position) if position.isdigit() else None,
+    )
+
+
+def _field_action(
+    ref: str, placement_id: str, kind: str, name: str, addr: str
+) -> str:
+    return f"/accounts/{ref}/program/{placement_id}/field/{kind}/{addr}/{name}"
+
+
+def _field_subject(
+    request: Request, placement: Any, kind: str, target: str | None, index: int | None
+) -> str:
+    """What the change summary and the conflict dialog call this row.
+
+    A summary reading "set notes" tells the changes list nothing about which
+    of fourteen layers moved; every other program write in this module names
+    its row, so this one does too.
+    """
+    conn = _conn(request)
+    if kind == "layer" and target:
+        for layer in layers_for(request, conn, placement.id):
+            if layer["id"] == target:
+                return str(layer["name"])
+    if kind == "line" and target:
+        return _line_name(conn, placement.id, target)
+    if kind == "program":
+        return str(placement.program_name or placement.ref)
+    return f"{kind} {target or index}"
+
+
+def _field_value(request: Request, placement_id: str, kind: str, name: str,
+                 target: str | None, index: int | None) -> Any:
+    """What the field holds right now, read through the same loader seam every
+    other program read uses — so a file that will not load says so rather than
+    rendering as an empty cell (2026-08-20)."""
+    conn = _conn(request)
+    linked = linked_for(request, conn, placement_id)
+    if linked.program is None:
+        return None
+    return sync.tower_field_value(linked.program, kind, name, target, index)
+
+
+def _field_display(
+    request: Request, ref: str, placement: Any, kind: str, name: str, addr: str,
+) -> str:
+    entry = _field_entry(kind, name)
+    spot = _field_placed(kind, name)
+    target, index = _unaddr(addr)
+    value = _field_value(request, placement.id, kind, name, target, index)
+    return render_cell_display(
+        request,
+        towerfields.bookkit_field(entry, key=_field_key(kind, name)),
+        towerfields.display(entry, value),
+        _field_action(ref, placement.id, kind, name, addr),
+        tag=spot.tag,
+        extra_class=spot.css,
+    )
+
+
+def _field_editor(
+    request: Request, ref: str, placement: Any, kind: str, name: str, addr: str,
+    error: str | None = None, typed: str | None = None,
+) -> str:
+    entry = _field_entry(kind, name)
+    spot = _field_placed(kind, name)
+    target, index = _unaddr(addr)
+    value = (
+        typed
+        if typed is not None
+        else towerfields.editor_text(
+            entry, _field_value(request, placement.id, kind, name, target, index)
+        )
+    )
+    return render_cell(
+        request,
+        towerfields.bookkit_field(entry, key=_field_key(kind, name)),
+        value,
+        _field_action(ref, placement.id, kind, name, addr),
+        error=error,
+        tag=spot.tag,
+        extra_class=spot.css,
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/field/{kind}/{addr}/{name}",
+    response_class=HTMLResponse,
+)
+def field_cell(
+    request: Request, ref: str, placement_id: str, kind: str, addr: str, name: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return HTMLResponse(_field_display(request, ref, placement, kind, name, addr))
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/field/{kind}/{addr}/{name}/edit",
+    response_class=HTMLResponse,
+)
+def field_cell_edit(
+    request: Request, ref: str, placement_id: str, kind: str, addr: str, name: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    return HTMLResponse(_field_editor(request, ref, placement, kind, name, addr))
+
+
+def _field_conflict(
+    request: Request, ref: str, placement: Any, kind: str, name: str, addr: str,
+    typed: str, message: str,
+) -> HTMLResponse:
+    entry = _field_entry(kind, name)
+    spot = _field_placed(kind, name)
+    target, index = _unaddr(addr)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_layer_conflict.html",
+        {
+            "action": _field_action(ref, placement.id, kind, name, addr),
+            "field": towerfields.bookkit_field(entry, key=_field_key(kind, name)),
+            "typed": typed,
+            "subject": _field_subject(request, placement, kind, target, index),
+            "message": message,
+            "tag": spot.tag,
+        },
+    )
+
+
+def _field_write(
+    request: Request, ref: str, org: Any, placement: Any, kind: str, name: str,
+    addr: str, typed: str,
+) -> HTMLResponse:
+    """The one write, shared by the save and by Overwrite's retry — so the two
+    cannot drift into doing different things (the same reason
+    `_write_layer_field` exists for the layer cells)."""
+    conn = _conn(request)
+    entry = _field_entry(kind, name)
+    spot = _field_placed(kind, name)
+    target, index = _unaddr(addr)
+    try:
+        wire = towerfields.to_wire(entry, typed)
+    except towerfields.FieldRefused as exc:
+        return HTMLResponse(
+            _field_editor(request, ref, placement, kind, name, addr, str(exc), typed)
+        )
+
+    subject = _field_subject(request, placement, kind, target, index)
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_field_edit",
+            summary=f"set {towerfields.label(entry)} on {subject}",
+            mutate=lambda: sync.set_tower_field(
+                conn, placement.id, kind, name, wire, target, index
+            ),
+            open_batch=_open_batch_web,
+        )
+    except program_files.ProgramWriteRefused as refused:
+        if _is_conflict(refused):
+            return _field_conflict(
+                request, ref, placement, kind, name, addr, typed, str(refused)
+            )
+        return HTMLResponse(
+            _field_editor(request, ref, placement, kind, name, addr, str(refused), typed)
+        )
+    except Exception as exc:
+        return HTMLResponse(
+            _field_editor(request, ref, placement, kind, name, addr, str(exc), typed)
+        )
+
+    forget_program_reads(request)
+    if spot.answers == "panel":
+        return _panel(
+            request, ref, org, placement.id,
+            refocus=f"{target}:{_field_key(kind, name)}" if target else None,
+            expanded=target if kind == "layer" else None,
+        )
+    return HTMLResponse(_field_display(request, ref, placement, kind, name, addr))
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/field/{kind}/{addr}/{name}",
+    response_class=HTMLResponse,
+)
+async def field_cell_save(
+    request: Request, ref: str, placement_id: str, kind: str, addr: str, name: str
+) -> HTMLResponse:
+    org = _org(request, ref)
+    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    typed = str((await request.form()).get(_field_key(kind, name), ""))
+    return _field_write(request, ref, org, placement, kind, name, addr, typed)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/field/{kind}/{addr}/{name}/reload",
+    response_class=HTMLResponse,
+)
+def field_cell_reload(
+    request: Request, ref: str, placement_id: str, kind: str, addr: str, name: str
+) -> HTMLResponse:
+    """THEIRS wins. Re-project, discard the draft, show what the file holds."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    _field_placed(kind, name)
+    _reproject(conn, placement)
+    forget_program_reads(request)
+    return HTMLResponse(_field_display(request, ref, placement, kind, name, addr))
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/field/{kind}/{addr}/{name}/overwrite",
+    response_class=HTMLResponse,
+)
+async def field_cell_overwrite(
+    request: Request, ref: str, placement_id: str, kind: str, addr: str, name: str
+) -> HTMLResponse:
+    """MINE lands on top of theirs — a RETRY, not a force: re-project so the
+    sha gate passes, then re-apply this ONE field. write_through re-reads the
+    file, so whatever else changed while this tab was open survives under it."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    typed = str((await request.form()).get(_field_key(kind, name), ""))
+    _reproject(conn, placement)
+    forget_program_reads(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    return _field_write(request, ref, org, placement, kind, name, addr, typed)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/field/{kind}/{addr}/{name}/keep",
+    response_class=HTMLResponse,
+)
+async def field_cell_keep(
+    request: Request, ref: str, placement_id: str, kind: str, addr: str, name: str
+) -> HTMLResponse:
+    """Neither. The editor comes back with what was typed still in it, and the
+    message still saying why nothing was written."""
+    org = _org(request, ref)
+    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    typed = str((await request.form()).get(_field_key(kind, name), ""))
+    return HTMLResponse(
+        _field_editor(
+            request, ref, placement, kind, name, addr,
+            "the file moved under this edit — nothing has been written", typed,
+        )
+    )
+
+
+# --- named limits: the collection half of D6 ------------------------------------
+#
+# The two FIELDS a named limit carries are ordinary derived cells above. Adding
+# and removing a ROW is not a field write and has no `set_field` to derive from,
+# so these two routes are hand-written — the same division the lines strip and
+# the terms strip already use.
+#
+# They answer with the DETAILS ROW, not the panel: the chips live in it, and a
+# panel swap would close the row the user is working in on every add. The row is
+# the same `_details_row` the chevron renders, so the chips cannot drift between
+# how they first appear and how they appear after a write.
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/named-limits",
+    response_class=HTMLResponse,
+)
+async def named_limit_add(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """One coordinate limit — a name and a figure. Amount is typed in CENTS
+    like every other money field in bookkit and lands in the file as whole
+    dollars; `sync.add_named_limit` refuses a sub-dollar remainder rather than
+    rounding it away."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    raw = str(form.get("amount", "")).strip()
+    try:
+        amount = parse_value(_NAMED_LIMIT_AMOUNT, raw)
+    except ValueError as exc:
+        return _details_row(request, ref, placement_id, layer, str(exc))
+    if not name:
+        return _details_row(
+            request, ref, placement_id, layer, "a named limit needs a name"
+        )
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_named_limit_add",
+            summary=f"added the {name} limit on {layer['name']}",
+            mutate=lambda: sync.add_named_limit(
+                conn, placement_id, layer_id, name, int(amount)
+            ),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _details_row(request, ref, placement_id, layer, str(exc))
+    forget_program_reads(request)
+    _, fresh = _owned_layer(request, org, placement_id, layer_id)
+    return _details_row(request, ref, placement_id, fresh)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}"
+    "/named-limits/{index}/remove",
+    response_class=HTMLResponse,
+)
+def named_limit_remove(
+    request: Request, ref: str, placement_id: str, layer_id: str, index: int
+) -> HTMLResponse:
+    """No confirm: a named limit is a name and a number, both visible, and the
+    removal is one undo unit away (`u`, or the panel's Revert). The confirms in
+    this module guard writes that CASCADE — removing a line takes layers with
+    it — which this does not."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    named = sync.named_limits_of(conn, placement_id, layer_id)
+    label = next((n["name"] for n in named if n["index"] == index), f"limit {index}")
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_named_limit_remove",
+            summary=f"removed the {label} limit from {layer['name']}",
+            mutate=lambda: sync.remove_named_limit(conn, placement_id, layer_id, index),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _details_row(request, ref, placement_id, layer, str(exc))
+    forget_program_reads(request)
+    _, fresh = _owned_layer(request, org, placement_id, layer_id)
+    return _details_row(request, ref, placement_id, fresh)

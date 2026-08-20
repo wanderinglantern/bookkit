@@ -68,6 +68,16 @@
         <dt>commission</dt>
         <dd>{{ placement_cells.commission_bps | safe }} <span class="fact-unit">bps</span></dd>
       </div>
+      {% if program_notes %}
+        {# The programme's own note, in the FILE — towerkit prints it and until
+           now only towerkit could write it. Behind `linked` because there is
+           no file to hold it otherwise, and an editable cell that refuses
+           every save is worse than no cell. #}
+        <div class="fact fact-wide">
+          <dt>notes</dt>
+          <dd>{{ program_notes | safe }}</dd>
+        </div>
+      {% endif %}
     </dl>
   </header>
   <div class="form-host"></div>
@@ -260,6 +270,23 @@
       <a class="btn" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/export/tower.svg">Tower SVG</a>
       <a class="btn" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/export/tower.pdf">Tower PDF</a>
       <a class="btn" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/export/schematic.xlsx">Schematic XLSX</a>
+    </div>
+    {# D6: the program's SAVED CHART OPTIONS, which travel in the file and were
+       writable only from towerkit's own editor. They sit here, with export,
+       because that is what they govern — these decide what the SVG, the PDF
+       and the SOI schematic print, NOT what the drawing above shows: the web
+       tower is towerkit's `render/web.py` geometry and takes no options.
+
+       Saying so in the strip label is not decoration. Until this phase the
+       export route ignored these settings entirely and rendered with the
+       library defaults, so a control here would have changed nothing at all —
+       a dead control being exactly what the house rule about refusals and
+       hints exists to stop. The export honours them now. #}
+    <div class="export-strip chart-options">
+      <span class="strip-label" title="saved in the program file; they govern the exports above, not the drawing">chart</span>
+      {% for name, cell in render_cells.items() %}
+        <span class="chart-option"><span class="detail-label">{{ name }}</span>{{ cell | safe }}</span>
+      {% endfor %}
     </div>
   {% endif %}
 </section>

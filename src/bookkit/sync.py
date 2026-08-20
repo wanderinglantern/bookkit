@@ -41,8 +41,10 @@ from rapidfuzz import fuzz, process
 # tests/test_conventions.py bans reaching past this module, but scans only
 # src/towerkit/tui, so the rule was invisible here. See
 # tests/test_conventions.py::test_sync_delegates_program_structure_to_towerkit.
+from towerkit import mcpsurface
 from towerkit.edit import add_layer as edit_add_layer
 from towerkit.edit import add_line as edit_add_line
+from towerkit.edit import add_named_limit as edit_add_named_limit
 from towerkit.edit import add_retention as edit_add_retention
 from towerkit.edit import add_sublimit as edit_add_sublimit
 from towerkit.edit import edit_retention as edit_edit_retention
@@ -51,9 +53,12 @@ from towerkit.edit import heal_follows, slugify, unique_id
 from towerkit.edit import move_line as edit_move_line
 from towerkit.edit import remove_layer as edit_remove_layer
 from towerkit.edit import remove_line as edit_remove_line
+from towerkit.edit import remove_named_limit as edit_remove_named_limit
 from towerkit.edit import remove_retention as edit_remove_retention
 from towerkit.edit import remove_sublimit as edit_remove_sublimit
 from towerkit.edit import rename_line as edit_rename_line
+from towerkit.edit import set_container as edit_set_container
+from towerkit.edit import set_field as edit_set_field
 from towerkit.model import SCHEMA_ID, Program, dump_program, load_program
 from towerkit.model import Layer as TkModelLayer
 
@@ -982,12 +987,16 @@ def add_retention(
     type: str,
     amount_cents: int,
     aggregate_cents: int | None = None,
+    notes: str | None = None,
 ) -> Diagnostics:
     """A retention under the tower (deductible / SIR / captive). Amounts are
-    cents on the wire, whole dollars in the file, like every money field."""
+    cents on the wire, whole dollars in the file, like every money field.
+
+    A NEW row has nothing to preserve, so `notes` needs no `set_notes` flag
+    here: None is an absent note, which is what a new retention has."""
 
     def mutate(program: Program) -> None:
-        edit_add_retention(
+        retention = edit_add_retention(
             program,
             applies_to,
             type,
@@ -998,6 +1007,10 @@ def add_retention(
                 else None
             ),
         )
+        if notes:
+            at = program.retentions.index(retention)
+            # The new row's position IS its address — see edit_retention.
+            edit_set_field(program, "retention", "notes", notes, at, at)
 
     return _mutate(conn, placement_id, mutate)
 
@@ -1010,11 +1023,22 @@ def edit_retention(
     applies_to: list[str] | None = None,
     type: str | None = None,
     amount_cents: int | None = None,
+    notes: str | None = None,
+    set_notes: bool = False,
 ) -> Diagnostics:
-    """None means leave alone — vehicle and notes ride through untouched,
-    the same preservation rule towerkit's own edit_retention keeps.
-    Retentions have no ids; the index is towerkit's own addressing, and
-    every web write re-renders the panel so an index is never stale."""
+    """None means leave alone — vehicle rides through untouched, the same
+    preservation rule towerkit's own edit_retention keeps. Retentions have no
+    ids; the index is towerkit's own addressing, and every web write re-renders
+    the panel so an index is never stale.
+
+    `set_notes` is separate from `notes` because None already means "leave
+    alone" here, and a note has to be CLEARABLE — one flag rather than a
+    sentinel value, so the call site says which of the two it means in words.
+    The note itself is written through `edit.set_field`, the choke point, not
+    through towerkit's `notes=` keyword: that keyword cannot express a clear
+    either, and it is a hand-written copy of the model that `mcpsurface` exists
+    to stop trusting.
+    """
 
     def mutate(program: Program) -> None:
         _check_index(list(program.retentions), index, "retention")
@@ -1029,6 +1053,17 @@ def edit_retention(
                 else None
             ),
         )
+        if set_notes:
+            # A RETENTION'S TARGET IS ITS INDEX. `edit._entity` takes the
+            # list position as `target` for a retention or a sublimit (one
+            # argument cannot say both, and a participant's target is its
+            # LAYER) — passing None here raised "retention needs a target",
+            # which `_mutate` folded into an ordinary refusal, so the whole
+            # save came back as a re-rendered form with the figure unchanged
+            # and nothing said about why. `mcpsurface.edit_address` states the
+            # rule; these four call sites are the only ones that do not read
+            # it from there, because they sit inside another verb's mutation.
+            edit_set_field(program, "retention", "notes", notes, index, index)
 
     return _mutate(conn, placement_id, mutate)
 
@@ -1049,11 +1084,18 @@ def add_sublimit(
     name: str,
     amount_cents: int,
     applies_to: list[str],
+    notes: str | None = None,
 ) -> Diagnostics:
+    """A new row has nothing to preserve — see `add_retention` on why `notes`
+    needs no `set_notes` flag on this side."""
+
     def mutate(program: Program) -> None:
-        edit_add_sublimit(
+        sublimit = edit_add_sublimit(
             program, name, _require_dollars(amount_cents, "amount"), applies_to
         )
+        if notes:
+            at = program.sublimits.index(sublimit)
+            edit_set_field(program, "sublimit", "notes", notes, at, at)
 
     return _mutate(conn, placement_id, mutate)
 
@@ -1066,7 +1108,20 @@ def edit_sublimit(
     name: str | None = None,
     amount_cents: int | None = None,
     applies_to: list[str] | None = None,
+    notes: str | None = None,
+    set_notes: bool = False,
 ) -> Diagnostics:
+    """None means leave alone.
+
+    `set_notes` is separate from `notes` because None already means "leave
+    alone" here, and a note has to be CLEARABLE — one flag rather than a
+    sentinel value, so the call site says which of the two it means in words.
+    The note itself is written through `edit.set_field`, the choke point, not
+    through towerkit's `notes=` keyword: that keyword cannot express a clear
+    either, and it is a hand-written copy of the model that `mcpsurface` exists
+    to stop trusting.
+    """
+
     def mutate(program: Program) -> None:
         _check_index(list(program.sublimits), index, "sublimit")
         edit_edit_sublimit(
@@ -1080,6 +1135,9 @@ def edit_sublimit(
             ),
             applies_to=applies_to,
         )
+        if set_notes:
+            # See edit_retention: a sublimit is addressed by position too.
+            edit_set_field(program, "sublimit", "notes", notes, index, index)
 
     return _mutate(conn, placement_id, mutate)
 
@@ -1287,6 +1345,198 @@ def set_applies_to(
     return _mutate(conn, placement_id, mutate)
 
 
+# --- the derived field seam ----------------------------------------------------
+#
+# Everything above this line is a HAND-WRITTEN wrapper: one bookkit function per
+# towerkit verb, each naming its own arguments. That shape is right for the
+# structural verbs (adding a line means adding a pending layer too; removing one
+# cascades) — the wrapper is where bookkit's own rule lives.
+#
+# It is the WRONG shape for a plain scalar. towerkit publishes every writable
+# field as data (`mcpsurface.SURFACE`, derived from the models at import time)
+# and funnels every scalar write through one choke point (`edit.set_field`,
+# where the conditional guards and the normalisers live). Seventeen fields
+# arrived in D6 with no way to reach them from a browser, and seventeen more
+# hand-written wrappers would have been seventeen places to edit the day
+# towerkit grows an eighteenth — which is exactly the drift the field ledger in
+# web/parity.py exists to catch, and which it caught only AFTER five fields had
+# already shipped unreachable. So the scalar path is derived: one function, over
+# whatever towerkit says is writable today.
+
+
+def _addressed(
+    program: Program, kind: str, target: str | None, index: int | None
+) -> Any:
+    """The row a (kind, target, index) address names.
+
+    `mcpsurface.TARGET` says which halves of the address each kind needs;
+    towerkit's `edit._entity` then resolves it, raising KeyError for an unknown
+    id and IndexError for a bad position — neither of which `_mutate` catches,
+    so both would escape as a 500. This resolves the same address out of
+    bookkit's OWN finders, which raise the ordinary ValueError refusal instead.
+
+    It is assembled from `_find_layer` / `_find_line` / `_check_index` rather
+    than written fresh, so it is not a second definition of "which row" — and
+    `tests/test_towerfields.py` pins it against `edit._entity` for every kind
+    towerkit publishes, so a change to towerkit's addressing turns this red
+    rather than letting the two drift.
+    """
+    needs = mcpsurface.TARGET.get(kind)
+    if needs is None:
+        raise ValueError(f"{kind!r} is not a towerkit record kind")
+    if "target" in needs and not target:
+        raise ValueError(f"a {kind} is addressed by id; none was given")
+    if "index" in needs and index is None:
+        raise ValueError(f"a {kind} is addressed by position; none was given")
+
+    if kind == "program":
+        return program
+    if kind == "line":
+        _find_line(program, str(target))
+        return next(line for line in program.lines if line.id == str(target))
+    if kind == "layer":
+        return _find_layer(program, str(target))
+    if kind == "retention":
+        _check_index(list(program.retentions), int(index or 0), "retention")
+        return program.retentions[int(index or 0)]
+    if kind == "sublimit":
+        _check_index(list(program.sublimits), int(index or 0), "sublimit")
+        return program.sublimits[int(index or 0)]
+    layer = _find_layer(program, str(target))
+    if kind == "participant":
+        _check_index(list(layer.participants), int(index or 0), "market")
+        return layer.participants[int(index or 0)]
+    if kind == "named_limit":
+        _check_index(list(layer.named_limits), int(index or 0), "named limit")
+        return layer.named_limits[int(index or 0)]
+    raise ValueError(f"{kind!r} is not a towerkit record kind")
+
+
+def tower_field_value(
+    program: Program, kind: str, name: str, target: str | None = None,
+    index: int | None = None,
+) -> Any:
+    """What a field currently holds, addressed the same way a write is.
+
+    Reads go through `Entry.path` rather than the wire name because pydantic
+    accepts the PYTHON name and towerkit's wire name is the alias —
+    `getattr(layer, 'policyNumber')` raises. An absent container reads as None
+    (there is no render block, so `showTotals` has no value), which is what the
+    display cell renders as an em-dash and what the write path then
+    materialises from defaults.
+    """
+    entry = mcpsurface.resolve(kind, name)
+    value: Any = _addressed(program, kind, target, index)
+    for step in entry.path:
+        if value is None:
+            return None
+        value = getattr(value, step)
+    return value
+
+
+def set_tower_field(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    kind: str,
+    name: str,
+    value: Any,
+    target: str | None = None,
+    index: int | None = None,
+) -> Diagnostics:
+    """Set ONE towerkit field, over the whole derived surface.
+
+    `value` has already been through `towerfields.to_wire`, so it is the type
+    the model holds (whole dollars for money, a real bool, a list for states) —
+    the money boundary and the typed-text lexicon are that module's job, and
+    doing either here would put a second copy of the cents rule inside the
+    write path.
+
+    A MISSING PARENT is materialised from its defaults, on the same terms the
+    MCP server uses: only if the model can build one with no invented data
+    (`RenderSettings()` can; `Period` needs both dates and so is refused with
+    the sentence naming them), and only through `edit.set_container`, because
+    `program.render` is on towerkit's denylist precisely so no surface writes
+    one with a bare setattr. The note saying WHICH defaults were written rides
+    back as a warning: the caller is now answerable for values they never sent.
+    """
+    entry = mcpsurface.resolve(kind, name)
+    created: list[str] = []
+
+    def mutate(program: Program) -> None:
+        entity = _addressed(program, kind, target, index)
+        if entry.container is not None and getattr(entity, entry.path[0]) is None:
+            if not mcpsurface.container_defaultable(entry):
+                raise ValueError(
+                    mcpsurface.missing_container_message(
+                        entry, mcpsurface.subject(kind, target, index)
+                    )
+                )
+            container, note = mcpsurface.create_container(entry)
+            edit_set_container(
+                program, kind, entry.field, container,
+                mcpsurface.edit_address(entry, target, index), index,
+            )
+            created.append(note)
+        mcpsurface.apply(program, entry, target, index, value)
+
+    diags = _mutate(conn, placement_id, mutate)
+    for note in created:
+        if diags.ok:
+            diags.warn("container-created", note)
+    return diags
+
+
+def add_named_limit(
+    conn: sqlite3.Connection, placement_id: str, layer_id: str,
+    name: str, amount_cents: int,
+) -> Diagnostics:
+    """One coordinate limit on a layer — the several figures a policy states
+    where `limit` states one. Appended, never sorted: order is the file's order
+    and the file's order is display order (towerkit.edit.add_named_limit)."""
+
+    def mutate(program: Program) -> None:
+        _find_layer(program, layer_id)
+        if not name.strip():
+            raise ValueError("a named limit needs a name")
+        edit_add_named_limit(
+            program, layer_id, name.strip(), _require_dollars(amount_cents, "amount")
+        )
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def remove_named_limit(
+    conn: sqlite3.Connection, placement_id: str, layer_id: str, index: int
+) -> Diagnostics:
+    def mutate(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        _check_index(list(layer.named_limits), index, "named limit")
+        edit_remove_named_limit(program, layer_id, index)
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def named_limits_of(
+    conn: sqlite3.Connection, placement_id: str, layer_id: str
+) -> list[dict[str, Any]]:
+    """A layer's coordinate limits as the panel reads them: cents, because
+    every money value bookkit HANDS a surface is cents (CLAUDE.md) and the
+    file's whole dollars are towerkit's side of the boundary."""
+    linked = linked_program(conn, placement_id)
+    if linked.program is None:
+        return []
+    for layer in linked.program.layers:
+        if layer.id == layer_id:
+            return [
+                {
+                    "index": i,
+                    "name": nl.name,
+                    "amount_cents": dollars_to_cents(nl.amount),
+                }
+                for i, nl in enumerate(layer.named_limits)
+            ]
+    return []
+
 @dataclass(frozen=True)
 class LinkedProgram:
     """A placement's towerkit file, loaded — or the reason it is not.
@@ -1479,6 +1729,10 @@ def program_terms_of(program: Program | None) -> dict[str, list[dict[str, Any]]]
                 "type": str(r.type),
                 "amount_cents": dollars_to_cents(r.amount),
                 "applies_to": list(r.applies_to),
+                # D6: read so the edit form can PREFILL it. A note the form
+                # cannot see is a note the form silently clears on the next
+                # save, which is worse than not offering the field at all.
+                "notes": r.notes,
             }
             for i, r in enumerate(program.retentions)
         ],
@@ -1488,6 +1742,7 @@ def program_terms_of(program: Program | None) -> dict[str, list[dict[str, Any]]]
                 "name": s.name,
                 "amount_cents": dollars_to_cents(s.amount),
                 "applies_to": list(s.applies_to),
+                "notes": s.notes,
             }
             for i, s in enumerate(program.sublimits)
         ],

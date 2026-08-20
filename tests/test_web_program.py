@@ -2595,3 +2595,308 @@ def test_the_rail_says_which_of_the_two_happened(app_and_org):
     assert landing, "no redirect to carry the outcome"
     page = client.get(landing).text
     assert "put back" in page.lower() or "reverted" in page.lower()
+
+
+# --- D6: towerkit's derived field surface, in the browser ----------------------
+#
+# Seventeen towerkit fields were writable only from towerkit's own editor,
+# behind the TUI's `o`, which a browser does not have — "built but not
+# accessible" (statutory, 2026-08-19). What is asserted here is not seventeen
+# fields but the SEAM: that a field declared in `_PLACED` actually renders,
+# actually saves through towerkit's guards, and actually reaches the file.
+
+
+def _field_url(org, placement, kind, name, addr):
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}/field/{kind}/{addr}/{name}"
+    )
+
+
+def _reload_program(conn, placement):
+    from bookkit import sync as _sync
+
+    return _sync.linked_program(conn, placement.id).program
+
+
+def test_every_placed_field_actually_renders_on_the_page(app_and_org):
+    """A GREEN SUITE PROVES NOTHING BROKE, NOT THAT THE NEW PATH IS TAKEN
+    (CLAUDE.md, 2026-08-15): `_PLACED` is a table of intentions, and a table of
+    intentions is what shipped `entity_actions.push_form` past 33 call sites
+    that bypassed it. So every row is checked against the RENDERED page.
+
+    The details-row fields are fetched with the row, because that is where they
+    live; everything else is on the panel itself.
+    """
+    from bookkit.web.routes.program import _PLACED
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    # A named limit's own two cells exist only where a named limit does, which
+    # is right — an empty strip should print no cells. One is added so the row
+    # is present and the two are genuinely checked rather than skipped.
+    assert sync.add_named_limit(
+        conn, placement.id, layer["id"], "Products", 2_000_000_00
+    ).ok
+    page = client.get(f"/accounts/{org.ref}/program").text
+    row = client.get(_details_url(org, placement, layer["id"])).text
+    everywhere = page + row
+
+    missing = [
+        key for key in _PLACED
+        if f'data-field="{key}"' not in everywhere
+    ]
+    assert not missing, f"declared in _PLACED and rendered nowhere: {missing}"
+
+
+def test_a_derived_layer_field_saves_into_the_towerkit_file(app_and_org):
+    """The prose a broker states on a quote and towerkit prints on the SOI."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    addr = f"{layer['id']}:_"
+
+    saved = client.post(
+        _field_url(org, placement, "layer", "limitsDetail", addr),
+        data={"layer.limitsDetail": "$5M per occurrence / $10M aggregate"},
+    )
+
+    assert saved.status_code == 200
+    assert saved.text.lstrip().startswith("<span"), "a detail cell came back as a td"
+    fresh = next(
+        ly for ly in _reload_program(conn, placement).layers if ly.id == layer["id"]
+    )
+    assert fresh.limits_detail == "$5M per occurrence / $10M aggregate"
+
+
+def test_a_derived_field_is_cleared_by_emptying_it(app_and_org):
+    """`clearable` is towerkit's own answer, read off the model — emptying the
+    box drops the key from the file rather than writing an empty string."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    addr = f"{layer['id']}:_"
+    url = _field_url(org, placement, "layer", "notes", addr)
+    client.post(url, data={"layer.notes": "quota share above $25M"})
+
+    client.post(url, data={"layer.notes": ""})
+
+    fresh = next(
+        ly for ly in _reload_program(conn, placement).layers if ly.id == layer["id"]
+    )
+    assert fresh.notes is None
+
+
+def test_a_value_towerkit_refuses_comes_back_in_the_cell_with_the_typing_intact(
+    app_and_org,
+):
+    """Commit-in-place, for a refusal that came from towerkit's guards rather
+    than bookkit's parser — the user should not be able to tell which."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    refused = client.post(
+        _field_url(org, placement, "named_limit", "amount", f"{layer['id']}:0"),
+        data={"named_limit.amount": "1,234.56"},
+    )
+
+    assert refused.status_code == 200
+    assert "1,234.56" in refused.text, "the typed value was thrown away"
+    assert "cell-error" in refused.text
+
+
+def test_a_line_whose_id_starts_with_i_keeps_its_address(app_and_org, tmp_path):
+    """THE INLAND MARINE BUG. The address was first encoded as a bare id for a
+    target and `i3` for a position, told apart by a leading "i" — so the line
+    id "im", which every real book has, parsed as "index m", lost its target
+    and took the whole Program tab down with it. There is no safe leading
+    character to pick out of user-supplied ids; both halves are always present
+    now, and this is the case that says so.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    assert sync.add_line(conn, placement.id, "Inland Marine").ok
+    assert sync.project(
+        conn, Path(placement.program_path), placement_id=placement.id
+    ).ok
+    line_id = next(
+        lid for lid, _ in sync.program_lines(conn, placement.id) if lid.startswith("i")
+    )
+
+    page = client.get(f"/accounts/{org.ref}/program")
+
+    assert page.status_code == 200
+    saved = client.post(
+        _field_url(org, placement, "line", "abbr", f"{line_id}:_"),
+        data={"line.abbr": "IM"},
+    )
+    assert saved.status_code == 200
+    assert next(
+        ln for ln in _reload_program(conn, placement).lines if ln.id == line_id
+    ).abbr == "IM"
+
+
+def test_a_column_label_answers_with_the_whole_panel(app_and_org):
+    """Every layer table header re-letters, so the cell alone would leave the
+    headers stale until a refresh."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    line_id = sync.program_lines(conn, placement.id)[0][0]
+
+    saved = client.post(
+        _field_url(org, placement, "line", "abbr", f"{line_id}:_"),
+        data={"line.abbr": "XX"},
+    )
+
+    _assert_panel_swap(saved, placement.id)
+
+
+def test_a_chart_option_materialises_the_render_block_it_needs(app_and_org):
+    """`program.render` is absent on most files and is on towerkit's DENYLIST —
+    no caller may set the container wholesale, because setting it blanks every
+    sibling. It is built from its own defaults through `edit.set_container`,
+    which is the one door, and the write then lands on the member asked for.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    assert _reload_program(conn, placement).render is None
+
+    saved = client.post(
+        _field_url(org, placement, "program", "render.showPremiums", "_:_"),
+        data={"program.render.showPremiums": "false"},
+    )
+
+    assert saved.status_code == 200
+    render = _reload_program(conn, placement).render
+    assert render is not None
+    assert render.show_premiums is False
+    # every sibling still at ITS default, not blanked
+    assert render.show_totals is True
+
+
+def test_the_tower_download_honours_the_saved_chart_options(app_and_org):
+    """Before D6 this route rendered with the library defaults and ignored the
+    file's own settings, so a broker who had turned premiums off in towerkit's
+    editor got them back on every download bookkit produced. Shipping the chart
+    strip without this would have made it a set of controls that provably
+    changed nothing."""
+    import bookkit.web.routes.program as program_routes
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    client.post(
+        _field_url(org, placement, "program", "render.showTotals", "_:_"),
+        data={"program.render.showTotals": "false"},
+    )
+
+    seen = {}
+    real = program_routes._loaded_program
+
+    def spy(*args, **kwargs):
+        program = real(*args, **kwargs)
+        seen["render"] = program.render
+        return program
+
+    program_routes._loaded_program = spy
+    try:
+        drawn = client.get(
+            f"/accounts/{org.ref}/program/{placement.id}/export/tower.svg"
+        )
+    finally:
+        program_routes._loaded_program = real
+
+    assert drawn.status_code == 200
+    assert seen["render"].show_totals is False
+    assert b"<svg" in drawn.content
+
+
+def _named_limits_base(org, placement, layer_id):
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/named-limits"
+    )
+
+
+def test_a_named_limit_is_added_edited_and_removed_from_the_row(app_and_org):
+    """The several figures a policy states where `limit` states one. Adding a
+    ROW is not a field write and has no set_field to derive from, so the two
+    collection routes are hand-written; the row's own name and amount are
+    ordinary derived cells."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    base = _named_limits_base(org, placement, layer["id"])
+
+    added = client.post(base, data={"name": "Products & Completed Ops", "amount": "2m"})
+    assert added.status_code == 200
+    assert added.text.lstrip().startswith("<tr"), "the add did not answer with the row"
+    limits = sync.named_limits_of(conn, placement.id, layer["id"])
+    assert [(nl["name"], nl["amount_cents"]) for nl in limits] == [
+        ("Products & Completed Ops", 2_000_000_00)
+    ]
+
+    client.post(
+        _field_url(org, placement, "named_limit", "amount", f"{layer['id']}:0"),
+        data={"named_limit.amount": "3m"},
+    )
+    assert sync.named_limits_of(conn, placement.id, layer["id"])[0][
+        "amount_cents"
+    ] == 3_000_000_00
+
+    removed = client.post(f"{base}/0/remove")
+    assert removed.status_code == 200
+    assert sync.named_limits_of(conn, placement.id, layer["id"]) == []
+
+
+def test_a_term_note_saves_with_the_figure_and_is_cleared_by_emptying_it(
+    app_and_org, tmp_path
+):
+    """One write, one undo unit: the note travels in the same save as the
+    amount it qualifies. Emptying the box CLEARS it — towerkit's own `notes=`
+    keyword cannot express that, because None already means "leave alone"
+    there, which is what `set_notes` is for."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    assert sync.add_retention(
+        conn, placement.id, ["gl"], "deductible", amount_cents=250_000_00,
+        notes="per claim, eroding",
+    ).ok
+    assert sync.project(
+        conn, Path(placement.program_path), placement_id=placement.id
+    ).ok
+    index = sync.program_terms(conn, placement.id)["retentions"][-1]["index"]
+
+    form = client.get(f"{_terms_base(org, placement, 'retentions')}/{index}/edit").text
+    assert "per claim, eroding" in form, "the note is not prefilled — the next save clears it"
+
+    client.post(
+        f"{_terms_base(org, placement, 'retentions')}/{index}",
+        data={"type": "sir", "amount": "500,000", "line": ["gl"], "notes": ""},
+    )
+
+    assert sync.program_terms(conn, placement.id)["retentions"][index]["notes"] is None
+
+
+def test_a_derived_cell_offers_the_same_three_way_when_the_file_moves(app_and_org):
+    """A conflict is not a refused value, and the answer is a CHOICE. The
+    derived cells reuse the layer cells' dialog rather than growing a second
+    one — two dialogs is how the same question comes to have two answers."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    _touch_out_of_band(placement)
+
+    refused = client.post(
+        _field_url(org, placement, "layer", "notes", f"{layer['id']}:_"),
+        data={"layer.notes": "typed while the file moved"},
+    )
+
+    assert refused.status_code == 200
+    assert "/reload" in refused.text and "/overwrite" in refused.text
+    assert "typed while the file moved" in refused.text
+    assert layer["name"] in refused.text, "the dialog does not say which row"

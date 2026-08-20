@@ -305,3 +305,53 @@ def test_every_towerkit_model_field_is_accounted_for():
         f"{sorted(public - set(TOWERKIT_MODEL_FIELDS))}; "
         f"stale ledger entries: {sorted(set(TOWERKIT_MODEL_FIELDS) - public)}"
     )
+
+
+# --- D6: the placement table is load-bearing, not descriptive -----------------
+
+
+def test_every_placed_field_is_one_towerkit_actually_publishes():
+    """`routes/program.py:_PLACED` says where each derived field is PUT. Every
+    key is resolved against `mcpsurface.SURFACE`, so a field towerkit renames
+    or denies turns this red rather than 404ing at a user who clicks the cell.
+    """
+    from towerkit import mcpsurface
+
+    from bookkit.web.routes.program import _PLACED
+
+    unknown = []
+    for key in _PLACED:
+        kind, _, name = key.partition(".")
+        if name not in mcpsurface.SURFACE.get(kind, {}):
+            unknown.append(key)
+    assert not unknown, f"_PLACED names fields towerkit does not publish: {unknown}"
+
+
+def test_a_field_with_a_cell_is_not_still_described_as_planned():
+    """THE DRIFT THAT HAS SHIPPED THREE TIMES: the thing gets built and the
+    ledger keeps saying it is pending, so the ledger stops being evidence and
+    the next audit re-finds work that is already done (three entries corrected
+    on 2026-08-19 alone). A field with a cell on the page cannot still be
+    marked planned here.
+    """
+    import re
+
+    from bookkit.web.parity import TOWERKIT_MODEL_FIELDS
+    from bookkit.web.routes.program import _PLACED
+
+    # `_PLACED` is keyed by towerkit's WIRE name (layer.limitsDetail); the
+    # ledger is keyed by the model's python name (Layer.limits_detail). One
+    # rule converts between them rather than a second hand-written table.
+    def ledger_key(placed: str) -> str:
+        kind, _, name = placed.partition(".")
+        head = "".join(part.title() for part in kind.split("_"))
+        snake = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name.split(".")[0]).lower()
+        return f"{head}.{snake}"
+
+    still_planned = [
+        key for key in _PLACED
+        if "NOT BUILT" in TOWERKIT_MODEL_FIELDS.get(ledger_key(key), "")
+    ]
+    assert not still_planned, (
+        f"built and reachable, still marked planned in the ledger: {still_planned}"
+    )

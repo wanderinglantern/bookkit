@@ -20,6 +20,39 @@
     <span class="detail-label">policy no</span>{{ policy_cell | safe }}
     <span class="detail-label">policy effective</span>{{ from_cell | safe }}
     <span class="detail-label">policy expiry</span>{{ to_cell | safe }}
+    {# D6: the coverage facts towerkit prints on the SOI and the schematic and
+       a broker states on a quote. They were writable through towerkit's own
+       editor and unreachable from a browser, which has no `o` — "built but not
+       accessible" (statutory, 2026-08-19).
+
+       Every one of these cells is rendered AND saved by the derived seam
+       (routes/program.py `_PLACED`, towerfields, sync.set_tower_field): the
+       type, the bounds, the guards and whether it may be cleared all come from
+       towerkit's own published surface, so a field towerkit grows needs a row
+       in `_PLACED` and nothing else. Spans, like every cell at this depth. #}
+    <span class="detail-label" title="statutory jurisdictions — towerkit refuses these on a dollar-limited layer">states</span>{{ tower_cells.states | safe }}
+    <span class="detail-label">limits detail</span>{{ tower_cells.limitsDetail | safe }}
+    <span class="detail-label">retention detail</span>{{ tower_cells.retentionDetail | safe }}
+    <span class="detail-label" title="the word a zero premium prints">premium detail</span>{{ tower_cells.premiumDetail | safe }}
+    <span class="detail-label">notes</span>{{ tower_cells.notes | safe }}
+    {# Named limits: the several figures a policy states where `limit` states
+       one. No ids — towerkit addresses them by position, so the remove control
+       carries the index a read reported and the row re-renders after every
+       write rather than leaving stale positions on the page. #}
+    <span class="detail-label">named limits</span>
+    {% for nl in named_limits %}
+      <span class="named-limit">{{ nl.name_cell | safe }}{{ nl.amount_cell | safe }}<button
+              type="button" class="chip-remove" aria-label="Remove this named limit"
+              title="Remove this named limit"
+              hx-post="{{ base }}/named-limits/{{ nl.index }}/remove"
+              hx-target="closest tr" hx-swap="outerHTML">&times;</button></span>
+    {% endfor %}
+    <form class="market-add-form" hx-post="{{ base }}/named-limits"
+          hx-target="closest tr" hx-swap="outerHTML">
+      <input type="text" name="name" placeholder="named limit" required>
+      <input type="text" name="amount" placeholder="1.5m &middot; 250k" required>
+      <button type="submit" class="row-action-btn">add limit</button>
+    </form>
     <span class="detail-label">applies to</span>
     {# Toggle chips (phase 3): each POST rescopes the layer to current±line
        through sync.set_applies_to — dead code until these, its first

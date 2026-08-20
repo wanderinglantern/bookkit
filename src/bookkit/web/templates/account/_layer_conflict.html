@@ -20,10 +20,16 @@
    keys live as spans inside the details row's colspan td, and a literal
    <td> swapped there has no table-row ancestor at the swap point — the
    parser drops it outright, and the conflict UI silently never appears
-   (fresh-eyes review, 2026-08-19). #}
+   (fresh-eyes review, 2026-08-19).
+
+   `subject` is what this row is CALLED — a layer's name, a line's name, the
+   programme's. It used to be `layer.name`, which made this template unusable
+   for the derived field cells (D6) even though the three-way choice is
+   identical for them; a second copy of a conflict dialog is how the two come
+   to offer different answers to the same question. #}
 <{{ tag }} class="cell cell-editing cell-error" data-field="{{ field.key }}">
   <div class="conflict" role="alertdialog" aria-label="This program file changed">
-    <p class="conflict-title">{{ layer.name }} — the file changed while you were editing</p>
+    <p class="conflict-title">{{ subject }} — the file changed while you were editing</p>
     <p class="conflict-detail">{{ message }}</p>
     <p class="conflict-detail">Nothing has been written.</p>
     <div class="form-actions">

@@ -283,6 +283,29 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "tui": "D on a carriers-table row, confirm first",
         "mcp": "DEFERRED — no tool; same mcpparity decision as remove_layer",
     },
+    "set_tower_field": {
+        "web": "every derived field cell — the layer's states and its four "
+        "prose fields in the details row, a line's column label on the lines "
+        "strip, the programme's note and its six chart options "
+        "(POST .../field/{kind}/{addr}/{name}); routes/program.py `_PLACED` "
+        "names where each one is PUT and is checked against "
+        "mcpsurface.SURFACE by tests/test_web_parity.py",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "program_edit_field — towerkit's own tool over the same "
+        "surface; bookkit's MCP server does not duplicate it",
+    },
+    "add_named_limit": {
+        "web": "the details row's named-limit strip (POST .../named-limits)",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — structure from an assistant is undecided, the same "
+        "call as remove_layer and set_applies_to",
+    },
+    "remove_named_limit": {
+        "web": "the x on a named-limit chip "
+        "(POST .../named-limits/{index}/remove)",
+        "tui": "via o -> towerkit's editor",
+        "mcp": "DEFERRED — same call as add_named_limit",
+    },
     "set_applies_to": {
         "web": "the details row's applies-to chips — the verb's first caller "
         "ever (POST .../layers/{layer_id}/applies-to)",
@@ -416,38 +439,34 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
     "Layer.premium": "layer cell (premium_cents)",
     "Layer.participants": "the market chips on the row (add/edit/remove)",
     "Layer.named_limits": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: the coordinate-limits "
-        "editor in the details row. towerkit.edit grew add/edit/remove_named_limit "
-        "and bookkit has no wrapper yet."
+        "the named-limit strip in the details row: add and remove are hand-written (a row is not "
+        "a field write), and each row's name and amount are derived cells"
     ),
     "Layer.states": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: statutory jurisdictions in the "
-        "details row, through edit.set_states. towerkit validates these "
-        "(ND/OH/WA/WY cannot be privately covered) and refuses them on a "
-        "dollar-limited layer."
+        "states cell in the details row, through the derived field seam (routes/program.py "
+        "`_PLACED` -> towerfields -> sync.set_tower_field)"
     ),
     "Layer.limits_detail": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "details-row prose, via edit.set_field"
+        "limits-detail cell in the details row, through the derived field seam (routes/program.py "
+        "`_PLACED` -> towerfields -> sync.set_tower_field)"
     ),
     "Layer.retention_detail": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "details-row prose, via edit.set_field"
+        "retention-detail cell in the details row, through the derived field seam "
+        "(routes/program.py `_PLACED` -> towerfields -> sync.set_tower_field)"
     ),
     "Layer.premium_detail": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "details-row prose, via edit.set_premium_detail"
+        "premium-detail cell in the details row, through the derived field seam "
+        "(routes/program.py `_PLACED` -> towerfields -> sync.set_tower_field)"
     ),
     "Layer.notes": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "details-row prose, via edit.set_field"
+        "notes cell in the details row, through the derived field seam (routes/program.py "
+        "`_PLACED` -> towerfields -> sync.set_tower_field)"
     ),
     # --- Line ----------------------------------------------------------------
     "Line.id": "identity — follows the name (sync.rename_line cascades)",
     "Line.name": "the lines strip: the name is an inline cell",
     "Line.abbr": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "the lines strip's column-label cell"
+        "the column-label cell on the lines strip, same derived seam"
     ),
     "Line.group": (
         "DEFERRED BY NAME — line grouping is diagram cosmetics, is not "
@@ -477,10 +496,12 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
     "Program.retentions": "the terms strip",
     "Program.sublimits": "the terms strip",
     "Program.notes": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "a program-level note on the section header"
+        "the notes fact on the section header, same derived seam"
     ),
-    "Program.render": "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: the render-settings panel",
+    "Program.render": (
+        "the chart strip beside export — every member is a derived cell; the container is "
+        "materialised from its defaults on first write (mcpsurface.create_container)"
+    ),
     # --- Retention / Sublimit -------------------------------------------------
     "Retention.applies_to": "terms strip: the retention form's lines",
     "Retention.type": "terms strip: the retention form's type",
@@ -488,40 +509,32 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
     "Retention.aggregate": "terms strip: the retention form's aggregate",
     "Retention.vehicle": "terms strip: the retention form's vehicle",
     "Retention.notes": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "a notes field on the retention form"
+        "a notes box on the retention form, saved in the same write"
     ),
     "Sublimit.name": "terms strip: the sublimit form's name",
     "Sublimit.amount": "terms strip: the sublimit form's amount",
     "Sublimit.applies_to": "terms strip: the sublimit form's lines",
     "Sublimit.notes": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "a notes field on the sublimit form"
+        "a notes box on the sublimit form, saved in the same write"
     ),
     # --- RenderSettings -------------------------------------------------------
     "RenderSettings.theme": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "the render-settings panel"
+        "the chart strip's theme cell"
     ),
     "RenderSettings.show_totals": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "the render-settings panel"
+        "the chart strip's totals cell"
     ),
     "RenderSettings.show_premiums": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "the render-settings panel"
+        "the chart strip's premiums cell"
     ),
     "RenderSettings.cell_premiums": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "the render-settings panel"
+        "the chart strip's premium-per-cell cell"
     ),
     "RenderSettings.cell_dates": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "the render-settings panel"
+        "the chart strip's dates-per-cell cell"
     ),
     "RenderSettings.soi_schematic": (
-        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
-        "the render-settings panel"
+        "the chart strip's SOI-schematic cell"
     ),
 }
 

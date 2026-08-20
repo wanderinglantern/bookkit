@@ -2830,6 +2830,8 @@ table.rows .muted {
 .term-chip:focus-within .chip-remove,
 .market:hover .chip-remove,
 .market:focus-within .chip-remove,
+.named-limit:hover .chip-remove,
+.named-limit:focus-within .chip-remove,
 tr:hover .market .chip-remove {
   opacity: 1;
 }
@@ -3033,4 +3035,66 @@ tr:hover .market .chip-remove {
 .unlinked-score {
   color: var(--muted);
   font-size: var(--hint-size);
+}
+
+
+/* --- D6: towerkit's derived fields ------------------------------------- */
+
+/* A named limit is a name and a figure that belong to each other, so they are
+   ONE chip with a shared border rather than two loose cells — the details row
+   already carries five labelled values and an unbounded pair reads as a sixth
+   and seventh. Same hover/focus reveal as every other chip; `opacity: 0`, never
+   `visibility: hidden`, which removes the control from the focus order and
+   makes :focus-within unreachable (2026-08-20). */
+.named-limit {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.15rem;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: var(--wash);
+  padding: 0.05rem 0.15rem 0.05rem 0.3rem;
+  margin-right: 0.25rem;
+}
+
+.named-limit:hover,
+.named-limit:focus-within {
+  border-color: var(--border);
+  background: var(--paper);
+}
+
+.named-limit .cell {
+  padding: 0 0.15rem;
+}
+
+/* The column label sits WITH the line's name, small and muted, because it is
+   a rendering of that name rather than a second fact about the line. */
+.chip-abbr {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.chip-abbr .cell {
+  padding: 0 0.15rem;
+}
+
+/* The saved chart options, beside export because that is what they govern.
+   Wrapping, because six options plus their labels do not fit one line at 1280
+   and a strip that overflows silently is the footer bug in another place. */
+.chart-options {
+  flex-wrap: wrap;
+  gap: 0.3rem 0.9rem;
+}
+
+.chart-option {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+/* A note runs longer than a period or a commission, so it takes the whole row
+   of the facts list rather than squeezing the two beside it. */
+.program-facts .fact-wide {
+  flex-basis: 100%;
 }

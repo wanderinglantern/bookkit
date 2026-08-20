@@ -25,6 +25,13 @@
                {% if line.id in values.get("line", []) %}checked{% endif %}>{{ line.name }}
       </label>
     {% endfor %}
+    {# D6: towerkit prints a term's note on the SOI, and until now only
+       towerkit could write one. Part of THIS form rather than a cell of its
+       own so the note is saved in the same write as the figure it qualifies —
+       one file write, one undo unit. Emptying it CLEARS the note (sync's
+       `set_notes`), which towerkit's own `notes=` keyword cannot express. #}
+    <input type="text" name="notes" aria-label="notes" placeholder="note (optional)"
+           value="{{ values.get('notes', '') }}">
     <button type="submit" class="row-action-btn">save</button>
     <button type="button" class="row-action-btn"
             hx-get="{{ cancel_url }}"
