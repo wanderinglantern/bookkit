@@ -240,17 +240,16 @@ def test_four_tabs_render_with_real_counts(app_and_org):
     assert _tab_badge(response.text, "Pipeline").isdigit()
 
 
-# The team rail's copy changed 2026-08-19 (audit): "empty — add the first
-# row" is the spec's ADDABLE-list phrase, and the rail's Assign control is
-# unrendered under D4 — copy that implies an add the page does not offer is
-# the same dishonesty class. The canonical phrase returns WITH the control.
+# The addable-list phrase returned WITH the control (gap 7): the rail's
+# Assign really adds now, so "empty — add the first row" is literally true
+# again — the audit's honest interim copy retired with the gap.
 @pytest.mark.parametrize(
     "tab,heading_text",
     [
-        ("program", "no team assigned yet"),
-        ("relationship", "no team assigned yet"),
+        ("program", "empty — add the first row"),
+        ("relationship", "empty — add the first row"),
         ("work", "no open tasks — add one"),
-        ("pipeline", "no team assigned yet"),
+        ("pipeline", "empty — add the first row"),
     ],
 )
 def test_each_tab_renders_its_empty_state_and_marks_itself_current(app_and_org, tab, heading_text):
@@ -780,8 +779,7 @@ def test_team_and_recent_changes_empty_states_use_canonical_copy(app_and_org):
     spec's attention-list phrasing, not invented copy."""
     client, org = app_and_org
     response = client.get(f"/accounts/{org.ref}/relationship")
-    assert "no team assigned yet" in response.text  # TEAM (no assignments seeded)
-    assert "empty — add the first row" not in response.text
+    assert "empty — add the first row" in response.text  # TEAM (Assign is live)
     assert "nothing here — that's good" in response.text  # RECENT CHANGES
     # the empty state sits beside a LIVE add, not a pending span
     assert f'hx-get="/accounts/{org.ref}/team/assign"' in response.text
