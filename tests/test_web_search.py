@@ -126,3 +126,11 @@ def test_the_topbar_search_form_is_on_other_pages(app_and_conn):
     assert response.status_code == 200
     assert 'action="/search"' in response.text
     assert 'name="q"' in response.text
+
+
+def test_search_does_not_pretend_to_be_the_book_section(app_and_conn):
+    """The topbar's section defaults to "book"; /search must not inherit
+    that and highlight a nav item the user is not on."""
+    client, _ = app_and_conn
+    html = client.get("/search", params={"q": "Atomic"}).text
+    assert 'is-current-section">Book<' not in html

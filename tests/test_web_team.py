@@ -380,3 +380,24 @@ def test_mcpserver_deactivate_routes_through_the_shared_service(client, monkeypa
     assert len(calls) == 1
     assert calls[0][1]["source"] == "mcp"
     assert calls[0][0][1] == member.id
+
+
+def test_a_cascade_over_the_blast_cap_refuses_in_the_page(client: TestClient):
+    """db.BlastRadiusExceeded is a refusal like ValueError: 200 with the
+    message in the members panel, never a 500 — and the over-cap rollback
+    means the member is still active with every assignment intact."""
+    from bookkit import db
+
+    conn = _conn(client)
+    member = team_repo.create_member(conn, "Atlas Overloaded")
+    for i in range(db.BLAST_CAP + 1):
+        org = orgs_repo.create(conn, name=f"Cap Filler {i}", kind="client")
+        team_repo.assign(conn, member.id, org_id=org.id, role="broker")
+
+    refused = client.post(
+        f"/team/members/{member.id}/deactivate", data={"cascade": "1"}
+    )
+    assert refused.status_code == 200
+    assert "narrow it" in refused.text
+    assert team_repo.get_member(conn, member.id).active
+    assert len(team_repo.for_member(conn, member.id)) == db.BLAST_CAP + 1

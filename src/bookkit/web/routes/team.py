@@ -35,6 +35,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from ... import db
 from ...forms.entities import (
     NEW_MEMBER,
     apply_assignment,
@@ -249,7 +250,9 @@ async def member_deactivate(request: Request, member_id: str) -> HTMLResponse:
     cascade = str(raw.get("cascade", "")) == "1"
     try:
         team_svc.member_deactivate(conn, member.id, cascade=cascade, source="web")
-    except ValueError as exc:
+    except (ValueError, db.BlastRadiusExceeded) as exc:
+        # the blast cap is a refusal like any other: a cascade over 250
+        # assignments lands in the page, not as a 500
         return _members_panel(request, error=str(exc))
     return _members_panel(request)
 

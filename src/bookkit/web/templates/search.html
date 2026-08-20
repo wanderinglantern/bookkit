@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Search — bookkit{% endblock %}
 {% block content %}
+  {# no nav item is "current" on /search — without this the topbar's
+     default("book") falsely highlights Book #}
+  {% set section = "search" %}
   {% include "partials/topbar.html" %}
 
   <div class="search-page">
