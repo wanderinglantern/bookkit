@@ -2256,3 +2256,27 @@ table.rows tr.is-waived td {
 .compare-badge-renewed { background: var(--good-wash); color: var(--good); }
 .compare-badge-new { background: var(--accent-wash); color: var(--accent); }
 .compare-badge-lapsed { background: var(--danger-wash); color: var(--danger); }
+
+/* --- the documents rail list (2026-08-19 audit fix) -------------------------- */
+
+.rail-doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rail-doc-list li {
+  margin-bottom: 0.5rem;
+}
+
+.rail-doc-title {
+  display: block;
+  font-weight: 600;
+}
+
+.rail-doc-path {
+  display: block;
+  font-size: var(--hint-size);
+  color: var(--muted);
+  word-break: break-all;
+}

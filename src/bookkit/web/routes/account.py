@@ -44,6 +44,7 @@ from ...models import (
 from ...repo import base as base_repo
 from ...repo import batches as batches_repo
 from ...repo import contacts as contacts_repo
+from ...repo import documents as documents_repo
 from ...repo import interactions as interactions_repo
 from ...repo import opportunities as opportunities_repo
 from ...repo import orgs as orgs_repo
@@ -622,6 +623,9 @@ def _context(
         ],
         "snapshot": _snapshot(conn, org, header, open_work, layers),
         "team": team_repo.for_org(conn, org.id),
+        # the rail's Documents list — it rendered a hard-coded "No documents
+        # yet" whatever the account held (2026-08-19 audit)
+        "documents": documents_repo.for_org(conn, org.id),
         "changes": changes,
         "last_undo": last_undo,
         "undo_action": undo_action,

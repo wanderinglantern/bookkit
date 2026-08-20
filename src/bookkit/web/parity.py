@@ -88,11 +88,28 @@ IMPLEMENTED: dict[str, str] = {
         "BUILT 2026-08-19 (phase 4), both flows behind the TUI's one key: the "
         "open-items workbook downloads from GET /accounts/{ref}/export/"
         "open-items.xlsx (the same services.export_open_items.write the "
-        "terminal calls), and the merge half landed in phase 3 (POST "
+        "terminal calls) — the anchor renders in the PROGRAMS PANEL HEAD, "
+        "account-scoped, so an account with no linked program still reaches "
+        "it (the audit caught it gated behind a linked placement's strip: "
+        "built but not accessible), and the merge half landed in phase 3 (POST "
         ".../program/{placement_id}/merge). Downloads are plain anchor GETs "
         "with Content-Disposition: attachment — the file-response decision is "
         "in DECISIONS.md. Tower SVG/PDF and the schematic workbook download "
         "beside it, through towerkit's own renderers."
+    ),
+    "new_submission": (
+        "BUILT 2026-08-19 (phase 2): + Submission on every program section "
+        "(GET/POST .../program/{placement_id}/submissions), the shared "
+        "submission_form, success redirecting to the Pipeline tab where the "
+        "row is visible. (The 2026-08-19 audit caught this entry still "
+        "PENDING after the build — the ledger's prose is hand-maintained, "
+        "and a shipped feature must move its entry in the same commit.)"
+    ),
+    "renew_placement": (
+        "BUILT 2026-08-19 (phase 2): Renew on every program section, "
+        "confirm-first, sync.renew in one web batch "
+        "(POST .../program/{placement_id}/renew). (Audit-corrected: this "
+        "entry sat in PENDING contradicting SYNC_VERBS in this same file.)"
     ),
     "scaffold_tower": (
         "BUILT 2026-08-19. A confirm step shows the DESTINATION PATH and then "
@@ -132,15 +149,8 @@ PENDING: dict[str, str] = {
         "task offer). Org-level edit_here (falling through to _edit_org) is "
         "still not built, so the action as a whole stays PENDING"
     ),
-    "new_submission": (
-        "a plain DB write (repo/submissions.create, no towerkit involvement) — "
-        "not built on the web yet"
-    ),
-    "renew_placement": (
-        "programs tab — phase 2 of the 2026-08-19 web-program plan wires the "
-        "header's Renew (sync.renew, confirm-first); until then the button is "
-        "not rendered (D4: unbuilt is unrendered)"
-    ),
+
+
     "open_towerkit": (
         "two flows behind one key. Opening a program in towerkit is a later "
         "slice; on the projects tab this same key runs _need_to_opportunity "
@@ -156,7 +166,10 @@ PENDING: dict[str, str] = {
     "delete_row": (
         "PARTLY built. `D` resolves by focused table: seven tables, FOUR kinds "
         "of row (contact, interaction, task, team assignment — AccountScreen."
-        "DELETABLE), and request items are not among them on either surface. "
+        "DELETABLE), and request items are not removable in the TUI — but the WEB "
+        "removes both request items (POST .../requests/{request_id}/items/"
+        "{item_id}/remove) and whole requests; the web is ahead here "
+        "(audit-corrected 2026-08-19 — this entry used to deny it). "
         "TWO kinds have a web route, each a confirm GET that writes nothing "
         "followed by a POST to the same path: contacts via "
         "/accounts/{ref}/contacts/{contact_id}/remove "
@@ -395,4 +408,82 @@ TOWERKIT_EDIT_OPS: dict[str, str] = {
     "remove_named_limit": "BRANCH-ONLY — decide when the branch merges",
     "set_field": "BRANCH-ONLY — the MCP field-write seam; decide when the branch merges",
     "set_container": "BRANCH-ONLY — the MCP container seam; decide when the branch merges",
+}
+
+
+# --- the screen-level ledger (2026-08-19 audit) --------------------------------
+#
+# The audit's structural finding: the ledgers above cover ACCOUNT actions,
+# sync verbs and towerkit ops — and none of them can turn red when a WHOLE
+# TUI SCREEN has no web answer. Today, Navigator, Calendar, Markets, Team,
+# Search and the global Pipeline board were invisible to every guard. This
+# ledger enumerates the TUI's screen modules (tests/test_web_parity.py
+# discovers them from src/bookkit/tui/screens/*.py, so a new screen turns
+# the suite red) plus the app-level keys, each PRESENT with its web home or
+# DEFERRED by name with a reason.
+
+SCREENS: dict[str, str] = {
+    "account": (
+        "PRESENT — /accounts/{ref}/{program|relationship|work|pipeline}; the "
+        "per-action truth lives in IMPLEMENTED/PENDING above. Overview folds "
+        "into the rail; Projects and Documents tabs are web-absent (documents "
+        "are a read-only rail list; projects are a named later slice)."
+    ),
+    "book": (
+        "PARTIAL — GET /book lists the book read-only; account CREATE and "
+        "EDIT (`a`/`e`) and the filter have no web answer, so a new client "
+        "still forces the terminal on day one. Top of the audit's gap list."
+    ),
+    "today": (
+        "DEFERRED — the daily brief (tasks due, renewals, stale accounts, "
+        "past-SLA) is design sub-project 2 (2026-08-17-web-frontend-design "
+        "\u00a7Decomposition); nothing on the web shows the day's work yet."
+    ),
+    "navigator": (
+        "DEFERRED — the attention tree (overdue never falls off) is design "
+        "sub-project 2; /book's next-renewal column is the only shadow of it."
+    ),
+    "calendar": "DEFERRED — the 12-month renewal grid; design sub-project 2.",
+    "markets": (
+        "DEFERRED — market CRUD, appetite, underwriters, aliases, merge/nest "
+        "have NO web surface; the web submission form dead-ends against it "
+        "('no markets on file — create one in the terminal app')."
+    ),
+    "team": (
+        "DEFERRED — member CRUD, assignment (`w`), deactivation; the account "
+        "rail's team list is read-only."
+    ),
+    "pipeline": (
+        "PARTIAL — the account Pipeline TAB reads well (quotes lead), but "
+        "the global kanban, stage moves, opportunity create/edit, the market "
+        "RESPONSE form (quote/decline/bind) and subjectivity writes are "
+        "web-absent: a web user can send a submission and never record its "
+        "outcome."
+    ),
+    "search": (
+        "DEFERRED — global `/` search and the command palette; finding an "
+        "account on the web means scanning /book."
+    ),
+    "help": (
+        "N/A BY SHAPE — a key-reference screen; the web equivalent is "
+        "discoverable controls, held to by tests/test_web_dead_controls.py."
+    ),
+    "import_screen": (
+        "DEFERRED BY DECISION — the book file import (staged report, "
+        "one-transaction commit) does not port; paste imports likewise "
+        "(see PENDING import_here/paste_items)."
+    ),
+    "onboarding": "DEFERRED — the client onboarding wizard has no web answer.",
+    "quick_capture_app_key": (
+        "DEFERRED — `n` quick capture (log an interaction with account "
+        "match and the follow-up-task offer) is the highest-frequency write "
+        "in the book and the web cannot make it; the timeline is edit/delete "
+        "only. Top of the audit's gap list with book-create."
+    ),
+    "sync_and_settings_app_keys": (
+        "DEFERRED — `y` sync programs + link review, `,` program-roots "
+        "setup; the web scaffold refusal still points at the terminal for "
+        "roots, and no web surface shows file sync state (in sync / changed "
+        "on disk)."
+    ),
 }

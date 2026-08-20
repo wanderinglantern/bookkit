@@ -111,18 +111,34 @@
             </div>
           {% endfor %}
         {% else %}
-          {# TEAM is an addable list (the Assign link above adds to it) — the
-             spec's addable-list empty state, not an invented phrase. #}
-          <p class="empty">empty — add the first row</p>
+          {# The Assign control was unrendered under D4 (assignments are a
+             named deferral, parity.SCREENS["team"]), so this empty state
+             must not imply a way to add that this page does not offer —
+             comment rot the 2026-08-19 audit caught. #}
+          <p class="empty">no team assigned yet</p>
         {% endif %}
       </section>
 
       <section class="rail-section">
         <h2 class="rail-label">Documents</h2>
-        <div class="documents-empty">
-          <p>No documents yet</p>
-          <p>Drop a binder, loss run or SOV here — BookKit records the path, not the file.</p>
-        </div>
+        {# THE LIST IS REAL now (audit, 2026-08-19): this section rendered a
+           hard-coded "No documents yet" whatever the account held, plus a
+           drop-target promise nothing handled — a false statement about data
+           wearing D4's inert-affordance smell. Read-only; adding documents
+           is still the TUI's `a` on its tab, a named later slice. #}
+        {% if documents %}
+          <ul class="rail-doc-list">
+            {% for doc in documents %}
+              <li><span class="rail-doc-title">{{ doc.title }}</span>
+                {% if doc.kind %}<span class="detail-label">{{ doc.kind }}</span>{% endif %}
+                <span class="rail-doc-path mono">{{ doc.path }}</span></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="documents-empty">
+            <p>No documents yet — BookKit records the path, not the file.</p>
+          </div>
+        {% endif %}
       </section>
 
       <section class="rail-section">
