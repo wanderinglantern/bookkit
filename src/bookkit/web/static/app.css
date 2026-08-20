@@ -2446,3 +2446,37 @@ a.search-row:focus-visible {
   max-width: 36rem;
   margin: 0.75rem 0 1rem;
 }
+
+/* --- quick capture (/capture) ---------------------------------------------
+   A full page carrying one entity-form: capture is entered from every page
+   (the top bar's "+ Log", the account header's "+ Log interaction") and
+   belongs to no panel, so the form gets a centered column of its own rather
+   than a .form-host slot. */
+.capture-page {
+  max-width: 40rem;
+  margin: 2rem auto 4rem;
+  padding: 0 1.5rem;
+}
+
+/* the pills are <a> here, not <span>/<button> — keep them pill-shaped */
+a.btn-pill {
+  text-decoration: none;
+}
+
+.topbar-log {
+  margin-right: 0.75rem;
+}
+
+/* the roster under "who was there" — the same hint line the TUI modal
+   renders: you cannot type a name you do not know */
+.capture-roster {
+  margin: 0.25rem 0 0;
+  font-size: var(--label-size);
+  color: var(--muted);
+}
+
+.capture-offer {
+  margin: 0 0 1rem;
+  font-size: var(--body-size);
+  color: var(--ink);
+}

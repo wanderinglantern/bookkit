@@ -50,6 +50,7 @@ def _pages(org) -> list[str]:
         "/book",
         "/search",
         "/search?q=Atomic",
+        "/capture",
         "/today",
         "/calendar",
         "/towers",

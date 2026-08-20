@@ -25,6 +25,10 @@
            into the Work tab with its add form already open; Renew joins when
            phase 2 wires sync.renew, and interaction logging is quick
            capture's job by decision, so neither renders here. #}
+        {# "+ Log interaction" is REAL as of gap 2 — removed under D4 while
+           inert, back as a link into /capture with this account
+           preselected. #}
+        <a class="btn-pill btn-pill-primary" href="/capture?org={{ header.org.ref }}">+ Log interaction</a>
         <a class="btn-pill btn-pill-primary" href="/accounts/{{ header.org.ref }}/work?add=task">+ Task</a>
         {# Live as of gap 5: the org edit form (org_form_initial_profile,
            prefilled, market-profile fields included) opens in the host

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Follow-up task? — bookkit{% endblock %}
+{% block content %}
+  {% include "partials/topbar.html" %}
+
+  <div class="capture-page">
+    {# The OFFER, after a successful log — the interaction is already saved
+       (§6.2: a follow-up phrase in the note offers a task, never silently
+       creates one). [Create task] POSTs; [Skip] is a plain link, a GET that
+       writes nothing. The hidden fields are re-proven server-side in
+       routes/capture.capture_task. #}
+    <form class="entity-form capture-form" method="post" action="/capture/task">
+      <h1 class="form-title">Create follow-up task?</h1>
+      <p class="capture-offer">Logged on <strong>{{ org.name }}</strong>. The note says
+        <em>&ldquo;{{ suggestion.phrase }}&rdquo;</em> — create a task due
+        <strong>{{ suggestion.due_on.isoformat() }}</strong>?</p>
+      <input type="hidden" name="org_id" value="{{ org.id }}">
+      <input type="hidden" name="interaction_id" value="{{ interaction.id }}">
+      <input type="hidden" name="due_on" value="{{ suggestion.due_on.isoformat() }}">
+      <input type="hidden" name="phrase" value="{{ suggestion.phrase }}">
+      <div class="field">
+        <label for="t-title">task title</label>
+        <input type="text" id="t-title" name="title" value="{{ title }}">
+      </div>
+      <div class="form-actions">
+        <button type="submit">Create task</button>
+        <a class="btn-pill capture-skip" href="/accounts/{{ org.ref }}/relationship">Skip</a>
+      </div>
+    </form>
+  </div>
+{% endblock %}

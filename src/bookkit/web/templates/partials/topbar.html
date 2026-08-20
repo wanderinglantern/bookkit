@@ -22,6 +22,10 @@
     <a href="/calendar" class="topbar-nav-item{% if current == "calendar" %} is-current-section{% endif %}">Calendar</a>
     <a href="/towers" class="topbar-nav-item{% if current == "towers" %} is-current-section{% endif %}">Towers</a>
   </nav>
+  {# Global quick capture — the TUI's app-level `n`, reachable from every
+     page. A real link, not a nav section: /capture is a flow you enter and
+     leave, not a place you stay. #}
+  <a class="btn-pill btn-pill-primary topbar-log" href="/capture">+ Log</a>
   <span class="topbar-spacer"></span>
   {# the live /search form — the inert Search pill's return (gap 3) #}
   <form action="/search" method="get" class="search-pill" role="search">
