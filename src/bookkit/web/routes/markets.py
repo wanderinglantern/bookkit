@@ -292,9 +292,14 @@ def market_detail(request: Request, ref: str) -> HTMLResponse:
     rate = next(
         (r for r in hit_rate.by_market(conn) if r.market_org_id == market.id), None
     )
-    parent = (
-        orgs_repo.get(conn, market.parent_org_id) if market.parent_org_id else None
-    )
+    # A dead parent (merged away before merges re-parented children) floats
+    # the child free — the same call market_families makes for the list.
+    parent = None
+    if market.parent_org_id:
+        try:
+            parent = orgs_repo.get(conn, market.parent_org_id)
+        except KeyError:
+            parent = None
     subs = [
         {
             "sent_on": s.sent_on,

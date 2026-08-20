@@ -528,11 +528,13 @@ SCREENS: dict[str, str] = {
         "paste-import is deferred by decision, same as import_here above)."
     ),
     "pipeline": (
-        "PARTIAL — the account Pipeline TAB reads well (quotes lead), but "
-        "the global kanban, stage moves, opportunity create/edit, the market "
-        "RESPONSE form (quote/decline/bind) and subjectivity writes are "
-        "web-absent: a web user can send a submission and never record its "
-        "outcome."
+        "PARTIAL — the account Pipeline TAB is readable AND writable "
+        "(routes/pipeline.py, gap 4): the market RESPONSE form "
+        "(quote/decline with the bind offer), opportunity create/edit, "
+        "stage moves, close won/lost, and subjectivity add. Still "
+        "web-absent: the TUI's GLOBAL kanban — one board across accounts; "
+        "on the web the cross-account view is Today's quotes-expiring "
+        "section, and working a deal means opening its account's tab."
     ),
     "search": (
 

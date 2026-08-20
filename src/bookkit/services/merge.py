@@ -145,6 +145,17 @@ def merge_markets(conn: sqlite3.Connection, source_id: str, target_id: str) -> M
             if fields:
                 orgs.set_market_profile(conn, target.id, **fields)
 
+        # A nested child would otherwise keep pointing at the dead source —
+        # and the detail page is the one reader that trusts that FK. The
+        # family folds into the survivor; merging a master INTO its own
+        # child unnests that child to where the master sat instead.
+        for child in orgs.children(conn, source.id):
+            orgs.set_parent(
+                conn,
+                child.id,
+                source.parent_org_id if child.id == target.id else target.id,
+            )
+
         base.log_event(
             conn, "org", target.id, "merged_from", None, source.name,
             note=(

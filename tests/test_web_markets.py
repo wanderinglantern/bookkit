@@ -446,3 +446,60 @@ def test_nest_refuses_a_cycle_in_place(client: TestClient):
     assert refused.status_code == 200
     assert "descendant" in refused.text
     assert orgs_repo.get(conn, berkley.id).parent_org_id is None
+
+
+def test_merging_a_master_folds_its_children_into_the_survivor(client: TestClient):
+    """The Sompo-under-Chubb case: merging Chubb into AIG must not leave
+    Sompo's parent FK pointing at a dead org — that 500'd the child's own
+    detail page, and the unnest control that could repair it lived there."""
+    conn = _conn(client)
+    sompo = _market(client, "Sompo")
+    chubb = _market(client, "Chubb")
+    aig = _market(client, "AIG")
+
+    assert client.post(
+        f"/markets/{sompo.ref}/nest", data={"parent": chubb.id},
+        follow_redirects=False,
+    ).status_code == 303
+    assert client.post(
+        f"/markets/{chubb.ref}/merge/confirm", params={"target": aig.id},
+        follow_redirects=False,
+    ).status_code == 303
+
+    # the child moved under the survivor, and its dossier still renders
+    assert orgs_repo.get(conn, sompo.id).parent_org_id == aig.id
+    assert client.get(f"/markets/{sompo.ref}").status_code == 200
+
+
+def test_merging_a_master_into_its_own_child_unnests_the_child(client: TestClient):
+    conn = _conn(client)
+    sompo = _market(client, "Sompo")
+    chubb = _market(client, "Chubb")
+    assert client.post(
+        f"/markets/{sompo.ref}/nest", data={"parent": chubb.id},
+        follow_redirects=False,
+    ).status_code == 303
+    assert client.post(
+        f"/markets/{chubb.ref}/merge/confirm", params={"target": sompo.id},
+        follow_redirects=False,
+    ).status_code == 303
+    # the survivor cannot nest under itself; it takes the dead master's spot
+    assert orgs_repo.get(conn, sompo.id).parent_org_id is None
+    assert client.get(f"/markets/{sompo.ref}").status_code == 200
+
+
+def test_a_child_whose_parent_died_before_the_family_fix_still_renders(
+    client: TestClient,
+):
+    """Pre-fix data: a parent merged away before merges re-parented children.
+    The detail page floats the child free, the same as the list does."""
+    conn = _conn(client)
+    sompo = _market(client, "Sompo")
+    chubb = _market(client, "Chubb")
+    from bookkit.repo import base as base_repo
+
+    orgs_repo.set_parent(conn, sompo.id, chubb.id)
+    base_repo.soft_delete(conn, "org", chubb.id, note="test: dead parent")
+    page = client.get(f"/markets/{sompo.ref}")
+    assert page.status_code == 200
+    assert f"nested under {chubb.name}" not in page.text  # no ghost master

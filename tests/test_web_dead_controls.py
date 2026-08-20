@@ -95,6 +95,7 @@ def test_every_rendered_action_resolves(client_and_org):
     client, org = client_and_org
     app = client.app
     checked = 0
+    post_actions = 0
     for page in _pages(org):
         html = client.get(page).text
         # a form's action follows its method; only method="get" forms exist
@@ -109,16 +110,26 @@ def test_every_rendered_action_resolves(client_and_org):
             ("action", "POST"),
         ):
             for url in re.findall(rf'{attr}="([^"]+)"', html):
-                if attr == "action" and url in get_form_actions:
-                    method = "GET"  # noqa: PLW2901
+                # decided per URL, never by rebinding `method`: rebinding
+                # leaked GET onto every later action on the page (the topbar
+                # search comes first on all of them) and blinded the POST
+                # sweep — a deleted write route stayed green
+                verb = (
+                    "GET"
+                    if attr == "action" and url in get_form_actions
+                    else method
+                )
                 path = url.split("?")[0].split("#")[0]
                 if not path.startswith("/"):
                     continue
                 checked += 1
-                assert _resolves(app, path, method), (
-                    f"{page} renders {attr}={url!r} and no {method} route matches"
+                if attr == "action" and verb == "POST":
+                    post_actions += 1
+                assert _resolves(app, path, verb), (
+                    f"{page} renders {attr}={url!r} and no {verb} route matches"
                 )
     assert checked > 40, f"the sweep found suspiciously few controls ({checked})"
+    assert post_actions > 0, "no POST form action was verified — the sweep is blind"
 
 
 def test_every_editable_layer_field_is_reachable(client_and_org):
