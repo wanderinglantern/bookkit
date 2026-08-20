@@ -2088,3 +2088,98 @@ table.rows tr.is-waived td {
   color: var(--muted);
   font-style: italic;
 }
+
+/* --- the Team page and the rail's live Team section (gap 7) ---------------- */
+
+/* the rail's Assign — a LIVE control, unlike .rail-action (the muted,
+   cursor-default pending treatment). Styled like .people-add: a real button
+   that reads as one. */
+.rail-action-btn {
+  margin-left: auto;
+  font: inherit;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.rail-action-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.team-row-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.team-row-top .team-row-actions {
+  margin-left: auto;
+}
+
+/* the roster grid — the TUI TeamScreen's columns plus state and actions */
+.team-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) minmax(140px, 1fr) 72px minmax(160px, 1.2fr) minmax(110px, 0.8fr) 80px 150px;
+  align-items: center;
+  min-width: 62.5rem;
+}
+
+.team-table-head {
+  height: 28px;
+  padding: 0 0.875rem;
+  background: var(--wash);
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--hairline);
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.team-member-row {
+  padding: 0 0.875rem;
+  border-bottom: 1px solid var(--hairline-2);
+}
+
+.team-member-row > .team-grid {
+  min-height: var(--row-height);
+}
+
+.team-member-row.is-retired .book-cell {
+  color: var(--muted);
+}
+
+.team-retired-label {
+  margin: 1.25rem 0.875rem 0.25rem;
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--hint-size);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.team-filter {
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+}
+
+.team-filter input {
+  font: inherit;
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  padding: 0.3rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+  min-width: 18rem;
+}

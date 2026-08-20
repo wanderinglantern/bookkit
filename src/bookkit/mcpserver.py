@@ -1744,68 +1744,33 @@ def _team_unassign(conn: sqlite3.Connection, assignment_id: str) -> dict[str, An
     return {"assignment_id": assignment_id, "removed": True, "batch": batch.ref}
 
 
-def _assignment_label(row: sqlite3.Row) -> str:
-    """How one assignment reads in a refusal: the client, plus the placement
-    ref when it is deal-level rather than account-level."""
-    keys = row.keys()
-    account = row["org_name"] if "org_name" in keys else None
-    placement = row["placement_ref"] if "placement_ref" in keys else None
-    label = account or "unscoped"
-    return f"{label} ({placement})" if placement else label
-
-
 def _member_deactivate(
     conn: sqlite3.Connection, name: str, cascade: bool = False
 ) -> dict[str, Any]:
-    """Retire a colleague. Refuses while they still hold assignments — a
-    roster that silently keeps pointing at someone who left is worse than a
-    refusal — and names every one so the caller can act. cascade=True removes
-    them and deactivates in ONE batch, so revert_batch puts it all back."""
-    from .repo import base, team
+    """Retire a colleague — the rule (refusal while assigned, cascade as ONE
+    revertible batch) lives in services.team.member_deactivate now, shared
+    with the web surface; this wrapper only resolves the name and stamps
+    per-entity provenance through the hook."""
+    from .services import team as team_svc
 
     member = _find_member(conn, name)
-    if not member.active:
-        raise ValueError(f"{member.name} is already inactive")
-    rows = team.for_member(conn, member.id)
-    if rows and not cascade:
-        labels = ", ".join(_assignment_label(r) for r in rows)
-        raise ValueError(
-            f"{member.name} is still on {len(rows)} assignments: {labels} — "
-            f"unassign them first, or pass cascade=True to remove all "
-            f"{len(rows)} and deactivate as one revertible batch"
-        )
-    summary = f"deactivated {member.name}"
-    if rows:
-        summary += f" and removed {len(rows)} assignments"
-    # org_id stays None: a cascade spans clients, so no single org owns it.
-    with _open_batch(
-        conn, tool="member_deactivate", summary=summary,
-    ) as batch:
-        for row in rows:
-            team.unassign(conn, row["id"])
-            _provenance(conn, "team_assignment", row["id"])
-        base.update(conn, "team_member", member.id, {"active": 0},
-                    note="mcp deactivate")
-        _provenance(conn, "team_member", member.id)
-    return {"name": member.name, "active": False, "unassigned": len(rows),
-            "batch": batch.ref}
+    result = team_svc.member_deactivate(
+        conn, member.id, cascade=cascade, source="mcp", provenance=_provenance,
+    )
+    return {"name": result.name, "active": False,
+            "unassigned": result.unassigned, "batch": result.batch}
 
 
 def _member_reactivate(conn: sqlite3.Connection, name: str) -> dict[str, Any]:
-    """Bring a retired colleague back. Assignments a cascade removed do NOT
-    come back — revert_batch is the undo for those."""
-    from .repo import base
+    """Bring a retired colleague back — services.team.member_reactivate owns
+    the rule (see _member_deactivate)."""
+    from .services import team as team_svc
 
     member = _find_member(conn, name)
-    if member.active:
-        raise ValueError(f"{member.name} is already active")
-    with _open_batch(
-        conn, tool="member_reactivate", summary=f"reactivated {member.name}",
-    ) as batch:
-        base.update(conn, "team_member", member.id, {"active": 1},
-                    note="mcp reactivate")
-        _provenance(conn, "team_member", member.id)
-    return {"name": member.name, "active": True, "batch": batch.ref}
+    result = team_svc.member_reactivate(
+        conn, member.id, source="mcp", provenance=_provenance,
+    )
+    return {"name": result.name, "active": True, "batch": result.batch}
 
 
 def _opportunity_stage(

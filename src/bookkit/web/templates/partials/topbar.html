@@ -11,9 +11,15 @@
 <div class="topbar">
   <span class="topbar-wordmark">BookKit</span>
   <nav class="topbar-nav">
-    {% for label in ("Today", "Navigator", "Book", "Pipeline", "Calendar", "Markets", "Towers") %}
+    {# `section` says which nav item the current page belongs to; every page
+       under /book and /accounts is the Book section, so that's the default
+       when a context doesn't set it. Team is the second real link (gap 7). #}
+    {% set current = section | default("book") %}
+    {% for label in ("Today", "Navigator", "Book", "Pipeline", "Calendar", "Markets", "Towers", "Team") %}
       {% if label == "Book" %}
-        <a href="/book" class="topbar-nav-item is-current-section">Book</a>
+        <a href="/book" class="topbar-nav-item{% if current == "book" %} is-current-section{% endif %}">Book</a>
+      {% elif label == "Team" %}
+        <a href="/team" class="topbar-nav-item{% if current == "team" %} is-current-section{% endif %}">Team</a>
       {% else %}
         <span class="topbar-nav-item">{{ label }}</span>
       {% endif %}

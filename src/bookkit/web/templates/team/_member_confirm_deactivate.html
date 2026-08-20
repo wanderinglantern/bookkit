@@ -1,0 +1,38 @@
+{# The confirm step for retiring a colleague — a GET rendered this and wrote
+   NOTHING. It names the blast radius: every live assignment, labeled with
+   services.team.assignment_label's own words (the same sentence the MCP
+   refusal uses), because the cascade removes all of them and the deactivation
+   in ONE revertible batch. With no assignments the plain Retire button posts
+   without cascade; with any, cascade is the ONLY offered button — a plain
+   retire would just bounce off the service's refusal, and a control that can
+   only refuse is a dead control.
+
+   Renders into the member row's own .form-host; Cancel is the delegated
+   [data-form-cancel] listener inline-cell.js already owns. The POST targets
+   #members-panel with outerHTML — this fragment lives inside that panel, so
+   returning the panel is a straight replace, not a nesting. #}
+<div class="confirm-remove" role="alertdialog" aria-label="Retire {{ member.name }}">
+  <p class="confirm-remove-title">Retire <strong>{{ member.name }}</strong>?</p>
+  <ul class="confirm-remove-notes">
+    {% if assignments %}
+      <li>they are still on {{ assignments | length }} assignment{{ "s" if assignments | length != 1 else "" }}:</li>
+      {% for a in assignments %}
+        <li class="confirm-remove-assignment">{{ a.label }}{% if a.lines %} — {{ a.lines }}{% endif %}</li>
+      {% endfor %}
+      <li>retiring removes all {{ assignments | length }} and deactivates as ONE revertible batch — undo puts everything back</li>
+    {% else %}
+      <li>they hold no assignments — they stay in the record and stop appearing in pickers</li>
+      <li>soft and revertible — undo (or Reactivate) puts them back</li>
+    {% endif %}
+  </ul>
+  <form hx-post="/team/members/{{ member.id }}/deactivate"
+        hx-target="#members-panel" hx-swap="outerHTML">
+    {% if assignments %}<input type="hidden" name="cascade" value="1">{% endif %}
+    <div class="form-actions">
+      <button type="submit" class="btn-danger">
+        {% if assignments %}Retire + remove {{ assignments | length }} assignment{{ "s" if assignments | length != 1 else "" }}{% else %}Retire{% endif %}
+      </button>
+      <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+    </div>
+  </form>
+</div>

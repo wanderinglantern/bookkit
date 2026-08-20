@@ -85,6 +85,22 @@ IMPLEMENTED: dict[str, str] = {
         "<two-word-slug>-<period year>.json — mirrored rather than reinvented, "
         "so a file scaffolded from either surface lands in the same place."
     ),
+    "assign_team": (
+        "BUILT 2026-08-20 (gap 7). The rail's Team section is live "
+        "(routes/team.py, account/_team_panel.html): Assign is GET/POST "
+        "/accounts/{ref}/team/assign (assignment_form's member select + "
+        "role/lines/notes, account-level org_id), each row edits IN PLACE "
+        "over role/lines/notes via GET/POST .../team/{assignment_id}/edit "
+        "(assignment_form(existing=...) renders no scope field — re-scoping "
+        "is unassign + assign, the repo's own rule) and removes behind a "
+        "confirm step at .../team/{assignment_id}/remove (team.unassign in "
+        "one batch, tool='team_unassign', the TUI D-flow's own summary). "
+        "DEAL-LEVEL assign is NOT built: the TUI offers it only from the "
+        "placements table, and the rail is account-scoped — assigning to a "
+        "placement from the web waits for a placements-tab control. The "
+        "TUI's '+ new team member…' sentinel in the who-select refuses with "
+        "a pointer at /team rather than chaining a second form."
+    ),
 }
 
 # action name -> why it is not covered yet
@@ -127,7 +143,6 @@ PENDING: dict[str, str] = {
         "instead — a plain projects_repo write turning a need into an "
         "opportunity, with no towerkit involvement."
     ),
-    "assign_team": "team assignment editing not built on the web yet",
     "export_open_items": (
         "two flows behind one key. The XLSX export is deferred by decision "
         "(needs a file-download response the web spec does not cover — see "
@@ -153,10 +168,12 @@ PENDING: dict[str, str] = {
         "differ on the consequences shown, on the soft delete, or on the one "
         "revertible batch. Contacts were built ahead of their turn because it "
         "was a LIVE DATA problem: MCP filed a wholesaler as a client contact "
-        "and no surface could take it off. Tasks (dropped, not deleted, in "
-        "the TUI), request items and team assignments still have no web "
-        "removal, so the action as a whole stays PENDING — do not promote "
-        "this entry until they do."
+        "and no surface could take it off. Team assignments joined 2026-08-20 "
+        "(gap 7): confirm GET + POST /accounts/{ref}/team/{assignment_id}/"
+        "remove, routes/team.py, one batch with the TUI D-flow's own tool and "
+        "summary. Tasks (dropped, not deleted, in the TUI) and request items "
+        "still have no web removal, so the action as a whole stays PENDING — "
+        "do not promote this entry until they do."
     ),
     "mark_primary": (
         "rendered as a pending row action on the contacts table "
@@ -175,5 +192,29 @@ PENDING: dict[str, str] = {
         "row-to-clipboard shortcut for a terminal; the web has native text "
         "selection/copy, so no dedicated route is planned unless that proves "
         "insufficient"
+    ),
+}
+
+# TUI screen name -> what the web covers of it. The dicts above are
+# action-granular for the account page; this ledger is screen-granular for
+# the screens outside it, so a whole screen cannot be silently missing the
+# way an action could.
+SCREENS: dict[str, str] = {
+    "team": (
+        "BUILT 2026-08-20 (gap 7). GET /team (routes/team.py, team.html) — "
+        "TeamScreen's columns (name, title, specialty, where assigned) plus "
+        "assignment count and active state; the `f` filter is ?line=cyber "
+        "through the same services.team.find_specialists, match evidence "
+        "shown. `a` is + New member (GET/POST /team/members/new), `e` is the "
+        "whole-form edit (GET/POST /team/members/{id}/edit) — renames inherit "
+        "repo/team.py's duplicate guard, which is where it lives. Beyond the "
+        "TUI: retire behind a confirm step naming every live assignment "
+        "(GET/POST /team/members/{id}/deactivate, cascade as ONE revertible "
+        "batch via services.team.member_deactivate — the same call mcpserver "
+        "makes) and Reactivate for retired members. NOT built: `w` "
+        "assign-from-the-member (the rail's Assign covers the account "
+        "direction; starting from a member means picking a client, a picker "
+        "this slice does not add) and `i` paste-signature import (bulk "
+        "paste-import is deferred by decision, same as import_here above)."
     ),
 }

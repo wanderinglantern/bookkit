@@ -101,26 +101,10 @@
         {% endfor %}
       </section>
 
-      <section class="rail-section">
-        <div class="rail-section-head">
-          <h2 class="rail-label">Team</h2>
-          {# Not wired yet — a pending treatment, same as the header pills. #}
-          <span class="rail-action" aria-disabled="true" title="Not wired yet — assigning team members is a later task">Assign</span>
-        </div>
-        {% if team %}
-          {% for a in team %}
-            <div class="team-row">
-              <span class="team-who">{{ a['member_name'] }}</span>
-              {% set detail = [a['role'], a['lines']] | select | join(' · ') %}
-              {% if detail %}<span class="team-detail">{{ detail }}</span>{% endif %}
-            </div>
-          {% endfor %}
-        {% else %}
-          {# TEAM is an addable list (the Assign link above adds to it) — the
-             spec's addable-list empty state, not an invented phrase. #}
-          <p class="empty">empty — add the first row</p>
-        {% endif %}
-      </section>
+      {# LIVE as of gap 7 — Assign, per-row edit and remove, all real routes
+         (routes/team.py). Extracted to a partial so htmx panel refreshes and
+         this page render the one template. #}
+      {% include "account/_team_panel.html" %}
 
       <section class="rail-section">
         <h2 class="rail-label">Documents</h2>
