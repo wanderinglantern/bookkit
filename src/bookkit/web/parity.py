@@ -15,6 +15,21 @@ catches the next one."""
 
 from __future__ import annotations
 
+# TUI screen -> whether the web has an equivalent surface. A coarser ledger
+# than the action dicts below: those track AccountScreen's keys, this tracks
+# whole screens (the gap audit, 2026-08-19).
+SCREENS: dict[str, str] = {
+    "search": (
+        "PRESENT — GET /search (routes/search.py): the `/` modal as a page, "
+        "repo.search end to end (FTS5 + the email LIKE pass), grouped "
+        "Accounts / Contacts / Interactions, every hit linking to the owning "
+        "account's relationship tab — the same org_id the TUI's enter key "
+        "opens. Reached from the topbar's live search form on every page. "
+        "This also covers the command palette's record-jump half; the "
+        "palette's screen-jump half is the topbar nav's job, not this page's."
+    ),
+}
+
 # action name -> the web route that covers it
 IMPLEMENTED: dict[str, str] = {
     "show_tab": "GET /accounts/{ref}/{tab} — Program/Relationship/Work/Pipeline, "

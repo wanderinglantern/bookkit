@@ -138,7 +138,12 @@ def test_filter_field_is_marked_pending_not_a_dead_input(app_and_conn):
     it must not render as a live-looking input."""
     client, _ = app_and_conn
     html = client.get("/book").text
-    assert "<input" not in html
+    # The topbar's search input is LIVE as of gap 3 (a real GET /search
+    # form), so "no <input> anywhere" over-asserts now. The intent narrows
+    # to what it always was: the FILTER must not render as an input — the
+    # only inputs on this page are the search form's.
+    inputs = re.findall(r"<input[^>]*>", html)
+    assert all('name="q"' in i for i in inputs), inputs
     tag = re.search(r'<span class="book-filter-pill"[^>]*>', html)
     assert tag, "filter pill not found"
     assert 'aria-disabled="true"' in tag.group(0)

@@ -20,7 +20,16 @@
     {% endfor %}
   </nav>
   <span class="topbar-spacer"></span>
-  <div class="search-pill"><span>Search</span></div>
+  {# Live as of gap 3 (2026-08-20): the inert Search pill is now the real
+     /search form — same pill chrome, but an <input> that submits. Plain GET,
+     no JS: the browser's Enter-to-submit is the whole interaction. `q` is
+     defined only on the search page itself, where the pill keeps the query;
+     everywhere else the default filter renders it empty. #}
+  <form action="/search" method="get" class="search-pill" role="search">
+    <input class="search-pill-input" type="search" name="q"
+           value="{{ q|default('') }}" placeholder="Search…"
+           aria-label="Search everything">
+  </form>
   {% if last_undo and undo_action %}
     {# Wired as of Task 15b: the same POST the rail's per-change Revert
        makes, against the newest unreverted batch on this account
