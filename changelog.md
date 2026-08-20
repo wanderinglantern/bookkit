@@ -4,7 +4,33 @@ All notable changes to bookkit, newest date first.
 
 ## 2026-08-20
 
+### Added
+- **Seventeen towerkit fields the browser could not reach.** A layer's states
+  and its four prose fields (limits, retention and premium detail, notes) and
+  its named limits, in the details row; a line's column label on the lines
+  strip; a note on the programme itself; a note on the retention and sublimit
+  forms, saved in the same write as the figure it qualifies; and the six saved
+  chart options beside export. They were writable only from towerkit's own
+  editor, behind the TUI's `o`, which a browser does not have.
+  None of it is hand-listed. towerkit publishes every writable field as data —
+  type, bounds, guards, whether it clears — and funnels every scalar write
+  through one choke point; bookkit reads that surface, so three routes serve
+  the lot and a field towerkit grows arrives already parsed and already
+  refusing correctly. What cannot be derived is where a field goes on the
+  page, and that is stated once, in one table, checked against the rendered
+  page by the suite.
+- A field ledger with nothing left in it: 0 of 55 towerkit model fields are
+  marked planned. The ledger was the ticket queue for this work.
+
 ### Fixed
+- **Every tower download ignored the program's own saved chart settings** and
+  rendered with the library defaults, so premiums turned off in towerkit's
+  editor came back on in every SVG and PDF bookkit produced. towerkit's own
+  `towerctl render` has always read them.
+- A cell's address could not survive a line whose id starts with `i` — inland
+  marine, which every real book has. It parsed as a position rather than a
+  name, lost the row it pointed at, and took the whole Program tab down with
+  it. Caught before release by the seeded fixture.
 - **The Program tab claimed five real programs were empty.** Moving a towerkit
   checkout out of OneDrive made every `program_path` a dead absolute path, and
   five readers returned `[]` from a bare `except Exception` — so "this file
