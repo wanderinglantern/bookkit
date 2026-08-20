@@ -141,22 +141,6 @@ IMPLEMENTED: dict[str, str] = {
         "<two-word-slug>-<period year>.json — mirrored rather than reinvented, "
         "so a file scaffolded from either surface lands in the same place."
     ),
-    "assign_team": (
-        "BUILT 2026-08-20 (gap 7). The rail's Team section is live "
-        "(routes/team.py, account/_team_panel.html): Assign is GET/POST "
-        "/accounts/{ref}/team/assign (assignment_form's member select + "
-        "role/lines/notes, account-level org_id), each row edits IN PLACE "
-        "over role/lines/notes via GET/POST .../team/{assignment_id}/edit "
-        "(assignment_form(existing=...) renders no scope field — re-scoping "
-        "is unassign + assign, the repo's own rule) and removes behind a "
-        "confirm step at .../team/{assignment_id}/remove (team.unassign in "
-        "one batch, tool='team_unassign', the TUI D-flow's own summary). "
-        "DEAL-LEVEL assign is NOT built: the TUI offers it only from the "
-        "placements table, and the rail is account-scoped — assigning to a "
-        "placement from the web waits for a placements-tab control. The "
-        "TUI's '+ new team member…' sentinel in the who-select refuses with "
-        "a pointer at /team rather than chaining a second form."
-    ),
 }
 
 # action name -> why it is not covered yet
