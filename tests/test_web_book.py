@@ -42,7 +42,7 @@ def test_the_root_path_lands_somewhere_useful(app_and_conn):
     assert response.headers["location"] == "/today"
     landed = client.get("/")
     assert landed.status_code == 200
-    assert "The book" in landed.text
+    assert "Today" in landed.text
 
 
 def test_the_book_lists_every_client_regardless_of_status(app_and_conn):
