@@ -2,6 +2,56 @@
 
 All notable changes to bookkit, newest date first.
 
+## 2026-08-20
+
+### Added
+- Today is the front door: `/` redirects to `/today`, the TUI brief's
+  sections in severity order — overdue renewals (never fall off), renewals
+  within 120 days, tasks due (tick done in place, one revertible batch),
+  project needs, past-SLA requests, quotes expiring, onboarding, requests
+  to chase, going stale — plus cross-account recent changes with Revert.
+- The renewal Calendar on the web: bucket-aligned months, lines of cover on
+  every entry, counting to the earliest line end, overdue pinned on top.
+- Quick capture on the web (`/capture`): log an interaction from any page,
+  attendees resolved through the same shared rule as the TUI, a follow-up
+  phrase offering a task on its own page; + Log on the topbar and every
+  account header.
+- Global search (`/search`): the TUI's `/` as a page — accounts, contacts
+  and interactions grouped, every hit landing on the owning account; the
+  topbar carries a live search form everywhere.
+- Pipeline outcomes are recordable from the browser: the market response
+  form (quote/decline with the bind offer), opportunity create/edit and
+  stage moves, close won/lost, and subjectivities.
+- Account create and edit on the web, both behind the one duplicate guard
+  the TUI uses.
+- The markets surface (`/markets`): family outline, hit rates, appetite,
+  underwriters, aliases; create, merge-with-confirm (the duplicate's name
+  becomes an alias so towers keep resolving), nest and unnest.
+- Team management (`/team`): the roster with the specialist filter, member
+  create/edit behind the duplicate-name guard, retire behind a confirm
+  naming every live assignment (cascade as one revertible batch),
+  reactivate; the account rail's Team section went live with assign,
+  edit-in-place and remove.
+
+### Fixed
+- Merging a master market no longer orphans its nested children: they fold
+  into the survivor (merging a master into its own child unnests the
+  child), and a market whose parent died before this fix renders instead
+  of crashing its own detail page.
+- The dead-control sweep verifies POST form actions again — a loop-variable
+  rebind had been silently checking them as GET, so a deleted write route
+  could not turn the suite red; a sentinel now proves the sweep sees POSTs.
+- The parity ledger's pipeline entry caught up with the code it sat beside:
+  the tab's writes shipped; the one honest absence left is the global
+  kanban.
+- Retiring a member whose cascade would exceed the blast cap refuses in the
+  page instead of answering a 500.
+- The search page stops highlighting Book as the current nav section.
+- The TUI's quick capture refuses an unparseable date with the shared
+  refusal sentence instead of silently stamping today, and the accepted
+  follow-up task is created inside a batch so undo can reach it — its two
+  last divergences from the web capture form.
+
 ## 2026-08-19
 
 ### Fixed
