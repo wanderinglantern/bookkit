@@ -1,0 +1,32 @@
+{# Step one of the merge (the TUI's `x` picker): choose which market the
+   duplicate folds INTO. Continue is a GET — it renders the confirm step and
+   writes NOTHING; the write only happens behind the confirm's own button.
+   The select is validated server-side against the freshly queried list of
+   other live markets (routes/markets._merge_target), the same rule
+   checked_option applies to any scoped select. #}
+<form class="entity-form" method="get" action="/markets/{{ market.ref }}/merge/confirm"
+      hx-get="/markets/{{ market.ref }}/merge/confirm"
+      hx-target="closest .form-host" hx-swap="innerHTML">
+  <h2 class="form-title">merge {{ market.name }} into which market?</h2>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  {% if targets %}
+    <div class="field">
+      <label for="f-merge-target">survivor <span class="req">*</span></label>
+      <select id="f-merge-target" name="target" required>
+        <option value=""></option>
+        {% for t in targets %}
+          <option value="{{ t.id }}">{{ t.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-actions">
+      <button type="submit">Continue</button>
+      <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+    </div>
+  {% else %}
+    <p class="panel-note">There is no other market to merge into.</p>
+    <div class="form-actions">
+      <button type="button" class="btn-cancel" data-form-cancel>Close</button>
+    </div>
+  {% endif %}
+</form>

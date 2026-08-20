@@ -1,0 +1,27 @@
+{# The confirm step for removing an appetite line. A step, not an
+   hx-confirm — the browser's own confirm() shows no plan, the same
+   objection web/parity.py records against using it for revert. The TUI's
+   `D` skips confirmation because `u` sits on the same screen; the web's
+   undo pill lives on the account pages only, so here the confirm carries
+   that weight. GET rendered this and wrote NOTHING.
+
+   It renders into the appetite panel's .form-host, so Cancel is the
+   delegated [data-form-cancel] listener inline-cell.js already owns.
+   Remove targets #appetite-panel with outerHTML — this fragment lives
+   inside that panel, so returning the panel is a straight replace. #}
+<div class="confirm-remove" role="alertdialog"
+     aria-label="Remove {{ line }} appetite">
+  <p class="confirm-remove-title">
+    Remove the <strong>{{ line }}</strong> appetite line from {{ market.name }}?
+  </p>
+  <ul class="confirm-remove-notes">
+    <li>Only this appetite row goes — nothing else on the market moves.</li>
+    <li>Soft and revertible: it lands as one change that can be put back.</li>
+  </ul>
+  <div class="form-actions">
+    <button type="button" class="btn-danger"
+            hx-post="/markets/{{ market.ref }}/appetite/{{ appetite.id }}/remove"
+            hx-target="#appetite-panel" hx-swap="outerHTML">Remove appetite</button>
+    <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+  </div>
+</div>

@@ -227,12 +227,18 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
-    from .routes import account, book, changes, pipeline, program, relationship, work
+    from .routes import account, book, changes, markets, pipeline, program, relationship, work
 
     # book.router owns GET / and GET /book — the app's front door (Task 18).
     # Neither path overlaps /accounts/..., so registration order relative
     # to the routers below doesn't matter the way relationship's does.
     app.include_router(book.router)
+
+    # markets.router owns everything under /markets. Its one internal
+    # ordering rule lives inside the router itself: FastAPI resolves a
+    # router's own routes in declaration order, and /markets/new is declared
+    # before /markets/{ref} there so "new" is never read as a market ref.
+    app.include_router(markets.router)
 
     # relationship's GET /accounts/{ref}/relationship must be registered
     # before account's generic GET /accounts/{ref}/{tab}: both patterns

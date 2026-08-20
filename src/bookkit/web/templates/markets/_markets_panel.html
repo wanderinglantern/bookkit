@@ -1,0 +1,54 @@
+{# The markets list — the TUI MarketsScreen's own columns (short headers on
+   purpose, review F25 there: a truncated header is worse than a terse one).
+   "n" is what the rates are OUT OF: a bare 100% over one decided submission
+   is not a hit rate anyone can act on. Outline order: master companies
+   first, issuing companies nested beneath (orgs.market_families).
+
+   #markets-panel is this partial's own root — a successful "+ New market"
+   replaces it via an out-of-band swap while the primary swap clears
+   .form-host (the _contacts_panel pattern; see that template's comment for
+   why success must be OOB and a refusal must not be). #}
+<div id="markets-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <div class="people-head">
+    <h2 class="people-label">All markets</h2>
+    <span class="people-count">{{ rows | length }}</span>
+    <span class="people-head-spacer"></span>
+    <button type="button" class="people-add"
+            hx-get="/markets/new"
+            hx-target="#markets-panel .form-host" hx-swap="innerHTML">+ New market</button>
+  </div>
+  <div class="form-host"></div>
+  {% if rows %}
+    <div class="table-scroll">
+      <table class="rows">
+        <thead>
+          <tr><th>Market</th><th>Type</th><th>Rating</th><th>Target lines</th>
+              <th class="num">Out</th><th class="num">n</th>
+              <th class="num">Quote</th><th class="num">Bind</th></tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td>
+                {% if row.nested %}<span class="muted">└ </span>{% endif %}
+                <a href="/markets/{{ row.ref }}">{{ row.name }}</a>
+              </td>
+              <td class="muted">{{ row.market_type }}</td>
+              <td class="num">{{ row.rating }}</td>
+              <td class="appetite-target">{{ row.target_lines }}</td>
+              <td class="num{% if not row.out %} muted{% endif %}">{{ row.out }}</td>
+              <td class="num">{{ row.decided }}</td>
+              <td class="num{% if row.quote_rate == "—" %} muted{% endif %}">{{ row.quote_rate }}</td>
+              <td class="num{% if row.bind_rate == "—" %} muted{% endif %}">{{ row.bind_rate }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="panel-empty">
+      <p>empty — add the first row</p>
+    </div>
+  {% endif %}
+</div>

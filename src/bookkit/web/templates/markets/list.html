@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Markets — bookkit{% endblock %}
+{% block content %}
+  {% set topbar_section = "markets" %}
+  {% include "partials/topbar.html" %}
+
+  <div class="book-header">
+    <h1 class="book-title">Markets</h1>
+    <span class="book-subtitle">{{ count }} market{{ "s" if count != 1 else "" }}</span>
+    <span class="book-header-spacer"></span>
+  </div>
+
+  <div class="markets-body">
+    {% include "markets/_markets_panel.html" %}
+  </div>
+{% endblock %}

@@ -2088,3 +2088,35 @@ table.rows tr.is-waived td {
   color: var(--muted);
   font-style: italic;
 }
+
+/* --- MARKETS (gap 6) --------------------------------------------------------
+   The carrier list and one market's dossier. Containers and tables reuse the
+   book header and table.rows; only what is market-specific lives here. */
+
+.markets-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.75rem 0.875rem 2rem;
+}
+
+.market-aliases {
+  margin: 0 0 0.75rem;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+/* Appetite levels — the TUI's APPETITE_STYLES grammar. Colour is signal,
+   not decoration: the level's own word is always printed in the cell. */
+.appetite-target { color: var(--good); }
+.appetite-will-consider { color: var(--accent); }
+.appetite-selective { color: var(--warn); }
+.appetite-no { color: var(--danger); }
+
+/* .muted inside a rows table — app.css only defined it scoped to
+   .book-cell before; the markets tables dim their secondary columns the
+   same way. */
+table.rows td.muted,
+table.rows .muted {
+  color: var(--muted);
+}

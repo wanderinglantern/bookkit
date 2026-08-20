@@ -177,3 +177,39 @@ PENDING: dict[str, str] = {
         "insufficient"
     ),
 }
+
+# Whole-screen coverage, for TUI screens that are not AccountScreen (whose
+# per-action ledger is the two dicts above). Value prose accounts for every
+# key the screen binds, BY NAME, so a gap has to be a sentence you can read
+# rather than a silence.
+SCREENS: dict[str, str] = {
+    "markets": (
+        "PARTIAL (gap 6, 2026-08-20; routes/markets.py, tests/"
+        "test_web_markets.py). MarketsScreen: enter -> GET /markets/{ref}; "
+        "`a` new_market -> GET/POST /markets/new (org_form "
+        "default_kind='market', same apply_org); `e` edit_market -> "
+        "GET/POST /markets/{ref}/edit (org_form_initial_profile); `x` "
+        "merge_market -> /markets/{ref}/merge + /merge/confirm — a confirm "
+        "step naming the blast radius and the alias-preserving rule, then "
+        "services.merge.merge_markets in one batch under the TUI's own "
+        "tool name (merge_markets); `N` nest_market -> GET/POST "
+        "/markets/{ref}/nest (orgs.set_parent; both TUI paths — existing "
+        "master, or create one on the spot); `A` add_alias -> GET/POST "
+        "/markets/{ref}/aliases/new (aliases.set_alias, suggestions from "
+        "aliases.unresolved_carriers). MarketDetailScreen: `a` add_appetite "
+        "-> .../appetite/new; `e` edit_row -> .../appetite/{id}/edit and "
+        ".../underwriters/{id}/edit (whole forms, as the TUI's are); `D` "
+        "delete_row -> .../appetite/{id}/remove — confirm-first on the web "
+        "because the undo pill is account-scoped and `u` is not beside it "
+        "here; `w` add_underwriter -> .../underwriters/new (role defaults "
+        "to underwriter in the write, mirroring the TUI's commit); enter on "
+        "an exposure row -> the account link in the ON THE TOWER table. "
+        "STILL MISSING, and why it is PARTIAL: `i` import_underwriter "
+        "(paste signature) stays deferred by name — it is a TUI paste flow, "
+        "and bulk paste-import needs a browser-side parser design of its "
+        "own (same deferral as import_here/paste_items above); `u` undo has "
+        "no markets-page control — the web's undo pill and changes rail are "
+        "account-scoped (routes/changes.py), so a market-scoped revert "
+        "control is a later slice."
+    ),
+}

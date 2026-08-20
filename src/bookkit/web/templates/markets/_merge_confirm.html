@@ -1,0 +1,27 @@
+{# Step two of the merge — the blast radius, named before anything is
+   written (the GET that rendered this wrote NOTHING). The one rule that
+   makes a market merge safe for towers leads the list: the duplicate's NAME
+   becomes an alias of the survivor, so every tower spelling that created
+   the duplicate keeps resolving (services.merge.merge_markets). #}
+<div class="confirm-remove" role="alertdialog"
+     aria-label="Merge {{ market.name }} into {{ target.name }}">
+  <p class="confirm-remove-title">
+    Merge <strong>{{ market.name }}</strong> into <strong>{{ target.name }}</strong>?
+  </p>
+  <ul class="confirm-remove-notes">
+    <li>"{{ market.name }}" becomes an alias of {{ target.name }}, so every
+        tower spelling it appears under keeps resolving.</li>
+    <li>{{ counts.contacts }} contact(s), {{ counts.appetite }} appetite
+        line(s), {{ counts.submissions }} submission(s) and
+        {{ counts.aliases }} existing alias(es) move to {{ target.name }},
+        along with its information requests, interactions and documents.</li>
+    <li>{{ market.name }} is then soft-deleted. The merge lands as one
+        change that can be reverted.</li>
+  </ul>
+  <div class="form-actions">
+    <button type="button" class="btn-danger"
+            hx-post="/markets/{{ market.ref }}/merge/confirm?target={{ target.id }}"
+            hx-target="closest .form-host" hx-swap="innerHTML">Merge markets</button>
+    <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+  </div>
+</div>

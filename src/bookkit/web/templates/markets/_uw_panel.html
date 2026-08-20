@@ -1,0 +1,47 @@
+{# Underwriters — contacts on the market org (the TUI's `w` adds one, `e`
+   edits through the whole contact form; role defaults to underwriter in the
+   write, not the form, mirroring the TUI's commit callback). Paste-signature
+   import (`i`) is deferred by name in web/parity.py — a TUI paste flow.
+
+   #uw-panel is this partial's own root — same OOB reasoning as the
+   appetite panel above it. #}
+<div id="uw-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <div class="people-head">
+    <h2 class="people-label">Underwriters</h2>
+    <span class="people-count">{{ rows | length }}</span>
+    <span class="people-head-spacer"></span>
+    <button type="button" class="people-add"
+            hx-get="/markets/{{ market.ref }}/underwriters/new"
+            hx-target="#uw-panel .form-host" hx-swap="innerHTML">+ Add underwriter</button>
+  </div>
+  <div class="form-host"></div>
+  {% if rows %}
+    <div class="table-scroll">
+      <table class="rows">
+        <thead>
+          <tr><th>Name</th><th>Title</th><th>Email</th><th>Phone</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td>{{ row.name }}</td>
+              <td class="muted">{{ row.title }}</td>
+              <td>{{ row.email }}</td>
+              <td class="num">{{ row.phone }}</td>
+              <td class="row-actions-cell">
+                <button type="button" class="row-action-btn"
+                        hx-get="/markets/{{ market.ref }}/underwriters/{{ row.id }}/edit"
+                        hx-target="#uw-panel .form-host" hx-swap="innerHTML">Edit</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="panel-empty">
+      <p>empty — add the first row</p>
+    </div>
+  {% endif %}
+</div>

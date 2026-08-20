@@ -1,0 +1,39 @@
+{# Aliases — every towerkit spelling that resolves to this market (the TUI's
+   `A`). The add form's suggestions are aliases.unresolved_carriers: the
+   spellings already on projected towers that currently resolve to NOTHING,
+   i.e. the ones silently missing every cross-book join.
+
+   A successful add answers with a full page refresh, not this panel alone:
+   a new spelling changes the header's "also written as" line and the
+   exposure table below (exposure.for_market searches every alias), so this
+   panel would be a partial truth. #}
+<div id="aliases-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <div class="people-head">
+    <h2 class="people-label">Aliases</h2>
+    <span class="people-count">{{ aliases | length }}</span>
+    <span class="people-head-spacer"></span>
+    <button type="button" class="people-add"
+            hx-get="/markets/{{ market.ref }}/aliases/new"
+            hx-target="#aliases-panel .form-host" hx-swap="innerHTML">+ Add alias</button>
+  </div>
+  <div class="form-host"></div>
+  {% if aliases %}
+    <div class="table-scroll">
+      <table class="rows">
+        <thead>
+          <tr><th>Tower spelling</th></tr>
+        </thead>
+        <tbody>
+          {% for alias in aliases %}
+            <tr><td class="num">{{ alias }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="panel-empty">
+      <p>no other spellings on file — add one when a tower writes this market differently</p>
+    </div>
+  {% endif %}
+</div>
