@@ -237,10 +237,13 @@ def _refusal(request: Request, message: str) -> HTMLResponse:
 
     Deliberately 200: htmx swaps 2xx only, and a refusal the user cannot
     read is the silent failure this codebase keeps finding. It lands in the
-    tab's form host, never over the panel."""
-    return TEMPLATES.TemplateResponse(
-        request, "account/_program_refusal.html", {"message": message}
-    )
+    tab's form host, never over the panel. Hand-built HTML sees no
+    autoescape, so the message is escaped by hand (the phase-4 rule —
+    _program_refusal.html, which this branch's older base still had, was
+    retired for exactly this shape)."""
+    from markupsafe import escape
+
+    return HTMLResponse(f'<p class="form-error" role="alert">{escape(message)}</p>')
 
 
 def _not_here(kind: str, entity_id: str, org: Org) -> HTTPException:
