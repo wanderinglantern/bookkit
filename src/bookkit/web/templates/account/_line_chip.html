@@ -4,15 +4,18 @@
    plus its remove control, which fetches an in-place confirm naming the
    layers that die with the line. #}
 <span class="line-chip">
-  <button type="button" class="row-action-btn line-arrow" title="move left"
+  <button type="button" class="chip-arrow" title="Move {{ name }} left"
+          aria-label="Move {{ name }} left"
           hx-post="{{ base }}/move" hx-vals='{"delta": "-1"}'
           hx-target="closest .line-chip" hx-swap="outerHTML">&#9666;</button>
   {{ name_cell | safe }}
-  <button type="button" class="row-action-btn line-arrow" title="move right"
+  <button type="button" class="chip-arrow" title="Move {{ name }} right"
+          aria-label="Move {{ name }} right"
           hx-post="{{ base }}/move" hx-vals='{"delta": "1"}'
           hx-target="closest .line-chip" hx-swap="outerHTML">&#9656;</button>
-  <button type="button" class="row-action-btn"
+  <button type="button" class="chip-remove"
+          aria-label="Remove {{ name }}"
           title="Remove {{ name }} — layers covering only this line go with it"
           hx-get="{{ base }}/remove"
-          hx-target="closest .line-chip" hx-swap="outerHTML">remove</button>
+          hx-target="closest .line-chip" hx-swap="outerHTML">&times;</button>
 </span>

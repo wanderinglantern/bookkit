@@ -557,10 +557,38 @@ def layers_for(request: Request, conn: sqlite3.Connection, placement_id: str) ->
     between renders (towerkit's editor, an MCP call, the web's own writes), so
     a longer-lived cache would serve a stale tower with nothing to say it had.
     """
-    cache: dict[str, list[Any]] = getattr(request.state, "layer_details", None) or {}
+    return sync.layer_details_of(linked_for(request, conn, placement_id).program)
+
+
+def forget_program_reads(request: Request) -> None:
+    """Drop the per-request program memos after a WRITE.
+
+    Two caches, one call. `request.state.layer_details = {}` used to be
+    written out by hand at sixteen call sites, so adding a second memo meant
+    sixteen chances to leave one of them serving the pre-image of the write
+    that just happened — and a stale parse here does not look like a cache
+    bug, it looks like a save that did not save."""
+    request.state.layer_details = {}
+    request.state.linked_program = {}
+
+
+def linked_for(
+    request: Request, conn: sqlite3.Connection, placement_id: str
+) -> sync.LinkedProgram:
+    """The parsed program AND the reason it did not parse, memoised the same
+    way `layers_for` is — one file open per placement per render.
+
+    The reason is half the answer, not an afterthought. A panel that knows only
+    "no layers came back" prints "the linked file has no layers yet" and is
+    wrong five times out of five when a towerkit tree has moved (2026-08-20).
+    The surfaces read `.error` off this and print it.
+    """
+    cache: dict[str, sync.LinkedProgram] = (
+        getattr(request.state, "linked_program", None) or {}
+    )
     if placement_id not in cache:
-        cache[placement_id] = sync.layer_details(conn, placement_id)
-        request.state.layer_details = cache
+        cache[placement_id] = sync.linked_program(conn, placement_id)
+        request.state.linked_program = cache
     return cache[placement_id]
 
 

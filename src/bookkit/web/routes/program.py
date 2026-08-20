@@ -30,12 +30,21 @@ from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS, PLACEMENT_FIELDS
 from ...forms.spec import Field, initial_text, parse_value
 from ...money import format_cents_compact
 from ...repo import placements as placements_repo
-from ...repo import vocab
+from ...repo import projection, vocab
 from ...services import batches as batches_svc
 from ...services import placement_edit, program_files
 from ..app import TEMPLATES
 from ..forms_render import render_cell, render_cell_display, render_form
-from .account import _conn, _context, _org, _owned, _save, layers_for
+from .account import (
+    _conn,
+    _context,
+    _org,
+    _owned,
+    _save,
+    forget_program_reads,
+    layers_for,
+    linked_for,
+)
 
 _LAYER_CELLS: dict[str, Field] = {f.key: f for f in LAYER_FIELDS}
 _PLACEMENT_CELLS: dict[str, Field] = {f.key: f for f in PLACEMENT_FIELDS}
@@ -104,58 +113,146 @@ def _layer_row(
     }
 
 
-def _tower_for(placement: Any) -> dict[str, Any] | None:
-    """The drawn tower for a placement's linked file, or None.
+def _tower_for(linked: sync.LinkedProgram) -> dict[str, Any] | None:
+    """The drawn tower for an already-loaded program, or None.
 
     None and an empty tower are different facts — "no program file" against "a
     program with nothing in it" — and the template says different things about
-    them. A file that will not load is also None rather than an exception: the
-    layers table above it still renders from the projection, and a tab that
-    500s because one drawing failed is worse than a tab with one drawing
-    missing.
+    them. This no longer opens the file itself: it takes the one
+    `LinkedProgram` the render already parsed, so the drawing and the table
+    below it can never disagree about which bytes they are showing, and a
+    panel costs one file read rather than two.
+
+    A tower that fails to DRAW is still None (towerkit's renderer can refuse a
+    program the model accepted), but the panel now says why the FILE would not
+    load, which is the case that actually happens.
     """
-    if not placement.program_path:
+    if linked.program is None:
         return None
-    from pathlib import Path
-
-    from towerkit.model import load_program
-
     from ..tower import panel
 
     try:
-        return panel(load_program(Path(placement.program_path)))
+        return panel(linked.program)
     except Exception:
         return None
 
 
-def _programs(request: Request, org: Any) -> list[dict[str, Any]]:
-    """Every placement on the account, each with its layers.
+def _last_synced(conn: sqlite3.Connection, placement_id: str) -> dict[str, Any] | None:
+    """What the LAST SUCCESSFUL SYNC recorded for a placement whose file will
+    not open right now — read-only, and labelled as such.
 
-    Through account.layers_for, which memoises per request: the shell has
-    already read the RENEWAL placement's file for the right rail, and this tab
-    wants that same file plus every other placement's. Calling layer_details
-    directly here parsed one file twice per render — caught by
-    test_layer_details_is_read_once_per_page, which was right and whose
-    assertion I had talked myself out of in a comment before running it.
+    Grant's five broken placements still held 12, 1, 8, 14 and 10 projected
+    layers between them while the web showed an empty panel and said the files
+    had no layers. The data was in the database the whole time. Showing it
+    beats showing nothing, but ONLY with the date on it and no editors: a
+    stale figure a broker can quote from is worse than a blank, and an editor
+    over it would write through to a file that is not there.
+    """
+    rows = projection.layers_for_placement(conn, placement_id)
+    if not rows:
+        return None
+    seats: dict[str, list[str]] = {}
+    for seat in projection.participants_for_placement(conn, placement_id):
+        seats.setdefault(str(seat["layer_id"]), []).append(
+            f"{seat['carrier']} {seat['share_bps'] / 100:g}%"
+        )
+    return {
+        "synced_at": rows[0]["synced_at"][:10],
+        "layers": [
+            {
+                "name": row["name"],
+                "attach": format_cents_compact(int(row["attach"])),
+                "limit": format_cents_compact(int(row["lim"])),
+                "premium": (
+                    format_cents_compact(int(row["premium"]))
+                    if row["premium"] is not None
+                    else "—"
+                ),
+                "markets": ", ".join(seats.get(str(row["layer_id"]), [])) or "To be placed",
+            }
+            for row in rows
+        ],
+    }
+
+
+def _section_html(
+    request: Request,
+    ref: str,
+    org: Any,
+    placement: Any,
+    *,
+    refocus: str | None = None,
+    expanded: str | None = None,
+) -> str:
+    """ONE renderer for a program section, for every caller.
+
+    The full page and every write response used to build this context
+    SEPARATELY — the page in `_programs`, the write in `_panel` — with the
+    keys re-listed a third time in the `{% with %}` block that included the
+    template. Three lists, and a key added to any one of them was silently
+    absent from the other two. That is not hypothetical: `tower` was in the
+    page's list and not the write's, so every save quietly erased the drawing;
+    then `load_error` was in both routes' lists and not the `{% with %}`, so
+    the fix for "this file will not load" rendered on writes and not on the
+    page it was written for. Both found the same afternoon (2026-08-20).
+
+    Now there is one list, here, and the template is included with the whole
+    context rather than a hand-copied subset of it.
     """
     conn = _conn(request)
-    out: list[dict[str, Any]] = []
-    for placement in placements_repo.for_org(conn, org.id):
-        layers = layers_for(request, conn, placement.id) if placement.program_path else []
-        out.append(
-            {
-                "placement": placement,
-                "placement_cells": _placement_cells(request, org.ref, placement),
-                "line_chips": _line_chips(request, org.ref, placement),
-                "term_chips": _term_chips(request, org.ref, placement),
-                "linked": bool(placement.program_path),
-                "layers": [
-                    _layer_row(request, org.ref, placement.id, layer) for layer in layers
-                ],
-                "tower": _tower_for(placement),
-            }
-        )
-    return out
+    linked = linked_for(request, conn, placement.id)
+    layers = layers_for(request, conn, placement.id) if placement.program_path else []
+    template = TEMPLATES.env.get_template("account/_layers_panel.html")
+    return template.render(
+        header={"org": org},
+        placement=placement,
+        placement_cells=_placement_cells(request, ref, placement),
+        line_chips=_line_chips(request, ref, placement),
+        term_chips=_term_chips(request, ref, placement),
+        linked=bool(placement.program_path),
+        # The two facts the panel used to conflate. `load_error` is a sentence
+        # to PRINT, not a flag: "no layers yet" is what an unreadable file
+        # looked like for as long as the reads swallowed their exceptions.
+        load_error=linked.error,
+        moved_from=linked.moved_from,
+        last_synced=_last_synced(conn, placement.id) if linked.error else None,
+        tower=_tower_for(linked),
+        layers=[_layer_row(request, ref, placement.id, layer) for layer in layers],
+        refocus=refocus,
+        expanded=expanded,
+        expanded_row=_expanded_row_html(request, ref, placement.id, expanded),
+    )
+
+
+def _expanded_row_html(
+    request: Request, ref: str, placement_id: str, expanded: str | None
+) -> str | None:
+    """The open details row, re-rendered inside the section that replaces it."""
+    if not expanded:
+        return None
+    conn = _conn(request)
+    layer = next(
+        (
+            candidate
+            for candidate in layers_for(request, conn, placement_id)
+            if candidate["id"] == expanded
+        ),
+        None,
+    )
+    if layer is None:
+        return None
+    return _text(_details_row(request, ref, placement_id, layer))
+
+
+def _programs(request: Request, org: Any) -> list[str]:
+    """Every placement on the account, rendered. One file open apiece — the
+    per-request memo in account.linked_for is what makes layers, lines, terms
+    and the tower share a single parse of the same bytes."""
+    conn = _conn(request)
+    return [
+        _section_html(request, org.ref, org, placement)
+        for placement in placements_repo.for_org(conn, org.id)
+    ]
 
 
 def _programs_panel(
@@ -164,7 +261,7 @@ def _programs_panel(
     """The whole tab body. Creating a placement and scaffolding a file both
     change the LIST rather than one row of it, so neither can honestly swap a
     single panel."""
-    request.state.layer_details = {}
+    forget_program_reads(request)
     return TEMPLATES.TemplateResponse(
         request, "account/_programs_panel.html",
         {
@@ -316,11 +413,8 @@ async def placement_cell_save(
     except Exception as exc:
         return _placement_editor_cell(request, ref, placement, key, str(exc), raw)
 
-    request.state.layer_details = {}
-    fresh = placements_repo.get(conn, placement_id)
-    cell = _placement_display_cell(request, ref, fresh, key)
-    panel = _panel(request, ref, org, placement_id)
-    return HTMLResponse(_text(cell) + _text(panel))
+    forget_program_reads(request)
+    return _panel(request, ref, org, placement_id, refocus=f"cell:{key}")
 
 
 # --- the lines strip (phase 3, D1) ---------------------------------------------
@@ -369,9 +463,16 @@ def _line_chips(request: Request, ref: str, placement: Any) -> list[str] | None:
     if not placement.program_path:
         return None
     conn = _conn(request)
+    # Through the per-request memo, not a fresh open: the Program tab lists
+    # every placement and each panel wants layers, lines, terms and a tower
+    # off the SAME file. Reading it once per consumer had the tab opening and
+    # re-parsing each program five times per render (caught 2026-08-20 by
+    # test_layer_details_is_read_once_per_page, once it was pointed at the
+    # function that actually does the I/O).
+    program = linked_for(request, conn, placement.id).program
     return [
         _line_chip_html(request, ref, placement.id, lid, name)
-        for lid, name in sync.program_lines(conn, placement.id)
+        for lid, name in sync.program_lines_of(program)
     ]
 
 
@@ -444,12 +545,7 @@ async def line_add(request: Request, ref: str, placement_id: str) -> HTMLRespons
         )
     except Exception as exc:
         return refused(str(exc))
-    button = TEMPLATES.TemplateResponse(
-        request, "account/_line_add_button.html",
-        {"lines_base": _lines_base(ref, placement_id)},
-    )
-    panel = _panel(request, ref, org, placement_id)
-    return HTMLResponse(_text(button) + _text(panel))
+    return _panel(request, ref, org, placement_id)
 
 
 @router.get(
@@ -549,7 +645,7 @@ async def line_cell_save(
         )
     except Exception as exc:
         return editor(str(exc))
-    request.state.layer_details = {}
+    forget_program_reads(request)
     return _panel(request, ref, org, placement_id)
 
 
@@ -581,7 +677,7 @@ async def line_move(
         )
     except Exception as exc:
         return _panel_refusal(request, ref, org, placement_id, str(exc))
-    request.state.layer_details = {}
+    forget_program_reads(request)
     return _panel(request, ref, org, placement_id)
 
 
@@ -637,7 +733,7 @@ def line_remove(
         return _line_remove_confirm(
             request, ref, placement_id, line_id, name, str(exc)
         )
-    request.state.layer_details = {}
+    forget_program_reads(request)
     return _panel(request, ref, org, placement_id)
 
 
@@ -723,9 +819,8 @@ def _reproject(conn: sqlite3.Connection, placement: Any) -> None:
     Both Reload and Overwrite do this first, and it is not a write to the file
     — it re-reads it and refreshes the proj_* cache, which is exactly what the
     conflict said had gone stale."""
-    from pathlib import Path
 
-    sync.project(conn, Path(str(placement.program_path)), placement_id=placement.id)
+    sync.project(conn, sync.program_file(conn, placement), placement_id=placement.id)
 
 
 @router.post(
@@ -740,11 +835,9 @@ def layer_cell_reload(
     conn = _conn(request)
     placement, _ = _owned_layer(request, org, placement_id, layer_id)
     _reproject(conn, placement)
-    request.state.layer_details = {}
+    forget_program_reads(request)
     _, fresh = _owned_layer(request, org, placement_id, layer_id)
-    cell = _layer_display_cell(request, ref, placement_id, fresh, key)
-    panel = _panel(request, ref, org, placement_id)
-    return HTMLResponse(_text(cell) + _text(panel))
+    return _panel(request, ref, org, placement_id, refocus=f"{layer_id}:{key}")
 
 
 @router.post(
@@ -777,18 +870,16 @@ async def layer_cell_overwrite(
         return _layer_editor_cell(request, ref, placement_id, layer, key, str(exc), raw)
 
     _reproject(conn, placement)
-    request.state.layer_details = {}
+    forget_program_reads(request)
     placement, layer = _owned_layer(request, org, placement_id, layer_id)
     try:
         _write_layer_field(conn, placement, layer_id, key, value, field, layer)
     except Exception as exc:
         return _layer_editor_cell(request, ref, placement_id, layer, key, str(exc), raw)
 
-    request.state.layer_details = {}
+    forget_program_reads(request)
     _, fresh = _owned_layer(request, org, placement_id, layer_id)
-    cell = _layer_display_cell(request, ref, placement_id, fresh, key)
-    panel = _panel(request, ref, org, placement_id)
-    return HTMLResponse(_text(cell) + _text(panel))
+    return _panel(request, ref, org, placement_id, refocus=f"{layer_id}:{key}")
 
 
 @router.post(
@@ -972,11 +1063,12 @@ async def layer_applies_to_toggle(
         )
     except Exception as exc:
         return _details_row(request, ref, placement_id, layer, str(exc))
-    request.state.layer_details = {}
+    forget_program_reads(request)
     _, fresh = _owned_layer(request, org, placement_id, layer_id)
-    row = _details_row(request, ref, placement_id, fresh)
-    panel = _panel(request, ref, org, placement_id)
-    return HTMLResponse(_text(row) + _text(panel))
+    return _panel(
+        request, ref, org, placement_id,
+        refocus=f"{layer_id}:applies_to", expanded=layer_id,
+    )
 
 
 @router.get(
@@ -1041,11 +1133,12 @@ async def statutory_save(
         )
     except Exception as exc:
         return _details_row(request, ref, placement_id, layer, str(exc))
-    request.state.layer_details = {}
+    forget_program_reads(request)
     _, fresh = _owned_layer(request, org, placement_id, layer_id)
-    row = _details_row(request, ref, placement_id, fresh)
-    panel = _panel(request, ref, org, placement_id)
-    return HTMLResponse(_text(row) + _text(panel))
+    return _panel(
+        request, ref, org, placement_id,
+        refocus=f"{layer_id}:statutory", expanded=layer_id,
+    )
 
 
 @router.post(
@@ -1078,11 +1171,12 @@ async def follows_save(
         )
     except Exception as exc:
         return _details_row(request, ref, placement_id, layer, str(exc))
-    request.state.layer_details = {}
+    forget_program_reads(request)
     _, fresh = _owned_layer(request, org, placement_id, layer_id)
-    row = _details_row(request, ref, placement_id, fresh)
-    panel = _panel(request, ref, org, placement_id)
-    return HTMLResponse(_text(row) + _text(panel))
+    return _panel(
+        request, ref, org, placement_id,
+        refocus=f"{layer_id}:follows", expanded=layer_id,
+    )
 
 
 def _layer_remove_confirm(
@@ -1212,8 +1306,16 @@ async def layer_cell_save(
 
     # Re-read rather than reusing `layer`: the memo is per REQUEST and this
     # one has just written, so the cached parse is now the pre-image.
-    request.state.layer_details = {}
+    forget_program_reads(request)
     _, fresh = _owned_layer(request, org, placement_id, layer_id)
+    if key in _DETAIL_KEYS:
+        # A DETAILS-ROW FIELD ANSWERS WITH ITS OWN CELL. Policy number and the
+        # two policy dates are not columns in the table above, so nothing in
+        # the panel moves when they change — and answering with the panel would
+        # replace the section, which CLOSES the details row the user is still
+        # working in. Losing the row you are typing in on every save is the
+        # same complaint as losing the whole program, one size down.
+        return _layer_display_cell(request, ref, placement_id, fresh, key)
 
     # THE CELL, PLUS THE WHOLE PANEL OUT OF BAND. A layer write can move rows
     # this cell knows nothing about: write_through runs heal_follows, which
@@ -1222,9 +1324,7 @@ async def layer_cell_save(
     # pre-write attachment — a tower with a gap or an overlap that does not
     # exist in the file, and the next edit made from that row would be made
     # against a number that is already gone (found by review, 2026-08-19).
-    cell = _layer_display_cell(request, ref, placement_id, fresh, key)
-    panel = _panel(request, ref, org, placement_id)
-    return HTMLResponse(_text(cell) + _text(panel))
+    return _panel(request, ref, org, placement_id, refocus=f"{layer_id}:{key}")
 
 
 # --- adding a layer, and working the markets on one ---------------------------
@@ -1281,30 +1381,69 @@ def _parsed(fields: tuple[Field, ...], raw: dict[str, str]) -> dict[str, Any]:
     return values
 
 
-def _panel(request: Request, ref: str, org: Any, placement_id: str) -> HTMLResponse:
-    """Re-render this placement's whole panel. A program write can move more
-    than the cell that caused it — a market's share changes the layer's signed
-    percentage, and adding a layer changes the table — so no single-cell swap
-    is honest here."""
-    request.state.layer_details = {}
+def _panel(
+    request: Request,
+    ref: str,
+    org: Any,
+    placement_id: str,
+    *,
+    refocus: str | None = None,
+    expanded: str | None = None,
+) -> HTMLResponse:
+    """Re-render this placement's whole panel, AND retarget the swap onto it.
+
+    A program write can move more than the cell that caused it — a market's
+    share changes the layer's signed percentage, heal_follows re-seats every
+    layer above the one edited, and adding a layer changes the table — so no
+    single-cell swap is honest here.
+
+    THE PANEL IS THE PRIMARY SWAP, never a sibling riding out of band behind
+    a `<td>`. Every write route used to answer with `cell_html + panel_html`,
+    the cell targeted in place and the panel marked hx-swap-oob. That shape
+    is destroyed by HTML fragment parsing before htmx ever sees it: htmx picks
+    its parse context from the response's FIRST tag (`makeFragment`), so a
+    response opening with `<td>` is parsed inside
+    `<table><tbody><tr>…</tr></tbody></table>` — and a `<section>` is not
+    table content, so the parser foster-parents it out of the fragment htmx
+    returns. Confirmed in Chrome on 2026-08-20: saving a layer premium left
+    `section.program` standing with its `.table-scroll` empty and every one of
+    the 14 layer rows gone, the write itself having succeeded. Grant hit this
+    as "I changed a limit and the program disappeared; the change saved but I
+    had to refresh". The `<tr>`-first responses (the details row) failed the
+    other way — the section was dropped silently, so the panel never refreshed
+    at all and the next edit was made against stale numbers.
+
+    HX-Retarget/HX-Reswap say the same thing without a second element in the
+    response: whatever the trigger's own target was, this answer replaces the
+    whole `#program-<id>` section. One element, top level, no table context to
+    misparse. forms_render.py already documented the single-element half of
+    this rule ("a `<td>` outside a table-row ancestor is silently dropped");
+    what was missing was that the rule binds the whole RESPONSE, not just the
+    fragment — asserted now by tests/test_conventions.py.
+
+    `refocus` is "<layer_id>:<field_key>" (or "cell:<field_key>" for a header
+    cell) and rides back as `data-refocus`; inline-cell.js puts the caret back
+    on the cell the user just left, so replacing the section does not cost
+    them their place in the table.
+
+    `expanded` names a layer whose DETAILS ROW is open. The row is inserted
+    client-side (the chevron's hx-swap="afterend"), so replacing the section
+    used to close it — on every statutory, follows-underlying and applies-to
+    write, all three of which are made FROM that row. Re-rendering it here
+    keeps the row the user is working in open across the write it caused,
+    which is the whole reason the row exists.
+    """
+    forget_program_reads(request)
     conn = _conn(request)
     placement = placements_repo.get(conn, placement_id)
-    return TEMPLATES.TemplateResponse(
-        request, "account/_layers_panel.html",
-        {
-            "header": {"org": org},
-            "placement": placement,
-            "placement_cells": _placement_cells(request, ref, placement),
-            "line_chips": _line_chips(request, ref, placement),
-            "term_chips": _term_chips(request, ref, placement),
-            "linked": bool(placement.program_path),
-            "layers": [
-                _layer_row(request, ref, placement_id, layer)
-                for layer in layers_for(request, conn, placement_id)
-            ],
-            "oob": True,
-        },
+    response = HTMLResponse(
+        _section_html(
+            request, ref, org, placement, refocus=refocus, expanded=expanded
+        )
     )
+    response.headers["HX-Retarget"] = f"#program-{placement_id}"
+    response.headers["HX-Reswap"] = "outerHTML"
+    return response
 
 
 def _refused_form(
@@ -1425,9 +1564,7 @@ async def market_add(
         )
     except Exception as exc:
         return _market_add_form(request, conn, base, str(exc), raw)
-    button = _market_add_button(request, base)
-    panel = _panel(request, ref, org, placement_id)
-    return HTMLResponse(_text(button) + _text(panel))
+    return _panel(request, ref, org, placement_id)
 
 
 def _market_field(key: str) -> Field:
@@ -1507,7 +1644,22 @@ def _market_chip_html(
         base=_market_base(ref, placement_id, layer["id"], index),
         seat=seat, layer_name=layer["name"],
         carrier_cell=cell("carrier"), share_cell=cell("share_pct"),
+        # A carrier the book does not know is a string in a file and nothing
+        # more — it misses exposure, hit rate and the market dossier. Said
+        # HERE, where the carrier is, rather than left to be noticed on a tab
+        # that never mentioned it (Grant, 2026-08-20).
+        unlinked=seat["carrier"] not in _known_carriers(request),
     )
+
+
+def _known_carriers(request: Request) -> set[str]:
+    """Memoised per request: the chip asks once per seat, and a busy tower has
+    dozens."""
+    cached = getattr(request.state, "known_carriers", None)
+    if cached is None:
+        cached = sync.known_carriers(_conn(request))
+        request.state.known_carriers = cached
+    return cached
 
 
 def _market_display_cell(
@@ -1684,14 +1836,8 @@ async def market_cell_save(
         )
 
     # Re-read: the memo is per request and this one has just written.
-    request.state.layer_details = {}
-    _, fresh_layer = _owned_layer(request, org, placement_id, layer_id)
-    fresh_seat = _seated(fresh_layer, index)
-    cell = _market_display_cell(
-        request, ref, placement_id, fresh_layer, index, fresh_seat, key
-    )
-    panel = _panel(request, ref, org, placement_id)
-    return HTMLResponse(_text(cell) + _text(panel))
+    forget_program_reads(request)
+    return _panel(request, ref, org, placement_id, refocus=f"{layer_id}:market-{index}-{key}")
 
 
 def _market_confirm(
@@ -2140,7 +2286,7 @@ def compare_page(request: Request, ref: str, placement_id: str) -> HTMLResponse:
         expiring = adjacent[0]
 
     delta = compare_programs(
-        _loaded_program(expiring), _loaded_program(proposed)
+        _loaded_program(conn, expiring), _loaded_program(conn, proposed)
     )
 
     from ...money import dollars_to_cents
@@ -2211,12 +2357,10 @@ def _attachment(content: bytes, filename: str, media_type: str) -> Any:
     )
 
 
-def _loaded_program(placement: Any) -> Any:
-    from pathlib import Path as _Path
-
+def _loaded_program(conn: sqlite3.Connection, placement: Any) -> Any:
     from towerkit.model import load_program
 
-    return load_program(_Path(str(placement.program_path)))
+    return load_program(sync.program_file(conn, placement))
 
 
 @router.get(
@@ -2242,7 +2386,8 @@ def _export_tower(
     from pathlib import Path as _Path
 
     org = _org(request, ref)
-    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
     if not placement.program_path:
         return _refusal_page(
             request,
@@ -2257,7 +2402,7 @@ def _export_tower(
     from towerkit.render.mpl_program import render_program
     from towerkit.theme import load_theme
 
-    program = _loaded_program(placement)
+    program = _loaded_program(conn, placement)
     with tempfile.TemporaryDirectory() as tmp:
         paths = render_program(
             program, load_theme(), _Path(tmp), placement.ref, formats=[fmt]
@@ -2275,7 +2420,8 @@ def export_schematic(request: Request, ref: str, placement_id: str) -> Any:
     from pathlib import Path as _Path
 
     org = _org(request, ref)
-    placement = _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
     if not placement.program_path:
         return _refusal_page(
             request,
@@ -2290,7 +2436,7 @@ def export_schematic(request: Request, ref: str, placement_id: str) -> Any:
     from towerkit.render.table_xlsx import finalize_workbook, new_workbook
     from towerkit.theme import load_theme
 
-    program = _loaded_program(placement)
+    program = _loaded_program(conn, placement)
     wb = new_workbook()
     add_schematic_sheet(wb, program, load_theme())
     with tempfile.TemporaryDirectory() as tmp:
@@ -2355,22 +2501,28 @@ def _terms_base(ref: str, placement_id: str, kind: str) -> str:
     return f"/accounts/{ref}/program/{placement_id}/{kind}"
 
 
-def _term_lines(conn: sqlite3.Connection, placement_id: str) -> list[dict[str, str]]:
-    return [
-        {"id": lid, "name": str(name)}
-        for lid, name in sync.program_lines(conn, placement_id)
-    ]
+def _program_lines(request: Request, placement_id: str) -> list[tuple[str, str]]:
+    """The linked program's lines, off the per-request memo.
+
+    `request` rather than `conn` because these three helpers are called once
+    PER TERM CHIP, and a nine-chip terms strip opened and re-parsed the same
+    towerkit file nine times per render before this (2026-08-20)."""
+    return sync.program_lines_of(linked_for(request, _conn(request), placement_id).program)
 
 
-def _line_names(conn: sqlite3.Connection, placement_id: str, ids: list[str]) -> str:
-    names = dict(sync.program_lines(conn, placement_id))
+def _term_lines(request: Request, placement_id: str) -> list[dict[str, str]]:
+    return [{"id": lid, "name": str(name)} for lid, name in _program_lines(request, placement_id)]
+
+
+def _line_names(request: Request, placement_id: str, ids: list[str]) -> str:
+    names = dict(_program_lines(request, placement_id))
     return ", ".join(str(names.get(lid, lid)) for lid in ids)
 
 
 def _term_label(
-    conn: sqlite3.Connection, placement_id: str, kind: str, term: dict[str, Any]
+    request: Request, placement_id: str, kind: str, term: dict[str, Any]
 ) -> str:
-    lines = _line_names(conn, placement_id, term["applies_to"])
+    lines = _line_names(request, placement_id, term["applies_to"])
     amount = format_cents_compact(term["amount_cents"])
     head = term["type"].upper() if kind == "retentions" else term["name"]
     return f"{head} {amount} · {lines}"
@@ -2379,12 +2531,11 @@ def _term_label(
 def _term_chip_html(
     request: Request, ref: str, placement_id: str, kind: str, term: dict[str, Any]
 ) -> str:
-    conn = _conn(request)
     template = TEMPLATES.env.get_template("account/_term_chip.html")
     return template.render(
         base=_terms_base(ref, placement_id, kind),
         term=term,
-        label=_term_label(conn, placement_id, kind, term),
+        label=_term_label(request, placement_id, kind, term),
     )
 
 
@@ -2392,7 +2543,7 @@ def _term_chips(request: Request, ref: str, placement: Any) -> dict[str, list[st
     if not placement.program_path:
         return None
     conn = _conn(request)
-    terms = sync.program_terms(conn, placement.id)
+    terms = sync.program_terms_of(linked_for(request, conn, placement.id).program)
     return {
         kind: [
             _term_chip_html(request, ref, placement.id, kind, term)
@@ -2415,13 +2566,12 @@ def _term_form(
     request: Request, ref: str, placement_id: str, kind: str,
     action: str, values: dict[str, Any], error: str | None = None,
 ) -> HTMLResponse:
-    conn = _conn(request)
     return TEMPLATES.TemplateResponse(
         request, "account/_term_form.html",
         {
             "kind": kind, "action": action,
             "cancel_url": f"{_terms_base(ref, placement_id, kind)}/button",
-            "lines": _term_lines(conn, placement_id),
+            "lines": _term_lines(request, placement_id),
             "values": values, "error": error,
         },
     )
@@ -2514,9 +2664,7 @@ async def term_add(
         )
     except Exception as exc:
         return _term_form(request, ref, placement_id, kind.value, action, values, str(exc))
-    button = _term_add_button(request, ref, placement_id, kind.value)
-    panel = _panel(request, ref, org, placement_id)
-    return HTMLResponse(_text(button) + _text(panel))
+    return _panel(request, ref, org, placement_id)
 
 
 @router.get(
@@ -2592,7 +2740,7 @@ async def term_edit(
         )
     except Exception as exc:
         return _term_form(request, ref, placement_id, kind.value, action, values, str(exc))
-    request.state.layer_details = {}
+    forget_program_reads(request)
     return _panel(request, ref, org, placement_id)
 
 
@@ -2612,7 +2760,7 @@ def term_remove_confirm(
         {
             "base": _terms_base(ref, placement_id, kind.value),
             "term": term,
-            "label": _term_label(conn, placement_id, kind.value, term),
+            "label": _term_label(request, placement_id, kind.value, term),
         },
     )
 
@@ -2628,7 +2776,7 @@ def term_remove(
     conn = _conn(request)
     placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
     term = _term_by_index(conn, placement_id, kind.value, index)
-    label = _term_label(conn, placement_id, kind.value, term)
+    label = _term_label(request, placement_id, kind.value, term)
     try:
         if kind.value == "retentions":
             mutate = lambda: sync.remove_retention(conn, placement_id, index)  # noqa: E731
@@ -2649,5 +2797,5 @@ def term_remove(
                 "term": term, "label": label, "error": str(exc),
             },
         )
-    request.state.layer_details = {}
+    forget_program_reads(request)
     return _panel(request, ref, org, placement_id)

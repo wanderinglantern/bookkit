@@ -6,7 +6,6 @@ are built in towerkit, participant moves happen in the binding flows."""
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 from towerkit.ingest import parse_tower
 from towerkit.model import Layer, load_program
@@ -14,6 +13,7 @@ from towerkit.money import format_money
 
 from ...money import dollars_to_cents
 from ...repo import placements
+from ...sync import program_file
 from ..staging import StagedImport, StagedRecord
 
 
@@ -29,7 +29,7 @@ def stage_renewal(
             f"{placement.ref} has no linked program file — renewal diffs need one",
         )
         return StagedImport("paste", "", [broken], [])
-    current = load_program(Path(placement.program_path))
+    current = load_program(program_file(conn, placement))
     draft = parse_tower(text, insured=current.insured, program=current.program)
     records: list[StagedRecord] = []
     claimed: set[str] = set()  # existing layer ids already matched

@@ -11,5 +11,19 @@
 </head>
 <body>
   <main id="main">{% block content %}{% endblock %}</main>
+  {# ONE description, referenced by every inline cell editor's
+     aria-describedby (macros/cell.html). It lives in the shell rather than
+     inside each cell because a cell is a table <td>: a line of help rendered
+     inside one re-sizes that column under every other row. Blur commits and
+     Escape discards (CLAUDE.md), and a discard nobody is told about is a dead
+     affordance — the failure tests/test_dead_keys.py exists to stop on the
+     terminal side.
+
+     A dangling aria-describedby announces NOTHING, so this element and the
+     attribute that points at it are pinned together by
+     tests/test_web_shell.py. #}
+  <p id="cell-keys" class="visually-hidden">
+    Enter or moving focus away saves this value. Escape discards it.
+  </p>
 </body>
 </html>

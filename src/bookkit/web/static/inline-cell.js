@@ -1,8 +1,8 @@
-/* Inline cell editing: Tab-hop and blur-cancel — the two behaviours the
+/* Inline cell editing: Tab-hop and blur-commit — the two behaviours the
  * declarative half of macros/cell.html (hx-get/hx-post/hx-trigger) cannot
  * express on its own. Mirrors tui/widgets/inline_edit.py's CellEditor:
  * Enter commits and closes, Tab commits and hops to the next editable cell
- * in the same record, Escape and blur both cancel — never a surprise write.
+ * in the same record, BLUR COMMITS, and Escape is the one discard.
  *
  * The bottom of this file also owns whole-form cancel (macros/form.html's
  * Cancel button and Escape) — a second small file for one button was worse
@@ -11,24 +11,23 @@
  *
  * Enter needs no JS: it's a native form submit (the editor's <form> already
  * carries hx-post). Escape is still declarative — the cell's own
- * hx-trigger="keyup[key=='Escape']" in macros/cell.html. Both Tab-hop and
- * blur-cancel are handled entirely here, in JS, not split against a
+ * hx-trigger="keyup[key=='Escape']" in macros/cell.html. Tab-hop, blur-commit
+ * and the Escape guard are handled entirely here, in JS, not split against a
  * declarative trigger:
  *
  *   - Tab's default action (move focus) is prevented so it never leaves via
  *     the browser's own tab order; we commit the cell instead, then open
  *     the next editable cell's editor once the commit lands.
- *   - Blur cancels by re-fetching the display cell — but a COMMIT's own
- *     outerHTML swap removes the focused input from the DOM too, which
- *     ALSO fires focusout. Fix round 2, 2026-08-17: this used to be a
- *     declarative hx-trigger="focusout" on the cell, running unconditionally
- *     alongside a `committing` flag that was set and cleared but never
- *     actually read anywhere — so every commit raced a spurious revert GET
- *     against its own save (harmless by luck here, since both requests
- *     converge on the same display value, but a real bug: the flag existed
- *     to prevent exactly this and did not). focusout is now handled here in
- *     JS, where `committing` actually gates the revert fetch — the flag is
- *     read on every focusout, not just carried.
+ *   - Blur commits (2026-08-20; it cancelled until then). Every path that
+ *     ends an edit — a commit's own outerHTML swap, Escape's revert — also
+ *     removes the focused input and therefore fires focusout, so the
+ *     listener has to know which one it is looking at. That is what
+ *     `committing` and `cancelling` are for, and both are READ on every
+ *     focusout rather than merely carried: fix round 2, 2026-08-17, found a
+ *     `committing` flag that was set and cleared and never consulted, so
+ *     every commit raced a spurious revert GET against its own save.
+ *   - An unchanged cell reverts instead of committing, so opening a cell to
+ *     read it costs nothing.
  *
  * Selectors below are class-only, never tag-qualified (no "td.cell" or
  * "td.cell-editing") — macros/cell.html's `tag` parameter means a cell is a
@@ -42,6 +41,7 @@
   var RECORD_SCOPE = "tr, .contact-card";
 
   var committing = false;
+  var cancelling = false;
   var pendingHop = null; // { scope: <element>, nextCell: <element> } set by a Tab keydown
 
   function editableCells(scope) {
@@ -76,15 +76,47 @@
     }
   });
 
-  // Blur cancels — never a surprise write. `committing` is what stops a
-  // commit's own removal-triggered focusout from firing a second, spurious
-  // revert request right behind its own save.
-  document.body.addEventListener("focusout", function (evt) {
-    var cell = evt.target.closest && evt.target.closest(".cell-editing");
-    if (!cell || committing) return;
+  // BLUR COMMITS (Grant, 2026-08-20). It used to cancel, which meant
+  // clicking out of a cell silently threw away what had just been typed —
+  // the failure people actually hit. A surprise write is at worst a visible
+  // value you can edit again or take back with the undo toast; a surprise
+  // DISCARD leaves nothing to take back. Escape is now the single discard,
+  // and macros/cell.html says so beside the input. Enter and Tab unchanged.
+  //
+  // Three guards, all load-bearing:
+  //   `committing`  — a commit's own outerHTML swap removes the focused
+  //                   input, firing focusout again; without this the cell
+  //                   would post twice.
+  //   `cancelling`  — Escape's declarative revert ALSO removes the input and
+  //                   fires focusout. Without this, Escape would commit the
+  //                   very value it exists to discard.
+  //   unchanged     — an untouched cell must not write. Opening a cell to
+  //                   read it and clicking away would otherwise cost a
+  //                   write-through, a rewritten towerkit file and an undo
+  //                   batch per glance, with heal_follows re-seating the
+  //                   tower each time.
+  function currentValue(cell) {
+    var input = cell.querySelector("input, select");
+    return input ? input.value : null;
+  }
+
+  function revert(cell) {
     var action = cell.getAttribute("data-cell-action");
     if (!action || typeof htmx === "undefined") return;
     htmx.ajax("GET", action, { target: cell, swap: "outerHTML" });
+  }
+
+  document.body.addEventListener("focusout", function (evt) {
+    var cell = evt.target.closest && evt.target.closest(".cell-editing");
+    if (!cell || committing || cancelling) return;
+    var form = cell.querySelector("form.cell-editor");
+    if (!form) return;
+    var opened = cell.getAttribute("data-opened-with");
+    if (opened !== null && currentValue(cell) === opened) {
+      revert(cell); // nothing typed — close it, exactly as blur used to
+      return;
+    }
+    form.requestSubmit();
   });
 
   document.body.addEventListener("keydown", function (evt) {
@@ -105,9 +137,37 @@
     form.requestSubmit();
   });
 
+  // Escape is the discard. It sets `cancelling` BEFORE the cell's own
+  // declarative hx-trigger="keyup[key=='Escape']" revert fires, so the
+  // focusout that revert causes cannot be read as a commit. keydown, not
+  // keyup, for exactly that ordering.
   document.body.addEventListener("keydown", function (evt) {
-    if (evt.key === "Escape") pendingHop = null;
+    if (evt.key !== "Escape") return;
+    pendingHop = null;
+    if (evt.target.closest && evt.target.closest(".cell-editing")) {
+      cancelling = true;
+      window.setTimeout(function () {
+        cancelling = false;
+      }, 0);
+    }
   });
+
+  // Put the caret back on the cell a panel-wide swap replaced. Best effort
+  // by design: a structure write (statutory, follows, applies-to) closes the
+  // details row its control lived in, so there is nothing to return to, and
+  // doing nothing is the right answer rather than guessing at another cell.
+  function refocus(section, token) {
+    var parts = token.split(":");
+    var scope = parts[0];
+    var field = parts.slice(1).join(":");
+    var row =
+      scope === "cell"
+        ? section
+        : section.querySelector('[data-layer-row="' + CSS.escape(scope) + '"]');
+    if (!row) return;
+    var cell = row.querySelector('.cell[data-field="' + CSS.escape(field) + '"]');
+    if (cell) cell.focus();
+  }
 
   // A commit's outerHTML swap replaces the editing cell with a plain
   // display cell on success, or a fresh (still cell-editing) one carrying
@@ -124,8 +184,21 @@
     // is what makes focus reliable for content inserted after page load.
     if (el.classList.contains("cell-editing")) {
       var input = el.querySelector("input, select");
+      // Remember what the cell held when it opened, so blur can tell "the
+      // user typed something" from "the user looked and left".
+      el.setAttribute("data-opened-with", input ? input.value : "");
       if (input) input.focus();
       return;
+    }
+
+    // A write answers with the WHOLE program section (routes/program.py
+    // `_panel` retargets onto it), so the cell the caret was in no longer
+    // exists. data-refocus names its replacement — "<layer_id>:<field>", or
+    // "cell:<field>" for a placement header cell — and putting focus back is
+    // what keeps a run of edits down one column from becoming a run of
+    // hunting for where the row went.
+    if (el.hasAttribute && el.hasAttribute("data-refocus")) {
+      refocus(el, el.getAttribute("data-refocus"));
     }
 
     if (!pendingHop) return;

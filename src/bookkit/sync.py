@@ -61,10 +61,11 @@ from towerkit.model import Layer as TkModelLayer
 from towerkit.money import premium_share
 from towerkit.validate import Diagnostics, validate_file, validate_program
 
+from . import programpath
 from .db import utc_now
 from .models import Opportunity, Org, Placement
 from .money import MoneyParseError, cents_to_dollars, dollars_to_cents
-from .repo import aliases, links, opportunities, orgs, placements, projection, settings
+from .repo import aliases, links, opportunities, orgs, placements, projection
 
 
 def file_sha256(path: Path | str) -> str:
@@ -72,15 +73,8 @@ def file_sha256(path: Path | str) -> str:
 
 
 def configured_roots(conn: sqlite3.Connection) -> list[Path]:
-    """Where program files live: the saved setting, falling back to the
-    BOOKKIT_PROGRAM_ROOTS env var (colon-separated) for scripting."""
-    import os
-
-    saved = settings.get_program_roots(conn)
-    if saved:
-        return [Path(r).expanduser() for r in saved]
-    raw = os.environ.get("BOOKKIT_PROGRAM_ROOTS", "")
-    return [Path(r).expanduser() for r in raw.split(":") if r]
+    """Where program files live — programpath.roots is the definition."""
+    return programpath.roots(conn)
 
 
 def scan(roots: list[Path]) -> list[Path]:
@@ -283,7 +277,10 @@ def _project_impl(
         total_limit=dollars_to_cents(program.total_limit()),
         total_premium=dollars_to_cents(program.total_premium()),
         currency=program.currency,
-        program_path=str(path),
+        # RELATIVE TO A ROOT where one contains it (programpath.store): the
+        # absolute spelling is what turned a moved towerkit checkout into five
+        # programs the web called empty (2026-08-20).
+        program_path=programpath.store(conn, path),
         source_sha256=sha,
         synced_at=synced,
     )
@@ -333,7 +330,7 @@ def _adoption_candidates(
         p
         for p in placements.for_org(conn, org_id)
         if p.program_path is not None
-        and not Path(p.program_path).exists()
+        and not programpath.resolve(conn, p.program_path).ok
         and p.period_from < end
         and p.period_to > start
     ]
@@ -358,7 +355,10 @@ def project_all(conn: sqlite3.Connection, roots: list[Path]) -> SyncReport:
             insured = _insured(path)
             org_id = links.org_for_insured(conn, insured)
             if org_id is not None:
-                links.confirm(conn, str(path), org_id, insured, source="insured_match")
+                links.confirm(
+                    conn, programpath.store(conn, path), org_id, insured,
+                    source="insured_match",
+                )
                 report.relinked.append((path, f"insured previously confirmed: {insured!r}"))
         if org_id is None:
             report.needs_link.append(_suggest(conn, path, client_orgs))
@@ -424,6 +424,18 @@ def carrier_suggestions(conn: sqlite3.Connection) -> list[CarrierSuggestion]:
     return out
 
 
+def known_carriers(conn: sqlite3.Connection) -> set[str]:
+    """Every carrier spelling that resolves to a market org — the market names
+    themselves plus every recorded alias.
+
+    A carrier that is not in here is a string in a towerkit file and nothing
+    more: it misses exposure, hit rate and the market dossier. The surfaces use
+    this to SAY so at the point the carrier is written, rather than leaving it
+    to be discovered on a tab that never mentions it (Grant, 2026-08-20)."""
+    names = {org.name for org in orgs.list_orgs(conn, kind="market")}
+    return names | set(aliases.alias_map(conn))
+
+
 def alias_carrier(conn: sqlite3.Connection, carrier: str, market_org_id: str) -> None:
     aliases.set_alias(conn, carrier, market_org_id)
 
@@ -450,17 +462,21 @@ def _detect_rename(conn: sqlite3.Connection, path: Path) -> str | None:
         for p in placements.all_linked(conn)
         if p.source_sha256 == sha
         and p.program_path is not None
-        and not Path(p.program_path).exists()
+        and not programpath.resolve(conn, p.program_path).ok
     ]
     if len(matches) != 1:
         return None
     moved = matches[0]
     old_path = moved.program_path
-    links.confirm(conn, str(path), moved.org_id, _insured(path), source="rename")
+    links.confirm(
+        conn, programpath.store(conn, path), moved.org_id, _insured(path),
+        source="rename",
+    )
     if old_path is not None:
         links.forget(conn, old_path)
     placements.update(
-        conn, moved.id, program_path=str(path), note=f"file renamed from {old_path}"
+        conn, moved.id, program_path=programpath.store(conn, path),
+        note=f"file renamed from {old_path}",
     )
     return moved.org_id
 
@@ -481,7 +497,7 @@ def _suggest(conn: sqlite3.Connection, path: Path, client_orgs: list[Org]) -> Li
 def confirm_link(conn: sqlite3.Connection, path: Path, org_id: str) -> Diagnostics:
     """User confirmed a file ↔ account link: record it and project. May raise
     AmbiguousPlacement — the caller then asks which placement to adopt."""
-    links.confirm(conn, str(path), org_id, _insured(path))
+    links.confirm(conn, programpath.store(conn, path), org_id, _insured(path))
     return project(conn, path)
 
 
@@ -654,9 +670,10 @@ def renew(
     new_path: Path | None = None
     program: Program | None = None
     if placement.program_path:
-        path = Path(placement.program_path)
-        if not path.exists():
-            diags.error("io", f"{path}: linked file is missing — fix the link first")
+        try:
+            path = program_file(conn, placement)
+        except ProgramFileMissing as missing:
+            diags.error("io", str(missing))
             return None, None, diags
         program, file_diags = validate_file(path)
         if program is None or not file_diags.ok:
@@ -692,7 +709,10 @@ def renew(
     if new_path is not None and program is not None:
         clone = program.clone_as_renewal()
         dump_program(clone, new_path)
-        links.confirm(conn, str(new_path), placement.org_id, clone.insured, source="renewal")
+        links.confirm(
+            conn, programpath.store(conn, new_path), placement.org_id, clone.insured,
+            source="renewal",
+        )
         diags = project(conn, new_path, placement_id=new_placement.id)
         new_placement = placements.get(conn, new_placement.id)
     return new_placement, new_path, diags
@@ -763,7 +783,7 @@ def scaffold_program(
         return None, check
     dest.parent.mkdir(parents=True, exist_ok=True)
     dump_program(program, dest)
-    links.confirm(conn, str(dest), org.id, org.name, source="scaffold")
+    links.confirm(conn, programpath.store(conn, dest), org.id, org.name, source="scaffold")
     diags = project(conn, dest, placement_id=placement.id)
     return dest, diags
 
@@ -1267,6 +1287,108 @@ def set_applies_to(
     return _mutate(conn, placement_id, mutate)
 
 
+@dataclass(frozen=True)
+class LinkedProgram:
+    """A placement's towerkit file, loaded — or the reason it is not.
+
+    ONE SEAM FOR EVERY READ. Five functions below used to open the file
+    themselves behind `except Exception: return []`, so "this file will not
+    load" and "this program has nothing in it" arrived at the surfaces as the
+    same value, and the surfaces printed the second. On 2026-08-20 that turned
+    a moved towerkit checkout into five programs the web swore were empty,
+    while the TUI's tower preview — the one reader that prints its exception
+    (tui/widgets/tower_preview.py) — rendered them correctly and made the bug
+    look like a ghost. Every read now goes through here, and `error` is a
+    sentence the surfaces are expected to PRINT.
+
+    `moved_from` is set when programpath recovered the file somewhere other
+    than the stored row says. The read succeeds; the surfaces say so, because
+    a file answering from a path the database does not record is how one
+    program quietly ends up serving two placements.
+    """
+
+    path: Path | None
+    program: Program | None
+    error: str | None = None
+    moved_from: str | None = None
+
+    @property
+    def linked(self) -> bool:
+        """The placement CLAIMS a file — true even when it cannot be read.
+        The surfaces need this to tell 'no program yet' (offer to scaffold
+        one) from 'a program that will not open' (say why)."""
+        return self.path is not None or self.error is not None
+
+
+def linked_program(conn: sqlite3.Connection, placement_id: str) -> LinkedProgram:
+    """Open a placement's program file, saying what happened either way."""
+    placement = placements.get(conn, placement_id)
+    return linked_program_for(conn, placement.program_path)
+
+
+def linked_program_for(conn: sqlite3.Connection, stored: str | None) -> LinkedProgram:
+    if not stored:
+        return LinkedProgram(None, None)
+    where = programpath.resolve(conn, stored)
+    if where.path is None:
+        return LinkedProgram(None, None, error=where.error)
+    try:
+        program = load_program(where.path)
+    except Exception as exc:
+        # The message towerkit gives is the useful half — a pydantic
+        # ValidationError names the field and the value. Prefix it with the
+        # file, because a reader looking at a panel has no other way to know
+        # WHICH file refused.
+        return LinkedProgram(
+            where.path,
+            None,
+            error=f"{where.path.name} will not load: {exc}",
+            moved_from=where.moved_from,
+        )
+    return LinkedProgram(where.path, program, moved_from=where.moved_from)
+
+
+class ProgramFileMissing(Exception):
+    """The placement claims a file and nothing on disk answers to it.
+
+    Raised rather than returned wherever a WRITE is about to happen: a writer
+    that treats "no file" as "empty program" would create the file fresh and
+    silently drop every layer in it. The message is programpath's — which
+    path was tried, and what to run — because a bare "file not found" tells a
+    broker nothing about a path they never typed.
+    """
+
+
+def program_file(conn: sqlite3.Connection, placement: Placement) -> Path:
+    """Where this placement's towerkit file is right now.
+
+    THE STORED VALUE IS NOT THE PATH. It is relative to a program root, or
+    absolute and possibly stale, and programpath owns turning it into a real
+    location (including recovering a tree that moved wholesale). Reaching for
+    `Path(placement.program_path)` directly is what broke on 2026-08-20 and is
+    banned by tests/test_conventions.py.
+    """
+    if not placement.program_path:
+        raise ProgramFileMissing(f"{placement.ref}: no program file linked")
+    where = programpath.resolve(conn, placement.program_path)
+    if where.path is None:
+        raise ProgramFileMissing(where.error or f"{placement.program_path}: not found")
+    return where.path
+
+
+def program_file_or_none(conn: sqlite3.Connection, placement: Placement) -> Path | None:
+    """`program_file` for readers that must render regardless."""
+    try:
+        return program_file(conn, placement)
+    except ProgramFileMissing:
+        return None
+
+
+def program_load_error(conn: sqlite3.Connection, placement_id: str) -> str | None:
+    """The one-line reason this placement's program will not open, or None."""
+    return linked_program(conn, placement_id).error
+
+
 def layer_details(conn: sqlite3.Connection, placement_id: str) -> list[dict[str, Any]]:
     """The linked program's layers with everything the edit form needs, plus
     the carrier panel on each; money in cents (bookkit-native).
@@ -1286,12 +1408,14 @@ def layer_details(conn: sqlite3.Connection, placement_id: str) -> list[dict[str,
     An unplaced layer is an EMPTY list, never a missing key: "nobody is on it"
     and "we did not look" are different facts and towerkit prints the first as
     'To be placed'."""
-    placement = placements.get(conn, placement_id)
-    if not placement.program_path:
-        return []
-    try:
-        program = load_program(Path(placement.program_path))
-    except Exception:
+    return layer_details_of(linked_program(conn, placement_id).program)
+
+
+def layer_details_of(program: Program | None) -> list[dict[str, Any]]:
+    """`layer_details` without the I/O, so a caller that already holds the
+    parsed program (the web memoises one LinkedProgram per placement per
+    render) does not open and re-parse the same file to get the rows."""
+    if program is None:
         return []
     out: list[dict[str, Any]] = []
     for layer in program.layers:
@@ -1340,13 +1464,13 @@ def program_terms(
     editors need; money in cents (bookkit-native), applies_to as line ids.
     Index order is towerkit's own addressing for these (they carry no ids),
     and every web write re-renders the panel so an index is never stale."""
-    placement = placements.get(conn, placement_id)
+    return program_terms_of(linked_program(conn, placement_id).program)
+
+
+def program_terms_of(program: Program | None) -> dict[str, list[dict[str, Any]]]:
+    """`program_terms` without the I/O — see `layer_details_of`."""
     empty: dict[str, list[dict[str, Any]]] = {"retentions": [], "sublimits": []}
-    if not placement.program_path:
-        return empty
-    try:
-        program = load_program(Path(placement.program_path))
-    except Exception:
+    if program is None:
         return empty
     return {
         "retentions": [
@@ -1370,31 +1494,52 @@ def program_terms(
     }
 
 
-def line_labels(program_path: str | None) -> str:
+def line_labels(program_path: str | None, conn: sqlite3.Connection | None = None) -> str:
     """Compact lines-of-cover label ("GL, AL, EL") straight from the file —
     what cover the placement actually is, for the attention tables. Empty
-    string when unlinked or unreadable (never raises: home must render)."""
-    if not program_path:
-        return ""
-    try:
-        program = load_program(Path(program_path))
-    except Exception:
+    string when unlinked or unreadable (never raises: home must render).
+
+    `conn` is optional ONLY because this is called from renderers that hold a
+    path and nothing else; pass it wherever you have it, or a program_path
+    stored relative to a root cannot be resolved and every attention row
+    silently loses its lines of cover. The attention tables are the one place
+    where an empty label is genuinely survivable — a row that says "PLC-0006"
+    with no lines is still a row, and the panel that owns the file says why."""
+    program = _program_at(program_path, conn)
+    if program is None:
         return ""
     return ", ".join(line.label for line in program.lines)
 
 
-def line_ends(program_path: str | None) -> list[tuple[str, date]]:
+def _program_at(
+    program_path: str | None, conn: sqlite3.Connection | None
+) -> Program | None:
+    """Load by stored path for the two callers that have no placement id.
+
+    With a connection the stored value goes through programpath (relative to a
+    root, and recovered when the tree moved); without one it can only be tried
+    as written, which is what it was before roots existed."""
+    if not program_path:
+        return None
+    if conn is not None:
+        return linked_program_for(conn, program_path).program
+    try:
+        return load_program(Path(program_path))
+    except Exception:
+        return None
+
+
+def line_ends(
+    program_path: str | None, conn: sqlite3.Connection | None = None
+) -> list[tuple[str, date]]:
     """(label, end date) per line of cover, soonest first — the date each
     LINE actually needs renewing, which is not always the program period end:
     policies are issued per layer, and a line's cover runs out when the first
     layer that applies to it expires. Lines with no layers (TBD, unplaced)
     are omitted — there is no policy to expire. Empty when unlinked or
     unreadable (never raises: home must render)."""
-    if not program_path:
-        return []
-    try:
-        program = load_program(Path(program_path))
-    except Exception:
+    program = _program_at(program_path, conn)
+    if program is None:
         return []
     out: list[tuple[str, date]] = []
     for line in program.lines:
@@ -1411,12 +1556,12 @@ def line_ends(program_path: str | None) -> list[tuple[str, date]]:
 
 def program_lines(conn: sqlite3.Connection, placement_id: str) -> list[tuple[str, str]]:
     """(id, name) of the linked program's lines, for the add-layer picker."""
-    placement = placements.get(conn, placement_id)
-    if not placement.program_path:
-        return []
-    try:
-        program = load_program(Path(placement.program_path))
-    except Exception:
+    return program_lines_of(linked_program(conn, placement_id).program)
+
+
+def program_lines_of(program: Program | None) -> list[tuple[str, str]]:
+    """`program_lines` without the I/O — see `layer_details_of`."""
+    if program is None:
         return []
     return [(line.id, line.name) for line in program.lines]
 
@@ -1469,12 +1614,13 @@ def write_through(
     on-disk hash refuses the write outright."""
     diags = Diagnostics()
     placement = placements.get(conn, placement_id)
-    if not placement.program_path:
-        diags.error("no-file", f"{placement.ref}: no program file linked")
-        return diags
-    path = Path(placement.program_path)
-    if not path.exists():
-        diags.error("io", f"{path}: file is gone")
+    try:
+        path = program_file(conn, placement)
+    except ProgramFileMissing as missing:
+        # Which of the two it is matters to the reader: "no file linked" is an
+        # invitation to scaffold one, "the file moved" is an invitation to run
+        # relink. programpath's message already distinguishes them.
+        diags.error("no-file" if not placement.program_path else "io", str(missing))
         return diags
     if not placement.source_sha256:
         # A NULL sha USED TO SHORT-CIRCUIT THE WHOLE GUARD, which inverted it:

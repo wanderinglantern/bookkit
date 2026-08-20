@@ -7,7 +7,12 @@
         hx-get="{{ base }}/{{ term.index }}/edit"
         hx-trigger="click, keyup[key=='Enter']"
         hx-target="closest .term-chip" hx-swap="outerHTML">{{ label }}</span>
-  <button type="button" class="row-action-btn"
+  {# "remove" was the visible word on every chip — twelve identical controls
+     on one strip, and twelve identical accessible names in a screen reader,
+     none of which said what they removed. A × with the term in its label
+     says more and takes a twelfth of the room. #}
+  <button type="button" class="chip-remove"
+          aria-label="Remove {{ label }}" title="Remove {{ label }}"
           hx-get="{{ base }}/{{ term.index }}/remove"
-          hx-target="closest .term-chip" hx-swap="outerHTML">remove</button>
+          hx-target="closest .term-chip" hx-swap="outerHTML">&times;</button>
 </span>

@@ -13,13 +13,13 @@ errors / warnings), per the colour-is-signal rule.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from ...repo import orgs, placements
+from ...sync import program_file
 from ..app import TEMPLATES
 from ..tower import panel
 
@@ -50,7 +50,7 @@ def _entries(request: Request) -> list[dict[str, Any]]:
     for placement in sorted(
         linked, key=lambda p: (names.get(p.org_id, ""), p.period_from)
     ):
-        program, diags = validate_file(Path(str(placement.program_path)))
+        program, diags = validate_file(program_file(conn, placement))
         badge = (
             "ok"
             if diags.ok and not diags.warnings

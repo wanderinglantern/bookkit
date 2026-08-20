@@ -30,7 +30,7 @@
      data-cell-action carries the base cell URL as a plain attribute (not
      just baked into hx-get) so inline-cell.js can read it without string
      surgery on hx-get — needed for Tab-hop (finding the next cell's URL)
-     and the blur-cancel fetch. is-editable is the dashed-underline
+     and the unchanged-on-blur revert. is-editable is the dashed-underline
      discoverability affordance from the visual-direction spec: without it
      a mouse-first user has no way to tell this value is editable.
 
@@ -57,15 +57,23 @@
      leaving a stale editor listening on something htmx just swapped out
      from under it. The keyup bubbles here from the input inside.
 
-     "Blur cancels" is handled entirely in inline-cell.js, not here — fix
-     round 2, 2026-08-17. A declarative hx-trigger="focusout" alongside it
-     used to do this instead, racing a commit's own removal-triggered
-     focusout unconditionally (the `committing` flag next to it was set and
-     cleared but never actually read by anything). One place, one guard
-     that's actually consulted, beats a declarative trigger and a JS flag
-     both reaching for the same event and only one of them checking it.
-     hx-target below tracks `tag` too — a literal "closest td" would
-     silently no-op when tag="div". #}
+     "Blur commits" is handled entirely in inline-cell.js, not here — fix
+     round 2, 2026-08-17, and the commit/discard flip on 2026-08-20. A
+     declarative hx-trigger="focusout" used to do this instead, racing a
+     commit's own removal-triggered focusout unconditionally (the
+     `committing` flag next to it was set and cleared but never actually
+     read by anything). One place, with guards that are actually consulted,
+     beats a declarative trigger and a JS flag both reaching for the same
+     event and only one of them checking it. hx-target below tracks `tag`
+     too — a literal "closest td" would silently no-op when tag="div".
+
+     THE DISCARD HAS TO BE SAID. Blur commits now (CLAUDE.md), so Escape is
+     the only way out without writing, and a key nobody is told about is the
+     same dead affordance tests/test_dead_keys.py exists to stop on the other
+     surface. It is announced (aria-describedby, so a screen reader hears it
+     when the input takes focus) and shown on hover (title), rather than
+     rendered as visible text — this element is a table CELL, and a line of
+     help inside one re-sizes the column under every other row. #}
   <{{ tag }} class="cell cell-editing{% if error %} cell-error{% endif %}{% if extra_class %} {{ extra_class }}{% endif %}"
       data-field="{{ field.key }}" data-cell-action="{{ action }}"
       hx-get="{{ action }}" hx-trigger="keyup[key=='Escape']" hx-swap="outerHTML">
@@ -73,6 +81,7 @@
           hx-post="{{ action }}" hx-target="closest {{ tag }}" hx-swap="outerHTML">
       {% if field.kind == "select" %}
         <select name="{{ field.key }}" aria-label="{{ field.label }}"
+                aria-describedby="cell-keys" title="Enter or click away saves · Esc discards"
                 {% if field.required %}required{% endif %} autofocus>
           {% if field.optional_select or not field.required %}<option value=""></option>{% endif %}
           {% for label, val in field.options %}
@@ -85,6 +94,7 @@
            or bypasses parse_human_date's bare-number refusal #}
         <input type="text" name="{{ field.key }}" value="{{ value }}"
                placeholder="{{ placeholder }}" aria-label="{{ field.label }}"
+               aria-describedby="cell-keys" title="Enter or click away saves · Esc discards"
                {% if field.suggestions %}list="cl-{{ field.key }}"{% endif %}
                {% if field.required %}required{% endif %}
                autofocus>

@@ -503,3 +503,148 @@ def test_a_child_whose_parent_died_before_the_family_fix_still_renders(
     page = client.get(f"/markets/{sompo.ref}")
     assert page.status_code == 200
     assert f"nested under {chubb.name}" not in page.text  # no ghost master
+
+
+# --- carriers on the towers that the book does not know -----------------------
+#
+# Grant, 2026-08-20: "New market added to program saved, but it does not carry
+# forward to the Markets tab." A carrier is a STRING in a towerkit file; it
+# joins the book only when a market org carries that name or an alias points at
+# one. The web could write the string and had no way to do the second half, so
+# a carrier bound in the browser missed exposure, hit rate and every market
+# page — silently, on the tab where you would go looking for it.
+
+
+def _bind_a_new_carrier(client, conn, name="Brand New Re"):
+    """Put a carrier nobody has heard of onto a real layer, the way the
+    Program tab does."""
+    from bookkit import sync
+    from bookkit.repo import orgs, placements
+
+    org = next(
+        o for o in orgs.list_orgs(conn, kind="client") if placements.for_org(conn, o.id)
+    )
+    placement = next(p for p in placements.for_org(conn, org.id) if p.program_path)
+    # A layer with ROOM on it: towerkit refuses a seat that would take the
+    # signed share past 100%, and every seeded layer is fully placed. So add
+    # one on top of the tower — which is also the shape of Grant's report,
+    # "new market added to program".
+    existing = sync.layer_details(conn, placement.id)
+    # Per LINE, not per tower: a new layer covering one line has to sit on top
+    # of that line's own stack, or towerkit refuses it as a gap.
+    line = existing[0]["applies_to"][0]
+    top = max(
+        ly["attach_cents"] + ly["limit_cents"]
+        for ly in existing
+        if line in ly["applies_to"]
+    )
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={
+            "name": "Test Excess",
+            "line": line,
+            "attach_cents": f"{top // 100:,}",
+            "limit_cents": "5,000,000",
+            "premium_cents": "",
+        },
+    )
+    assert added.status_code == 200
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["name"] == "Test Excess"
+    )
+    posted = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers/{layer['id']}/markets",
+        data={"carrier": name, "share_pct": "1"},
+    )
+    assert posted.status_code == 200
+    seated = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer["id"]
+    )
+    assert any(seat["carrier"] == name for seat in seated["participants"]), (
+        f"the bind was refused: {posted.text[:400]}"
+    )
+    return org, placement, layer
+
+
+def test_a_carrier_bound_on_a_program_shows_up_on_the_markets_tab(client):
+    conn = client.app.state.conn
+    _bind_a_new_carrier(client, conn)
+
+    page = client.get("/markets").text
+
+    assert "Brand New Re" in page, "the bound carrier never reached the Markets tab"
+    assert "On your towers, not in the book" in page
+
+
+def test_adding_an_unknown_carrier_as_a_market_makes_it_a_real_market(client):
+    from bookkit.repo import orgs
+
+    conn = client.app.state.conn
+    _bind_a_new_carrier(client, conn)
+
+    added = client.post("/markets/unlinked/create", data={"carrier": "Brand New Re"})
+
+    assert added.status_code == 200
+    assert any(o.name == "Brand New Re" for o in orgs.list_orgs(conn, kind="market"))
+    # and it has LEFT the unlinked list rather than appearing in both. Scoped
+    # to this carrier: the seeded book has other unresolved spellings, and
+    # asserting the whole panel is gone would pass only by accident.
+    unlinked = added.text[added.text.index("unlinked-panel"):]
+    assert "Brand New Re" not in unlinked[: unlinked.index("markets-panel")]
+
+
+def test_an_unknown_carrier_can_be_linked_to_the_market_it_already_is(client):
+    from bookkit.repo import aliases, orgs
+
+    conn = client.app.state.conn
+    _bind_a_new_carrier(client, conn, "Chubb Limited")
+    existing = orgs.list_orgs(conn, kind="market")[0]
+
+    linked = client.post(
+        "/markets/unlinked/link",
+        data={"carrier": "Chubb Limited", "org_id": existing.id},
+    )
+
+    assert linked.status_code == 200
+    assert aliases.resolve(conn, "Chubb Limited") == existing.id
+    # no second market org was invented for a spelling of one we already have
+    assert not any(o.name == "Chubb Limited" for o in orgs.list_orgs(conn, kind="market"))
+
+
+def test_linking_to_something_that_is_not_a_market_is_refused(client):
+    from bookkit.repo import aliases, orgs
+
+    conn = client.app.state.conn
+    _bind_a_new_carrier(client, conn)
+    a_client = orgs.list_orgs(conn, kind="client")[0]
+
+    refused = client.post(
+        "/markets/unlinked/link",
+        data={"carrier": "Brand New Re", "org_id": a_client.id},
+    )
+
+    assert refused.status_code == 200
+    assert "is not a market" in refused.text
+    assert aliases.resolve(conn, "Brand New Re") is None
+
+
+def test_the_layer_chip_says_a_carrier_is_not_in_the_book(client):
+    """Said where the carrier is. A fact only visible on another page is a
+    fact nobody sees."""
+    conn = client.app.state.conn
+    org, placement, _layer = _bind_a_new_carrier(client, conn)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    # The badge reads "NEW"; the sentence lives in the accessible name, where
+    # it is available without being repeated at the reader once per seat.
+    assert 'aria-label="Brand New Re is not a market in the book' in page
+    assert "market-unlinked" in page
+
+    client.post("/markets/unlinked/create", data={"carrier": "Brand New Re"})
+    after = client.get(f"/accounts/{org.ref}/program").text
+
+    assert "Brand New Re" in after
+    assert 'aria-label="Brand New Re is not a market in the book' not in after, (
+        "the marker outlived the thing it marked"
+    )

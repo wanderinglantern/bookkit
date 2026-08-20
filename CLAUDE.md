@@ -97,6 +97,34 @@
 - One theme: tui/theme.py (palette + status/days/money Text helpers).
   Color is signal, not decoration; every colored state carries a glyph or
   word too.
+- BLUR COMMITS, ESCAPE DISCARDS — everywhere a value is edited IN PLACE, on
+  both surfaces (Grant, 2026-08-20). Enter commits and closes, Tab commits and
+  hops, clicking or tabbing away COMMITS, and Escape is the single discard.
+  Blur used to cancel on the reasoning that a surprise write is worse than a
+  surprise discard; it is not. A written value is visible, editable again and
+  revertible with `u`/the undo toast, while a discarded one is gone with
+  nothing left to point at — and losing typing to a stray click is the thing
+  people actually hit. Two guards are load-bearing and must survive any
+  rewrite: Escape's own close blurs the editor (so it must not then commit
+  what Escape discarded), and an UNCHANGED value closes without writing, or
+  opening a cell to read it costs a file rewrite, an event-log row and an undo
+  batch per glance. Owned by tui/widgets/inline_edit.py and
+  web/static/inline-cell.js; they must agree. NOT the rule for whole forms —
+  a multi-field modal blurs every time you tab between its own fields, so
+  FormModal and the in-row add forms keep their explicit Save.
+- ONE RESPONSE, ONE TOP-LEVEL ELEMENT. htmx chooses its HTML parse context
+  from the response's FIRST tag (`makeFragment`), so a response opening with
+  `<td>` is parsed inside `<table><tbody><tr>`, and anything in it that is not
+  table content is FOSTER-PARENTED out of the fragment before htmx ever sees
+  it. `cell_html + panel_html` with the panel marked `hx-swap-oob` therefore
+  did not refresh the panel — it destroyed it: a saved layer premium left the
+  program section standing with its table emptied and all 14 rows gone, the
+  write having succeeded, so a refresh made it look like a ghost (Grant,
+  2026-08-20). Answer with ONE element and say where it goes with
+  `HX-Retarget`/`HX-Reswap` (routes/program.py `_panel`). Asserted by
+  tests/test_conventions.py and `_assert_panel_swap` in test_web_program.py.
+  The single-element half of this rule was already written down in
+  web/forms_render.py; what was missing was that it binds the whole RESPONSE.
 - A REFUSAL SAYS SOMETHING. Row actions require table focus, and the gate is
   correct — but returning in SILENCE is its own bug: six of seven navigator
   row actions produced no modal, no message and no change, which reads as a

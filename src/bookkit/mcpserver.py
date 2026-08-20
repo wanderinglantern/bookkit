@@ -846,7 +846,7 @@ def _program_summary(conn: sqlite3.Connection, ref: str) -> dict[str, Any]:
         "account": org.name, "program": placement.program_name,
         "ref": placement.ref, "period": [placement.period_from, placement.period_to],
         "status": placement.status,
-        "lines_of_cover": sync.line_labels(placement.program_path),
+        "lines_of_cover": sync.line_labels(placement.program_path, conn),
         "premium": format_cents(placement.total_premium)
         if placement.total_premium else None,
         "open_tasks": len([t for t in tasks_repo.open_tasks_for_client(conn, org.id)
@@ -1468,14 +1468,12 @@ def _program_write(
 
 
 def _program_layers(conn: sqlite3.Connection, placement_ref: str) -> dict[str, Any]:
-    from pathlib import Path as _Path
-
     from towerkit.model import load_program
 
     from . import sync as sync_mod
 
     placement = _resolve_linked_placement(conn, placement_ref)
-    program = load_program(_Path(placement.program_path))
+    program = load_program(sync_mod.program_file(conn, placement))
     return {
         "placement_ref": placement.ref,
         "program": program.program,

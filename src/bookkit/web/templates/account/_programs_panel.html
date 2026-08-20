@@ -27,15 +27,14 @@
   <div class="form-host"></div>
 
   {% if programs %}
-    {% for program in programs %}
-      {% with placement = program.placement, layers = program.layers,
-              linked = program.linked, tower = program.tower,
-              placement_cells = program.placement_cells,
-              line_chips = program.line_chips,
-              term_chips = program.term_chips %}
-        {% include "account/_layers_panel.html" %}
-      {% endwith %}
-    {% endfor %}
+    {# PRE-RENDERED, not included with a hand-copied context. This was a
+       `{% with %}` block naming seven of the section's keys, which made it a
+       THIRD place a new key had to be added — and the one nobody remembered.
+       `load_error` reached both python callers and not this list, so the
+       "this file will not open" message rendered on writes and stayed
+       invisible on the page it existed for (2026-08-20). routes/program.py
+       `_section_html` is the single renderer now. #}
+    {% for program in programs %}{{ program | safe }}{% endfor %}
   {% else %}
     <div class="panel-empty">
       <p>no programs on this account</p>

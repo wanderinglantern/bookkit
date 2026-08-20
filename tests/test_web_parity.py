@@ -268,3 +268,40 @@ def test_every_tui_screen_is_in_the_screen_ledger():
     app_level = {"quick_capture_app_key", "sync_and_settings_app_keys"}
     stale = set(SCREENS) - modules - app_level
     assert not stale, f"screen ledger entries with no screen: {stale}"
+
+
+def test_every_towerkit_model_field_is_accounted_for():
+    """The other half of "built but not accessible".
+
+    TOWERKIT_EDIT_OPS enumerates towerkit's VERBS and says nothing about its
+    NOUNS. towerkit grew `named_limits`, `states` and three detail strings on
+    Layer — coverage facts a broker states on a quote and towerkit prints on
+    the SOI — and every parity test stayed green, because adding a FIELD adds
+    no op. They were reachable only from towerkit's own editor behind the
+    TUI's `o`, which a browser does not have (Grant, 2026-08-20).
+
+    Introspected at runtime, like the op ledger: a field towerkit grows turns
+    this red until TOWERKIT_MODEL_FIELDS names it.
+    """
+    import inspect
+
+    from pydantic import BaseModel
+    from towerkit import model
+
+    from bookkit.web.parity import TOWERKIT_MODEL_FIELDS
+
+    public = {
+        f"{name}.{field}"
+        for name, obj in vars(model).items()
+        if inspect.isclass(obj)
+        and issubclass(obj, BaseModel)
+        and obj.__module__ == "towerkit.model"
+        and not name.startswith("_")
+        for field in obj.model_fields
+    }
+
+    assert public == set(TOWERKIT_MODEL_FIELDS), (
+        f"towerkit fields with no parity entry: "
+        f"{sorted(public - set(TOWERKIT_MODEL_FIELDS))}; "
+        f"stale ledger entries: {sorted(set(TOWERKIT_MODEL_FIELDS) - public)}"
+    )

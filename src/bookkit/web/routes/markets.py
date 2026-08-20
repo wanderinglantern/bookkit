@@ -203,8 +203,133 @@ def _markets_panel(
 def markets_list(request: Request) -> HTMLResponse:
     conn = _conn(request)
     rows = _list_rows(conn)
-    context = {"rows": rows, "count": len(rows), "oob": False, "error": None}
+    context = {
+        "rows": rows,
+        "count": len(rows),
+        "carriers": _unlinked_rows(request),
+        "oob": False,
+        "error": None,
+    }
     return TEMPLATES.TemplateResponse(request, "markets/list.html", context)
+
+
+# --- carriers on the towers that the book does not know ----------------------
+#
+# A carrier is a STRING in a towerkit file. It becomes part of the book only
+# when a market org carries that name, or an alias points at one. Nothing on
+# the web did that: `+ market` on a layer wrote the name into the program file
+# and stopped, so a carrier bound in the browser never appeared on this tab and
+# missed every cross-book join — exposure, hit rate, the market dossier (Grant,
+# 2026-08-20). The terminal resolves these in the `y` sync review queue, which
+# a browser does not have.
+#
+# The queue is REPLACED here rather than reproduced: the strings live on this
+# page, beside the markets they are meant to become, with the same two answers
+# the TUI offers — link it to a market that already exists, or add it as a new
+# one — and nothing is ever chosen for the user. `sync.carrier_suggestions`
+# already computed the fuzzy candidates for the TUI; this is its second caller.
+
+
+def _unlinked_rows(request: Request) -> list[dict[str, Any]]:
+    from ... import sync
+
+    return [
+        {
+            "name": suggestion.carrier,
+            "candidates": [
+                {"ref": org.ref, "id": org.id, "name": org.name, "score": round(score)}
+                for org, score in suggestion.candidates
+            ],
+        }
+        for suggestion in sync.carrier_suggestions(_conn(request))
+    ]
+
+
+def _unlinked_panel(
+    request: Request, *, oob: bool = False, error: str | None = None
+) -> HTMLResponse:
+    return TEMPLATES.TemplateResponse(
+        request, "markets/_unlinked_panel.html",
+        {"carriers": _unlinked_rows(request), "oob": oob, "error": error},
+    )
+
+
+@router.get("/markets/unlinked", response_class=HTMLResponse)
+def unlinked_carriers(request: Request) -> HTMLResponse:
+    return _unlinked_panel(request)
+
+
+@router.post("/markets/unlinked/create", response_class=HTMLResponse)
+async def unlinked_create(request: Request) -> HTMLResponse:
+    """"This really is a market we do not have yet" — create it under the
+    EXACT tower spelling, so it matches by name with no alias needed."""
+    from ... import sync
+
+    conn = _conn(request)
+    carrier = str((await request.form()).get("carrier", "")).strip()
+    if not carrier:
+        return _unlinked_panel(request, error="no carrier named")
+    if carrier not in aliases_repo.unresolved_carriers(conn):
+        # Already resolved by another tab, or never unresolved. Re-render
+        # rather than create a duplicate market for a name that now matches.
+        return _both_panels(request)
+    with batches_svc.open_batch(
+        conn, source="web", tool="market_create",
+        summary=f"added {carrier} to the book",
+    ):
+        sync.create_market_for_carrier(conn, carrier)
+    return _both_panels(request)
+
+
+@router.post("/markets/unlinked/link", response_class=HTMLResponse)
+async def unlinked_link(request: Request) -> HTMLResponse:
+    """"It is a market we already have, spelled differently" — an alias, so
+    every tower carrying the old spelling joins to the right market."""
+    from ... import sync
+
+    conn = _conn(request)
+    form = await request.form()
+    carrier = str(form.get("carrier", "")).strip()
+    org_id = str(form.get("org_id", "")).strip()
+    if not carrier or not org_id:
+        return _unlinked_panel(request, error="pick a market to link it to")
+    try:
+        market = orgs_repo.get(conn, org_id)
+    except KeyError:
+        return _unlinked_panel(request, error="that market no longer exists")
+    if market.kind != "market":
+        return _unlinked_panel(request, error=f"{market.name} is not a market")
+    with batches_svc.open_batch(
+        conn, source="web", tool="market_alias",
+        summary=f"{carrier} is {market.name}", org_id=market.id,
+    ):
+        sync.alias_carrier(conn, carrier, market.id)
+    return _both_panels(request)
+
+
+def _both_panels(request: Request) -> HTMLResponse:
+    """Resolving a carrier changes BOTH lists — the string leaves the unlinked
+    panel and (when created) joins the market table above it. Answering with
+    one of them leaves the other showing a state that is no longer true.
+
+    ONE element, retargeted, not two glued together: see CLAUDE.md's
+    "ONE RESPONSE, ONE TOP-LEVEL ELEMENT" and routes/program.py `_panel` for
+    what the glued shape does to a response the moment its first tag decides
+    the parse context."""
+    conn = _conn(request)
+
+    response = TEMPLATES.TemplateResponse(
+        request, "markets/_markets_body.html",
+        {
+            "rows": _list_rows(conn),
+            "carriers": _unlinked_rows(request),
+            "error": None,
+            "oob": False,
+        },
+    )
+    response.headers["HX-Retarget"] = "#markets-body"
+    response.headers["HX-Reswap"] = "outerHTML"
+    return response
 
 
 @router.get("/markets/new", response_class=HTMLResponse)

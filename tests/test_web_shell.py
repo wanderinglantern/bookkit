@@ -628,3 +628,57 @@ def test_form_host_hygiene_script_is_wired(snapshot_db):
     assert "/static/form-host.js" in page.text
     assert asset.status_code == 200
     assert "htmx:beforeSwap" in asset.text
+
+
+def test_the_cell_editor_description_is_not_dangling(client):
+    """`aria-describedby` pointing at an id that is not on the page announces
+    NOTHING — a silent accessibility failure that looks correct in the markup.
+    The attribute and its target ship together or not at all.
+
+    Blur commits and Escape discards (CLAUDE.md, 2026-08-20), so Escape is the
+    only way out of a cell without writing, and the editor has to say so.
+    """
+    page = client.get("/").text
+    assert 'id="cell-keys"' in page, "the shell dropped the cell-editor description"
+    assert "Escape discards" in page
+
+    from bookkit.forms.spec import Field
+    from bookkit.web.forms_render import render_cell
+
+    editor = render_cell(None, Field("limit_cents", "limit", "money"), "$5M", "/cell/x")
+    assert 'aria-describedby="cell-keys"' in editor
+
+
+def test_no_hover_revealed_control_is_hidden_from_the_keyboard():
+    """`visibility: hidden` removes an element from the FOCUS ORDER.
+
+    The chip controls (remove, reorder) are held back until their chip is
+    hovered or focused, which is right — twelve visible "remove" links in one
+    strip is noise. Doing it with `visibility: hidden` makes them unreachable
+    by keyboard entirely: `.focus()` does nothing, so `:focus-within` never
+    fires and the reveal can never happen. Verified in Chrome the day it was
+    written (2026-08-20) — `focusable: false` before, `true` after. It is the
+    dead-affordance class tests/test_dead_keys.py exists to stop on the
+    terminal side, arriving through a purely visual rule.
+
+    `opacity: 0` keeps the element focusable and keeps the chip's width fixed.
+    """
+    import re
+    from pathlib import Path
+
+    css = (
+        Path(__file__).resolve().parents[1]
+        / "src" / "bookkit" / "web" / "static" / "app.css"
+    ).read_text()
+    # comments explain the rule and must not trip it
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+    offenders = [
+        block.strip().splitlines()[0].strip()
+        for block in re.split(r"}\s*", css)
+        if "visibility: hidden" in block
+    ]
+    assert not offenders, (
+        "a control hidden with `visibility: hidden` cannot be focused, so any "
+        f"focus-based reveal for it is dead: {offenders}"
+    )

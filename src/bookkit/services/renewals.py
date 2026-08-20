@@ -49,26 +49,35 @@ def _renewed(placement: Placement, others: list[Placement]) -> bool:
     return False
 
 
-def _labels(program_path: str | None, cache: dict[str, str]) -> str:
+def _labels(
+    conn: sqlite3.Connection, program_path: str | None, cache: dict[str, str]
+) -> str:
     from .. import sync
 
     if not program_path:
         return ""
     if program_path not in cache:
-        cache[program_path] = sync.line_labels(program_path)
+        cache[program_path] = sync.line_labels(program_path, conn)
     return cache[program_path]
 
 
 def _line_ends(
-    program_path: str | None, cache: dict[str, tuple[tuple[str, str], ...]]
+    conn: sqlite3.Connection,
+    program_path: str | None,
+    cache: dict[str, tuple[tuple[str, str], ...]],
 ) -> tuple[tuple[str, str], ...]:
+    """`conn` is not decoration: a program_path stored relative to a program
+    root cannot be resolved without it, and an unresolved path here means an
+    attention row counting down to the PROGRAM period end instead of to the
+    earliest line end — the exact "twenty days in the future rendered red as
+    70d over" class CLAUDE.md records."""
     from .. import sync
 
     if not program_path:
         return ()
     if program_path not in cache:
         cache[program_path] = tuple(
-            (label, end.isoformat()) for label, end in sync.line_ends(program_path)
+            (label, end.isoformat()) for label, end in sync.line_ends(program_path, conn)
         )
     return cache[program_path]
 
@@ -109,7 +118,7 @@ def upcoming(
     for placement in placements.expiring_between(conn, "0001-01-01", "9999-12-31"):
         if placement.status == "lapsed":
             continue
-        ends = _line_ends(placement.program_path, ends_cache)
+        ends = _line_ends(conn, placement.program_path, ends_cache)
         renewal_on = _renewal_on(placement, ends)
         remaining = days_until(renewal_on, today)
         if remaining >= 0 and renewal_on > horizon_iso:
@@ -123,7 +132,7 @@ def upcoming(
         items.append(
             RenewalItem(
                 placement, orgs.get(conn, placement.org_id), remaining,
-                _bucket(remaining), _labels(placement.program_path, label_cache),
+                _bucket(remaining), _labels(conn, placement.program_path, label_cache),
                 ends, renewal_on,
             )
         )
@@ -140,7 +149,7 @@ def next_for_org(
     ends_cache: dict[str, tuple[tuple[str, str], ...]] = {}
     live: list[tuple[int, Placement, tuple[tuple[str, str], ...], str]] = []
     for placement in candidates:
-        ends = _line_ends(placement.program_path, ends_cache)
+        ends = _line_ends(conn, placement.program_path, ends_cache)
         renewal_on = _renewal_on(placement, ends)
         remaining = days_until(renewal_on, today)
         if remaining < 0 and _renewed(placement, candidates):
@@ -151,7 +160,7 @@ def next_for_org(
     remaining, placement, ends, renewal_on = min(live, key=lambda entry: entry[0])
     return RenewalItem(
         placement, orgs.get(conn, org_id), remaining, _bucket(remaining),
-        _labels(placement.program_path, {}), ends, renewal_on,
+        _labels(conn, placement.program_path, {}), ends, renewal_on,
     )
 
 

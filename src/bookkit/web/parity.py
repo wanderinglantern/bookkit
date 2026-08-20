@@ -386,6 +386,146 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
 # in-flight feat/mcp-hardening branch; its branch-only ops are marked as
 # such and must be re-decided when the branch merges.)
 
+# --- the towerkit model FIELD ledger (2026-08-20) ------------------------------
+#
+# TOWERKIT_EDIT_OPS above enumerates towerkit's VERBS. It says nothing about
+# its NOUNS, and that is the gap Grant walked into: towerkit grew
+# `named_limits`, `states`, `limits_detail`, `retention_detail` and
+# `premium_detail` on Layer — coverage facts that a broker states on a quote
+# and that towerkit prints on the SOI and the schematic — and every parity
+# test stayed green, because no op was added to set them. They were reachable
+# only from towerkit's own editor, behind the TUI's `o`, which a browser does
+# not have. "Built but not accessible" (statutory, 2026-08-19) has a second
+# half, and this is it.
+#
+# Introspected at runtime by tests/test_web_parity.py: a field towerkit grows
+# turns the suite red until it is covered here or deferred BY NAME with a
+# reason. Keys are "Model.field".
+
+TOWERKIT_MODEL_FIELDS: dict[str, str] = {
+    # --- Layer ---------------------------------------------------------------
+    "Layer.id": "identity — towerkit owns it (slugify/unique_id); never typed",
+    "Layer.name": "layer cell (POST .../layers/{id}/cell/name)",
+    "Layer.policy_number": "details row cell",
+    "Layer.period": "details row: policy effective / policy expiry cells",
+    "Layer.follows_underlying": "details row: one-click toggle",
+    "Layer.applies_to": "details row: applies-to chips",
+    "Layer.attach": "layer cell (attach_cents)",
+    "Layer.limit": "layer cell (limit_cents)",
+    "Layer.statutory": "details row: mark/leave statutory, confirm-first",
+    "Layer.premium": "layer cell (premium_cents)",
+    "Layer.participants": "the market chips on the row (add/edit/remove)",
+    "Layer.named_limits": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: the coordinate-limits "
+        "editor in the details row. towerkit.edit grew add/edit/remove_named_limit "
+        "and bookkit has no wrapper yet."
+    ),
+    "Layer.states": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: statutory jurisdictions in the "
+        "details row, through edit.set_states. towerkit validates these "
+        "(ND/OH/WA/WY cannot be privately covered) and refuses them on a "
+        "dollar-limited layer."
+    ),
+    "Layer.limits_detail": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "details-row prose, via edit.set_field"
+    ),
+    "Layer.retention_detail": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "details-row prose, via edit.set_field"
+    ),
+    "Layer.premium_detail": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "details-row prose, via edit.set_premium_detail"
+    ),
+    "Layer.notes": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "details-row prose, via edit.set_field"
+    ),
+    # --- Line ----------------------------------------------------------------
+    "Line.id": "identity — follows the name (sync.rename_line cascades)",
+    "Line.name": "the lines strip: the name is an inline cell",
+    "Line.abbr": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "the lines strip's column-label cell"
+    ),
+    "Line.group": (
+        "DEFERRED BY NAME — line grouping is diagram cosmetics, is not "
+        "projected (NOTES.md), and has no reader in bookkit; revisit with "
+        "evidence of demand. Same call as edit.set_line_group above."
+    ),
+    # --- NamedLimit / Participant / Period -----------------------------------
+    "NamedLimit.name": "part of Layer.named_limits' editor",
+    "NamedLimit.amount": "part of Layer.named_limits' editor",
+    "Participant.carrier": "market chip: carrier cell",
+    "Participant.share_bps": "market chip: share cell (entered as percent)",
+    "Period.start": "wherever a period is edited — Program.period, Layer.period",
+    "Period.end": "wherever a period is edited — Program.period, Layer.period",
+    # --- Program -------------------------------------------------------------
+    "Program.schema_id": "towerkit's own constant; never a user field",
+    "Program.insured": (
+        "DEFERRED BY DECISION — the insured is the ACCOUNT's name in bookkit "
+        "and is edited there (orgs); a second editable copy inside the file "
+        "is how the two spellings drift apart and the link stops matching."
+    ),
+    "Program.program": "placement header cell (program_name), write-through",
+    "Program.placement": "placement header cell (status): bound vs proposed",
+    "Program.period": "placement header cells (period_from / period_to)",
+    "Program.currency": "placement header cell (currency)",
+    "Program.lines": "the lines strip: add / rename / remove / reorder",
+    "Program.layers": "the layer table: add / edit / remove",
+    "Program.retentions": "the terms strip",
+    "Program.sublimits": "the terms strip",
+    "Program.notes": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "a program-level note on the section header"
+    ),
+    "Program.render": "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: the render-settings panel",
+    # --- Retention / Sublimit -------------------------------------------------
+    "Retention.applies_to": "terms strip: the retention form's lines",
+    "Retention.type": "terms strip: the retention form's type",
+    "Retention.amount": "terms strip: the retention form's amount",
+    "Retention.aggregate": "terms strip: the retention form's aggregate",
+    "Retention.vehicle": "terms strip: the retention form's vehicle",
+    "Retention.notes": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "a notes field on the retention form"
+    ),
+    "Sublimit.name": "terms strip: the sublimit form's name",
+    "Sublimit.amount": "terms strip: the sublimit form's amount",
+    "Sublimit.applies_to": "terms strip: the sublimit form's lines",
+    "Sublimit.notes": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "a notes field on the sublimit form"
+    ),
+    # --- RenderSettings -------------------------------------------------------
+    "RenderSettings.theme": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "the render-settings panel"
+    ),
+    "RenderSettings.show_totals": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "the render-settings panel"
+    ),
+    "RenderSettings.show_premiums": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "the render-settings panel"
+    ),
+    "RenderSettings.cell_premiums": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "the render-settings panel"
+    ),
+    "RenderSettings.cell_dates": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "the render-settings panel"
+    ),
+    "RenderSettings.soi_schematic": (
+        "PLANNED (D6, spec'd 2026-08-20) — NOT BUILT YET: "
+        "the render-settings panel"
+    ),
+}
+
+
 TOWERKIT_EDIT_OPS: dict[str, str] = {
     # utilities consumed by bookkit's own wrappers — not user capabilities
     "slugify": "utility — id naming; consumed by sync.add_layer",
@@ -393,7 +533,7 @@ TOWERKIT_EDIT_OPS: dict[str, str] = {
     "ordinal": "utility — layer auto-naming inside edit.add_layer",
     "suggested_attach": "utility — default attachment inside edit.add_layer",
     "heal_follows": "utility — run by sync.write_through on every write",
-    "parse_states": "utility (BRANCH-ONLY) — state-list parsing for set_states",
+    "parse_states": "utility — state-list parsing consumed by set_states",
     "adopt": "internal — towerkit's line-transfer flow; no bookkit use",
     # covered — a sync wrapper exists and a surface reaches it
     "add_line": "sync.add_line (phase 3); see SYNC_VERBS",
@@ -430,13 +570,25 @@ TOWERKIT_EDIT_OPS: dict[str, str] = {
         "field directly (established field-write practice) so the web toggle "
         "does not depend on the in-flight branch"
     ),
-    "set_states": "BRANCH-ONLY — SOI prose field; decide when the branch merges",
-    "set_premium_detail": "BRANCH-ONLY — SOI prose field; decide when the branch merges",
-    "add_named_limit": "BRANCH-ONLY — decide when the branch merges",
-    "edit_named_limit": "BRANCH-ONLY — decide when the branch merges",
-    "remove_named_limit": "BRANCH-ONLY — decide when the branch merges",
-    "set_field": "BRANCH-ONLY — the MCP field-write seam; decide when the branch merges",
-    "set_container": "BRANCH-ONLY — the MCP container seam; decide when the branch merges",
+    "set_states": (
+        "MERGED to towerkit main 2026-08-20 and DECIDED: Grant took Layer.states "
+        "for the web (D6). Planned, not built — see TOWERKIT_MODEL_FIELDS."
+    ),
+    "set_premium_detail": "MERGED and DECIDED — D6; see TOWERKIT_MODEL_FIELDS",
+    "add_named_limit": "MERGED and DECIDED — D6; see TOWERKIT_MODEL_FIELDS",
+    "edit_named_limit": "MERGED and DECIDED — D6; see TOWERKIT_MODEL_FIELDS",
+    "remove_named_limit": "MERGED and DECIDED — D6; see TOWERKIT_MODEL_FIELDS",
+    "set_field": (
+        "MERGED to towerkit main 2026-08-20. THE choke point for every scalar "
+        "write, and the seam D6 builds the web's field editors on: towerkit's "
+        "mcpsurface.SURFACE already publishes each field's type, guards and "
+        "bounds, so bookkit derives the editors rather than hand-listing them "
+        "and drifting the moment towerkit grows another one."
+    ),
+    "set_container": (
+        "MERGED — the list-valued half of set_field; D6 uses it for states "
+        "and named limits"
+    ),
 }
 
 

@@ -4,6 +4,59 @@ All notable changes to bookkit, newest date first.
 
 ## 2026-08-20
 
+### Fixed
+- **The Program tab claimed five real programs were empty.** Moving a towerkit
+  checkout out of OneDrive made every `program_path` a dead absolute path, and
+  five readers returned `[]` from a bare `except Exception` — so "this file
+  will not load" and "this program has nothing in it" reached the panel as the
+  same value and it printed the second. The panel now names the file, the path
+  it tried and the command that fixes it, and falls back to what the last sync
+  recorded (greyed, dated, read-only). The layers were in `proj_layer` the
+  whole time.
+- **A saved layer edit deleted the layer table.** Every write answered with a
+  `<td>` and an out-of-band `<section>` glued together; htmx picks its parse
+  context from the response's first tag, so the section was foster-parented out
+  of the fragment before htmx saw it — section standing, table emptied, write
+  succeeded. One element per response now, with `HX-Retarget`. Five
+  string-matching tests had asserted the broken shape was correct.
+- **Every write silently erased the tower drawing**, which was rendered only by
+  the full-page builder. Found while fixing the above; the section now has one
+  renderer, and a convention test fails if a second appears.
+- **The layer details row closed itself** on the statutory, follows-underlying
+  and applies-to writes made from inside it.
+- **A market bound on a program never reached the Markets tab.** A carrier is a
+  string in a towerkit file until a market org carries that name or an alias
+  points at one, and the web could only do the first half.
+- The Program tab opened and re-parsed each program file five to ten times per
+  render; one read apiece now.
+
+### Added
+- `bookctl relink` — repairs placement↔file links after a towerkit tree moves.
+  Reports by default, snapshots the database before writing, and sorts every
+  broken link into moved / renamed (byte-identical content) / lost / ambiguous.
+  Only the first two are repaired; ambiguity is named and refused.
+- Program paths are stored relative to a program root, so moving the tree is
+  one `bookctl roots` call rather than a per-row repair. Reads resolve and,
+  when the stored location is empty, recover by matching the longest tail that
+  exists under exactly one root.
+- Carriers on your towers that the book does not know are listed on the Markets
+  page, with the same two answers the terminal's `y` queue offers — link to an
+  existing market, or add it — and fuzzy candidates shown with their scores.
+  An unresolved seat carries a `NEW` badge on its layer row.
+- A parity ledger over towerkit's model FIELDS, introspected at runtime. The op
+  ledger covered towerkit's verbs and said nothing about its nouns, so five
+  Layer fields grew with every parity test green.
+
+### Changed
+- **Blur commits, Escape discards**, everywhere a value is edited in place, on
+  both surfaces. Blur used to cancel; losing typing to a stray click is the
+  failure people actually hit, and a written value is visible, editable again
+  and revertible. An unchanged cell still closes without writing.
+- The Program tab: a two-tier section header (identity, then labelled facts,
+  then right-aligned actions), lines/retentions/sublimits as separate labelled
+  rows of bounded chips, per-chip controls revealed on hover **and focus**, and
+  export moved to the end of the section as the output it is.
+
 ### Added
 - Today is the front door: `/` redirects to `/today`, the TUI brief's
   sections in severity order — overdue renewals (never fall off), renewals

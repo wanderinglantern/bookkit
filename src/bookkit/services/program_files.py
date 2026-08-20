@@ -19,7 +19,7 @@ from typing import Any
 
 from towerkit.atomicio import atomic_write_bytes
 
-from ..sync import file_sha256
+from ..sync import file_sha256, program_file
 
 SNAPSHOT_KEEP = 20
 _DIRNAME = ".mcp-snapshots"
@@ -108,7 +108,7 @@ def revert_file(conn: Any, batch: Any) -> dict[str, Any]:
         if not placement.program_path:
             continue
         try:
-            restore(_Path(str(placement.program_path)), batch.ref)
+            restore(program_file(conn, placement), batch.ref)
             target = placement
             break
         except ValueError as exc:
@@ -173,7 +173,7 @@ def write(
                 f"{placement.ref} has no program file linked — scaffold one first",
             )
         )
-    path = Path(str(placement.program_path))
+    path = program_file(conn, placement)
     pre_image = path.read_bytes()
     with open_batch(
         conn, tool=tool, org_id=placement.org_id, summary=summary,

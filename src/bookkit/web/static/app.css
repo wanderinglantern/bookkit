@@ -2607,3 +2607,430 @@ table.rows td.muted,
 table.rows .muted {
   color: var(--muted);
 }
+
+/* Announced, never drawn. The clip-path/1px idiom rather than
+   display:none or visibility:hidden — both of those remove the element from
+   the accessibility tree too, which would make an aria-describedby pointing
+   at it announce nothing at all. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* === The program section (2026-08-20) =======================================
+   Grant: "This also looks a complete mess." It was: the section header, three
+   strips of different KINDS of thing, and every control in them were all set
+   at one weight in one wrapping paragraph, so at 1440px the program name
+   broke mid-phrase, the period broke mid-value, and twelve identically
+   worded "remove" links sat inline in the reading flow.
+
+   Nothing here invents a colour. The palette is towerkit's brand set and is
+   authoritative (palette.py, docs/.../2026-08-17-web-visual-direction.md);
+   this is spacing, weight and grouping only. ------------------------------ */
+
+/* --- the section header: identity, actions, then the qualifying facts ---- */
+
+.program-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "identity actions"
+    "facts    actions";
+  gap: 0.35rem 1.5rem;
+  align-items: start;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 0.875rem;
+}
+
+.program-identity {
+  grid-area: identity;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+/* The program NAME, not a section label. It wore .people-label — the muted
+   letterspaced mono caps meant for headings like "Programs" — which made the
+   one piece of identity on the section the quietest text in it. */
+.program-name {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  min-width: 0;
+}
+
+.program-ref {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.program-actions {
+  grid-area: actions;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  justify-content: flex-end;
+}
+
+/* A LABELLED fact, so no value has to carry its own meaning. "—" beside the
+   words COMM BPS was the commission field; nothing said so. */
+.program-facts {
+  grid-area: facts;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+  margin: 0;
+}
+
+.program-facts .fact {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.program-facts dt {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.program-facts dd {
+  margin: 0;
+  font-size: var(--hint-size);
+}
+
+/* A date range is ONE value. It used to break after the arrow, so a period
+   read as two unrelated dates on two lines. */
+.nowrap {
+  white-space: nowrap;
+}
+
+.fact-arrow {
+  margin: 0 0.35rem;
+  color: var(--muted);
+}
+
+.fact-unit {
+  color: var(--muted);
+  font-size: var(--hint-size);
+}
+
+/* --- strips: a label column, then wrapping content ---------------------- */
+
+.strip {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.3rem 0;
+}
+
+.strip + .strip {
+  border-top: 1px solid var(--hairline-2);
+}
+
+.strip-label {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.strip-content {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.4rem;
+  min-width: 0;
+}
+
+/* --- chips: a bounded object, with its controls held until wanted ------- */
+
+.line-chip,
+.terms-strip .term-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0.1rem 0.15rem 0.1rem 0.4rem;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: var(--wash);
+  max-width: 100%;
+}
+
+.line-chip:hover,
+.terms-strip .term-chip:hover,
+.line-chip:focus-within,
+.terms-strip .term-chip:focus-within {
+  border-color: var(--border);
+  background: var(--paper);
+}
+
+/* The controls are held back until the chip is hovered or FOCUSED.
+   `opacity`, NOT `visibility: hidden` — that removes the button from the
+   focus order entirely, so `.focus()` does nothing, `:focus-within` can
+   never fire, and every chip control becomes unreachable by keyboard. Caught
+   in Chrome the moment it was written (2026-08-20); it is the dead-affordance
+   class tests/test_dead_keys.py exists to stop on the other surface, arriving
+   through a purely visual rule. Opacity also keeps the chip's width fixed, so
+   the strip does not re-wrap under the pointer. */
+.chip-arrow,
+.chip-remove {
+  font: inherit;
+  font-size: var(--hint-size);
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: 2px;
+  padding: 0.2rem 0.25rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+
+/* A control nobody can see is one nobody can aim at, however focusable it is.
+   Keyboard focus reveals it, always. */
+.chip-arrow:focus-visible,
+.chip-remove:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chip-arrow,
+  .chip-remove {
+    transition: none;
+  }
+}
+
+.line-chip:hover .chip-arrow,
+.line-chip:hover .chip-remove,
+.line-chip:focus-within .chip-arrow,
+.line-chip:focus-within .chip-remove,
+.term-chip:hover .chip-remove,
+.term-chip:focus-within .chip-remove,
+.market:hover .chip-remove,
+.market:focus-within .chip-remove,
+tr:hover .market .chip-remove {
+  opacity: 1;
+}
+
+.chip-remove:hover,
+.chip-remove:focus-visible {
+  color: var(--danger);
+  background: var(--danger-wash);
+  opacity: 1;
+}
+
+.chip-arrow:hover,
+.chip-arrow:focus-visible {
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+
+/* The add controls are chips too — an outline the same size and shape as the
+   things they create, dashed because they are a slot rather than a value. */
+.line-add,
+.terms-strip .term-add {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.4rem;
+  border: 1px dashed var(--border);
+  border-radius: 3px;
+  background: none;
+}
+
+.line-add:hover,
+.terms-strip .term-add:hover,
+.line-add:focus-within,
+.terms-strip .term-add:focus-within {
+  border-color: var(--accent);
+}
+
+.line-add .row-action-btn,
+.terms-strip .term-add .row-action-btn {
+  color: var(--accent);
+}
+
+/* --- export: navigation, below the data, not a fourth strip ------------- */
+
+.export-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.375rem;
+  padding-top: 0.5rem;
+}
+
+.export-strip .strip-label {
+  margin-right: auto;
+}
+
+/* --- a small, quiet button, used for the section's own actions ---------- */
+
+.btn {
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-primary {
+  color: var(--paper);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn-primary:hover {
+  color: var(--paper);
+  opacity: 0.9;
+}
+
+/* --- a carrier the book does not know ----------------------------------- */
+
+.market-unlinked {
+  font-size: 0.625rem;
+  line-height: 1.4;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--warn);
+  background: var(--warn-wash);
+  border: 1px solid var(--warn);
+  border-radius: 2px;
+  padding: 0 0.2rem;
+  margin-left: 0.15rem;
+  text-decoration: none;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+
+.market-unlinked:hover {
+  text-decoration: underline;
+}
+
+/* --- a file that will not open, and what the last sync recorded ---------- */
+
+.panel-broken {
+  border-left: 3px solid var(--danger);
+  background: var(--danger-wash);
+  padding: 0.75rem 1rem;
+  border-radius: 0 3px 3px 0;
+}
+
+.panel-broken-head {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.panel-broken-why {
+  margin: 0;
+  font-size: var(--hint-size);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.panel-moved {
+  margin: 0 0 0.75rem;
+  padding: 0.4rem 0.75rem;
+  font-size: var(--hint-size);
+  color: var(--ink);
+  background: var(--warn-wash);
+  border-left: 3px solid var(--warn);
+  border-radius: 0 3px 3px 0;
+}
+
+.stale-caption {
+  caption-side: top;
+  text-align: left;
+  padding: 0.4rem 0;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.rows.is-stale tbody td {
+  color: var(--muted);
+}
+
+.panel-note {
+  margin: 0 0 0.5rem;
+  font-size: var(--hint-size);
+  color: var(--muted);
+  max-width: 60ch;
+}
+
+/* --- carriers on the towers that the book does not know ------------------ */
+
+.unlinked-list {
+  list-style: none;
+  margin: 0 0 1.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.unlinked-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: var(--wash);
+}
+
+.unlinked-name {
+  font-weight: 600;
+  margin-right: auto;
+}
+
+.unlinked-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: center;
+}
+
+.inline-form {
+  display: inline;
+  margin: 0;
+}
+
+.unlinked-score {
+  color: var(--muted);
+  font-size: var(--hint-size);
+}

@@ -25,7 +25,15 @@ def confirm(
 
 
 def org_for_path(conn: sqlite3.Connection, path: str) -> str | None:
-    row = conn.execute("SELECT org_id FROM program_link WHERE path = ?", (path,)).fetchone()
+    """Whichever spelling the link row holds — see placements.by_program_path
+    for why one equality test is not enough."""
+    from .. import programpath
+
+    forms = programpath.stored_forms(conn, path)
+    placeholders = ", ".join("?" for _ in forms)
+    row = conn.execute(
+        f"SELECT org_id FROM program_link WHERE path IN ({placeholders})", forms
+    ).fetchone()
     return row["org_id"] if row else None
 
 
@@ -47,4 +55,10 @@ def all_links(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def forget(conn: sqlite3.Connection, path: str) -> None:
-    conn.execute("DELETE FROM program_link WHERE path = ?", (path,))
+    """Forget every spelling of it, not just the one handed in: half-forgetting
+    a link leaves the old absolute row to re-claim the file on the next sweep."""
+    from .. import programpath
+
+    forms = programpath.stored_forms(conn, path)
+    placeholders = ", ".join("?" for _ in forms)
+    conn.execute(f"DELETE FROM program_link WHERE path IN ({placeholders})", forms)

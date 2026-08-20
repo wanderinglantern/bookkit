@@ -1,0 +1,58 @@
+{# Carriers written on projected towers that the book does not know.
+
+   A carrier is a STRING inside a towerkit file. It joins the book only when a
+   market org carries that name, or an alias points at one — until then it
+   misses exposure, hit rate and every market dossier, silently. Binding a
+   market on a program used to leave the string exactly there: the tower was
+   right and the Markets tab never heard of the carrier (Grant, 2026-08-20).
+
+   Two answers, the same two the terminal's `y` review queue offers, and
+   neither is ever chosen automatically: LINK it to a market that already
+   exists under a different spelling, or ADD it as a market of its own. The
+   fuzzy candidates are suggestions with their scores shown — a wrong guess
+   attached to the wrong market is worse than asking (§5.2), and it would be
+   inherited by every tower that spells the carrier that way. #}
+<section id="unlinked-panel" class="panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  {% if carriers %}
+    <div class="people-head">
+      <h2 class="people-label">On your towers, not in the book</h2>
+      <span class="people-count">{{ carriers | length }}</span>
+      <span class="people-head-spacer"></span>
+    </div>
+    <p class="panel-note">
+      These carriers are written on program files but match no market here, so
+      they are missing from exposure, hit rate and every market page. Link each
+      one to the market it already is, or add it.
+    </p>
+    <ul class="unlinked-list">
+      {% for carrier in carriers %}
+        <li class="unlinked-row">
+          <span class="unlinked-name">{{ carrier.name }}</span>
+          <span class="unlinked-actions">
+            {% for candidate in carrier.candidates %}
+              <form method="post" action="/markets/unlinked/link"
+                    hx-post="/markets/unlinked/link" class="inline-form">
+                <input type="hidden" name="carrier" value="{{ carrier.name }}">
+                <input type="hidden" name="org_id" value="{{ candidate.id }}">
+                <button type="submit" class="row-action-btn"
+                        title="record “{{ carrier.name }}” as another spelling of {{ candidate.name }}">
+                  {{ candidate.name }}
+                  <span class="unlinked-score">{{ candidate.score }}%</span>
+                </button>
+              </form>
+            {% endfor %}
+            <form method="post" action="/markets/unlinked/create"
+                  hx-post="/markets/unlinked/create" class="inline-form">
+              <input type="hidden" name="carrier" value="{{ carrier.name }}">
+              <button type="submit" class="row-action-btn is-primary"
+                      title="create a market named exactly “{{ carrier.name }}”">
+                Add as a new market
+              </button>
+            </form>
+          </span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</section>

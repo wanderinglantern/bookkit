@@ -92,8 +92,21 @@ def all_linked(conn: sqlite3.Connection) -> list[Placement]:
 
 
 def by_program_path(conn: sqlite3.Connection, path: str) -> Placement | None:
+    """The placement linked to this file, whichever spelling its row holds.
+
+    Paths are stored relative to a program root now (see programpath) and were
+    stored absolute before, so an equality test against one spelling misses
+    the other. Getting this wrong does not fail loudly: `sync` would decide it
+    had never seen the file, and either adopt a different placement or create
+    a duplicate one beside the real one."""
+    from .. import programpath
+
+    forms = programpath.stored_forms(conn, path)
+    placeholders = ", ".join("?" for _ in forms)
     row = conn.execute(
-        f"SELECT * FROM placement WHERE program_path = ? AND {base.alive()}", (path,)
+        f"SELECT * FROM placement WHERE program_path IN ({placeholders})"
+        f" AND {base.alive()}",
+        forms,
     ).fetchone()
     return Placement.from_row(row) if row else None
 

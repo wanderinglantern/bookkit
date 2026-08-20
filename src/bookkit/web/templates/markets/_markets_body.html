@@ -1,0 +1,9 @@
+{# The Markets page body: the market table, and the carriers that are not in it
+   yet. ONE element, so a write can answer with the whole thing and retarget
+   onto it — resolving a carrier moves a row between the two panels, and an
+   answer carrying only one of them leaves the other showing a state that is no
+   longer true. #}
+<div id="markets-body" class="markets-body">
+  {% include "markets/_unlinked_panel.html" %}
+  {% include "markets/_markets_panel.html" %}
+</div>

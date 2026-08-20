@@ -217,3 +217,71 @@ def test_client_task_counts_go_through_one_rule():
         "a client-scoped task count must call open_tasks_for_client — "
         f"open_tasks(org_id=) drops placement-attached tasks: {offenders}"
     )
+
+
+# --- one response, one top-level element --------------------------------------
+#
+# htmx picks its HTML parse context from the response's FIRST tag
+# (`makeFragment`), so a response opening with `<td>` is parsed inside
+# `<table><tbody><tr>` and any non-table element in it is FOSTER-PARENTED out
+# of the fragment before htmx sees it. `HTMLResponse(_text(cell) +
+# _text(panel))` therefore did not refresh the panel out of band — it
+# destroyed it, emptying a 14-row layer table on a save that had succeeded
+# (Grant, 2026-08-20; CLAUDE.md "ONE RESPONSE, ONE TOP-LEVEL ELEMENT").
+#
+# The shape is impossible to spot in a string-matching test, which is exactly
+# why five of them asserted the broken response was correct. Ban the idiom.
+
+_CONCATENATED_RESPONSE = re.compile(r"HTMLResponse\(\s*_text\([^)]*\)\s*\+")
+
+
+def test_no_route_answers_with_two_concatenated_fragments():
+    offenders = [
+        f"{path.relative_to(SRC)}:{n}: {line.strip()}"
+        for path in (SRC / "web").rglob("*.py")
+        for n, line in enumerate(path.read_text().splitlines(), 1)
+        if _CONCATENATED_RESPONSE.search(line)
+    ]
+    assert not offenders, (
+        "a response glued out of two fragments is destroyed by HTML parsing "
+        "when the first one is a <td>/<tr> — answer with ONE element and "
+        "retarget the swap (HX-Retarget/HX-Reswap):\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_the_concatenation_predicate_catches_the_shape_it_bans():
+    """The rule is only as good as its pattern (see the raw-SQL note above)."""
+    assert _CONCATENATED_RESPONSE.search(
+        "    return HTMLResponse(_text(cell) + _text(panel))"
+    )
+    assert _CONCATENATED_RESPONSE.search(
+        "return HTMLResponse( _text(row) + _text(panel) )"
+    )
+    assert not _CONCATENATED_RESPONSE.search("return HTMLResponse(_text(panel))")
+
+
+# --- one renderer per panel ---------------------------------------------------
+#
+# The program section's context was built in three places: the full-page
+# builder, the write-response builder, and a `{% with %}` block listing seven
+# keys where the template was included. A key added to one was silently absent
+# from the others — `tower` was missing from the write path (every save erased
+# the drawing) and `load_error` from the include (the "this file will not open"
+# message never rendered on the page it was written for). Both 2026-08-20.
+
+def test_the_program_section_has_exactly_one_renderer():
+    routes = (SRC / "web" / "routes" / "program.py").read_text()
+    assert routes.count('"account/_layers_panel.html"') == 1, (
+        "the program section is rendered from more than one place — its context "
+        "keys will drift apart again"
+    )
+    templates = SRC / "web" / "templates"
+    including = [
+        f"{path.relative_to(templates)}"
+        for path in templates.rglob("*.html")
+        if "_layers_panel.html" in path.read_text() and path.name != "_layers_panel.html"
+    ]
+    assert not including, (
+        "a template includes the program section directly, which re-introduces "
+        f"the hand-copied context this rule exists to remove: {including}"
+    )

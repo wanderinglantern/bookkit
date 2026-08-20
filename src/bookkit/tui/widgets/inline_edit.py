@@ -1,9 +1,11 @@
 """Inline cell editing for tables — i edits the row under the cursor in
 place, spreadsheet style. A slim one-line Input opens over the cell itself:
 enter commits and closes, tab / shift+tab commit and hop across the row's
-editable cells, esc cancels. Values run through the same Field parsers as
-the modal forms (dates, money, phone, email), and every commit is a single
-field write in the event log — u undoes it.
+editable cells, BLUR COMMITS, and esc is the one discard (the house rule,
+CLAUDE.md; the web's macros/cell.html + inline-cell.js say the same thing).
+Values run through the same Field parsers as the modal forms (dates, money,
+phone, email), and every commit is a single field write in the event log —
+u undoes it.
 
 The screen wires a table up by setting `inline_fields` (column index →
 forms.Field) and `inline_initial` (row_key, field_key → current raw text)
@@ -250,8 +252,13 @@ class CellEditor(Input):
         self._row_key = row_key
         self._coordinate = coordinate
         self._field = field
+        self._initial = initial
+        self._cancelling = False
 
     def action_cancel(self) -> None:
+        # Escape is the discard. Closing the editor blurs it, and on_blur now
+        # COMMITS, so the flag has to be set before the close, not after.
+        self._cancelling = True
         self._table._close_editor()
 
     def action_commit_close(self) -> None:
@@ -267,7 +274,24 @@ class CellEditor(Input):
             self._table._hop(self._coordinate, -1)
 
     def on_blur(self) -> None:
-        # clicking elsewhere abandons the edit — esc semantics, never a
-        # surprise write
-        if self._table._editor is self:
+        """BLUR COMMITS (Grant, 2026-08-20) — the house rule, both surfaces.
+
+        It abandoned the edit until then, on the reasoning that a surprise
+        write is worse than a surprise discard. It is not: a written value is
+        visible, editable again and revertible with `u`; a discarded one is
+        gone with nothing to point at. Escape is the single discard.
+
+        `esc` cancels through `action_cancel`, which closes the editor and
+        therefore blurs it — so this must not then commit what Escape just
+        threw away. `_cancelling` is set for exactly that window.
+
+        An unchanged value closes without writing, so opening a cell to read
+        it never costs an event-log row or an undo batch.
+        """
+        if self._table._editor is not self:
+            return
+        if self._cancelling or self.value == self._initial:
+            self._table._close_editor()
+            return
+        if self._table._commit(self._row_key, self._coordinate, self._field, self.value):
             self._table._close_editor()

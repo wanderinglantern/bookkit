@@ -2556,7 +2556,7 @@ class AccountScreen(Screen):
             towerctl = Path(found)
         with self.app.suspend():
             subprocess.run([str(towerctl), "edit", placement.program_path])
-        diags = sync.project(self.app.conn, Path(placement.program_path))
+        diags = sync.project(self.app.conn, sync.program_file(self.app.conn, placement))
         if diags.ok:
             self.notify("back from towerkit — re-projected")
         else:

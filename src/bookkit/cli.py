@@ -65,6 +65,15 @@ def build_parser() -> argparse.ArgumentParser:
     roots_p.add_argument("--json", action="store_true",
                          help="emit {\"roots\": [...]} for other tools to read")
 
+    relink_p = sub.add_parser(
+        "relink",
+        help="repair placement↔file links after moving the towerkit files",
+    )
+    relink_p.add_argument(
+        "--write", action="store_true",
+        help="apply the repairs (without this it reports and writes nothing)",
+    )
+
     backup_p = sub.add_parser("backup", help="timestamped copy + integrity check")
     backup_p.add_argument("--dest", type=Path, default=None)
 
@@ -145,12 +154,17 @@ def _run(argv: list[str] | None) -> int:
         conn.close()
 
 
-# Commands that only READ. db.connect creates the file on demand, so without
-# this a typo in --db (or a wrong $BOOKKIT_DB, or the wrong machine) produced
-# a cheerful all-zeros brief and exit 0 — indistinguishable from a quiet book,
-# and it left an empty database behind. Creation belongs to init/migrate/seed.
+# Commands that must never CREATE a book. db.connect makes the file on demand,
+# so without this a typo in --db (or a wrong $BOOKKIT_DB, or the wrong machine)
+# produced a cheerful all-zeros brief and exit 0 — indistinguishable from a
+# quiet book, and it left an empty database behind. Creation belongs to
+# init/migrate/seed.
+#
+# Mostly read-only commands, plus `relink`: it writes, but only ever to rows
+# that already exist, and running it against a book conjured out of a typo
+# would report "0 linked placements" — the answer that looks like good news.
 READ_ONLY_COMMANDS = frozenset(
-    {"today", "renewals", "search", "export", "open", "web"}
+    {"today", "renewals", "search", "export", "open", "web", "relink"}
 )
 
 
@@ -358,6 +372,32 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
         for root in roots:
             count = len(sync.scan([root]))
             print(f"{root}  ({count} program file(s))")
+        return 0
+
+    if args.command == "relink":
+        from datetime import datetime
+
+        from .services import relink as relink_svc
+
+        findings = relink_svc.inspect(conn)
+        if not args.write:
+            print(relink_svc.render(findings, repaired=False))
+            return 0
+        repairable = [f for f in findings if f.repairable]
+        if not repairable:
+            print(relink_svc.render(findings, repaired=False))
+            return 0
+        # SNAPSHOT BEFORE THE FIRST ROW CHANGES, the same rule the importers
+        # follow. This rewrites program_path and program_link on every
+        # repairable placement at once; the dry run is the review step and
+        # this file is the undo.
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        base = args.db or db.default_db_path()
+        snapshot = base.parent / "backups" / f"bookkit-relink-{stamp}.db"
+        db.backup(conn, snapshot)
+        print(f"backup written and verified: {snapshot}\n")
+        relink_svc.repair(conn, findings)
+        print(relink_svc.render(relink_svc.inspect(conn), repaired=True))
         return 0
 
     if args.command == "backup":

@@ -59,6 +59,7 @@ from ..money import MoneyParseError, cents_to_dollars, format_cents
 from ..repo import contacts, links, orgs, placements, submissions
 from ..repo import projects as projects_repo
 from ..repo import tasks as tasks_repo
+from ..sync import ProgramFileMissing, program_file
 
 CLIENT_OWNER = "You"
 OUR_OWNER = "Us"
@@ -323,7 +324,7 @@ def compose(
             for row in subs_by_placement.get(placement.id, [])
         ]
         if rows:
-            lines = sync.line_labels(placement.program_path)
+            lines = sync.line_labels(placement.program_path, conn)
             label = placement.program_name + (f" ({lines})" if lines else "")
             sections.append(ExportSection(label, tuple(rows)))
 
@@ -834,7 +835,18 @@ def _linked_program(
     ValidationError are all ValueError). Anything else is not a file problem
     and propagates, which is what an unknown failure on a client deliverable
     should do."""
-    path = Path(str(placement.program_path))
+    # ProgramFileMissing joins OSError/ValueError here rather than
+    # propagating: "the row points nowhere" is the same grade of problem as
+    # "the file is corrupt" from a deliverable's point of view — the section
+    # falls back to book data and SAYS which file it could not read. Letting
+    # it escape would fail the whole export because one placement's tree moved.
+    try:
+        path = program_file(conn, placement)
+    except ProgramFileMissing as missing:
+        # "could not read" is the phrase the SOI's problem list is read for
+        # (tests/test_services.py); programpath's sentence supplies the which
+        # and the what-to-run behind it.
+        return None, f"could not read the program file — {missing}"
     try:
         program = load_program(path)
     except (OSError, ValueError) as exc:

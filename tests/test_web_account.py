@@ -569,14 +569,20 @@ def test_layer_details_is_read_once_per_page(app_and_org, monkeypatch):
     from bookkit.web.routes import account as account_routes
 
     client, org = app_and_org
-    real = account_routes.sync.layer_details
+    # COUNT THE I/O, NOT ITS CALLER. `layer_details` used to be the function
+    # that opened the file; since 2026-08-20 it is a thin wrapper over
+    # `linked_program`, which is what actually reads and parses — and which the
+    # web memoises per request so the panel gets the load ERROR alongside the
+    # rows. Counting the wrapper would leave this test measuring nothing while
+    # the render read every file twice.
+    real = account_routes.sync.linked_program
     calls: list[str] = []
 
     def counting(conn, placement_id):
         calls.append(placement_id)
         return real(conn, placement_id)
 
-    monkeypatch.setattr(account_routes.sync, "layer_details", counting)
+    monkeypatch.setattr(account_routes.sync, "linked_program", counting)
 
     for tab in ("relationship", "work", "pipeline"):
         calls.clear()
@@ -610,11 +616,23 @@ def _stub_layers(monkeypatch, layers):
     """Render the rail against a made-up tower. Neither case can be built out
     of the seed: no seeded program leaves a premium unset, and towerkit's
     validator will not let a normal layer sit at zero limit — the statutory
-    case that produces `max(attach + limit) == 0` is a WC Part A flag."""
+    case that produces `max(attach + limit) == 0` is a WC Part A flag.
+
+    BOTH halves of the read are stubbed. `layer_details` was split on
+    2026-08-20 into the I/O half (`linked_program`, memoised per request so the
+    panel gets the load ERROR as well as the rows) and the pure half
+    (`layer_details_of`), and the web render now goes through the second.
+    Patching only the old name left this stub attached to a function nobody
+    calls, and five tests went green against the real seeded tower instead of
+    the fixture they were written for — the "assert the seam is actually used"
+    failure from CLAUDE.md, arriving from the test side this time."""
     from bookkit.web.routes import account as account_routes
 
     monkeypatch.setattr(
         account_routes.sync, "layer_details", lambda conn, placement_id: list(layers)
+    )
+    monkeypatch.setattr(
+        account_routes.sync, "layer_details_of", lambda program: list(layers)
     )
 
 

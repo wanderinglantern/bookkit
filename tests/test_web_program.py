@@ -45,6 +45,77 @@ def _linked(conn, org):
     return [p for p in placements.for_org(conn, org.id) if p.program_path]
 
 
+def _file_of(conn, placement) -> Path:
+    """The placement's towerkit file on disk.
+
+    NOT `Path(placement.program_path)`: the stored value is relative to a
+    program root wherever one contains the file (bookkit.programpath), which
+    is the whole point — Grant's paths broke on 2026-08-20 because they were
+    absolute. A test that reaches for the raw column is asserting against the
+    old storage rule and will pass or fail depending on whether its fixture
+    happens to configure roots."""
+    from bookkit import sync as _sync
+
+    return _sync.program_file(conn, placement)
+
+
+def _top_level_tags(html: str) -> list[str]:
+    """The element names at the TOP level of a response body.
+
+    htmx picks its HTML parse context from the response's FIRST tag
+    (`makeFragment`), so a response opening with `<td>` is parsed inside
+    `<table><tbody><tr>…</tr></tbody></table>`. Anything in that response that
+    is not table content — a `<section>`, say — is then FOSTER-PARENTED out of
+    the fragment by the HTML tree builder and never reaches htmx at all. That
+    is not a theory: on 2026-08-20 saving a layer premium in Chrome left
+    `section.program` standing with its table emptied and all 14 rows gone,
+    while the write itself succeeded.
+
+    One top-level element per response is the invariant that makes the parse
+    context irrelevant, so that is what the tests below assert.
+    """
+    from html.parser import HTMLParser
+
+    VOID = {
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+    }
+
+    class Scanner(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.depth = 0
+            self.tops: list[str] = []
+
+        def handle_starttag(self, tag: str, attrs: object) -> None:
+            if tag in VOID:
+                if self.depth == 0:
+                    self.tops.append(tag)
+                return
+            if self.depth == 0:
+                self.tops.append(tag)
+            self.depth += 1
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag not in VOID:
+                self.depth = max(0, self.depth - 1)
+
+    scanner = Scanner()
+    scanner.feed(html)
+    return scanner.tops
+
+
+def _assert_panel_swap(response, placement_id: str) -> None:
+    """A program write answers with the WHOLE panel, as ONE element, and says
+    so in the swap headers rather than by riding a second element out of band
+    behind a `<td>`. See `_top_level_tags` for what the old shape did."""
+    tags = _top_level_tags(response.text)
+    assert tags == ["section"], f"expected one <section>, got {tags}"
+    assert response.headers.get("HX-Retarget") == f"#program-{placement_id}"
+    assert response.headers.get("HX-Reswap") == "outerHTML"
+    assert 'hx-swap-oob' not in response.text
+
+
 # --- the tab tells the truth --------------------------------------------------
 
 
@@ -138,6 +209,106 @@ def test_an_unplaced_layer_says_to_be_placed(app_and_org):
     page = client.get(f"/accounts/{org.ref}/program").text
 
     assert "To be placed" in page
+
+
+def test_a_file_that_will_not_load_says_so_instead_of_claiming_to_be_empty(
+    app_and_org, tmp_path
+):
+    """THE BUG THIS WHOLE BRANCH STARTED FROM (Grant, 2026-08-20).
+
+    Five of his placements pointed at a towerkit tree he had moved. Every read
+    swallowed the FileNotFoundError and returned [], and the panel printed
+    "the linked file has no layers yet" — so the web asserted the programs
+    were empty while the same files opened fine in the TUI. The panel now
+    prints the reason, and the reason names the file.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    from bookkit.repo import placements as placements_repo
+
+    placements_repo.update(conn, placement.id, program_path=str(tmp_path / "vanished.json"))
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert "has no layers yet" not in page, "an unreadable file was called empty"
+    assert "will not open" in page
+    assert "vanished.json" in page, "the message does not name the file"
+
+
+def test_an_unreadable_file_still_shows_what_the_last_sync_recorded(
+    app_and_org, tmp_path
+):
+    """The layers were in proj_layer the whole time — Grant's five broken
+    placements held 12, 1, 8, 14 and 10 rows between them while the panel
+    showed nothing. Read-only and dated, because a stale figure a broker can
+    quote from is worse than a blank."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    expected = len(sync.layer_details(conn, placement.id))
+    assert expected, "fixture placement has no layers to strand"
+    from bookkit.repo import placements as placements_repo
+
+    placements_repo.update(conn, placement.id, program_path=str(tmp_path / "vanished.json"))
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert "Last synced" in page
+    assert "is-stale" in page
+    # read-only: no editors over data that cannot be written back
+    stale = page[page.index("is-stale"):]
+    assert "data-cell-action" not in stale[: stale.index("</table>")]
+
+
+def test_a_moved_file_is_read_and_says_it_moved(app_and_org, tmp_path):
+    """Recovery is not silence. The read succeeds from a new location; a
+    program answering from a path the book does not record is how one file
+    quietly ends up serving two placements."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    real = sync.program_file(conn, placement)
+    moved_root = tmp_path / "moved"
+    moved_root.mkdir()
+    (moved_root / real.name).write_bytes(real.read_bytes())
+    from bookkit.repo import placements as placements_repo
+    from bookkit.repo import settings as settings_repo
+
+    settings_repo.set_program_roots(conn, [str(moved_root)])
+
+    placements_repo.update(
+        conn, placement.id, program_path=str(tmp_path / "old" / real.name)
+    )
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert "different location than the book records" in page
+    assert "has no layers yet" not in page
+    assert "bookctl relink" in page
+
+
+def test_the_program_tab_opens_each_file_once(app_and_org):
+    """Layers, lines, terms and the tower all want the SAME parsed file. Read
+    per consumer, a nine-chip terms strip alone re-parsed it nine times."""
+    from bookkit.web.routes import account as account_routes
+
+    client, org = app_and_org
+    real = account_routes.sync.linked_program
+    calls: list[str] = []
+
+    def counting(conn, placement_id):
+        calls.append(placement_id)
+        return real(conn, placement_id)
+
+    account_routes.sync.linked_program = counting
+    try:
+        assert client.get(f"/accounts/{org.ref}/program").status_code == 200
+    finally:
+        account_routes.sync.linked_program = real
+
+    assert calls, "the program tab read no program file at all"
+    assert len(calls) == len(set(calls)), f"a file was parsed more than once: {calls}"
 
 
 def test_a_placement_with_no_file_says_so_rather_than_looking_empty(app_and_org):
@@ -575,8 +746,8 @@ def test_a_markets_share_is_corrected_in_place(app_and_org):
     )
     assert fresh["participants"][0]["share_pct"] == was / 2
     # a share moves the layer's signed % and can re-seat other rows, so the
-    # cell comes back WITH the panel out of band, like a layer cell save
-    assert 'hx-swap-oob="true"' in saved.text
+    # answer is the whole panel, retargeted onto itself
+    _assert_panel_swap(saved, placement.id)
 
 
 def test_a_market_is_taken_off_a_layer_and_the_layer_survives(app_and_org):
@@ -1270,7 +1441,7 @@ def test_marking_statutory_clears_follows_and_attach(app_and_org, tmp_path):
     from towerkit.model import load_program
 
     layer = next(
-        ly for ly in load_program(Path(placement.program_path)).layers
+        ly for ly in load_program(_file_of(conn, placement)).layers
         if ly.id == layer_id
     )
     assert layer.statutory is True
@@ -1327,7 +1498,7 @@ def test_follows_underlying_toggles_from_the_details_row(app_and_org, tmp_path):
     from towerkit.model import load_program
 
     layer = next(
-        ly for ly in load_program(Path(placement.program_path)).layers
+        ly for ly in load_program(_file_of(conn, placement)).layers
         if ly.id == layer_id
     )
     assert layer.follows_underlying is True
@@ -1378,7 +1549,7 @@ def test_renaming_a_line_cascades_and_rerenders_the_panel(app_and_org, tmp_path)
         if ly["name"] == "Primary Cyber"
     )
     assert new_id in layer["applies_to"], "the cascade left the layer stranded"
-    assert 'hx-swap-oob="true"' in saved.text or 'id="program-' in saved.text
+    _assert_panel_swap(saved, placement.id)
 
 
 def test_line_remove_asks_first_naming_what_dies_with_it(app_and_org, tmp_path):
@@ -1542,7 +1713,7 @@ def test_a_removed_layer_is_gone_seats_and_all(app_and_org):
     assert removed.status_code == 200
     fresh = sync.layer_details(conn, placement.id)
     assert doomed["id"] not in [ly["id"] for ly in fresh]
-    assert 'id="programs-panel"' in removed.text or 'hx-swap-oob' in removed.text
+    _assert_panel_swap(removed, placement.id)
 
 
 def test_a_refused_layer_removal_answers_in_place(app_and_org, tmp_path):
@@ -1604,7 +1775,7 @@ def test_a_placement_name_saves_through_the_file(app_and_org):
         placements_repo.get(conn, placement.id).program_name
         == "Renamed From The Header"
     )
-    assert 'hx-swap-oob="true"' in saved.text, "no panel refresh with the cell"
+    _assert_panel_swap(saved, placement.id)
 
 
 def test_a_placement_status_saves_to_the_row_only(app_and_org):
@@ -1887,7 +2058,112 @@ def test_a_layer_edit_refreshes_the_rows_it_moved(app_and_org):
         _cell(org, placement, layer, "name"), data={"name": "Refreshed Layer"}
     )
 
-    assert 'hx-swap-oob="true"' in saved.text, "no panel refresh came back with the cell"
+    _assert_panel_swap(saved, placement.id)
+
+
+def test_a_saved_layer_cell_cannot_destroy_its_own_table(app_and_org):
+    """The 2026-08-20 regression, asserted at the level it actually broke.
+
+    The old response was `<td>…</td><section hx-swap-oob>…</section>`. Both
+    halves were correct HTML on their own and every string-matching test
+    passed. In a browser the response never survived parsing: htmx reads the
+    FIRST tag to choose its parse context, `<td>` puts the whole response
+    inside `<table><tbody><tr>`, and the `<section>` — not table content — is
+    foster-parented out before htmx can swap it. Chrome showed the program
+    section with an empty `.table-scroll` and none of its 14 rows; the layer
+    edit itself had saved, so a refresh made it look fine and the bug looked
+    like a ghost.
+
+    A single top-level element is what makes the parse context irrelevant.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    saved = client.post(
+        _cell(org, placement, layer, "premium_cents"), data={"premium_cents": "123,456.00"}
+    )
+
+    assert saved.status_code == 200
+    _assert_panel_swap(saved, placement.id)
+    # and the rows are all still there — the thing the browser lost
+    assert saved.text.count("data-layer-row") == len(sync.layer_details(conn, placement.id))
+
+
+def test_a_write_keeps_the_tower_it_just_changed(app_and_org):
+    """The panel's answer must carry the drawing. It did not: `tower` was
+    rendered only by the full-page builder, so every save returned a panel
+    with no tower key and the chart disappeared — the one thing on the page
+    that shows what the edit did to the shape of the program."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    assert 'class="tower"' in client.get(f"/accounts/{org.ref}/program").text
+
+    saved = client.post(
+        _cell(org, placement, layer, "name"), data={"name": "Still Drawn"}
+    )
+
+    assert 'class="tower"' in saved.text, "the write dropped the tower drawing"
+
+
+def test_a_structure_write_keeps_its_own_details_row_open(app_and_org, tmp_path):
+    """Statutory, follows-underlying and applies-to are all edited FROM the
+    details row, and all three answer with the whole panel because all three
+    move columns in the table above. The row is inserted client-side, so the
+    panel used to replace it away — closing the row you are working in, on
+    every click you make in it."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "GL Excess", "line": "gl", "attach_cents": "2,000,000",
+              "limit_cents": "3,000,000", "premium_cents": ""},
+    )
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "GL Excess"
+    )
+
+    toggled = client.post(
+        f"{_layer_base(org, placement, layer_id)}/follows", data={"follows": "true"}
+    )
+
+    assert 'class="layer-details"' in toggled.text, "the write closed its own row"
+    assert "follows-toggle is-on" in toggled.text, "the row does not show the new state"
+    _assert_panel_swap(toggled, placement.id)
+
+
+def test_a_saved_cell_says_where_to_put_the_caret_back(app_and_org):
+    """Replacing the whole section costs the user their place unless the
+    answer names the cell they were in. inline-cell.js reads data-refocus."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    saved = client.post(
+        _cell(org, placement, layer, "name"), data={"name": "Refocus Me"}
+    )
+
+    assert f'data-refocus="{layer["id"]}:name"' in saved.text
+
+
+def test_a_refused_cell_edit_still_answers_with_just_the_cell(app_and_org):
+    """The retarget belongs to the SUCCESS path only. A refusal has to land
+    back in the cell the user is still typing in — commit-in-place — so it
+    must not carry the panel's swap headers."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    refused = client.post(
+        _cell(org, placement, layer, "premium_cents"), data={"premium_cents": "not money"}
+    )
+
+    assert refused.status_code == 200
+    assert "HX-Retarget" not in refused.headers
+    assert _top_level_tags(refused.text) == ["td"]
 
 
 # --- phase 3: creating a program ----------------------------------------------
@@ -1972,7 +2248,10 @@ def test_scaffolding_writes_the_file_and_links_it(app_and_org, tmp_path):
     assert made.status_code == 200
     linked = placements.get(conn, bare.id)
     assert linked.program_path, "the placement was not linked to its new file"
-    assert Path(linked.program_path).exists()
+    # stored relative to the configured root, resolved through programpath —
+    # a bare Path() here would be asserting the old absolute storage rule
+    assert not Path(linked.program_path).is_absolute()
+    assert _file_of(conn, linked).exists()
     assert sync.layer_details(conn, bare.id), "the scaffold carries no layer"
 
 
