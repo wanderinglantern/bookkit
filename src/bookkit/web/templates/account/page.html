@@ -26,9 +26,17 @@
            phase 2 wires sync.renew, and interaction logging is quick
            capture's job by decision, so neither renders here. #}
         <a class="btn-pill btn-pill-primary" href="/accounts/{{ header.org.ref }}/work?add=task">+ Task</a>
+        {# Live as of gap 5: the org edit form (org_form_initial_profile,
+           prefilled, market-profile fields included) opens in the host
+           below the header — the web's _edit_org. Batched like the TUI's
+           (tool edit_account); refusals re-render in place. #}
+        <button type="button" class="btn-pill"
+                hx-get="/accounts/{{ header.org.ref }}/edit"
+                hx-target="#org-edit-host" hx-swap="innerHTML">Edit</button>
       </div>
     </div>
   </header>
+  <div id="org-edit-host" class="form-host page-form-host"></div>
 
   <nav class="tabs">
     {% for t in tabs %}

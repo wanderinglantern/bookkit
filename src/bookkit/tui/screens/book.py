@@ -162,9 +162,19 @@ class BookScreen(Screen):
 
     def action_new_account(self) -> None:
         from ...forms.entities import apply_org, org_form
+        from ...services import orgs as orgs_svc
         from ..widgets.forms import FormModal
 
         def commit(values: dict) -> str | None:
+            # The create-door duplicate guard (services.orgs). This form had
+            # NEITHER of the two inline copies the navigator and MCP carried,
+            # so `a` here wrote straight past the rule both of them enforce —
+            # the repo/team.py story. Client creates only: the guard's
+            # candidate list is the book.
+            if values.get("kind") == "client":
+                dup = orgs_svc.find_duplicate(self.app.conn, values["name"])
+                if dup:
+                    return f"looks like {dup.name} ({dup.ref}) — rename, or esc and open it"
             org = apply_org(self.app.conn, values)
             self.notify(f"created {org.ref} {org.name}")
             return None

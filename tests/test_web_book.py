@@ -128,7 +128,8 @@ def test_unbuilt_book_controls_are_not_rendered(app_and_conn):
     not the UI. A dead filter <input> stays banned for the same reason."""
     client, _ = app_and_conn
     html = client.get("/book").text
-    assert "New account" not in html
+    # New account went LIVE in gap 5 — assert it is wired, not absent
+    assert 'hx-get="/book/accounts/new"' in html
     assert "Export workbook" not in html
     assert "book-filter-pill" not in html
     # the topbar's live /search input is the ONE input allowed (gap 3);

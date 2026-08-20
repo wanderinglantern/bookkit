@@ -2436,3 +2436,13 @@ a.search-row:focus-visible {
   font-size: var(--body-size);
   padding: 0 0.75rem;
 }
+
+/* --- PAGE-LEVEL FORM HOSTS (gap 5) — the book's New-account host and the
+   account header's Edit host. Both sit on full-bleed surfaces, so without a
+   cap the entity-form stretches edge to edge; a form column reads as a form.
+   .form-host:empty above already hides them when nothing is open. -------- */
+
+.page-form-host {
+  max-width: 36rem;
+  margin: 0.75rem 0 1rem;
+}

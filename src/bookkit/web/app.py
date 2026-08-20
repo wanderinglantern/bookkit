@@ -232,6 +232,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
         book,
         calendar,
         changes,
+        orgs,
         pipeline,
         program,
         relationship,
@@ -258,6 +259,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
     # changes.router owns POST /accounts/{ref}/changes/{batch_ref}/revert —
     # a three-segment path under /accounts that nothing else matches, so its
     # position here is free.
+    app.include_router(orgs.router)
     app.include_router(changes.router)
     app.include_router(relationship.router)
     app.include_router(work.router)

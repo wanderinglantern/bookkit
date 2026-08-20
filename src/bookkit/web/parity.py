@@ -430,9 +430,12 @@ SCREENS: dict[str, str] = {
         "are a read-only rail list; projects are a named later slice)."
     ),
     "book": (
-        "PARTIAL — GET /book lists the book read-only; account CREATE and "
-        "EDIT (`a`/`e`) and the filter have no web answer, so a new client "
-        "still forces the terminal on day one. Top of the audit's gap list."
+        "PRESENT for create+edit (gap 5): New account on /book (org_form "
+        "into a form host, POST /book/accounts through the SHARED duplicate "
+        "guard services.orgs.find_duplicate — extracted; mcpserver, both TUI "
+        "create doors and the web all consult it now), Edit on the account "
+        "header (org_form_initial_profile, POST /accounts/{ref}/edit). The "
+        "filter and the book XLSX export stay deferred by name."
     ),
     "today": (
         "PRESENT — GET /today (the web's front door: / redirects to it). "

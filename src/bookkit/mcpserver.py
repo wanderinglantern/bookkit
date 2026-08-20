@@ -70,13 +70,16 @@ from mcp.server.mcpserver import MCPServer
 
 from . import db, mcpsurface
 from .models import EventBatch, RfiItem, RfiRequest, is_internal_category
-from .services.renewals import RenewalItem
 
-# score_cutoff for the client_create duplicate guard (rapidfuzz WRatio,
-# 0-100). 'Henderson Grp' vs 'Henderson Group' scores ~95; this is
-# deliberately loose enough to catch near-misses while staying below scores
-# for genuinely distinct short names.
-_DUP_CUTOFF = 87
+# _DUP_CUTOFF: score_cutoff for the near-duplicate title guards below
+# (rapidfuzz WRatio, 0-100). 'Henderson Grp' vs 'Henderson Group' scores ~95;
+# this is deliberately loose enough to catch near-misses while staying below
+# scores for genuinely distinct short names. The CLIENT-NAME create guard
+# moved to services.orgs.find_duplicate (2026-08-20) so the TUI's and the
+# web's create forms share it — this alias tracks that one so the two numbers
+# cannot drift apart.
+from .services.orgs import DUPLICATE_CUTOFF as _DUP_CUTOFF
+from .services.renewals import RenewalItem
 
 # Field NAME -> its real KIND, exactly as forms/entities.py declares it for the
 # same field. This is per-field, not a name-wide lookup: a name is not
@@ -1197,18 +1200,14 @@ def _client_create(
     """The whole bundle (org, contacts, opening note, tasks) is ONE
     transaction — a bad task date (or any other failure partway through)
     rolls the org itself back too, never leaving a half-created client."""
-    from rapidfuzz import fuzz, process
-
     from .dates import parse_human_date
     from .forms.spec import date_refusal
     from .repo import contacts, interactions, orgs
     from .repo import tasks as tasks_repo
+    from .services import orgs as orgs_svc
 
-    existing = {o.name: o for o in orgs.list_orgs(conn, kind="client")}
-    match = process.extractOne(
-        name, list(existing), scorer=fuzz.WRatio, score_cutoff=_DUP_CUTOFF)
-    if match:
-        dup = existing[match[0]]
+    dup = orgs_svc.find_duplicate(conn, name)
+    if dup:
         raise ValueError(
             f"possible duplicate of {dup.name} ({dup.ref}) — if this is the same "
             f"client use enrich_field/log_activity on it; if genuinely new, "

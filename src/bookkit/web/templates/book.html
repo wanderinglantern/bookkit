@@ -7,11 +7,17 @@
     <h1 class="book-title">The book</h1>
     <span class="book-subtitle">{{ count }} account{{ "s" if count != 1 else "" }} · {{ total_premium }} bound premium</span>
     <span class="book-header-spacer"></span>
-    {# Filter, New account and Export workbook rendered here as pending
-       pills until D4 (2026-08-19): unbuilt is unrendered — the parity
-       ledger is the roadmap, not the UI. Each returns live with its
-       route. A dead <input> stays banned for the old reason too. #}
+    {# The filter and the XLSX export stay unrendered (D4: unbuilt is
+       unrendered). New account is LIVE as of gap 5: the org form
+       (suggestions wired) lands in the host below; POST /book/accounts
+       creates through the same apply_org + services.orgs.find_duplicate
+       path the TUI uses and redirects to the new account. #}
+    <button type="button" class="btn-pill btn-pill-primary"
+            hx-get="/book/accounts/new"
+            hx-target="#book-form-host" hx-swap="innerHTML">New account</button>
   </div>
+
+  <div id="book-form-host" class="form-host page-form-host"></div>
 
   <div class="book-body">
     <div class="book-table-head book-grid">
