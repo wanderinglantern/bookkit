@@ -332,3 +332,72 @@ async def test_a_contact_who_has_left_cannot_be_put_in_the_room(
         assert len(interactions_repo.for_org(conn, org.id)) == before
         # and the roster does not offer them either
         assert "Halvard" not in str(app.screen.query_one("#qc-who-known", Static).render())
+
+
+async def test_a_date_that_will_not_parse_refuses_the_save_and_says_so(
+    snapshot_db: Path,
+) -> None:
+    """Ambiguous entry is refused, never guessed. The old fallback stamped
+    today over whatever was typed — a follow-up entered as "the 5th" once
+    saved as 2027-05-01 and fell off every attention window silently. The
+    modal stays open with the typed date still in it."""
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        conn = app.conn
+        org = _account_with_contacts(conn)
+        before = len(interactions_repo.for_org(conn, org.id))
+
+        await _open(pilot, app, org, who="", subject="Call")
+        app.screen.query_one("#qc-date", Input).value = "5"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert isinstance(app.screen, QuickCapture), "the save was accepted"
+        assert app.screen.query_one("#qc-date", Input).value == "5"
+        assert len(interactions_repo.for_org(conn, org.id)) == before
+
+
+async def test_the_accepted_follow_up_task_is_one_revertible_batch(
+    snapshot_db: Path,
+) -> None:
+    """ConfirmTask used to write the task UNBATCHED — the one capture write
+    `u` could not reach. Same batch shape as the web now: tool="task_add"."""
+    from textual.widgets import TextArea
+
+    from bookkit.repo import tasks as tasks_repo
+    from bookkit.services import batches as batches_svc
+    from bookkit.tui.widgets.quick_capture import ConfirmTask
+
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        conn = app.conn
+        org = _account_with_contacts(conn)
+        before = {t.id for t in tasks_repo.open_tasks_for_client(conn, org.id)}
+
+        await _open(pilot, app, org, who="", subject="Renewal kickoff")
+        app.screen.query_one("#qc-note", TextArea).text = (
+            "Follow up Tuesday about loss runs."
+        )
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmTask), "no follow-up was offered"
+        await pilot.press("y")
+        await pilot.pause()
+
+        created = [
+            t for t in tasks_repo.open_tasks_for_client(conn, org.id) if t.id not in before
+        ]
+        assert len(created) == 1
+        batch = batches_repo.most_recent(conn)
+        assert batch is not None
+        assert batch.source == "tui" and batch.tool == "task_add"
+        assert batch.org_id == org.id
+        # and `u` can now actually take it back
+        from bookkit import db
+
+        batches_svc.revert(conn, batch.ref, now=db.utc_now())
+        assert created[0].id not in {
+            t.id for t in tasks_repo.open_tasks_for_client(conn, org.id)
+        }

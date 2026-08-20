@@ -11,13 +11,9 @@ ambiguity rather than guessing) is services.capture.resolve_attendees, the
 same call the TUI makes; the follow-up-task OFFER is capture.suggest_task —
 offered on a page of its own after a successful log, never silently created.
 
-Two deliberate divergences from the TUI, both on the strict side:
-- an unparseable date is REFUSED with forms.spec.date_refusal's sentence,
-  where the TUI modal silently substitutes today ("ambiguous entry is
-  refused, never guessed" — CLAUDE.md; the TUI's fallback predates the rule).
-- the accepted follow-up task is created INSIDE a batch (tool="task_add"),
-  where the TUI's ConfirmTask writes it unbatched — a latent TUI bug (`u`
-  cannot reach that task), not a precedent to copy.
+No divergences from the TUI any more (2026-08-20): both surfaces refuse an
+unparseable date with forms.spec.date_refusal's sentence, and both create
+the accepted follow-up task INSIDE a batch (tool="task_add").
 
 /capture shares no path prefix with /accounts/..., so this router's
 registration position in app.py is free."""
@@ -209,9 +205,8 @@ async def capture_task(request: Request) -> Response:
     these values are never rendered into a control a user could produce a bad
     one from, so a page-shaped refusal has nobody to talk to.
 
-    INSIDE a batch (tool="task_add"), deliberately unlike the TUI's
-    ConfirmTask, which creates its task unbatched — a latent bug that leaves
-    the task unreachable by `u`, not a behavior to mirror."""
+    INSIDE a batch (tool="task_add") — the same shape the TUI's ConfirmTask
+    uses since 2026-08-20."""
     conn = _conn(request)
     raw = {k: str(v) for k, v in (await request.form()).items()}
     org = _org_for_task(conn, raw.get("org_id", ""))

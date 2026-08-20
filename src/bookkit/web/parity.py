@@ -566,12 +566,12 @@ SCREENS: dict[str, str] = {
         "(source='web', tool='log_interaction' — interaction + attendee links "
         "one undo unit); a follow-up phrase OFFERS a task on a page of its "
         "own, created via POST /capture/task inside its own batch "
-        "(tool='task_add' — deliberately unlike the TUI's ConfirmTask, which "
-        "writes unbatched: a latent TUI bug, not a precedent). Divergences: "
-        "an unparseable date is refused with forms.spec.date_refusal where "
-        "the TUI silently substitutes today, and the account picker is a "
-        "select over CLIENT orgs where the TUI fuzzy-matches every org — "
-        "logging against a market still needs the TUI."
+        "(tool='task_add' — and since 2026-08-20 the TUI's ConfirmTask "
+        "batches the same way; both surfaces also refuse an unparseable "
+        "date with forms.spec.date_refusal). One divergence left: the "
+        "account picker is a select over CLIENT orgs where the TUI "
+        "fuzzy-matches every org — logging against a market still needs "
+        "the TUI."
     ),
     "sync_and_settings_app_keys": (
         "DEFERRED — `y` sync programs + link review, `,` program-roots "

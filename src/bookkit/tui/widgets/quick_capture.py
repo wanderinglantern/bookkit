@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from ..app import BookkitApp
 
 import json
-from datetime import date
 
 from rapidfuzz import fuzz
 from textual.app import ComposeResult
@@ -22,6 +21,7 @@ from textual.widgets import Button, Input, Label, OptionList, Select, Static, Te
 from textual.widgets.option_list import Option
 
 from ...dates import parse_human_date
+from ...forms.spec import date_refusal
 from ...models import InteractionType
 from ...normalize import clean_text
 from ...repo import contacts, drafts, interactions, orgs
@@ -261,7 +261,13 @@ class QuickCapture(ModalScreen):
             # dropping the whole note would be worse.
             self.notify(refusal, severity="error")
             return
-        occurred = parse_human_date(payload["date"] or "today") or date.today()
+        occurred = parse_human_date(payload["date"] or "today")
+        if occurred is None:
+            # ambiguous entry is refused, never guessed — the old `or
+            # date.today()` fallback silently stamped today over whatever
+            # the user actually typed. Same sentence as every other surface.
+            self.notify(date_refusal(payload["date"]), severity="error")
+            return
         subject = clean_text(payload["subject"]) or payload["note"].splitlines()[0][:60]
         # one writer action, one undo unit: the interaction and its attendee
         # links land together or not at all
@@ -343,13 +349,23 @@ class ConfirmTask(ModalScreen):
 
     def action_accept(self) -> None:
         title = self.query_one("#ct-title", Input).value or self.suggestion.phrase
-        tasks_repo.create(
+        # one writer action, one undo unit — same batch shape as the web's
+        # accepted follow-up (routes/capture.py, tool="task_add"); unbatched,
+        # the task was the one capture write `u` could not reach
+        with batches_svc.open_batch(
             self.app.conn,
-            title,
+            source="tui",
+            tool="task_add",
+            summary=f"task — {title}",
             org_id=self.org_id,
-            due_on=self.suggestion.due_on.isoformat(),
-            source_interaction_id=self.source_interaction_id,
-        )
+        ):
+            tasks_repo.create(
+                self.app.conn,
+                title,
+                org_id=self.org_id,
+                due_on=self.suggestion.due_on.isoformat(),
+                source_interaction_id=self.source_interaction_id,
+            )
         self.notify(f"task created, due {self.suggestion.due_on.isoformat()}")
         self.dismiss(True)
 
