@@ -233,6 +233,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
         calendar,
         capture,
         changes,
+        items,
         markets,
         orgs,
         pipeline,
@@ -249,6 +250,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
     # Neither path overlaps /accounts/..., so registration order relative
     # to the routers below doesn't matter the way relationship's does.
     app.include_router(book.router)
+    app.include_router(items.router)
     app.include_router(capture.router)
     app.include_router(search.router)
     app.include_router(team.router)

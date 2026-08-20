@@ -1,3 +1,4 @@
+{% import "macros/account.html" as account %}
 {% extends "base.html" %}
 {% block title %}Today — bookkit{% endblock %}
 {% block content %}
@@ -26,7 +27,7 @@
                 <tr>
                   <td class="num">{{ item.renewal_on }}</td>
                   <td class="num overdue-cell">{{ -item.days_remaining }}d over</td>
-                  <td class="prose"><a href="/accounts/{{ refs[item.org.id] }}/program">{{ item.org.name }}</a></td>
+                  <td class="prose">{{ account.account_link(accounts, item.org.id, "program") }}</td>
                   <td class="prose">{{ item.lines or item.placement.program_name }}</td>
                 </tr>
               {% endfor %}
@@ -52,7 +53,7 @@
                 <tr>
                   <td class="num">{{ item.renewal_on }}</td>
                   <td class="num">{{ item.days_remaining }}d</td>
-                  <td class="prose"><a href="/accounts/{{ refs[item.org.id] }}/program">{{ item.org.name }}</a></td>
+                  <td class="prose">{{ account.account_link(accounts, item.org.id, "program") }}</td>
                   <td class="prose">{{ item.lines or item.placement.program_name }}</td>
                 </tr>
               {% endfor %}
@@ -82,7 +83,7 @@
                   <td class="prose">{{ need.line }}</td>
                   <td class="prose">{{ need.project_name if need.project_name is defined else need.name }}</td>
                   <td class="prose">
-                    {% if refs.get(need.org_id) %}<a href="/accounts/{{ refs[need.org_id] }}/relationship">{{ need.org_name }}</a>
+                    {% if accounts.get(need.org_id) %}{{ account.account_link(accounts, need.org_id, "relationship") }}
                     {% else %}{{ need.org_name }}{% endif %}
                   </td>
                 </tr>
@@ -109,7 +110,7 @@
                 <tr>
                   <td class="prose">{{ sub.market.name }}</td>
                   <td class="prose">{{ sub.underwriter.name if sub.underwriter else "—" }}</td>
-                  <td class="prose"><a href="/accounts/{{ refs[sub.account.id] }}/pipeline">{{ sub.account.name }}</a></td>
+                  <td class="prose">{{ account.account_link(accounts, sub.account.id, "pipeline") }}</td>
                   <td class="num">{{ sub.submission.sent_on }}</td>
                   <td class="num overdue-cell">{{ sub.days_out }}d</td>
                 </tr>
@@ -138,7 +139,7 @@
                   <td class="num{% if quote.is_expired %} overdue-cell{% endif %}">{{ quote.expiry_word }}</td>
                   <td class="prose">{{ quote.market_name }}</td>
                   <td class="prose">{{ quote.about }}</td>
-                  <td class="prose"><a href="/accounts/{{ refs[quote.org_id] }}/pipeline">{{ quote.org_name }}</a></td>
+                  <td class="prose">{{ account.account_link(accounts, quote.org_id, "pipeline") }}</td>
                 </tr>
               {% endfor %}
               {% for quote in undated_quotes %}
@@ -146,7 +147,7 @@
                   <td class="num">no expiry</td>
                   <td class="prose">{{ quote.market_name }}</td>
                   <td class="prose">{{ quote.about }}</td>
-                  <td class="prose"><a href="/accounts/{{ refs[quote.org_id] }}/pipeline">{{ quote.org_name }}</a></td>
+                  <td class="prose">{{ account.account_link(accounts, quote.org_id, "pipeline") }}</td>
                 </tr>
               {% endfor %}
             </tbody>
@@ -165,7 +166,7 @@
       {% if onboarding %}
         <ul class="confirm-remove-notes">
           {% for org, note in onboarding %}
-            <li><a href="/accounts/{{ refs.get(org.id, '') }}/relationship">{{ org.name }}</a> — {{ note }}</li>
+            <li>{{ account.account_link(accounts, org.id, "relationship") }} — {{ note }}</li>
           {% endfor %}
         </ul>
       {% else %}
@@ -210,12 +211,15 @@
           <table class="rows rows-fit">
             <thead><tr><th>Account</th><th>Last touch</th><th>Stale</th><th>Premium</th></tr></thead>
             <tbody>
-              {% for account in stale %}
+              {# `stale_row`, not `account`: the loop variable used to be
+                 `account`, which now shadows the imported macro namespace and
+                 would make every link in this table a call on a stale row. #}
+              {% for stale_row in stale %}
                 <tr>
-                  <td class="prose"><a href="/accounts/{{ refs.get(account.org.id, '') }}/relationship">{{ account.org.name }}</a></td>
-                  <td class="num">{{ account.last_interaction_on or "never" }}</td>
-                  <td class="num">{{ account.days_stale }}d</td>
-                  <td class="num">{{ money(account.premium) if account.premium else "—" }}</td>
+                  <td class="prose">{{ account.account_link(accounts, stale_row.org.id, "relationship") }}</td>
+                  <td class="num">{{ stale_row.last_interaction_on or "never" }}</td>
+                  <td class="num">{{ stale_row.days_stale }}d</td>
+                  <td class="num">{{ money(stale_row.premium) if stale_row.premium else "—" }}</td>
                 </tr>
               {% endfor %}
             </tbody>
@@ -243,15 +247,15 @@
               {% for batch in changes %}
                 <tr>
                   <td class="num">{{ batch.created_at[:16] | replace("T", " ") }}</td>
-                  <td class="prose">{{ change_names.get(batch.org_id, "—") }}</td>
+                  <td class="prose">{{ account.account_link(accounts, batch.org_id, "relationship") }}</td>
                   <td class="prose">{{ batch.summary }}</td>
                   <td class="mono">{{ batch.source }}</td>
                   <td>
                     {% if batch.reverted_at %}
                       <span class="detail-label">reverted</span>
-                    {% elif batch.org_id and refs.get(batch.org_id) %}
+                    {% elif accounts.get(batch.org_id) %}
                       <button type="button" class="row-action-btn"
-                              hx-post="/accounts/{{ refs[batch.org_id] }}/changes/{{ batch.ref }}/revert?tab=relationship"
+                              hx-post="/accounts/{{ accounts[batch.org_id].ref }}/changes/{{ batch.ref }}/revert?tab=relationship"
                               hx-confirm="Put back: {{ batch.summary }}? This cannot be undone."
                               hx-swap="none">Revert</button>
                     {% endif %}

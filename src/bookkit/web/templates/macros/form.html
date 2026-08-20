@@ -2,8 +2,22 @@
   <div class="field">
     <label for="f-{{ f.key }}">{{ f.label }}{% if f.required %} <span class="req">*</span>{% endif %}</label>
     {% if f.kind == "select" %}
+      {# THE BLANK OPTION IS ALWAYS RENDERED, required or not. A <select> with
+         no empty option pre-selects its FIRST option, and `required` is then
+         satisfied by a value the user never chose — so a market response left
+         untouched filed itself as "quoted", a layer took "all lines" (which
+         routes/program.py says must be asked and never guessed), and an
+         assignment took whichever colleague sorted first. The browser makes
+         that choice silently and the form looks answered.
+
+         `required` still does its job: an empty submit is refused, which is
+         the behaviour the TUI has always had (Select.NULL in
+         tui/widgets/forms.py). A field that genuinely should arrive with a
+         value sets it as the form's `initial`, which selects it here — that
+         is a default the user can see, and is a different thing from the
+         browser picking row one. #}
       <select id="f-{{ f.key }}" name="{{ f.key }}"{% if f.required %} required{% endif %}>
-        {% if f.optional_select or not f.required %}<option value=""></option>{% endif %}
+        <option value=""></option>
         {% for label, val in f.options %}
           <option value="{{ val }}"{% if value == val %} selected{% endif %}>{{ label }}</option>
         {% endfor %}

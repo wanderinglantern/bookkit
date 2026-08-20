@@ -39,16 +39,6 @@ from .account import _conn
 router = APIRouter()
 
 
-def _org_refs(conn: sqlite3.Connection, org_ids: set[str]) -> dict[str, str]:
-    refs: dict[str, str] = {}
-    for org_id in org_ids:
-        try:
-            refs[org_id] = str(orgs_repo.get(conn, org_id).ref)
-        except KeyError:
-            continue  # a deleted account's rows render unlinked
-    return refs
-
-
 def _sections(conn: sqlite3.Connection, today: date) -> dict[str, Any]:
     items = renewals.upcoming(conn, today, days=120)
     overdue = [i for i in items if i.days_remaining < 0]
@@ -63,7 +53,6 @@ def _sections(conn: sqlite3.Connection, today: date) -> dict[str, Any]:
     stale = staleness.stale_accounts(conn, today)
     since = (today - timedelta(days=14)).isoformat()
     changes = [b for b in batches_repo.recent(conn, since, limit=20)]
-    change_names = orgs_repo.names_for(conn, {b.org_id for b in changes if b.org_id})
 
     org_ids = (
         {i.org.id for i in items}
@@ -75,11 +64,14 @@ def _sections(conn: sqlite3.Connection, today: date) -> dict[str, Any]:
         | {a.org.id for a in stale}
         | {b.org_id for b in changes if b.org_id}
     )
-    refs = _org_refs(conn, org_ids)
+    # ONE lookup, carrying the ref and the name TOGETHER. Two lookups is how
+    # the tasks table came to print `ACC-0004` where every other section on
+    # this page printed the account's name: it held only the ref map.
+    accounts = orgs_repo.labels_for(conn, org_ids)
 
     return {
         "today": today.isoformat(),
-        "refs": refs,
+        "accounts": accounts,
         "overdue": overdue,
         "soon": soon,
         "tasks": due_tasks,
@@ -91,7 +83,6 @@ def _sections(conn: sqlite3.Connection, today: date) -> dict[str, Any]:
         "chases": chases,
         "stale": stale[:15],
         "changes": changes,
-        "change_names": change_names,
         "money": format_cents_compact,
     }
 

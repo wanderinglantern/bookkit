@@ -103,3 +103,65 @@ def test_recent_changes_lists_cross_account_with_revert(client):
 
     assert f"renewed {placement.ref}" in page
     assert f"/accounts/{org.ref}/changes/" in page
+
+
+def test_every_section_names_the_account_rather_than_its_ref(client):
+    """One section of Today printed `ACC-0004` in the Account column while the
+    other nine printed "Delta Marine Logistics" (Grant, 2026-08-20).
+
+    The cause was DRY, not a typo: ten hand-written copies of the same anchor,
+    each picking its label out of whatever its row happened to carry, and the
+    tasks table's row carried no name — only the ref lookup. So it printed the
+    ref. Every account link on this page now goes through one macro over one
+    lookup that returns the ref and the name together.
+
+    Asserted over the WHOLE page rather than the tasks table alone: the next
+    section someone adds is the one that would otherwise repeat the mistake.
+    """
+    import re
+
+    conn = client.app.state.conn
+    from bookkit.repo import orgs as orgs_repo
+
+    page = client.get("/today").text
+    names = {o.ref: o.name for o in orgs_repo.list_orgs(conn, kind="client")}
+
+    # every account anchor on the page, as (ref-in-the-href, printed-label)
+    anchors = re.findall(
+        r'<a href="/accounts/(ACC-\d+)/[a-z]+"[^>]*>([^<]+)</a>', page
+    )
+    assert anchors, "no account links on Today at all — the scan is broken"
+
+    printed_a_ref = [
+        (ref, label) for ref, label in anchors
+        if label.strip() == ref and names.get(ref) != ref
+    ]
+    assert not printed_a_ref, (
+        f"these Today links print the account's ref instead of its name: "
+        f"{printed_a_ref}"
+    )
+
+
+def test_a_task_row_links_to_the_account_it_belongs_to(client):
+    """The bug's own section, pinned by content: the tasks table must carry a
+    real account name and a link that lands on that account's Work tab."""
+    import re
+
+    conn = client.app.state.conn
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import tasks as tasks_repo
+
+    page = client.get("/today").text
+    section = page[page.index("Tasks due") :]
+    section = section[: section.index("</section>")]
+
+    due = [t for t in tasks_repo.open_tasks(conn) if t.org_id]
+    if not due:
+        pytest.skip("the seeded book has no account-scoped open task")
+
+    linked = re.findall(r'<a href="/accounts/(ACC-\d+)/work"[^>]*>([^<]+)</a>', section)
+    assert linked, "the tasks table has no account links"
+    for ref, label in linked:
+        org = orgs_repo.find(conn, ref)
+        assert org is not None
+        assert label.strip() == org.name, f"{ref} rendered as {label!r}"

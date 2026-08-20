@@ -1,0 +1,26 @@
+{# HOW AN ACCOUNT IS NAMED AND LINKED, once.
+
+   Today alone had ten copies of `<a href="/accounts/{{ refs[id] }}/{tab}">{{
+   something.name }}</a>`, each picking its own label out of whatever the row
+   happened to carry — `item.org.name`, `need.org_name`, `sub.account.name`,
+   `quote.org_name`. The tasks table carried none of those, so it printed the
+   REF, and one section of Today said `ACC-0004` where the other nine said
+   "Delta Marine Logistics" (Grant, 2026-08-20).
+
+   That is the DRY rule stated for markup: the tenth copy is not the risk, the
+   copy that quietly differs is. One macro, one lookup (`repo/orgs.labels_for`
+   returns ref and name TOGETHER so they cannot be fetched separately and drift
+   apart), and a row with no account of its own gets the same em-dash every
+   other empty cell on the page gets.
+
+   `accounts` is the id → OrgLabel map. A missing id is a merged or deleted
+   account: it renders as plain text, never as a dead link to /accounts//tab. #}
+
+{% macro account_link(accounts, org_id, tab) %}
+  {%- set label = accounts.get(org_id) if org_id else None -%}
+  {%- if label -%}
+    <a href="/accounts/{{ label.ref }}/{{ tab }}" title="{{ label.ref }}">{{ label.name }}</a>
+  {%- else -%}
+    —
+  {%- endif -%}
+{% endmacro %}

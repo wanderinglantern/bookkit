@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% import "macros/account.html" as account %}
+
+{# OPEN ITEMS ACROSS THE BOOK — the working list.
+
+   Every task cell here posts to its own account's edit route
+   (routes/work.py), so editing from this page and editing from the account's
+   Work tab are the same write, the same guard and the same undo batch. The
+   only thing this page owns is the reading and the arrangement.
+
+   The table is one row per task with a designated wrapping column (the task
+   itself); every other column stays on one line, so a long description cannot
+   destroy the vertical rhythm that makes a list of forty scannable. #}
+
+{% block title %}Open items — bookkit{% endblock %}
+
+{% block content %}
+{% include "partials/topbar.html" %}
+
+<main class="page">
+  <header class="page-head">
+    <h1 class="page-title">Open items</h1>
+    <p class="page-sub">
+      {{ tasks | length }} open
+      {%- if overdue_count %}, <strong class="is-overdue">{{ overdue_count }} overdue</strong>{% endif %}
+      {%- if undated_count %}, {{ undated_count }} with no date{% endif %}
+    </p>
+  </header>
+
+  {# Filters are a GET form: the view is a URL, so "everything overdue" is
+     something you can keep, and the back button behaves. #}
+  <form class="filter-bar" method="get" action="/items">
+    <label class="filter-field">
+      <span class="filter-label">Account</span>
+      <select name="account">
+        {# blank first, always — see macros/form.html: a select with no empty
+           option lets the browser answer the question #}
+        <option value="">every account</option>
+        {% for org in all_accounts %}
+          <option value="{{ org.ref }}"{% if filter_ref == org.ref %} selected{% endif %}>{{ org.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="filter-check">
+      <input type="checkbox" name="overdue" value="1"{% if overdue_only %} checked{% endif %}>
+      overdue only
+    </label>
+    <button type="submit" class="btn">Apply</button>
+    {% if overdue_only or filter_ref %}<a class="btn" href="/items">Clear</a>{% endif %}
+    <span class="filter-spacer"></span>
+    <button type="button" class="btn btn-primary"
+            hx-get="/items/tasks/new"
+            hx-target="#items-form-host" hx-swap="innerHTML">Add task</button>
+  </form>
+
+  <div class="form-host" id="items-form-host"></div>
+
+  <section class="today-section">
+    <div class="people-head">
+      <h2 class="people-label">Tasks</h2>
+      <span class="people-count">{{ tasks | length }}</span>
+    </div>
+    {% if tasks %}
+      <div class="table-scroll">
+        <table class="rows rows-fit">
+          <thead>
+            <tr>
+              <th>Due</th><th>Task</th><th>Account</th><th>Category</th>
+              <th>Assignee</th><th>Notes</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for task in tasks %}
+              <tr{% if task.overdue %} class="is-overdue-row"{% endif %}>
+                {% if task.editable %}
+                  {{ task.cells.due_on | safe }}
+                  {{ task.cells.title | safe }}
+                  <td class="prose">{{ account.account_link(accounts, task.org_id, "work") }}</td>
+                  {{ task.cells.category | safe }}
+                  {{ task.cells.assignee | safe }}
+                  {{ task.cells.description | safe }}
+                {% else %}
+                  {# No account, so no route to post a cell to. Said plainly:
+                     a cell that silently refuses to open reads as broken. #}
+                  <td class="num">{{ task.due_on or "—" }}</td>
+                  <td class="prose">{{ task.title }}</td>
+                  <td class="prose"><span class="detail-label">no account — not editable here</span></td>
+                  <td class="prose">{{ task.category or "—" }}</td>
+                  <td class="prose">—</td>
+                  <td class="prose">—</td>
+                {% endif %}
+                <td>
+                  <button type="button" class="row-action-btn"
+                          hx-post="{{ task.done_url }}"
+                          hx-target="body" hx-swap="outerHTML">done</button>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="panel-empty">
+        <p>{% if overdue_only or filter_ref %}nothing matches this filter{% else %}nothing open — the book is clear{% endif %}</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="today-section">
+    <div class="people-head">
+      <h2 class="people-label">Requests to chase</h2>
+      <span class="people-count">{{ requests | length }}</span>
+    </div>
+    {% if requests %}
+      <div class="table-scroll">
+        <table class="rows rows-fit">
+          <thead><tr><th>Ref</th><th>Account</th><th>Market</th><th>Open</th><th>Due</th></tr></thead>
+          <tbody>
+            {% for req in requests %}
+              <tr>
+                <td class="mono">{{ req.ref }}</td>
+                <td class="prose">{{ account.account_link(request_accounts, req.org_id, "work") }}</td>
+                <td class="prose">{{ req.market_name or "—" }}</td>
+                <td class="num">{{ req.open_count }} of {{ req.total_count }}</td>
+                <td class="num">{{ req.earliest_due or req.due_on or "—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="panel-empty"><p>nothing outstanding</p></div>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}

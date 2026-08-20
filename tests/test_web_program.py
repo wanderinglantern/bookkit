@@ -2921,3 +2921,154 @@ def test_a_derived_cell_offers_the_same_three_way_when_the_file_moves(app_and_or
     assert "/reload" in refused.text and "/overwrite" in refused.text
     assert "typed while the file moved" in refused.text
     assert layer["name"] in refused.text, "the dialog does not say which row"
+
+
+# --- the export theme, end to end ---------------------------------------------
+#
+# `render.theme` shipped in D6 as a free-text cell holding a file path, which is
+# the open field mistake-proofing literature says to replace with a picker: a
+# broker cannot discover which themes exist, and nothing stops them naming one
+# that does not. Worse, towerkit REFUSES an absolute `render.theme` (program
+# files are portable by contract), so the free-text cell could store a value
+# that made the file fail validation — and because every later write
+# re-validates, that wedged the file until somebody edited the JSON by hand.
+
+
+def _theme_url(org, placement):
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/field/program/_:_/render.theme"
+    )
+
+
+def test_the_theme_picker_offers_only_themes_a_program_file_may_name(app_and_org):
+    """towerkit's validator refuses an absolute `render.theme`. The packaged
+    themes are absolute, so offering them is offering a choice that makes the
+    file invalid — the write is refused and the file is stuck.
+
+    Filtering here rather than policing on the way in is the point: a control
+    must not advertise a choice its own system rejects.
+    """
+    from bookkit.web.routes.program import _theme_choices
+
+    for label, value in _theme_choices():
+        assert not Path(value).is_absolute(), (
+            f"the picker offers {label!r} as {value!r}, which towerkit refuses "
+            "as non-portable"
+        )
+
+
+def test_an_absolute_theme_is_refused_before_it_can_wedge_the_file(app_and_org):
+    """The server checks the picker's own options, because the markup only
+    constrains a mouse and this route is reachable by anything that can POST."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+
+    refused = client.post(
+        _theme_url(org, placement),
+        data={"program.render.theme": "/etc/themes/evil.json"},
+    )
+
+    assert refused.status_code == 200
+    assert "cell-error" in refused.text
+    assert _reload_program(conn, placement).render is None, "it was written anyway"
+
+
+def test_the_blank_option_clears_the_theme_rather_than_being_refused(app_and_org, tmp_path):
+    """THE BLANK OPTION IS A REAL ANSWER — a cleared theme is what "use
+    towerkit's built-in" means, and the <select> offers it.
+
+    It was refused for an afternoon: `checked_option` compares against the
+    option VALUES and the blank one is "", which is not in that set. The
+    control looked like it worked, because the cell re-renders either way.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    theme = _portable_theme(tmp_path)
+    assert client.post(
+        _theme_url(org, placement), data={"program.render.theme": theme}
+    ).status_code == 200
+    assert _reload_program(conn, placement).render.theme == theme
+
+    cleared = client.post(_theme_url(org, placement), data={"program.render.theme": ""})
+
+    assert cleared.status_code == 200
+    assert "cell-error" not in cleared.text
+    assert _reload_program(conn, placement).render.theme is None
+
+
+def _portable_theme(tmp_path) -> str:
+    """A real theme under a RELATIVE path, which is the only kind a program file
+    may name. Copied from towerkit's own packaged set so it is a theme the
+    renderer genuinely accepts, not a stub that would fail `theme_problems`."""
+    import os
+    import shutil
+    from pathlib import Path as _P
+
+    from towerkit.theme import available_themes
+
+    source = next(p for p in available_themes() if p.stem == "default")
+    themes = _P(os.getcwd()) / "themes"
+    themes.mkdir(exist_ok=True)
+    target = themes / "regression-theme.json"
+    if not target.exists():
+        shutil.copy(source, target)
+    return "themes/regression-theme.json"
+
+
+def test_the_download_is_rendered_with_the_theme_the_program_names(app_and_org, tmp_path):
+    """The whole pathway: pick a theme, and the SVG comes out of the renderer
+    with it. Spying on the renderer's argument, not on the saved value — the
+    first version of the neighbouring test asserted the save and stayed green
+    with the hand-off deleted."""
+    import towerkit.render.mpl_program as mpl
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    theme = _portable_theme(tmp_path)
+    client.post(_theme_url(org, placement), data={"program.render.theme": theme})
+
+    seen = {}
+    real = mpl.render_program
+
+    def spy(program, loaded_theme, *args, **kwargs):
+        seen["theme"] = loaded_theme
+        return real(program, loaded_theme, *args, **kwargs)
+
+    mpl.render_program = spy
+    try:
+        drawn = client.get(
+            f"/accounts/{org.ref}/program/{placement.id}/export/tower.svg"
+        )
+    finally:
+        mpl.render_program = real
+
+    assert drawn.status_code == 200
+    from towerkit.theme import load_theme
+
+    assert seen["theme"] == load_theme(theme), (
+        "the export was rendered with a different theme than the file names"
+    )
+
+
+def test_a_theme_that_is_gone_refuses_the_download_instead_of_quietly_substituting(
+    app_and_org, tmp_path
+):
+    """A client-facing chart rendered in the wrong brand, silently, is worse
+    than no chart. The refusal names the theme and how to fix it."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    theme = _portable_theme(tmp_path)
+    client.post(_theme_url(org, placement), data={"program.render.theme": theme})
+    Path(theme).unlink()
+
+    drawn = client.get(f"/accounts/{org.ref}/program/{placement.id}/export/tower.svg")
+
+    assert drawn.status_code == 200
+    assert "regression-theme" in drawn.text
+    assert "themes" in drawn.text
+    assert not drawn.content.startswith(b"<?xml"), "it rendered anyway"

@@ -1,3 +1,4 @@
+{% import "macros/account.html" as account %}
 {# The tasks-due section — its own file because completing a task re-renders
    exactly this (the write changes this list and nothing else on Today). #}
 <section class="today-section" id="today-tasks">
@@ -14,11 +15,7 @@
             <tr>
               <td class="num">{{ task.due_on or "—" }}</td>
               <td class="prose">{{ task.title }}</td>
-              <td class="prose">
-                {% if task.org_id and refs.get(task.org_id) %}
-                  <a href="/accounts/{{ refs[task.org_id] }}/work">{{ refs[task.org_id] }}</a>
-                {% else %}—{% endif %}
-              </td>
+              <td class="prose">{{ account.account_link(accounts, task.org_id, "work") }}</td>
               <td>
                 <button type="button" class="row-action-btn"
                         hx-post="/today/tasks/{{ task.id }}/done"

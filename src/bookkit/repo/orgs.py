@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from typing import Any
 
 from ..ids import ORG_REF, next_ref
@@ -66,17 +67,45 @@ def get(conn: sqlite3.Connection, org_id: str) -> Org:
     return Org.from_row(row)
 
 
-def names_for(conn: sqlite3.Connection, org_ids: set[str]) -> dict[str, str]:
-    """id → name for the LIVING orgs among org_ids, one query. A missing key
-    means the org was merged/deleted away — the caller picks the label."""
+@dataclass(frozen=True)
+class OrgLabel:
+    """How an account is NAMED and REACHED, together.
+
+    The two always travel as a pair — a surface that shows an account shows its
+    name and links on its ref — and separating them is how Today came to print
+    `ACC-0004` in the Account column of one section while every other section
+    printed "Delta Marine Logistics" (Grant, 2026-08-20). The tasks table was
+    the one place holding only the ref lookup, so the ref is what it printed.
+    """
+
+    ref: str
+    name: str
+
+
+def labels_for(conn: sqlite3.Connection, org_ids: set[str]) -> dict[str, OrgLabel]:
+    """id → (ref, name) for the LIVING orgs among org_ids, ONE query.
+
+    A missing key means the org was merged or deleted away — the caller picks
+    the label, and `macros/account.html` picks an em-dash.
+
+    One query, not one per id: the caller before this looped `orgs.get` over
+    every account on the page, which on a busy Today is thirty round trips for
+    a column of links.
+    """
     if not org_ids:
         return {}
     marks = ",".join("?" * len(org_ids))
     rows = conn.execute(
-        f"SELECT id, name FROM org WHERE id IN ({marks}) AND {base.alive()}",
+        f"SELECT id, ref, name FROM org WHERE id IN ({marks}) AND {base.alive()}",
         tuple(org_ids),
     ).fetchall()
-    return {r["id"]: r["name"] for r in rows}
+    return {r["id"]: OrgLabel(ref=r["ref"], name=r["name"]) for r in rows}
+
+
+def names_for(conn: sqlite3.Connection, org_ids: set[str]) -> dict[str, str]:
+    """id → name. Delegates, so there is ONE definition of the query and of
+    what "living" means for this lookup."""
+    return {org_id: label.name for org_id, label in labels_for(conn, org_ids).items()}
 
 
 def find(conn: sqlite3.Connection, ref_or_id: str) -> Org | None:

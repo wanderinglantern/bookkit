@@ -287,13 +287,29 @@ def task_done(request: Request, ref: str, task_id: str) -> HTMLResponse:
     one column."""
     org = _org(request, ref)
     conn = _conn(request)
-    existing = _owned(conn, org, "task", task_id, tasks_repo.get)
+    _owned(conn, org, "task", task_id, tasks_repo.get)
+    complete_task(conn, org, task_id)
+    return _tasks_panel(request, org)
+
+
+def complete_task(
+    conn: sqlite3.Connection, org: Org | None, task_id: str
+) -> None:
+    """The write, shared with the book-wide list (routes/items.py).
+
+    Only the RE-RENDER differs between the two surfaces — this tab answers
+    with the account's panel, the book-wide list answers with itself — so only
+    the re-render is written twice. The batch, its tool name and its sentence
+    live here, once, or the changes list would describe the same action two
+    ways depending on which page it was done from.
+    """
+    existing = tasks_repo.get(conn, task_id)
     with batches_svc.open_batch(
         conn, source="web", tool="task_done",
-        summary=f"completed {existing.title}", org_id=org.id,
+        summary=f"completed {existing.title}",
+        org_id=org.id if org else None,
     ):
         tasks_repo.complete(conn, task_id)
-    return _tasks_panel(request, org)
 
 
 # --- requests (master) ------------------------------------------------------

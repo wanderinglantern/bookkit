@@ -19,7 +19,9 @@ the tab badge counted the placements it was claiming did not exist.
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -28,7 +30,7 @@ from fastapi.responses import HTMLResponse
 from ... import sync, towerfields
 from ...forms.entities import apply_placement, apply_submission, placement_form, submission_form
 from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS, PLACEMENT_FIELDS
-from ...forms.spec import Field, initial_text, parse_value
+from ...forms.spec import Field, checked_option, initial_text, parse_value
 from ...money import format_cents_compact
 from ...repo import placements as placements_repo
 from ...repo import projection, vocab
@@ -2450,6 +2452,38 @@ def export_tower_pdf(request: Request, ref: str, placement_id: str) -> Any:
     return _export_tower(request, ref, placement_id, "pdf", "application/pdf")
 
 
+def _resolve_theme(stored: str | None) -> Path | None:
+    """The stored theme as a path that exists, or a refusal naming it.
+
+    Two steps, because a stored theme is portable BY DESIGN: entries under
+    ./themes stay relative so a program file carries the same value between
+    machines (towerkit.theme.available_themes). A relative path is therefore
+    resolved against the themes this machine can actually see, by NAME, rather
+    than against whatever directory happens to have launched the server.
+
+    IT REFUSES RATHER THAN FALLING BACK. A missing theme silently replaced by
+    the built-in default renders a client-facing chart in the wrong brand and
+    says nothing — the export looks like it worked. Refusing names the theme
+    and leaves the file untouched, which is the same call the program panel
+    makes when a towerkit file will not load.
+    """
+    if not stored:
+        return None
+    from towerkit.theme import available_themes
+
+    direct = Path(stored)
+    if direct.is_file():
+        return direct
+    for candidate in available_themes():
+        if candidate.stem == direct.stem:
+            return candidate
+    raise FileNotFoundError(
+        f"this program is set to render with the {direct.stem!r} theme, and no "
+        f"theme by that name is installed here — pick another on the Program "
+        f"tab's chart strip, or put {direct.name} in ./themes"
+    )
+
+
 def _export_tower(
     request: Request, ref: str, placement_id: str, fmt: str, media_type: str
 ) -> Any:
@@ -2482,7 +2516,10 @@ def _export_tower(
     # towerkit's own CLI reads them the same way (cli.py `_cmd_render`),
     # including the theme.
     stored = program.render
-    theme_path = _Path(stored.theme) if stored and stored.theme else None
+    try:
+        theme_path = _resolve_theme(stored.theme if stored else None)
+    except FileNotFoundError as missing:
+        return _refusal_page(request, str(missing), f"/accounts/{ref}/program")
     with tempfile.TemporaryDirectory() as tmp:
         paths = render_program(
             program, load_theme(theme_path), _Path(tmp), placement.ref, formats=[fmt],
@@ -2656,6 +2693,13 @@ def _term_form(
             "kind": kind, "action": action,
             "cancel_url": f"{_terms_base(ref, placement_id, kind)}/button",
             "lines": _term_lines(request, placement_id),
+            # FROM TOWERKIT, NOT FROM A LITERAL. The three retention types were
+            # spelled out in the template — a hand-written copy of towerkit's
+            # `RetentionType` sitting in Jinja, where no test and no type
+            # checker would ever notice it going stale. towerkit publishes the
+            # vocabulary on the same derived surface D6 already reads, so it is
+            # read from there and cannot drift by a fourth spelling.
+            "retention_types": towerfields.resolve("retention", "type").values or (),
             "values": values, "error": error,
         },
     )
@@ -2933,6 +2977,14 @@ class _Placed:
     tag: str
     answers: str = "cell"
     css: str = ""
+    # Names a `_CHOICES` provider that turns this field into a PICKER.
+    # towerkit publishes `render.theme` as free text — it is a file path, and
+    # the model cannot know which paths exist on this machine. A text box for a
+    # path is the open field that mistake-proofing literature says to replace
+    # with a constrained control: nobody can type a theme they have, and
+    # nothing stops them typing one they do not. The list is discovered at
+    # request time, so a theme dropped into ./themes appears without a restart.
+    choices: str | None = None
 
 
 # The placement table. Adding a row here is what makes a towerkit field
@@ -2963,7 +3015,7 @@ _PLACED: dict[str, _Placed] = {
     # drawing on this page is towerkit's `render/web.py` geometry, which takes
     # no options — re-rendering the section would redraw a picture that cannot
     # have changed and cost the user their place for nothing.
-    "program.render.theme": _Placed(tag="span"),
+    "program.render.theme": _Placed(tag="span", choices="themes"),
     "program.render.showTotals": _Placed(tag="span"),
     "program.render.showPremiums": _Placed(tag="span"),
     "program.render.cellPremiums": _Placed(tag="span"),
@@ -2982,6 +3034,69 @@ _RENDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("SOI schematic", "render.soiSchematic"),
     ("theme", "render.theme"),
 )
+
+
+def _theme_choices() -> tuple[tuple[str, str], ...]:
+    """Every theme this program file may legally NAME, as (label, value).
+
+    Not every theme on the machine: only the ones that are STORABLE.
+    towerkit's validator (`_check_render_theme`) refuses an absolute
+    `render.theme` outright — program files are portable by contract, and a
+    theme path that renders here and breaks on the next machine is worse than
+    one that breaks now — and it resolves the value relative to the working
+    directory because that is exactly how `towerctl render` will resolve it.
+
+    So the PACKAGED themes, which `available_themes` reports as absolute paths,
+    cannot be named by a program file at all. Offering them is offering a
+    choice that makes the file fail validation, which is worse than not
+    offering them: the write is refused, and because every later write to that
+    file re-validates it, the file is wedged until somebody edits the JSON by
+    hand. That is not hypothetical — it is what this picker did on its first
+    afternoon, and it is why the list is filtered here rather than presented
+    whole and policed on the way in.
+
+    The built-in default is the blank option, and it is a real answer: a
+    cleared `render.theme` is what "use towerkit's own theme" means.
+    """
+    from towerkit.theme import available_themes
+
+    return tuple(
+        (path.stem, str(path))
+        for path in available_themes()
+        if not path.is_absolute()
+    )
+
+
+# A picker's options are DATA, discovered per request, so a theme added to
+# ./themes is offered without a restart and one that disappears stops being
+# offered. Keyed by the name a `_Placed` row asks for.
+_CHOICES: dict[str, Callable[[], tuple[tuple[str, str], ...]]] = {
+    "themes": _theme_choices,
+}
+
+
+def _as_choice_field(field: Field, spot: _Placed) -> Field:
+    """A `_PLACED` row that names a provider becomes a select.
+
+    The blank option is deliberate and load-bearing for the theme: an empty
+    value CLEARS the field, and a cleared `render.theme` means towerkit's
+    built-in default — which is a real, choosable answer, not an absence.
+    """
+    if spot.choices is None:
+        return field
+    options = _CHOICES[spot.choices]()
+    return replace(
+        field,
+        kind="select",
+        options=options,
+        optional_select=True,
+        # An empty list is not a broken picker — it is a machine with no
+        # portable themes installed, and the placeholder says what to do about
+        # it rather than presenting an empty menu that reads as a bug.
+        placeholder=field.placeholder or (
+            "" if options else "no portable themes — put one in ./themes"
+        ),
+    )
 
 
 def _field_key(kind: str, name: str) -> str:
@@ -3081,6 +3196,27 @@ def _field_value(request: Request, placement_id: str, kind: str, name: str,
     return sync.tower_field_value(linked.program, kind, name, target, index)
 
 
+def _field_display_text(entry: Any, spot: _Placed, value: Any) -> str:
+    """What the display cell shows.
+
+    A picker shows its LABEL, never the stored value: `render.theme` holds a
+    file path, and a cell reading
+    `/…/site-packages/towerkit/themes/marsh.json` says nothing a broker wants
+    to know and wraps the row while saying it. The editor still round-trips the
+    exact stored value — a cell that pre-fills something its own parser would
+    store differently is the cents lesson in another costume.
+    """
+    if spot.choices is not None and value not in (None, ""):
+        for label, candidate in _CHOICES[spot.choices]():
+            if candidate == str(value):
+                return label
+        # Stored, but no longer on this machine. Say so rather than printing a
+        # dead path or, worse, an em-dash that reads as "no theme set" while
+        # every export silently uses a different one.
+        return f"{Path(str(value)).stem} (missing)"
+    return towerfields.display(entry, value)
+
+
 def _field_display(
     request: Request, ref: str, placement: Any, kind: str, name: str, addr: str,
 ) -> str:
@@ -3090,8 +3226,10 @@ def _field_display(
     value = _field_value(request, placement.id, kind, name, target, index)
     return render_cell_display(
         request,
-        towerfields.bookkit_field(entry, key=_field_key(kind, name)),
-        towerfields.display(entry, value),
+        _as_choice_field(
+            towerfields.bookkit_field(entry, key=_field_key(kind, name)), spot
+        ),
+        _field_display_text(entry, spot, value),
         _field_action(ref, placement.id, kind, name, addr),
         tag=spot.tag,
         extra_class=spot.css,
@@ -3114,7 +3252,9 @@ def _field_editor(
     )
     return render_cell(
         request,
-        towerfields.bookkit_field(entry, key=_field_key(kind, name)),
+        _as_choice_field(
+            towerfields.bookkit_field(entry, key=_field_key(kind, name)), spot
+        ),
         value,
         _field_action(ref, placement.id, kind, name, addr),
         error=error,
@@ -3179,8 +3319,30 @@ def _field_write(
     spot = _field_placed(kind, name)
     target, index = _unaddr(addr)
     try:
+        # A PICKER IS CHECKED HERE TOO, not only by the <select>. The markup
+        # constrains a mouse; it constrains nothing else, and this route is
+        # reachable by anything that can POST. `checked_option` is the same
+        # rule every other select in bookkit is held to, so a theme that is not
+        # on this machine cannot be stored by hand and then silently swallowed
+        # by the export.
+        field = _as_choice_field(
+            towerfields.bookkit_field(entry, key=_field_key(kind, name)), spot
+        )
+        if field.kind == "select" and typed.strip():
+            # NON-EMPTY ONLY, which is the same order `forms.spec.parse_value`
+            # uses and not an optimisation. `checked_option` compares against
+            # the option VALUES, and the blank option's value is "" — which is
+            # not in that set, so checking it unconditionally refused the one
+            # choice the markup itself offers. The theme picker's blank option
+            # means "towerkit's built-in default", a real answer a broker picks
+            # on purpose; refusing it made the field one-way (settable, never
+            # unsettable) while the <select> went on advertising the option.
+            # A control that offers a choice the server rejects is the
+            # dead-control class in its most confusing form: it looks like it
+            # worked, because the row re-renders either way.
+            typed = checked_option(field, typed)
         wire = towerfields.to_wire(entry, typed)
-    except towerfields.FieldRefused as exc:
+    except (towerfields.FieldRefused, ValueError) as exc:
         return HTMLResponse(
             _field_editor(request, ref, placement, kind, name, addr, str(exc), typed)
         )

@@ -1,92 +1,136 @@
-{# One layer's long tail — policy number and the policy dates — as a row the
-   chevron inserts under the layer (hx-swap="afterend"). Three more table
-   columns would have crowded the scannable four; a row one click away keeps
-   the fields REACHABLE, which they were not: the routes existed and nothing
-   rendered them (review finding F6, 2026-08-19).
+{# One layer's long tail, as a row the chevron inserts under the layer
+   (hx-swap="afterend"). Three more table columns would have crowded the
+   scannable four; a row one click away keeps the fields REACHABLE, which they
+   were not: the routes existed and nothing rendered them (review finding F6,
+   2026-08-19).
+
+   GROUPED, NOT THINNED (Grant, 2026-08-20, after D6 put eight values in here).
+   The complaint was density; the cause was not. This row is read by one expert
+   who wants everything at once, and the literature on data-dense tools is
+   consistent that hiding what someone frequently needs relocates the cost
+   rather than removing it — Nielsen's own caveat on progressive disclosure.
+   What was actually wrong was PROXIMITY: administrative facts (policy number
+   and dates), coverage prose, named limits, scope and structure controls are
+   five different KINDS of fact, and rendering them as one inline run of
+   LABEL value LABEL value told the reader they were all the same kind.
+
+   So: same eight values, same one row, nothing hidden — but a two-column grid
+   with a label rail down the left, one group per row, and each group's values
+   in their own column. Three consequences that are the whole point:
+
+     - a long note wraps INSIDE its own cell instead of shoving the next label
+       sideways (the vertical-rhythm rule: exactly one column may wrap);
+     - the group labels form a rail the eye runs down, so finding "coverage"
+       is a scan and not a parse;
+     - the em-dashes of the four empty coverage fields read as an orderly list
+       of what is available, rather than as noise scattered through a sentence.
 
    The cells arrive pre-rendered as SPANS: a <td> swapped back at this depth
    (inside the colspan cell) has no table-row ancestor at the swap point and
    the HTML parser drops it outright, value and all — see macros/cell.html.
+   That is unchanged by the regrouping, and the divs below are legal children
+   of a <td> where a <td> is not.
 
-   Any panel refresh (every save returns the panel out of band) replaces the
-   whole section and closes this row. Accepted: it is one click away, and
-   re-seating open expanders server-side buys little. Close is delegated
-   ([data-row-close], form-host.js) — no inline onclick, per the house rule
-   inline-cell.js records. #}
+   Any panel refresh replaces the whole section; `expanded` re-renders this row
+   so the one the user is working in survives the write it caused. Close is
+   delegated ([data-row-close], form-host.js) — no inline onclick. #}
 <tr class="layer-details">
   <td class="row-expand"></td>
   <td colspan="6" class="prose">
     {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
-    <span class="detail-label">policy no</span>{{ policy_cell | safe }}
-    <span class="detail-label">policy effective</span>{{ from_cell | safe }}
-    <span class="detail-label">policy expiry</span>{{ to_cell | safe }}
-    {# D6: the coverage facts towerkit prints on the SOI and the schematic and
-       a broker states on a quote. They were writable through towerkit's own
-       editor and unreachable from a browser, which has no `o` — "built but not
-       accessible" (statutory, 2026-08-19).
+    <div class="detail-grid">
 
-       Every one of these cells is rendered AND saved by the derived seam
-       (routes/program.py `_PLACED`, towerfields, sync.set_tower_field): the
-       type, the bounds, the guards and whether it may be cleared all come from
-       towerkit's own published surface, so a field towerkit grows needs a row
-       in `_PLACED` and nothing else. Spans, like every cell at this depth. #}
-    <span class="detail-label" title="statutory jurisdictions — towerkit refuses these on a dollar-limited layer">states</span>{{ tower_cells.states | safe }}
-    <span class="detail-label">limits detail</span>{{ tower_cells.limitsDetail | safe }}
-    <span class="detail-label">retention detail</span>{{ tower_cells.retentionDetail | safe }}
-    <span class="detail-label" title="the word a zero premium prints">premium detail</span>{{ tower_cells.premiumDetail | safe }}
-    <span class="detail-label">notes</span>{{ tower_cells.notes | safe }}
-    {# Named limits: the several figures a policy states where `limit` states
-       one. No ids — towerkit addresses them by position, so the remove control
-       carries the index a read reported and the row re-renders after every
-       write rather than leaving stale positions on the page. #}
-    <span class="detail-label">named limits</span>
-    {% for nl in named_limits %}
-      <span class="named-limit">{{ nl.name_cell | safe }}{{ nl.amount_cell | safe }}<button
-              type="button" class="chip-remove" aria-label="Remove this named limit"
-              title="Remove this named limit"
-              hx-post="{{ base }}/named-limits/{{ nl.index }}/remove"
-              hx-target="closest tr" hx-swap="outerHTML">&times;</button></span>
-    {% endfor %}
-    <form class="market-add-form" hx-post="{{ base }}/named-limits"
-          hx-target="closest tr" hx-swap="outerHTML">
-      <input type="text" name="name" placeholder="named limit" required>
-      <input type="text" name="amount" placeholder="1.5m &middot; 250k" required>
-      <button type="submit" class="row-action-btn">add limit</button>
-    </form>
-    <span class="detail-label">applies to</span>
-    {# Toggle chips (phase 3): each POST rescopes the layer to current±line
-       through sync.set_applies_to — dead code until these, its first
-       caller. A move towerkit refuses (last line, an overlap, a stranded
-       gap) re-renders this row with the message. #}
-    {% for line in lines %}
-      <button type="button"
-              class="row-action-btn line-toggle{% if line.on %} is-on{% endif %}"
-              title="{{ 'stop covering' if line.on else 'also cover' }} {{ line.name }}"
-              hx-post="{{ base }}/applies-to" hx-vals='{"line": "{{ line.id }}"}'
-              hx-target="closest tr" hx-swap="outerHTML">{{ line.name }}</button>
-    {% endfor %}
-    <span class="detail-label">structure</span>
-    {% if statutory %}
-      {# leaving statutory NEEDS the replacing dollar limit — the inline form
-         asks for it; a bare toggle would have to invent a number #}
-      <form class="market-add-form" hx-post="{{ base }}/statutory"
-            hx-target="closest tr" hx-swap="outerHTML">
-        <input type="hidden" name="statutory" value="false">
-        <input type="text" name="limit" placeholder="dollar limit to restore" required>
-        <button type="submit" class="row-action-btn">leave statutory</button>
-      </form>
-    {% else %}
-      <button type="button" class="row-action-btn"
-              hx-get="{{ base }}/statutory"
-              hx-target="closest tr" hx-swap="outerHTML">mark statutory</button>
-    {% endif %}
-    <button type="button" class="row-action-btn follows-toggle{% if follows %} is-on{% endif %}"
-            title="{{ 'the attachment is derived from the layers below' if follows else 'derive the attachment from the layers below' }}"
-            hx-post="{{ base }}/follows" hx-vals='{"follows": "{{ 'false' if follows else 'true' }}"}'
-            hx-target="closest tr" hx-swap="outerHTML">follows underlying</button>
-    <button type="button" class="row-action-btn" data-row-close>close</button>
-    <button type="button" class="row-action-btn row-action-danger"
-            hx-get="{{ remove_url }}"
-            hx-target="closest tr" hx-swap="outerHTML">remove layer</button>
+      <span class="detail-label">policy</span>
+      <div class="detail-inline">
+        <span class="pair"><span class="pair-k">no</span>{{ policy_cell | safe }}</span>
+        <span class="pair"><span class="pair-k">effective</span>{{ from_cell | safe }}</span>
+        <span class="pair"><span class="pair-k">expiry</span>{{ to_cell | safe }}</span>
+      </div>
+
+      {# D6: the coverage facts towerkit prints on the SOI and the schematic and
+         a broker states on a quote. They were writable through towerkit's own
+         editor and unreachable from a browser, which has no `o` — "built but
+         not accessible" (statutory, 2026-08-19).
+
+         Every one of these cells is rendered AND saved by the derived seam
+         (routes/program.py `_PLACED`, towerfields, sync.set_tower_field): the
+         type, the bounds, the guards and whether it may be cleared all come
+         from towerkit's own published surface, so a field towerkit grows needs
+         a row in `_PLACED` and nothing else.
+
+         THIS is the group that may wrap. Its own sub-rail keeps the five
+         labels aligned so a two-line note does not move the four beneath it. #}
+      <span class="detail-label">coverage</span>
+      <div class="detail-stack">
+        <span class="pair-k">limits</span>{{ tower_cells.limitsDetail | safe }}
+        <span class="pair-k">retention</span>{{ tower_cells.retentionDetail | safe }}
+        <span class="pair-k" title="the word a ZERO premium prints">premium</span>{{ tower_cells.premiumDetail | safe }}
+        <span class="pair-k" title="statutory jurisdictions — towerkit refuses these on a dollar-limited layer">states</span>{{ tower_cells.states | safe }}
+        <span class="pair-k">notes</span>{{ tower_cells.notes | safe }}
+      </div>
+
+      {# Named limits: the several figures a policy states where `limit` states
+         one. No ids — towerkit addresses them by position, so the remove
+         control carries the index a read reported and the row re-renders after
+         every write rather than leaving stale positions on the page. #}
+      <span class="detail-label">named limits</span>
+      <div class="detail-inline">
+        {% for nl in named_limits %}
+          <span class="named-limit">{{ nl.name_cell | safe }}{{ nl.amount_cell | safe }}<button
+                  type="button" class="chip-remove" aria-label="Remove this named limit"
+                  title="Remove this named limit"
+                  hx-post="{{ base }}/named-limits/{{ nl.index }}/remove"
+                  hx-target="closest tr" hx-swap="outerHTML">&times;</button></span>
+        {% endfor %}
+        <form class="market-add-form" hx-post="{{ base }}/named-limits"
+              hx-target="closest tr" hx-swap="outerHTML">
+          <input type="text" name="name" placeholder="named limit" required>
+          <input type="text" name="amount" placeholder="1.5m &middot; 250k" required>
+          <button type="submit" class="row-action-btn">add limit</button>
+        </form>
+      </div>
+
+      {# Toggle chips (phase 3): each POST rescopes the layer to current±line
+         through sync.set_applies_to — dead code until these, its first caller.
+         A move towerkit refuses (last line, an overlap, a stranded gap)
+         re-renders this row with the message. #}
+      <span class="detail-label">applies to</span>
+      <div class="detail-inline">
+        {% for line in lines %}
+          <button type="button"
+                  class="row-action-btn line-toggle{% if line.on %} is-on{% endif %}"
+                  title="{{ 'stop covering' if line.on else 'also cover' }} {{ line.name }}"
+                  hx-post="{{ base }}/applies-to" hx-vals='{"line": "{{ line.id }}"}'
+                  hx-target="closest tr" hx-swap="outerHTML">{{ line.name }}</button>
+        {% endfor %}
+      </div>
+
+      <span class="detail-label">structure</span>
+      <div class="detail-inline">
+        {% if statutory %}
+          {# leaving statutory NEEDS the replacing dollar limit — the inline form
+             asks for it; a bare toggle would have to invent a number #}
+          <form class="market-add-form" hx-post="{{ base }}/statutory"
+                hx-target="closest tr" hx-swap="outerHTML">
+            <input type="hidden" name="statutory" value="false">
+            <input type="text" name="limit" placeholder="dollar limit to restore" required>
+            <button type="submit" class="row-action-btn">leave statutory</button>
+          </form>
+        {% else %}
+          <button type="button" class="row-action-btn"
+                  hx-get="{{ base }}/statutory"
+                  hx-target="closest tr" hx-swap="outerHTML">mark statutory</button>
+        {% endif %}
+        <button type="button" class="row-action-btn follows-toggle{% if follows %} is-on{% endif %}"
+                title="{{ 'the attachment is derived from the layers below' if follows else 'derive the attachment from the layers below' }}"
+                hx-post="{{ base }}/follows" hx-vals='{"follows": "{{ 'false' if follows else 'true' }}"}'
+                hx-target="closest tr" hx-swap="outerHTML">follows underlying</button>
+        <button type="button" class="row-action-btn" data-row-close>close</button>
+        <button type="button" class="row-action-btn row-action-danger"
+                hx-get="{{ remove_url }}"
+                hx-target="closest tr" hx-swap="outerHTML">remove layer</button>
+      </div>
+
+    </div>
   </td>
 </tr>

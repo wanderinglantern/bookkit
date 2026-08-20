@@ -29,7 +29,9 @@
       <span class="field-label">{{ f.label }}</span>
       {% if f.kind == "select" %}
         <select name="{{ f.key }}" {% if f.required %}required{% endif %}>
-          {% if not f.required %}<option value=""></option>{% endif %}
+          {# always, required or not — see macros/form.html: a select with no blank
+             option lets the browser answer the question #}
+          <option value=""></option>
           {% for label, val in f.options %}
             <option value="{{ val }}"{% if values and values.get(f.key) == val %} selected{% endif %}>{{ label }}</option>
           {% endfor %}

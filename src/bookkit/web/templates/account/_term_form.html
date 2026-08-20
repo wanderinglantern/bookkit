@@ -9,7 +9,11 @@
     {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
     {% if kind == "retentions" %}
       <select name="type" aria-label="retention type" required>
-        {% for t in ("deductible", "sir", "captive") %}
+        {# blank first — see macros/form.html. Without it the browser answers
+           "what kind of retention is this?" with "deductible" and the form
+           looks filled in. #}
+        <option value=""></option>
+        {% for t in retention_types %}
           <option value="{{ t }}"{% if values.get("type") == t %} selected{% endif %}>{{ t }}</option>
         {% endfor %}
       </select>

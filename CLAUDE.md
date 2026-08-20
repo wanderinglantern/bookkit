@@ -66,6 +66,60 @@
   backups/ before the first row changes. Migrations are additive-only so
   far; call out anything destructive before writing it.
 
+## DRY — the standing rule (Grant, 2026-08-20)
+
+DON'T REPEAT YOURSELF, in code, in what the user has to type, and in how the
+platform is used. The second copy is not the risk; the copy that quietly
+DIFFERS is.
+
+- One rule, one home. A vocabulary, a query, a parser, a piece of markup: state
+  it once and read it from there. towerkit's retention types were spelled out
+  as a literal in a Jinja template — a fourth copy of an enum, where no test
+  and no type checker would ever see it go stale.
+- A fact the user has already given is not asked for twice. The insured lives
+  on the account, not a second time in the file (that decision is recorded in
+  web/parity.py and is the same rule).
+- The derived-field seam (towerfields / sync.set_tower_field / `_PLACED`) is
+  this rule at its largest: seventeen fields, one definition.
+- When a bug appears in one of N copies, fix the N, not the one. The Today
+  account-name bug was ten hand-written copies of the same anchor and the tenth
+  one differed; the fix was one macro over one lookup, not one corrected line.
+
+## Data entry and input integrity
+
+READ `.claude/skills/data-entry-integrity/SKILL.md` BEFORE adding a field, a
+form, a picker or an import mapping. It carries the researched rules (with
+sources) and the insurance-domain facts about limits and sublimits that decide
+what a field must be able to SAY. The load-bearing ones:
+
+- CONSTRAINED INPUT over an open text field wherever the valid set is knowable,
+  and a picker must offer ONLY what is storable. `render.theme` shipped as free
+  text and could store an absolute path, which towerkit refuses as
+  non-portable — and since every later write re-validates the file, one bad
+  value wedged the whole program until the JSON was hand-edited. Check the
+  picker server-side too (`forms.spec.checked_option`): markup constrains a
+  mouse and nothing else.
+- EVERY SELECT RENDERS A BLANK OPTION, required or not. Without one the browser
+  pre-selects option 1 and `required` is satisfied by a value nobody chose: a
+  market response left untouched filed itself as "quoted", and a layer took
+  "all lines" — the field routes/program.py says must be asked, never guessed.
+  A value that should arrive set is the form's `initial`, which is a default
+  the user can SEE.
+- VALIDATE ON BLUR, CLEAR ON KEYSTROKE. Validating while typing measurably
+  raises error rates; a message that survives the correction makes a valid
+  entry read as broken. The TUI's auto-dismissing toasts are right; the web's
+  persistent `.cell-error` is not, and is on the list.
+- NEVER PRE-FILL A FIGURE THAT COMES OFF A DOCUMENT. People do not check
+  prefills. A template fills NAMES and leaves every amount visibly empty.
+- CONSISTENCY IS THE THIN CATEGORY. Conformance and timeliness are well covered
+  here; cross-field rules (period_to > period_from on an unlinked placement,
+  status paired with its date, response after submission) mostly are not.
+  Enforce them at the service layer where both surfaces meet — a DB CHECK is a
+  migration and refuses to apply against existing violating rows.
+- DENSITY IS NOT THE ENEMY; undifferentiated density is. Do not thin a working
+  surface an expert reads — group it. The layer details row is the worked
+  example (`_layer_details.html`).
+
 ## UI conventions (Grant's calls, all 2026-08-12)
 
 - FormModal commit-in-place is THE DEFAULT: every form passes `commit=`;
@@ -154,6 +208,18 @@
   goes in a `VerticalScroll`, and any go/no-go line is rendered OUTSIDE it
   (`StagedImport.verdict()`) so clipping can never hide the one line that
   decides what happens next.
+- AN ACCOUNT IS NAMED, NOT REFERENCED. Every surface that shows an account
+  shows its NAME and links on its ref, through `macros/account.html` over
+  `repo/orgs.labels_for` (which returns the two together so they cannot be
+  fetched separately and drift). Today had ten hand-written copies of that
+  anchor and the tasks table — the one whose row carried no name — printed
+  `ACC-0004` where the other nine printed the account (Grant, 2026-08-20).
+- OPEN ITEMS ACROSS THE BOOK is `/items` (routes/items.py), and it OWNS NO
+  WRITES: every cell posts to the account-scoped route in routes/work.py that
+  already serves it, because those answer with the cell alone and are therefore
+  correct on any page that renders them. One parser, one guard, one batch, one
+  refusal path. Only `done` differs, and only in what it re-renders — the write
+  is `work.complete_task`, shared.
 - Stage/status/type vocabularies are controlled-but-extensible tuples in
   models.py (TEAM_ROLES pattern), rendered via theme.status_text.
 - Textual pitfalls (ctrl+p palette, Rich markup in Static, autocomplete

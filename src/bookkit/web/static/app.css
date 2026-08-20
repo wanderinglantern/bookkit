@@ -2164,6 +2164,87 @@ table.rows tr.is-waived td {
   margin-left: 0;
 }
 
+/* --- the details row is GROUPED, not thinned (2026-08-20) ------------------
+   Eight values arrived with D6 and the row read as a wall. The fix is not to
+   remove or hide any of them: this row is read by one expert who wants the
+   whole layer at once, and hiding what someone frequently needs relocates the
+   cost rather than removing it. What was wrong was PROXIMITY — five different
+   KINDS of fact rendered as one inline run, so nothing told the reader where
+   one ended and the next began.
+
+   A label rail down the left, one group per grid row. The margins on
+   .detail-label above are for its OTHER callers (today, compare, the chart
+   strip); inside the grid the gap owns the spacing, so they are zeroed. */
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr);
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+}
+
+.detail-grid > .detail-label {
+  margin: 0;
+  text-align: right;
+  padding-top: 0.15rem;
+}
+
+/* Groups whose values are chips, controls or short facts: they flow. */
+.detail-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  min-width: 0;
+}
+
+.detail-inline .pair {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  margin-right: 0.5rem;
+}
+
+/* The ONE group allowed to wrap, so exactly one column can grow a second line
+   without moving anything else. Its own sub-rail keeps the five keys aligned:
+   a two-line note pushes nothing sideways, which is the whole reason the group
+   exists. */
+.detail-stack {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: 0.15rem 0.6rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.pair-k {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.detail-stack > .pair-k {
+  text-align: right;
+}
+
+/* A prose cell in the stack may run long; it wraps inside its own column
+   rather than forcing the grid wider. */
+.detail-stack > .cell {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 60rem) {
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.15rem;
+  }
+  .detail-grid > .detail-label {
+    text-align: left;
+    padding-top: 0.5rem;
+  }
+}
+
 
 /* --- the tower is a surface (phase 3) --------------------------------------
    A drawn block lands on its table row: pointer affordance on the blocks,
