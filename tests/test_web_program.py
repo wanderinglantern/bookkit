@@ -2714,6 +2714,21 @@ def test_a_line_whose_id_starts_with_i_keeps_its_address(app_and_org, tmp_path):
     character to pick out of user-supplied ids; both halves are always present
     now, and this is the case that says so.
     """
+    from bookkit.web.routes.program import _addr, _unaddr
+
+    # THE INVARIANT, first: an address survives the round trip whatever the id
+    # looks like. Asserted directly because neither half of the encoding is
+    # individually wrong — the bug needed a target-shaped segment AND a reader
+    # that guessed at it, so only the round trip can see it. "i3" is the nastiest
+    # case: it is a plausible line id and a plausible position at once.
+    for target, index in [
+        ("im", None), ("i3", None), ("i", None), ("gl", None), (None, None),
+        ("im", 0), ("i3", 2), (None, 3), (None, 0),
+    ]:
+        assert _unaddr(_addr(target, index)) == (target, index), (
+            f"{target!r}/{index!r} does not survive the address round trip"
+        )
+
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _two_line_placement(client, org, tmp_path)
@@ -2784,8 +2799,6 @@ def test_the_tower_download_honours_the_saved_chart_options(app_and_org):
     editor got them back on every download bookkit produced. Shipping the chart
     strip without this would have made it a set of controls that provably
     changed nothing."""
-    import bookkit.web.routes.program as program_routes
-
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)[0]
@@ -2794,24 +2807,32 @@ def test_the_tower_download_honours_the_saved_chart_options(app_and_org):
         data={"program.render.showTotals": "false"},
     )
 
+    # SPY ON THE RENDERER, not on the load. The first version of this test
+    # watched `_loaded_program` and asserted the file's own settings — which
+    # only proved the SAVE worked, and stayed green with the hand-off deleted.
+    # What has to be pinned is the argument the renderer actually receives.
+    import towerkit.render.mpl_program as mpl
+
     seen = {}
-    real = program_routes._loaded_program
+    real = mpl.render_program
 
     def spy(*args, **kwargs):
-        program = real(*args, **kwargs)
-        seen["render"] = program.render
-        return program
+        seen.update(kwargs)
+        return real(*args, **kwargs)
 
-    program_routes._loaded_program = spy
+    mpl.render_program = spy
     try:
         drawn = client.get(
             f"/accounts/{org.ref}/program/{placement.id}/export/tower.svg"
         )
     finally:
-        program_routes._loaded_program = real
+        mpl.render_program = real
 
     assert drawn.status_code == 200
-    assert seen["render"].show_totals is False
+    assert seen.get("show_totals") is False, (
+        f"the renderer was handed {seen.get('show_totals')!r} — the file's own "
+        "saved chart options are being ignored again"
+    )
     assert b"<svg" in drawn.content
 
 
