@@ -48,6 +48,8 @@ def client_and_org(snapshot_db: Path):
 def _pages(org) -> list[str]:
     return [
         "/book",
+        "/search",
+        "/search?q=Atomic",
         "/today",
         "/calendar",
         "/towers",

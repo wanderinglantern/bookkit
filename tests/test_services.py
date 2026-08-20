@@ -2261,7 +2261,10 @@ def test_write_four_sheet_order_when_rfi_outstanding(conn, tmp_path):
     ws = wb["Information Requests"]
     assert [c.value for c in ws[1]] == ["Item", "Detail", "Type", "Needed by"]
     # row 2 is the leading merged header line
-    assert ws["A2"].value == "Items we need from you"
+    # The banner names BOTH halves as of 2026-08-19: the sheet carries answered
+    # asks too, and a banner naming only the outstanding ones is a false
+    # statement about the rest of the sheet.
+    assert ws["A2"].value == "Items we need from you, and what you have already sent"
     values = [cell.value for row in ws.iter_rows() for cell in row]
     assert "how many locations?" in values
     assert "Please list them all." in values

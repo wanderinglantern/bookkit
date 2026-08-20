@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Search — bookkit{% endblock %}
+{% block content %}
+  {% include "partials/topbar.html" %}
+
+  <div class="search-page">
+    {# The page's own big box, distinct from the topbar pill: q round-trips
+       through here, and autoescape is what keeps a hostile query inert
+       (tests/test_web_search.py::test_a_script_query_comes_back_escaped). #}
+    <form action="/search" method="get" class="search-page-form" role="search">
+      <input class="search-page-input" type="search" name="q" value="{{ q }}"
+             placeholder="accounts, contacts, notes…" autofocus
+             aria-label="Search everything">
+      <button type="submit" class="btn-pill btn-pill-primary">Search</button>
+    </form>
+
+    {% if searched %}
+      {% for section in sections %}
+        <div class="search-section">
+          <div class="search-section-head">{{ section.label }}</div>
+          {% for row in section.rows %}
+            {% if row.href %}
+              <a href="{{ row.href }}" class="search-row">
+                <span class="search-row-title">{{ row.title }}</span>
+                {% if row.snippet %}<span class="search-row-snippet">{{ row.snippet }}</span>{% endif %}
+              </a>
+            {% else %}
+              {# The owning account is merged/deleted away — the hit still
+                 shows (it matched; hiding it reads as a search bug), but a
+                 link to a 404 is worse than no link, and the row says why. #}
+              <div class="search-row is-unlinked">
+                <span class="search-row-title">{{ row.title }}</span>
+                {% if row.snippet %}<span class="search-row-snippet">{{ row.snippet }}</span>{% endif %}
+                <span class="search-row-snippet">account no longer exists</span>
+              </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="search-empty"><p>no matches for “{{ q }}”</p></div>
+      {% endfor %}
+    {% endif %}
+  </div>
+{% endblock %}

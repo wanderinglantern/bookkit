@@ -466,8 +466,14 @@ SCREENS: dict[str, str] = {
         "outcome."
     ),
     "search": (
-        "DEFERRED — global `/` search and the command palette; finding an "
-        "account on the web means scanning /book."
+
+        "PRESENT — GET /search (routes/search.py): the `/` modal as a page, "
+        "repo.search end to end (FTS5 + the email LIKE pass), grouped "
+        "Accounts / Contacts / Interactions, every hit linking to the owning "
+        "account's relationship tab — the same org_id the TUI's enter key "
+        "opens. Reached from the topbar's live search form on every page. "
+        "This also covers the command palette's record-jump half; the "
+        "palette's screen-jump half is the topbar nav's job, not this page's."
     ),
     "help": (
         "N/A BY SHAPE — a key-reference screen; the web equivalent is "

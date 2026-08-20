@@ -360,13 +360,125 @@ def test_an_answer_rides_along_with_the_item(conn) -> None:
     assert row[4] == "Confirmed $4.2M, split 63/37.", "markdown is flattened, as elsewhere"
 
 
-def test_a_received_item_takes_its_answer_off_the_sheet_with_it(conn) -> None:
-    """The sheet is outstanding-only, so an answer is visible while the ask is
-    still open — an interim note. Marking it received removes the whole row,
-    which is the existing rule and not something the answer column changes."""
+def test_a_received_item_keeps_its_answer_on_the_sheet(conn) -> None:
+    """REVERSED by Grant on 2026-08-19, the same day the column shipped.
+
+    The sheet was outstanding-only, so marking an item received removed the
+    whole row — and the answer with it. The client's copy therefore lost the
+    record of what they had told us at the exact moment it became a fact
+    rather than a promise. It stays now, under its own heading."""
     org = _client(conn)
     req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
     item = rfi.add_item(conn, req.id, "payroll by class code")
     rfi.update_item(conn, item.id, response="Confirmed.", status="received")
 
-    assert compose_information_requests(conn, org.id, TODAY) == []
+    sections = compose_information_requests(conn, org.id, TODAY)
+
+    rows = [row for section in sections for row in section.rows]
+    assert [row[0] for row in rows] == ["payroll by class code"]
+    assert rows[0][4] == "Confirmed."
+
+
+# --- what the client has already told us (Grant, 2026-08-19) ------------------
+#
+# The sheet was outstanding-only, so an answer left the client's copy the moment
+# the item was marked received — taking the record of what they had sent with
+# it. Answered items now stay, in their own section, under their own heading.
+
+
+def test_an_answered_item_stays_on_the_sheet_after_it_is_received(conn) -> None:
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    item = rfi.add_item(conn, req.id, "payroll by class code")
+    rfi.update_item(
+        conn, item.id, response="Confirmed $4.2M.", status="received",
+        received_on="2026-08-18",
+    )
+
+    sections = compose_information_requests(conn, org.id, TODAY)
+
+    rows = [row for section in sections for row in section.rows]
+    assert any("payroll by class code" in row[0] for row in rows)
+    assert any("Confirmed $4.2M." == row[4] for row in rows)
+
+
+def test_answered_items_sit_under_their_own_heading(conn) -> None:
+    """"Items we need from you" is a false statement about something they have
+    already sent. The outstanding sections keep that heading; the answered ones
+    say what they are."""
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    still_open = rfi.add_item(conn, req.id, "loss runs")
+    done = rfi.add_item(conn, req.id, "payroll by class code")
+    rfi.update_item(conn, done.id, response="Confirmed.", status="received")
+
+    sections = compose_information_requests(conn, org.id, TODAY)
+
+    where = {
+        row[0]: section.label
+        for section in sections
+        for row in section.rows
+    }
+    assert "already sent" in (where["payroll by class code"] or "").lower()
+    assert "already sent" not in (where["loss runs"] or "").lower()
+    del still_open
+
+
+def test_a_received_item_with_no_answer_is_not_resurrected(conn) -> None:
+    """The point is keeping the ANSWER. A received item nobody recorded an
+    answer for carries nothing the client does not already know, and printing
+    it back at them pads the deliverable."""
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    item = rfi.add_item(conn, req.id, "signed application")
+    rfi.update_item(conn, item.id, status="received", received_on="2026-08-18")
+
+    sections = compose_information_requests(conn, org.id, TODAY)
+
+    rows = [row for section in sections for row in section.rows]
+    assert not any("signed application" in row[0] for row in rows)
+
+
+def test_a_request_whose_asks_are_all_answered_still_shows_them(conn) -> None:
+    """It used to vanish entirely: the composer skipped any request with
+    nothing outstanding, so a completed ask took its answers with it."""
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    item = rfi.add_item(conn, req.id, "payroll by class code")
+    rfi.update_item(conn, item.id, response="Confirmed.", status="received")
+
+    sections = compose_information_requests(conn, org.id, TODAY)
+
+    assert sections, "a fully answered request disappeared, answers and all"
+
+
+def test_an_internal_item_stays_withheld_even_once_it_is_answered(conn) -> None:
+    """The client-safe rule applies to the answered half too. Withholding
+    outstanding Internal asks and then shipping them the moment they are
+    answered would be the same leak, delayed."""
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    rfi.add_item(conn, req.id, "loss runs")
+    secret = rfi.add_item(conn, req.id, "our own file note", category="Internal")
+    rfi.update_item(conn, secret.id, response="done internally", status="received")
+
+    sections = compose_information_requests(conn, org.id, TODAY)
+
+    rows = [row for section in sections for row in section.rows]
+    assert not any("our own file note" in row[0] for row in rows)
+    assert not any("done internally" in row[4] for row in rows)
+
+
+def test_an_answered_internal_item_is_counted_as_withheld(conn) -> None:
+    """The withheld count reports what the workbook actually held back. It read
+    the outstanding items only, so once answered items joined the sheet an
+    Internal one that had been answered was withheld from the client and
+    counted by nobody — an omission the operator line exists to prevent."""
+    from bookkit.services.export_rfi import withheld_items
+
+    org = _client(conn)
+    req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
+    secret = rfi.add_item(conn, req.id, "our own file note", category="Internal")
+    rfi.update_item(conn, secret.id, response="done internally", status="received")
+
+    assert [i.id for i in withheld_items(conn, org.id)] == [secret.id]

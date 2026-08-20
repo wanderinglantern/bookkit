@@ -130,6 +130,32 @@ def _request_sections(
     return sections
 
 
+ANSWERED_LABEL = "already sent"
+"""How the answered half is headed.
+
+"Items we need from you" is the sheet's own banner and a false statement about
+something they have already sent, so the answered sections carry their own
+words rather than sitting silently under it."""
+
+
+def _answered_sections(
+    conn: sqlite3.Connection, request: RfiRequest, items: list[RfiItem]
+) -> list[SheetSection]:
+    """The asks this request has answers for, in one section per request.
+
+    NOT sub-grouped by category the way the outstanding half is: the category
+    bands exist to help somebody work down a list of things still to do, and
+    nobody works down a list of things already done.
+    """
+    prefix = f"{rfi_svc.asker_name(conn, request)} — {request.title}"
+    return [
+        SheetSection(
+            f"{prefix} · {ANSWERED_LABEL}",
+            tuple(_item_row(item, request) for item in items),
+        )
+    ]
+
+
 def compose_information_requests(
     conn: sqlite3.Connection, org_id: str, today: date
 ) -> list[SheetSection]:
@@ -142,7 +168,7 @@ def compose_information_requests(
     with the rest of this package's composers and the no-wall-clock rule."""
     del today
 
-    scored: list[tuple[RfiRequest, list[RfiItem], str | None]] = []
+    scored: list[tuple[RfiRequest, list[RfiItem], list[RfiItem], str | None]] = []
     for request in rfi_repo.requests_for_org(conn, org_id):
         if request.cancelled_at:
             continue
@@ -150,28 +176,53 @@ def compose_information_requests(
         # so a request whose only outstanding item is Internal omits its whole
         # section rather than printing an empty heading, and a withheld item's
         # date takes no part in ordering the sheet.
-        outstanding = _client_safe([
-            item
-            for item in rfi_repo.items_for_request(conn, request.id)
-            if item.status == "outstanding"
+        every = rfi_repo.items_for_request(conn, request.id)
+        outstanding = _client_safe([i for i in every if i.status == "outstanding"])
+        # WHAT THEY HAVE ALREADY TOLD US. The sheet was outstanding-only, so an
+        # answer left the client's copy the moment the item was marked received
+        # — taking the record of what they sent with it (Grant, 2026-08-19).
+        #
+        # Only items carrying an ANSWER: the point is keeping what they told
+        # us, and a received item nobody recorded an answer for says nothing
+        # they do not already know. _client_safe runs over these too — the
+        # internal rule withholding an outstanding ask and then shipping it the
+        # moment it is answered would be the same leak, delayed.
+        answered = _client_safe([
+            i for i in every if i.status != "outstanding" and i.response
         ])
-        if outstanding:
-            scored.append((request, outstanding, _earliest_due(outstanding, request)))
+        if outstanding or answered:
+            scored.append(
+                (request, outstanding, answered, _earliest_due(outstanding, request))
+            )
 
-    # Requests by earliest outstanding due (undated last), then ref.
-    scored.sort(key=lambda t: (t[2] is None, t[2] or "", t[0].ref))
+    # Requests by earliest outstanding due (undated last), then ref. A request
+    # with nothing outstanding has no due date to sort on and lands with the
+    # undated — which is where a finished ask belongs anyway.
+    scored.sort(key=lambda t: (t[3] is None, t[3] or "", t[0].ref))
 
+    # EVERY outstanding section first, then every answered one. Not per
+    # request: "what you still owe us" is the list this sheet exists for, and
+    # interleaving finished asks through it would bury the live ones.
     sections: list[SheetSection] = []
-    for request, items, _due in scored:
-        sections.extend(_request_sections(conn, request, items))
+    for request, items, _answered, _due in scored:
+        if items:
+            sections.extend(_request_sections(conn, request, items))
+    for request, _items, answered, _due in scored:
+        if answered:
+            sections.extend(_answered_sections(conn, request, answered))
     return sections
 
 
-def _outstanding_items(conn: sqlite3.Connection, org_id: str) -> list[RfiItem]:
-    """Every item this sheet would consider before the internal rule runs —
-    outstanding, on a request that has not been cancelled. The same population
-    compose_information_requests walks, so the two counts below cannot drift
-    from what the workbook actually did."""
+def _considered_items(conn: sqlite3.Connection, org_id: str) -> list[RfiItem]:
+    """Every item this sheet would consider before the internal rule runs, on a
+    request that has not been cancelled.
+
+    THE SAME POPULATION compose_information_requests walks, which is the whole
+    point: the counts below report what the workbook actually withheld, and a
+    narrower population here would under-report it silently. That is not
+    hypothetical — this was outstanding-only until answered items joined the
+    sheet on 2026-08-19, at which point an Internal item that had been answered
+    was withheld from the client and counted by nobody."""
     items: list[RfiItem] = []
     for request in rfi_repo.requests_for_org(conn, org_id):
         if request.cancelled_at:
@@ -179,18 +230,18 @@ def _outstanding_items(conn: sqlite3.Connection, org_id: str) -> list[RfiItem]:
         items += [
             item
             for item in rfi_repo.items_for_request(conn, request.id)
-            if item.status == "outstanding"
+            if item.status == "outstanding" or item.response
         ]
     return items
 
 
 def withheld_items(conn: sqlite3.Connection, org_id: str) -> list[RfiItem]:
-    """Outstanding asks kept off the client's copy — exactly what
+    """Asks kept off the client's copy — exactly what
     `_client_safe` drops. Withholding a ROW from this sheet is the one place
     the internal rule can cost the client something they were meant to send,
     so it is never silent: export_open_items.withheld_note names the count on
     the CLI line and the TUI toast, beside the task count it already gave."""
-    return [i for i in _outstanding_items(conn, org_id) if is_internal_category(i.category)]
+    return [i for i in _considered_items(conn, org_id) if is_internal_category(i.category)]
 
 
 def near_miss_items(conn: sqlite3.Connection, org_id: str) -> list[RfiItem]:
@@ -199,6 +250,6 @@ def near_miss_items(conn: sqlite3.Connection, org_id: str) -> list[RfiItem]:
     suppressed. Same shape, and same reason for saying so out loud, as
     export_open_items.near_miss_internal does for tasks."""
     return [
-        i for i in _outstanding_items(conn, org_id)
+        i for i in _considered_items(conn, org_id)
         if reads_as_internal(i.category) and not is_internal_category(i.category)
     ]

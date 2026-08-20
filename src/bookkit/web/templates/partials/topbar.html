@@ -23,6 +23,12 @@
     <a href="/towers" class="topbar-nav-item{% if current == "towers" %} is-current-section{% endif %}">Towers</a>
   </nav>
   <span class="topbar-spacer"></span>
+  {# the live /search form — the inert Search pill's return (gap 3) #}
+  <form action="/search" method="get" class="search-pill" role="search">
+    <input class="search-pill-input" type="search" name="q"
+           value="{{ q|default('') }}" placeholder="Search…"
+           aria-label="Search everything">
+  </form>
   {% if last_undo and undo_action %}
     {# Wired as of Task 15b: the same POST the rail's per-change Revert
        makes, against the newest unreverted batch on this account

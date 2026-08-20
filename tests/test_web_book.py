@@ -131,7 +131,12 @@ def test_unbuilt_book_controls_are_not_rendered(app_and_conn):
     assert "New account" not in html
     assert "Export workbook" not in html
     assert "book-filter-pill" not in html
-    assert "<input" not in html
+    # the topbar's live /search input is the ONE input allowed (gap 3);
+    # a dead filter input on the book body stays banned
+    import re as _re
+
+    inputs = _re.findall(r"<input[^>]*>", html)
+    assert all('name="q"' in tag for tag in inputs), inputs
     assert 'aria-disabled' not in html
 
 

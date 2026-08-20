@@ -982,7 +982,16 @@ avoid: on the many accounts where nothing has been answered yet it is a blank
 band down a client deliverable, which reads as a form we forgot to fill in
 rather than a fact about the account."""
 
-_RFI_HEADER_LABEL = "Items we need from you"
+_RFI_HEADER_LABEL = "Items we need from you, and what you have already sent"
+"""The sheet's own banner, and it has to be true of the WHOLE sheet.
+
+It read "Items we need from you" while the sheet was outstanding-only. Since
+2026-08-19 it also carries the asks the client has answered — Grant's call, so
+their copy keeps the record of what they sent rather than losing it the moment
+it stopped being outstanding — and a banner naming only half of that is a
+false statement about the other half. Same reasoning as SCOPE_NOTE below: the
+one sentence the client reads about this document has to describe the document
+they are holding."""
 
 SCOPE_NOTE = (
     "This report lists items owned by you or by us on your account. "
