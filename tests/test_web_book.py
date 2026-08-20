@@ -120,16 +120,25 @@ def test_a_row_links_to_that_account(app_and_conn):
     assert followed.headers["location"].endswith("/relationship")
 
 
-def test_new_account_and_export_workbook_are_marked_pending(app_and_conn):
+def test_new_account_is_live_and_export_workbook_is_marked_pending(app_and_conn):
+    """New account went live in gap 5 (routes/orgs.py): a real <button> that
+    fetches the org form into #book-form-host. Export workbook stays the
+    pending treatment until the file-download story is specified."""
     client, _ = app_and_conn
     html = client.get("/book").text
-    for label in ("New account", "Export workbook"):
-        tag = re.search(rf'<span class="btn-pill[^"]*"[^>]*>{re.escape(label)}</span>', html)
-        assert tag, f"{label!r} pill not found"
-        assert 'aria-disabled="true"' in tag.group(0)
-        assert "title=" in tag.group(0)
-        assert "href=" not in tag.group(0)
-        assert "hx-" not in tag.group(0)
+
+    button = re.search(r"<button[^>]*>New account</button>", html)
+    assert button, "New account control not found"
+    assert 'hx-get="/book/accounts/new"' in button.group(0)
+    assert "aria-disabled" not in button.group(0)
+    assert 'id="book-form-host"' in html, "the New-account form has nowhere to render"
+
+    tag = re.search(r'<span class="btn-pill[^"]*"[^>]*>Export workbook</span>', html)
+    assert tag, "'Export workbook' pill not found"
+    assert 'aria-disabled="true"' in tag.group(0)
+    assert "title=" in tag.group(0)
+    assert "href=" not in tag.group(0)
+    assert "hx-" not in tag.group(0)
 
 
 def test_filter_field_is_marked_pending_not_a_dead_input(app_and_conn):

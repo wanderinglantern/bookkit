@@ -227,7 +227,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
-    from .routes import account, book, changes, pipeline, program, relationship, work
+    from .routes import account, book, changes, orgs, pipeline, program, relationship, work
 
     # book.router owns GET / and GET /book — the app's front door (Task 18).
     # Neither path overlaps /accounts/..., so registration order relative
@@ -249,5 +249,8 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
     # program.router owns GET /accounts/{ref}/program — same two-segment shape
     # as the generic {tab} route below, so it must be registered first.
     app.include_router(program.router)
+    # orgs.router owns GET/POST /accounts/{ref}/edit (same two-segment shape,
+    # same registration-order trap) plus the /book/accounts create pair.
+    app.include_router(orgs.router)
     app.include_router(account.router)
     return app

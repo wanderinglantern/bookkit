@@ -28,10 +28,21 @@
         <span class="btn-pill btn-pill-primary" aria-disabled="true" title="Not wired yet — logging an interaction is a later task">+ Log interaction</span>
         <span class="btn-pill" aria-disabled="true" title="Not wired yet — adding a task is a later task">+ Task</span>
         <span class="btn-pill" aria-disabled="true" title="Not wired yet — renewing is a later task">Renew</span>
+        {# Live as of gap 5: the org edit form (org_form_initial_profile,
+           prefilled, market-profile fields included) opens in the host
+           below the header — the web's _edit_org. Batched like the TUI's
+           (tool edit_account); refusals re-render in place. #}
+        <button type="button" class="btn-pill"
+                hx-get="/accounts/{{ header.org.ref }}/edit"
+                hx-target="#org-edit-host" hx-swap="innerHTML">Edit</button>
         <span class="btn-pill btn-pill-icon" aria-disabled="true" title="Not wired yet — the overflow menu is a later task">···</span>
       </div>
     </div>
   </header>
+
+  {# The account-edit form lands here; refusals re-render into the same host
+     (closest .form-host), never over a panel. Empty = display:none. #}
+  <div id="org-edit-host" class="form-host page-form-host"></div>
 
   <nav class="tabs">
     {% for t in tabs %}

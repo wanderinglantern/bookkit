@@ -113,8 +113,13 @@ PENDING: dict[str, str] = {
         "deliberately not built (R49). Interaction CREATION is not here either: "
         "forms.entities has an edit builder and no create builder, because "
         "logging one is quick capture's job (account matching, the follow-up-"
-        "task offer). Org-level edit_here (falling through to _edit_org) is "
-        "still not built, so the action as a whole stays PENDING"
+        "task offer). Org-level edit_here (falling through to _edit_org) IS "
+        "built as of 2026-08-20: the account header's Edit pill opens "
+        "GET/POST /accounts/{ref}/edit (routes/orgs.py) — the same "
+        "org_form_initial_profile builder, batched as edit_account, refusals "
+        "in place. What still keeps the action PENDING as a whole is the team "
+        "table's `e` (_edit_assignment) — assignment editing has no web "
+        "route (see assign_team)"
     ),
     "new_submission": (
         "a plain DB write (repo/submissions.create, no towerkit involvement) — "
@@ -175,5 +180,26 @@ PENDING: dict[str, str] = {
         "row-to-clipboard shortcut for a terminal; the web has native text "
         "selection/copy, so no dedicated route is planned unless that proves "
         "insufficient"
+    ),
+}
+
+# page -> what its own controls cover (the two ledgers above are keyed by
+# AccountScreen actions; the book page's header controls have no action name
+# to hang an entry on, so they get their own map).
+SCREENS: dict[str, str] = {
+    "book": (
+        "New account is LIVE as of 2026-08-20 (gap 5): the header pill "
+        "fetches org_form into #book-form-host, POST /book/accounts "
+        "(routes/orgs.py) creates through apply_org inside one web batch "
+        "(tool new_account) behind services.orgs.find_duplicate — the SAME "
+        "near-name guard (WRatio 87) MCP's client_create and both TUI create "
+        "forms now share, extracted rather than copied — and a refusal "
+        "re-renders the form naming the match, input intact; success "
+        "redirects to the new account's relationship tab. Org EDIT is live "
+        "on the account header (see IMPLEMENTED-adjacent prose under "
+        "edit_here). Still deferred BY NAME: the filter pill (rendered "
+        "inert, aria-disabled — wiring it is a later task) and Export "
+        "workbook (needs a file-download response the web spec does not "
+        "cover)."
     ),
 }

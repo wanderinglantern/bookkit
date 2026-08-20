@@ -12,9 +12,19 @@
        happens is a worse "looks live, is dead" bug than a static pill that
        says so up front, so this stays a span, never an <input>. #}
     <span class="book-filter-pill" aria-disabled="true" title="Filtering is not wired yet — a later task">filter by name / owner / status…</span>
-    <span class="btn-pill btn-pill-primary" aria-disabled="true" title="Not wired yet — creating an account is a later task">New account</span>
+    {# Live as of gap 5: fetches the org form (bookkit.forms.entities.org_form,
+       suggestions wired) into the host below; POST /book/accounts creates
+       through the same apply_org + services.orgs.find_duplicate path the TUI
+       uses and redirects to the new account's relationship tab. #}
+    <button type="button" class="btn-pill btn-pill-primary"
+            hx-get="/book/accounts/new"
+            hx-target="#book-form-host" hx-swap="innerHTML">New account</button>
     <span class="btn-pill" aria-disabled="true" title="Not wired yet — the XLSX export needs a file-download response the web spec does not cover yet">Export workbook</span>
   </div>
+
+  {# The New-account form lands here; refusals re-render into the same host
+     (closest .form-host), never over the table. Empty = display:none. #}
+  <div id="book-form-host" class="form-host page-form-host"></div>
 
   <div class="book-body">
     <div class="book-table-head book-grid">

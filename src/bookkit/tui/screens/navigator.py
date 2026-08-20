@@ -1327,14 +1327,13 @@ class NavigatorScreen(Screen):
         def commit(values: dict) -> str | None:
             # spec's duplicate guard: refuse a near-duplicate name in place —
             # the form stays open so Grant can rename, or esc and resume the
-            # existing client from the onboarding attention list instead
-            from rapidfuzz import fuzz, process
+            # existing client from the onboarding attention list instead.
+            # The rule itself lives in services.orgs (one WRatio cutoff for
+            # MCP, both TUI create forms and the web — 2026-08-20).
+            from ...services import orgs as orgs_svc
 
-            existing = {o.name: o for o in orgs.list_orgs(conn, kind="client")}
-            match = process.extractOne(
-                values["name"], list(existing), scorer=fuzz.WRatio, score_cutoff=87)
-            if match:
-                dup = existing[match[0]]
+            dup = orgs_svc.find_duplicate(conn, values["name"])
+            if dup:
                 return f"looks like {dup.name} ({dup.ref}) — rename, or esc and resume it"
             created.append(ef.apply_org(conn, values))
             return None
