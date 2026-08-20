@@ -1,0 +1,35 @@
+{# The tasks-due section — its own file because completing a task re-renders
+   exactly this (the write changes this list and nothing else on Today). #}
+<section class="today-section" id="today-tasks">
+  <div class="people-head">
+    <h2 class="people-label">Tasks due</h2>
+    <span class="people-count">{{ tasks | length }}</span>
+  </div>
+  {% if tasks %}
+    <div class="table-scroll">
+      <table class="rows rows-fit">
+        <thead><tr><th>Due</th><th>Task</th><th>Account</th><th></th></tr></thead>
+        <tbody>
+          {% for task in tasks %}
+            <tr>
+              <td class="num">{{ task.due_on or "—" }}</td>
+              <td class="prose">{{ task.title }}</td>
+              <td class="prose">
+                {% if task.org_id and refs.get(task.org_id) %}
+                  <a href="/accounts/{{ refs[task.org_id] }}/work">{{ refs[task.org_id] }}</a>
+                {% else %}—{% endif %}
+              </td>
+              <td>
+                <button type="button" class="row-action-btn"
+                        hx-post="/today/tasks/{{ task.id }}/done"
+                        hx-target="#today-tasks" hx-swap="outerHTML">done</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="panel-empty"><p>nothing due — that's good</p></div>
+  {% endif %}
+</section>

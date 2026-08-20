@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% block title %}Today — bookkit{% endblock %}
+{% block content %}
+  {% set section = "today" %}
+  {% include "partials/topbar.html" %}
+
+  <div class="book-header">
+    <h1 class="book-title">Today</h1>
+    <span class="book-subtitle mono">{{ today }}</span>
+  </div>
+
+  <div class="towers-body">
+    {# OVERDUE FIRST AND NEVER OFF THE LIST — the attention rule the whole
+       terminal app is built around, now the web's front door too. #}
+    <section class="today-section">
+      <div class="people-head">
+        <h2 class="people-label">Overdue renewals</h2>
+        <span class="people-count{% if overdue %} count-danger{% endif %}">{{ overdue | length }}</span>
+      </div>
+      {% if overdue %}
+        <div class="table-scroll">
+          <table class="rows rows-fit">
+            <thead><tr><th>Renews</th><th>Over by</th><th>Account</th><th>Cover</th></tr></thead>
+            <tbody>
+              {% for item in overdue %}
+                <tr>
+                  <td class="num">{{ item.renewal_on }}</td>
+                  <td class="num overdue-cell">{{ -item.days_remaining }}d over</td>
+                  <td class="prose"><a href="/accounts/{{ refs[item.org.id] }}/program">{{ item.org.name }}</a></td>
+                  <td class="prose">{{ item.lines or item.placement.program_name }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="panel-empty"><p>nothing overdue — that's good</p></div>
+      {% endif %}
+    </section>
+
+    <section class="today-section">
+      <div class="people-head">
+        <h2 class="people-label">Renewals ≤ 120d</h2>
+        <span class="people-count">{{ soon | length }}</span>
+      </div>
+      {% if soon %}
+        <div class="table-scroll">
+          <table class="rows rows-fit">
+            <thead><tr><th>Renews</th><th>Due in</th><th>Account</th><th>Cover</th></tr></thead>
+            <tbody>
+              {% for item in soon %}
+                <tr>
+                  <td class="num">{{ item.renewal_on }}</td>
+                  <td class="num">{{ item.days_remaining }}d</td>
+                  <td class="prose"><a href="/accounts/{{ refs[item.org.id] }}/program">{{ item.org.name }}</a></td>
+                  <td class="prose">{{ item.lines or item.placement.program_name }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="panel-empty"><p>no renewals in the window</p></div>
+      {% endif %}
+    </section>
+
+    {% include "partials/_today_tasks.html" %}
+
+    <section class="today-section">
+      <div class="people-head">
+        <h2 class="people-label">Project needs due</h2>
+        <span class="people-count">{{ needs | length }}</span>
+      </div>
+      {% if needs %}
+        <div class="table-scroll">
+          <table class="rows rows-fit">
+            <thead><tr><th>Needed by</th><th>Line</th><th>Project</th><th>Account</th></tr></thead>
+            <tbody>
+              {% for need in needs %}
+                <tr>
+                  <td class="num">{{ need.needed_by }}</td>
+                  <td class="prose">{{ need.line }}</td>
+                  <td class="prose">{{ need.project_name if need.project_name is defined else need.name }}</td>
+                  <td class="prose">
+                    {% if refs.get(need.org_id) %}<a href="/accounts/{{ refs[need.org_id] }}/relationship">{{ need.org_name }}</a>
+                    {% else %}{{ need.org_name }}{% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="panel-empty"><p>no needs in the window</p></div>
+      {% endif %}
+    </section>
+
+    <section class="today-section">
+      <div class="people-head">
+        <h2 class="people-label">Submissions past SLA</h2>
+        <span class="people-count{% if late %} count-danger{% endif %}">{{ late | length }}</span>
+      </div>
+      {% if late %}
+        <div class="table-scroll">
+          <table class="rows rows-fit">
+            <thead><tr><th>Market</th><th>Chase</th><th>Account</th><th>Sent</th><th>Out</th></tr></thead>
+            <tbody>
+              {% for sub in late %}
+                <tr>
+                  <td class="prose">{{ sub.market.name }}</td>
+                  <td class="prose">{{ sub.underwriter.name if sub.underwriter else "—" }}</td>
+                  <td class="prose"><a href="/accounts/{{ refs[sub.account.id] }}/pipeline">{{ sub.account.name }}</a></td>
+                  <td class="num">{{ sub.submission.sent_on }}</td>
+                  <td class="num overdue-cell">{{ sub.days_out }}d</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="panel-empty"><p>nothing past SLA</p></div>
+      {% endif %}
+    </section>
+
+    <section class="today-section">
+      <div class="people-head">
+        <h2 class="people-label">Quotes expiring</h2>
+        <span class="people-count">{{ quotes | length }}</span>
+        {% if undated_quotes %}<span class="detail-label">+{{ undated_quotes | length }} no expiry</span>{% endif %}
+      </div>
+      {% if quotes or undated_quotes %}
+        <div class="table-scroll">
+          <table class="rows rows-fit">
+            <thead><tr><th>Expires</th><th>Market</th><th>About</th><th>Account</th></tr></thead>
+            <tbody>
+              {% for quote in quotes %}
+                <tr{% if quote.is_expired %} class="compare-lapsed"{% endif %}>
+                  <td class="num{% if quote.is_expired %} overdue-cell{% endif %}">{{ quote.expiry_word }}</td>
+                  <td class="prose">{{ quote.market_name }}</td>
+                  <td class="prose">{{ quote.about }}</td>
+                  <td class="prose"><a href="/accounts/{{ refs[quote.org_id] }}/pipeline">{{ quote.org_name }}</a></td>
+                </tr>
+              {% endfor %}
+              {% for quote in undated_quotes %}
+                <tr>
+                  <td class="num">no expiry</td>
+                  <td class="prose">{{ quote.market_name }}</td>
+                  <td class="prose">{{ quote.about }}</td>
+                  <td class="prose"><a href="/accounts/{{ refs[quote.org_id] }}/pipeline">{{ quote.org_name }}</a></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="panel-empty"><p>no quotes waiting on a clock</p></div>
+      {% endif %}
+    </section>
+
+    <section class="today-section">
+      <div class="people-head">
+        <h2 class="people-label">Onboarding incomplete</h2>
+        <span class="people-count">{{ onboarding | length }}</span>
+      </div>
+      {% if onboarding %}
+        <ul class="confirm-remove-notes">
+          {% for org, note in onboarding %}
+            <li><a href="/accounts/{{ refs.get(org.id, '') }}/relationship">{{ org.name }}</a> — {{ note }}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="panel-empty"><p>every recent client is fully onboarded</p></div>
+      {% endif %}
+    </section>
+
+    <section class="today-section">
+      <div class="people-head">
+        <h2 class="people-label">Requests to chase</h2>
+        <span class="people-count">{{ chases | length }}</span>
+      </div>
+      {% if chases %}
+        <div class="table-scroll">
+          <table class="rows rows-fit">
+            <thead><tr><th>Due</th><th>Request</th><th>Open</th><th>Account</th></tr></thead>
+            <tbody>
+              {% for chase in chases %}
+                <tr>
+                  <td class="num">{{ chase.earliest_due or "—" }}</td>
+                  <td class="prose">{{ chase.request.title }}</td>
+                  <td class="num">{{ chase.open_count }}/{{ chase.total_count }}</td>
+                  <td class="prose">{{ chase.org_name }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="panel-empty"><p>no outstanding requests</p></div>
+      {% endif %}
+    </section>
+
+    <section class="today-section">
+      <div class="people-head">
+        <h2 class="people-label">Going stale</h2>
+        <span class="people-count">{{ stale | length }}</span>
+        <span class="detail-label">days since last touch × premium</span>
+      </div>
+      {% if stale %}
+        <div class="table-scroll">
+          <table class="rows rows-fit">
+            <thead><tr><th>Account</th><th>Last touch</th><th>Stale</th><th>Premium</th></tr></thead>
+            <tbody>
+              {% for account in stale %}
+                <tr>
+                  <td class="prose"><a href="/accounts/{{ refs.get(account.org.id, '') }}/relationship">{{ account.org.name }}</a></td>
+                  <td class="num">{{ account.last_interaction_on or "never" }}</td>
+                  <td class="num">{{ account.days_stale }}d</td>
+                  <td class="num">{{ money(account.premium) if account.premium else "—" }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="panel-empty"><p>nothing going stale</p></div>
+      {% endif %}
+    </section>
+
+    {# The Navigator's cross-account changes list, folded in: Revert reuses
+       the account route (204 + HX-Redirect), landing on the account with
+       the outcome toast — where the consequences are visible. #}
+    <section class="today-section">
+      <div class="people-head">
+        <h2 class="people-label">Recent changes</h2>
+        <span class="people-count">{{ changes | length }}</span>
+        <span class="detail-label">last 14 days, every surface</span>
+      </div>
+      {% if changes %}
+        <div class="table-scroll">
+          <table class="rows rows-fit">
+            <thead><tr><th>When</th><th>Account</th><th>Change</th><th>Via</th><th></th></tr></thead>
+            <tbody>
+              {% for batch in changes %}
+                <tr>
+                  <td class="num">{{ batch.created_at[:16] | replace("T", " ") }}</td>
+                  <td class="prose">{{ change_names.get(batch.org_id, "—") }}</td>
+                  <td class="prose">{{ batch.summary }}</td>
+                  <td class="mono">{{ batch.source }}</td>
+                  <td>
+                    {% if batch.reverted_at %}
+                      <span class="detail-label">reverted</span>
+                    {% elif batch.org_id and refs.get(batch.org_id) %}
+                      <button type="button" class="row-action-btn"
+                              hx-post="/accounts/{{ refs[batch.org_id] }}/changes/{{ batch.ref }}/revert?tab=relationship"
+                              hx-confirm="Put back: {{ batch.summary }}? This cannot be undone."
+                              hx-swap="none">Revert</button>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="panel-empty"><p>nothing here — that's good</p></div>
+      {% endif %}
+    </section>
+  </div>
+{% endblock %}
