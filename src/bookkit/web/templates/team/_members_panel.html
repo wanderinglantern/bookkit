@@ -1,0 +1,89 @@
+{# The roster panel — TeamScreen's columns (name, title, specialty, where
+   they're assigned) plus assignment count, the filter's match evidence, and
+   the active state the TUI never shows (it lists active members only;
+   Reactivate needs the retired ones on screen).
+
+   #members-panel is this partial's own root for the same reason
+   #contacts-panel is: a successful member save replaces it via an
+   out-of-band swap (`oob`), and OOB matching is by id, so the id must be
+   present whether this renders standalone (a panel refresh) or inside the
+   full /team page. Refused panel-targeting POSTs land in the error slot —
+   a refusal that answered form-shaped into a panel target would delete the
+   panel (routes/program.py's contract). #}
+<div id="members-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+
+  <div class="book-body">
+    <div class="team-table-head team-grid">
+      <span>name</span>
+      <span>title</span>
+      <span>specialty</span>
+      <span class="right">assigned</span>
+      <span>where</span>
+      <span>match</span>
+      <span>state</span>
+      <span></span>
+    </div>
+    {% for row in rows %}
+      <div class="team-member-row">
+        <div class="team-grid">
+          <span class="book-cell">{{ row.name }}</span>
+          <span class="book-cell muted">{{ row.title }}</span>
+          <span class="book-cell muted">{{ row.specialty }}</span>
+          <span class="book-cell mono right">{{ row.count }}</span>
+          <span class="book-cell muted">{{ row.where }}</span>
+          <span class="book-cell muted">{{ row.match }}</span>
+          <span class="book-cell is-good">active</span>
+          <span class="book-cell team-row-actions">
+            <button type="button" class="row-action-btn"
+                    hx-get="/team/members/{{ row.id }}/edit"
+                    hx-target="next .form-host" hx-swap="innerHTML">Edit</button>
+            {# A confirm STEP, not an hx-confirm: retiring someone who still
+               holds assignments removes every one of them, and a browser
+               confirm() shows no plan — the same objection web/parity.py
+               records against it for revert. #}
+            <button type="button" class="row-action-btn"
+                    hx-get="/team/members/{{ row.id }}/deactivate"
+                    hx-target="next .form-host" hx-swap="innerHTML">Retire</button>
+          </span>
+        </div>
+        <div class="form-host"></div>
+      </div>
+    {% else %}
+      {% if line %}
+        <div class="book-empty"><p>nobody matches '{{ line }}' — clear the filter to see everyone</p></div>
+      {% else %}
+        {# addable-list empty state — "+ New member" is this list's add #}
+        <div class="book-empty"><p>empty — add the first row</p></div>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  {% if retired %}
+    <h2 class="team-retired-label">Retired</h2>
+    <div class="book-body">
+      {% for row in retired %}
+        <div class="team-member-row is-retired">
+          <div class="team-grid">
+            <span class="book-cell muted">{{ row.name }}</span>
+            <span class="book-cell muted">{{ row.title }}</span>
+            <span class="book-cell muted">{{ row.specialty }}</span>
+            <span class="book-cell mono right muted">{{ row.count }}</span>
+            <span class="book-cell muted">{{ row.where }}</span>
+            <span class="book-cell muted"></span>
+            <span class="book-cell muted">retired</span>
+            <span class="book-cell team-row-actions">
+              {# Direct POST, no confirm step: one field flips back, the batch
+                 reverts it, nothing cascades — assignments a deactivation
+                 removed do NOT come back (revert that batch instead). #}
+              <button type="button" class="row-action-btn"
+                      hx-post="/team/members/{{ row.id }}/reactivate"
+                      hx-target="#members-panel" hx-swap="outerHTML">Reactivate</button>
+            </span>
+          </div>
+          <div class="form-host"></div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>

@@ -51,6 +51,7 @@ def _pages(org) -> list[str]:
         "/search",
         "/search?q=Atomic",
         "/capture",
+        "/team",
         "/today",
         "/calendar",
         "/towers",

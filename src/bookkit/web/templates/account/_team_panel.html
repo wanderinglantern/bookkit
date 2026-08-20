@@ -1,0 +1,49 @@
+{# The rail's Team section, LIVE (gap 7) — Assign posts a real assignment,
+   each row edits IN PLACE (role/lines/notes, never re-scoped) and removes
+   behind a confirm step. Included by page.html on every tab, and rendered
+   standalone by routes/team.py's _team_panel for htmx refreshes — so
+   #team-panel is this partial's own root (OOB matching is by id), and the
+   error slot is where a refused panel-targeting POST answers panel-shaped
+   instead of deleting the panel (routes/program.py's contract).
+
+   `team` rows are repo.team.for_org's: account-level assignments plus
+   deal-level ones on this org's placements, member joined in. #}
+<section class="rail-section" id="team-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if team_error %}<p class="form-error" role="alert">{{ team_error }}</p>{% endif %}
+  <div class="rail-section-head">
+    <h2 class="rail-label">Team</h2>
+    <button type="button" class="rail-action-btn"
+            hx-get="/accounts/{{ header.org.ref }}/team/assign"
+            hx-target="next .form-host" hx-swap="innerHTML">Assign</button>
+  </div>
+  <div class="form-host"></div>
+  {% if team %}
+    {% for a in team %}
+      <div class="team-row">
+        <div class="team-row-top">
+          <span class="team-who">{{ a['member_name'] }}</span>
+          <span class="team-row-actions">
+            <button type="button" class="row-action-btn"
+                    hx-get="/accounts/{{ header.org.ref }}/team/{{ a['id'] }}/edit"
+                    hx-target="next .form-host" hx-swap="innerHTML">Edit</button>
+            <button type="button" class="row-action-btn"
+                    hx-get="/accounts/{{ header.org.ref }}/team/{{ a['id'] }}/remove"
+                    hx-target="next .form-host" hx-swap="innerHTML">Remove</button>
+          </span>
+        </div>
+        {% set detail = [a['role'], a['lines']] | select | join(' · ') %}
+        {% if detail %}<span class="team-detail">{{ detail }}</span>{% endif %}
+        {% if a['placement_ref'] %}
+          {# deal-level: say which deal, or two rows for one person read as a
+             duplicate #}
+          <span class="team-detail">{{ a['placement_ref'] }} {{ a['program_name'] }}</span>
+        {% endif %}
+        <div class="form-host"></div>
+      </div>
+    {% endfor %}
+  {% else %}
+    {# TEAM is an addable list (the Assign button above adds to it) — the
+       spec's addable-list empty state, and now the add really exists. #}
+    <p class="empty">empty — add the first row</p>
+  {% endif %}
+</section>

@@ -774,16 +774,17 @@ def test_a_fully_signed_layer_is_not_a_hole(divergent_tower, monkeypatch):
 
 
 def test_team_and_recent_changes_empty_states_use_canonical_copy(app_and_org):
-    """RECENT CHANGES having nothing yet isn't a problem — the spec's
-    attention-list phrasing. TEAM stopped using the addable-list phrase
-    (2026-08-19 audit): its Assign control is unrendered under D4, and copy
-    that implies an add the page does not offer is the dishonesty class the
-    empty-state rules exist to prevent."""
+    """TEAM is addable — and as of gap 7 the Assign button REALLY adds to it
+    (routes/team.py), so the addable-list phrasing is now literally true, not
+    aspirational. RECENT CHANGES having nothing yet isn't a problem — the
+    spec's attention-list phrasing, not invented copy."""
     client, org = app_and_org
     response = client.get(f"/accounts/{org.ref}/relationship")
     assert "no team assigned yet" in response.text  # TEAM (no assignments seeded)
     assert "empty — add the first row" not in response.text
     assert "nothing here — that's good" in response.text  # RECENT CHANGES
+    # the empty state sits beside a LIVE add, not a pending span
+    assert f'hx-get="/accounts/{org.ref}/team/assign"' in response.text
 
 
 def test_undo_pill_absent_when_nothing_to_undo(app_and_org):

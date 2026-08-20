@@ -110,26 +110,7 @@
         {% endfor %}
       </section>
 
-      <section class="rail-section">
-        <div class="rail-section-head">
-          <h2 class="rail-label">Team</h2>
-        </div>
-        {% if team %}
-          {% for a in team %}
-            <div class="team-row">
-              <span class="team-who">{{ a['member_name'] }}</span>
-              {% set detail = [a['role'], a['lines']] | select | join(' · ') %}
-              {% if detail %}<span class="team-detail">{{ detail }}</span>{% endif %}
-            </div>
-          {% endfor %}
-        {% else %}
-          {# The Assign control was unrendered under D4 (assignments are a
-             named deferral, parity.SCREENS["team"]), so this empty state
-             must not imply a way to add that this page does not offer —
-             comment rot the 2026-08-19 audit caught. #}
-          <p class="empty">no team assigned yet</p>
-        {% endif %}
-      </section>
+      {% include "account/_team_panel.html" %}
 
       <section class="rail-section">
         <h2 class="rail-label">Documents</h2>

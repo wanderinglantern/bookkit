@@ -1,0 +1,22 @@
+{# The confirm step for removing a team assignment — a GET rendered this and
+   wrote NOTHING. It names the LINE as well as the person: with several rows
+   for one colleague, "remove Rosa Delgado" alone reads as though she came
+   off the account entirely (the TUI's own toast rule, account.py
+   _remove_assignment). Renders into the row's own .form-host; Cancel is the
+   delegated [data-form-cancel] listener. Remove targets #team-panel with
+   outerHTML — this fragment lives inside that panel, so returning the panel
+   is a straight replace. #}
+<div class="confirm-remove" role="alertdialog" aria-label="Remove {{ who }}">
+  <p class="confirm-remove-title">
+    Remove <strong>{{ who }}</strong> ({{ lines }}) from this team?
+  </p>
+  <ul class="confirm-remove-notes">
+    <li>soft and revertible — undo puts them back</li>
+  </ul>
+  <div class="form-actions">
+    <button type="button" class="btn-danger"
+            hx-post="/accounts/{{ org.ref }}/team/{{ assignment_id }}/remove"
+            hx-target="#team-panel" hx-swap="outerHTML">Remove from team</button>
+    <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+  </div>
+</div>

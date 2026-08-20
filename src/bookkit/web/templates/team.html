@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Team — bookkit{% endblock %}
+{% block content %}
+  {% include "partials/topbar.html" %}
+
+  <div class="book-header">
+    <h1 class="book-title">Team</h1>
+    <span class="book-subtitle">{{ rows | length }} member{{ "s" if rows | length != 1 else "" }}{% if line %} match '{{ line }}'{% endif %}</span>
+    <span class="book-header-spacer"></span>
+    {# The TUI's `f` filter as a querystring: a plain GET form, so the URL is
+       shareable and the browser's back button undoes the filter. Matches
+       specialties AND the lines on live assignments (services.team.
+       find_specialists) — someone actively placing cyber counts. #}
+    <form class="team-filter" method="get" action="/team">
+      <input type="text" name="line" value="{{ line }}"
+             placeholder="who do I go to for… (cyber, marine, D&amp;O)">
+      <button type="submit" class="btn-pill">Who for…</button>
+    </form>
+    <button type="button" class="btn-pill btn-pill-primary"
+            hx-get="/team/members/new"
+            hx-target="next .form-host" hx-swap="innerHTML">+ New member</button>
+  </div>
+
+  <div class="form-host"></div>
+
+  {% include "team/_members_panel.html" %}
+{% endblock %}

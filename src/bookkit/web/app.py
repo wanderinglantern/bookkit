@@ -238,6 +238,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
         program,
         relationship,
         search,
+        team,
         today,
         towers,
         work,
@@ -249,6 +250,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
     app.include_router(book.router)
     app.include_router(capture.router)
     app.include_router(search.router)
+    app.include_router(team.router)
     app.include_router(today.router)
     app.include_router(calendar.router)
     app.include_router(towers.router)
