@@ -1108,9 +1108,10 @@ def test_the_web_tab_tells_an_empty_pipeline_how_a_quote_gets_recorded(
 ) -> None:
     """The note sat INSIDE `{% if quote_rows %}`, so the one reader who most
     needs it — the person looking at an empty tab wondering where quotes come
-    from — was the only one not told. The tab is read-only on purpose; a
-    read-only surface that does not say where the write lives is just a dead
-    end."""
+    from — was the only one not told. The tab is writable as of gap 4
+    (2026-08-20), so the note now points at the tab's own Response control
+    rather than at the terminal app — but it still has to be there, outside
+    the if, for the empty-tab reader."""
     from fastapi.testclient import TestClient
 
     from bookkit.web.app import create_app
@@ -1124,7 +1125,9 @@ def test_the_web_tab_tells_an_empty_pipeline_how_a_quote_gets_recorded(
     with TestClient(create_app(path), base_url="http://127.0.0.1") as client:
         body = client.get(f"/accounts/{org.ref}/pipeline").text
     assert "no quotes in hand" in body
-    assert "market-response form" in body
+    # the note names the tab's own control, and says what recording does
+    assert "<em>Response</em>" in body
+    assert "moves the row up here" in body
 
 
 async def test_e_on_an_empty_pipeline_table_refuses_out_loud(
