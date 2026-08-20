@@ -1,0 +1,31 @@
+{# The confirm step for closing an opportunity won or lost (gap 4).
+
+   A step, not an hx-confirm: the browser's own confirm() shows no plan —
+   the same objection web/parity.py records against using it for revert.
+   The plan here is what closing actually does: closed is closed (no stage
+   move ever leaves won or lost), and the probability side-effect lands
+   (DECISIONS.md — the service owns it, this fragment only names it).
+
+   It renders into #pipeline-form-host, so Cancel is the delegated
+   [data-form-cancel] listener inline-cell.js already owns. The GET that
+   produced this fragment wrote NOTHING. #}
+<div class="confirm-remove" role="alertdialog"
+     aria-label="Mark {{ opp.ref }} {{ outcome }}">
+  <p class="confirm-remove-title">
+    Mark <strong>{{ opp.title }}</strong> ({{ opp.ref }}) {{ outcome }}?
+  </p>
+  <ul class="confirm-remove-notes">
+    <li>Closed is closed — no stage move reopens it. A mistaken close is
+        reverted from Recent changes, as one change.</li>
+    <li>Probability becomes {{ "100%" if outcome == "won" else "0%" }}.</li>
+    {% if outcome == "lost" %}
+      <li>Deals die anywhere: lost is allowed from any open stage.</li>
+    {% endif %}
+  </ul>
+  <div class="form-actions">
+    <button type="button" class="btn-danger"
+            hx-post="/accounts/{{ header.org.ref }}/pipeline/opportunities/{{ opp.id }}/close/{{ outcome }}"
+            hx-target="#pipeline-form-host" hx-swap="innerHTML">Mark {{ outcome }}</button>
+    <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+  </div>
+</div>

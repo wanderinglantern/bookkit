@@ -11,7 +11,14 @@ AccountScreen's own bindings, plus the ones its ListTable/InlineTable rows
 bind for themselves (`Y` copy_row, `i` inline_edit). AccountScreen.BINDINGS
 alone missed those two entirely (fix round 2, 2026-08-17); see
 tests/test_web_parity.py for the widget enumeration and the guard that
-catches the next one."""
+catches the next one.
+
+PipelineScreen (the GLOBAL kanban — h/l columns, >/< card moves across every
+account) stays TUI-only and is outside this ledger's key space: as of gap 4
+(2026-08-20) the web's pipeline surface is the ACCOUNT tab, now writable
+(responses, the bind offer, opportunities with stage moves, subjectivities —
+see routes/pipeline.py), while the book-wide board remains a terminal
+screen."""
 
 from __future__ import annotations
 
@@ -92,10 +99,14 @@ PENDING: dict[str, str] = {
     "add_here": (
         "generic per-tab add ('a') — contacts, tasks, requests and request "
         "items now have one each (POST .../contacts/new, .../tasks/new, "
-        ".../requests/new, .../requests/{id}/items/new), and the placements "
-        "tab has one as of 2026-08-19 (POST .../program/placements); pipeline "
-        "and projects do not yet, and the action covers all of them, so it "
-        "stays PENDING as a whole"
+        ".../requests/new, .../requests/{id}/items/new), the placements "
+        "tab has one as of 2026-08-19 (POST .../program/placements), and the "
+        "pipeline tab has BOTH of its adds as of 2026-08-20 — "
+        "POST .../pipeline/opportunities/new and "
+        "POST .../pipeline/submissions/{id}/subjectivities/new, the same "
+        "focus-dependent pair the TUI's `a` resolves on that tab "
+        "(routes/pipeline.py); projects does not yet, and the action covers "
+        "all of them, so it stays PENDING as a whole"
     ),
     "edit_here": (
         "generic per-tab edit ('e', a whole-form modal) — for contacts, tasks "
@@ -113,8 +124,21 @@ PENDING: dict[str, str] = {
         "deliberately not built (R49). Interaction CREATION is not here either: "
         "forms.entities has an edit builder and no create builder, because "
         "logging one is quick capture's job (account matching, the follow-up-"
-        "task offer). Org-level edit_here (falling through to _edit_org) is "
-        "still not built, so the action as a whole stays PENDING"
+        "task offer). The PIPELINE tab's three-way `e` is BUILT as of "
+        "2026-08-20 (routes/pipeline.py): recording a market response "
+        "(GET/POST .../pipeline/submissions/{id}/response, the shared "
+        "response_form/apply_response, with the bind-to-layer offer when the "
+        "outcome is bound — sync.add_participant through "
+        "services.program_files.write, tool='program_bind', the Program "
+        "tab's own seam), editing an opportunity "
+        "(.../pipeline/opportunities/{id}/edit, plus stage moves through "
+        "services.pipeline.move_stage: advance one forward gate unconfirmed, "
+        "won/lost from any open stage behind a confirm step that writes "
+        "nothing on GET), and editing a subjectivity "
+        "(.../pipeline/subjectivities/{id}/edit — status on the form is how "
+        "one is marked met/waived, same as the TUI). Org-level edit_here "
+        "(falling through to _edit_org) is still not built, so the action as "
+        "a whole stays PENDING"
     ),
     "new_submission": (
         "a plain DB write (repo/submissions.create, no towerkit involvement) — "
