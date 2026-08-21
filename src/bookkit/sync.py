@@ -877,7 +877,7 @@ def add_layer(
     placement_id: str,
     name: str,
     line_ids: list[str],
-    attach_cents: int,
+    attach_cents: int | None,
     limit_cents: int,
     premium_cents: int | None = None,
 ) -> Diagnostics:
@@ -890,10 +890,18 @@ def add_layer(
     that line's id — and no validator catches an id shared across the two
     collections, because nothing looks. `edit.unique_id` takes the union of
     layer and line ids, which is the rule towerkit's own two surfaces obey.
+
+    `attach_cents=None` leaves `edit.add_layer`'s own suggested attach — the
+    top of the existing stack for these lines — standing, instead of
+    overwriting it with a typed figure. The web's `layer_add` route is the
+    only caller that passes `None`: whole-branch review finding 2 (2026-08-21)
+    found its form still took a typed attachment, the exact mechanism this
+    branch's stack editor exists to remove, on the surface right below it. TUI
+    and MCP still pass an explicit `attach_cents` for a layer whose attachment
+    is already known — unaffected, and towerkit itself needs no change.
     """
 
     def mutate(program: Program) -> None:
-        attach = _require_dollars(attach_cents, "attach")
         limit = _require_dollars(limit_cents, "limit")
         premium = (
             _require_dollars(premium_cents, "premium") if premium_cents is not None else None
@@ -907,7 +915,8 @@ def add_layer(
         # layer with the placeholder id it is replacing.
         layer.id = unique_id(program, slugify(name), exclude=layer.id)
         layer.name = name
-        layer.attach = attach
+        if attach_cents is not None:
+            layer.attach = _require_dollars(attach_cents, "attach")
         layer.limit = limit
         layer.premium = premium
 

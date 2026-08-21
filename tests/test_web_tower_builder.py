@@ -265,6 +265,13 @@ def test_a_refused_write_comes_back_as_the_panel_not_a_status_code(
     by towerkit's whole-dollar rule. An unparseable limit tests the parser's
     try/except instead, and passed with the write's own arm deleted (mutation,
     2026-08-21).
+
+    A REFUSAL KEEPS THE TYPING (spec, section 2; whole-branch review finding
+    1, 2026-08-21). This test used to assert the opposite — that "Sub Dollar"
+    was GONE from the response — which is what the bug looked like, not what
+    the spec asks for: `_programs_panel` blanked every stack editor on the
+    page. Now it proves the typed name survives the refusal, in the ONE
+    fragment answer the route returns.
     """
     client, org = app_and_org
     conn = client.app.state.conn
@@ -279,13 +286,21 @@ def test_a_refused_write_comes_back_as_the_panel_not_a_status_code(
     )
 
     assert refused.status_code == 200
-    assert "Sub Dollar" not in refused.text
+    assert "Sub Dollar" in refused.text, "the typed name did not survive the refusal"
     assert "dollar" in refused.text.lower() or "limit" in refused.text.lower()
 
 
 def test_an_unparseable_limit_is_refused_before_the_write(app_and_org) -> None:
     """The other half: the parse arm, kept as its own test now that the one
-    above no longer covers it by accident."""
+    above no longer covers it by accident.
+
+    Also inverted with the three the whole-branch review named (finding 1):
+    the parse-error branch answers through the same `refused()` helper in
+    `stack_insert` as every other refusal, so it keeps the typing too — a
+    fourth instance of the same wrong assertion the review's three examples
+    had, caught by making the fix uniform across every refusal branch rather
+    than patching only the branches the review happened to quote.
+    """
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)
@@ -299,7 +314,7 @@ def test_an_unparseable_limit_is_refused_before_the_write(app_and_org) -> None:
     )
 
     assert refused.status_code == 200
-    assert "Bad" not in refused.text
+    assert "Bad" in refused.text, "the typed name did not survive the refusal"
 
 
 def _other_placement_layer_id(conn, placement):
@@ -345,6 +360,11 @@ def test_an_anchor_from_another_placement_is_refused(app_and_org) -> None:
     the assertion is on the route's own words. `sync.insert_layer` would also
     refuse this id, which is exactly why an assertion on "no layer" alone
     passed with the guard deleted (mutation, 2026-08-21).
+
+    A REFUSAL KEEPS THE TYPING (spec, section 2; whole-branch review finding
+    1). This used to assert "Sneaky" was gone, which was the bug, not the
+    spec — inverted to prove the typed name survives alongside the route's
+    own refusal message.
     """
     client, org = app_and_org
     conn = client.app.state.conn
@@ -363,7 +383,7 @@ def test_an_anchor_from_another_placement_is_refused(app_and_org) -> None:
     assert refused.status_code == 200
     assert "reload the tab" in refused.text, refused.text[:400]
     assert placement.ref in refused.text
-    assert "Sneaky" not in refused.text
+    assert "Sneaky" in refused.text, "the typed name did not survive the refusal"
 
 
 def test_another_accounts_program_is_a_404(app_and_org) -> None:
@@ -393,7 +413,12 @@ def test_an_unrecognised_kind_is_refused_before_the_write(app_and_org) -> None:
     "buffer" silently coerced to a plain layer. Fails safe, but the
     project's rule is that a constrained field is checked SERVER-SIDE too:
     "markup constrains a mouse and nothing else." A refusal names the fix,
-    so the message names both legal values."""
+    so the message names both legal values.
+
+    A REFUSAL KEEPS THE TYPING (spec, section 2; whole-branch review finding
+    1). Inverted from asserting "Sneaky Kind" was gone (the bug) to asserting
+    it survived (the spec), alongside the still-unwritten stack and the
+    still-present message naming both legal values."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)
@@ -408,21 +433,80 @@ def test_an_unrecognised_kind_is_refused_before_the_write(app_and_org) -> None:
     )
 
     assert refused.status_code == 200
-    assert "Sneaky Kind" not in refused.text
+    assert "Sneaky Kind" in refused.text, "the typed name did not survive the refusal"
     assert "layer" in refused.text.lower() and "buffer" in refused.text.lower()
     assert len(_stack_of(conn, placement, line_id)) == before
 
 
 def test_the_stack_editor_has_no_attachment_input(app_and_org) -> None:
     """THE DESIGN, asserted. An attachment input is how two slabs come to
-    share one; there is not one to fill in."""
+    share one; there is not one to fill in.
+
+    BOUNDED AT BOTH ENDS (nit 4, whole-branch review 2026-08-21): this used
+    to slice from `stack-editor` to the end of the WHOLE PAGE, which passed
+    for an accidental reason — the pre-existing "Add layer" form (which used
+    to carry `attach_cents`) is fetched on demand via `hx-get` and was never
+    present in the base page HTML at all, not because the slice was actually
+    scoped to the editor. `_stack_editor_markup` bounds the end at the next
+    sibling section instead, and the "insert buffer" check proves that slice
+    is not vacuous before trusting the negative assertion below it. See
+    `test_no_attachment_input_survives_anywhere_on_the_program_tab` for the
+    claim the spec actually makes (finding 2, same review): that form still
+    exists — it is the only web control that can add a layer across a whole
+    multi-line program or price one at creation — but no longer takes a typed
+    attachment either.
+    """
     client, org = app_and_org
     page = client.get(f"/accounts/{org.ref}/program").text
-    editor = page[page.index("stack-editor") :]
+    editor = _stack_editor_markup(page)
+
+    # Not vacuous: reaches the insert form's own LAST control.
+    assert "insert buffer" in editor
 
     assert 'name="attach' not in editor
     assert 'name="anchor"' in editor
     assert 'name="position"' in editor
+
+
+def test_no_attachment_input_survives_anywhere_on_the_program_tab(app_and_org) -> None:
+    """THE SPEC'S OWN CLAIM, checked at the surface, not just the editor
+    (finding 2, whole-branch review 2026-08-21): "the overlap is
+    unconstructible" has to be true of the whole Program tab, not merely of
+    `sync.insert_layer`'s own path. The pre-existing "Add layer" button sat
+    on the same panel, wired to a form that still took a typed `attach_cents`
+    — the exact control shape ("add a layer" plus an attachment box) that
+    drew two D&O excess layers on top of each other in the first place.
+
+    That form is NOT deleted: it is the only web control that can add a
+    layer across every line of a multi-line program in one call, or price a
+    layer at creation, neither of which `sync.insert_layer` does (checked
+    before removing anything, per the review's instruction not to assume
+    superseded). Only the typed attachment came out of it
+    (`_layer_add_fields`; `sync.add_layer(attach_cents=None, ...)` leaves
+    towerkit's own suggested-attach standing). Checked at both surfaces the
+    button offers: the base page load, and the form itself once opened —
+    the base page alone would pass before AND after this fix, since the
+    form's fields only exist once its own `hx-get` is followed.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    assert 'name="attach' not in page, "an attachment input is on the base page"
+
+    add_form = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/layers/new"
+    ).text
+    # Not vacuous: the surviving fields are still there, proving this is the
+    # real "Add layer" form and not an empty or 404 response.
+    assert 'name="name"' in add_form
+    assert 'name="line"' in add_form
+    assert 'name="limit_cents"' in add_form
+    assert 'name="premium_cents"' in add_form
+    assert 'name="attach' not in add_form, (
+        "the 'Add layer' form still takes a typed attachment"
+    )
 
 
 def _slab_blocks(editor: str) -> str:

@@ -54,30 +54,39 @@
          is a SELECT of this line's slabs — the picker's options are the
          authority, re-checked server-side, and there is no free text to type
          an id into. #}
+      {# A refusal keeps the typing: `insert_error`/`insert_typed` come from
+         `stack_insert` and belong to THIS stack alone (`_stacks` only
+         attaches them to the line that was posted to), so every other
+         stack's form on the page stays exactly as it was. #}
       <form class="stack-insert" hx-post="{{ stack.insert_action }}"
             hx-target="#programs-panel" hx-swap="outerHTML">
+        {% if stack.insert_error %}
+          <p class="form-error" role="alert">{{ stack.insert_error }}</p>
+        {% endif %}
         <label class="field">
           <span class="field-label">name</span>
-          <input type="text" name="name" required placeholder="2nd Excess">
+          <input type="text" name="name" required placeholder="2nd Excess"
+                 value="{{ stack.insert_typed.name if stack.insert_typed else '' }}">
         </label>
         <label class="field">
           <span class="field-label">limit</span>
-          <input type="text" name="limit_cents" required placeholder="10m">
+          <input type="text" name="limit_cents" required placeholder="10m"
+                 value="{{ stack.insert_typed.limit_cents if stack.insert_typed else '' }}">
         </label>
         <label class="field">
           <span class="field-label">goes</span>
           <select name="position" required>
             <option value=""></option>
-            <option value="above" selected>above</option>
-            <option value="below">below</option>
+            <option value="above"{% if not stack.insert_typed or stack.insert_typed.position == "above" %} selected{% endif %}>above</option>
+            <option value="below"{% if stack.insert_typed and stack.insert_typed.position == "below" %} selected{% endif %}>below</option>
           </select>
         </label>
         <label class="field">
           <span class="field-label">this slab</span>
           <select name="anchor">
-            <option value="">the ground ($0)</option>
+            <option value=""{% if stack.insert_typed and stack.insert_typed.anchor == "" %} selected{% endif %}>the ground ($0)</option>
             {% for slab in stack.slabs %}
-              <option value="{{ slab.id }}">{{ slab.name }}</option>
+              <option value="{{ slab.id }}"{% if stack.insert_typed and stack.insert_typed.anchor == slab.id %} selected{% endif %}>{{ slab.name }}</option>
             {% endfor %}
           </select>
         </label>

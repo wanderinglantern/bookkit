@@ -502,12 +502,18 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
     ),
     "Layer.buffer": (
         "the stack editor's `insert buffer`, beside `insert layer` "
-        "(routes/program.py). A deliberate uninsured band: it seats the stack "
-        "above it like any slab, carries no carriers and no premium, and "
-        "suppresses the `line-gap` it would otherwise be reported as. NOT an "
-        "inline cell — a band that became insured by someone clearing a "
-        "checkbox would silently change what the client is covered for; it is "
-        "converted through its own control, confirm-first."
+        "(routes/program.py, `kind='buffer'` in `stack_insert` -> "
+        "sync.insert_layer). A deliberate uninsured band: it has an "
+        "attachment and a limit like any slab and carries no carriers and no "
+        "premium. It needs NO gap-suppression rule — a slab with an "
+        "attachment and a limit fills the band, so there is no gap left to "
+        "report; the suppression rule that used to live here was DELETED "
+        "(R2, 2026-08-21: a mutation proved it dead, and it also hid a real "
+        "gap above an under-sized buffer, which is the one thing this "
+        "feature exists to make honest). NOT an inline cell, and there is no "
+        "conversion control either direction — the only way to get a buffer "
+        "is inserting one as a new slab; nothing flips an existing layer's "
+        "`buffer` flag."
     ),
     "Layer.period": "details row: policy effective / policy expiry cells",
     "Layer.follows_underlying": "details row: one-click toggle",

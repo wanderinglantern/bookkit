@@ -654,31 +654,18 @@ def test_adding_a_layer_appends_it_pending(app_and_org):
     assert batch.source == "web" and batch.tool == "program_layer_add"
 
 
-def test_a_layer_that_would_leave_a_gap_saves_and_says_so(app_and_org):
-    """line-gap is a WARNING, not a refusal (2026-08-21): the write that
-    leaves a gap SUCCEEDS, and the gap still names the layers it is between —
-    that message is now the panel's diagnostics strip, not a refusal, and
-    stating a true gap is the point, not a reason to lose the write."""
-    client, org = app_and_org
-    conn = client.app.state.conn
-    placement, _ = _first_layer(conn, org)
-    path = Path(placement.program_path)
-    before = path.read_bytes()
-
-    added = client.post(
-        f"/accounts/{org.ref}/program/{placement.id}/layers",
-        data={
-            "name": "Floating Excess",
-            "line": _first_line(conn, placement),
-            "attach_cents": "900,000,000",
-            "limit_cents": "5,000,000",
-            "premium_cents": "",
-        },
-    )
-
-    assert added.status_code == 200
-    assert "GAP" in added.text or "gap" in added.text
-    assert path.read_bytes() != before
+# test_a_layer_that_would_leave_a_gap_saves_and_says_so RETIRED (whole-branch
+# review finding 2, 2026-08-21): it forced a gap by typing a far-above attach
+# on the "Add layer" form, the exact mechanism finding 2 removed from that
+# form (`sync.add_layer` no longer takes an attach a caller can aim anywhere
+# it likes — `_layer_add_fields` has no attach field, and the route always
+# calls `attach_cents=None`, which leaves towerkit's own contiguous
+# suggested-attach standing). Typing an attach into `layer_add` can no longer
+# create a gap at all. The property this test protected — line-gap is a
+# WARNING, the write SUCCEEDS, and the message is stated in the panel, not a
+# refusal — is still covered, through the mechanism that can actually still
+# produce a gap: removing a mid-stack layer.  See
+# test_a_layer_removal_that_leaves_a_gap_saves_in_place, below.
 
 
 def test_binding_a_market_onto_a_layer(app_and_org):
@@ -1951,10 +1938,16 @@ def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
     deleted the layers table, the add controls and the panel's own id, leaving
     the placement unusable until a full page reload.
 
-    Attach at $123 — well inside the bottom layer's span on any seeded org —
-    to force a `line-overlap`, which is STILL an error (2026-08-21;
-    `line-gap` is now a warning and would no longer refuse this add, so it
-    can no longer stand in for "refused" here)."""
+    A sub-dollar limit forces the refusal now (2026-08-21, whole-branch
+    review finding 2): the form used to type an attach INSIDE an existing
+    layer's span to force a `line-overlap`, but that typed attachment is
+    exactly what finding 2 removed from this form — `sync.add_layer` no
+    longer takes one a caller can aim, so it can no longer be made to overlap
+    from here. towerkit's whole-dollar rule on the LIMIT still refuses
+    (`_require_dollars`, unaffected by this branch), and it is refused
+    inside the mutation exactly like the stack editor's own version of this
+    same test, so this still proves the write-side refusal path, not just
+    the parser's."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement, _ = _first_layer(conn, org)
@@ -1964,8 +1957,7 @@ def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
         data={
             "name": "Floating Excess",
             "line": _first_line(conn, placement),
-            "attach_cents": "12,300",
-            "limit_cents": "5,000,000",
+            "limit_cents": "1.50",
             "premium_cents": "",
         },
     )
@@ -1973,7 +1965,7 @@ def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
     assert refused.status_code == 200
     assert "<form" in refused.text, "the form did not come back"
     assert "Floating Excess" in refused.text, "the typed name was thrown away"
-    assert "12,300" in refused.text, "the typed attachment was thrown away"
+    assert "dollar" in refused.text.lower() or "limit" in refused.text.lower()
 
 
 def test_the_add_form_posts_into_the_form_host_not_over_the_panel(app_and_org):
@@ -1989,19 +1981,33 @@ def test_the_add_form_posts_into_the_form_host_not_over_the_panel(app_and_org):
     assert "closest .program" not in form
 
 
-def test_a_blank_attachment_is_refused_in_the_broker_s_language(app_and_org):
-    """It used to reach sync.add_layer as None and come back as
-    "unsupported operand type(s) for %: 'NoneType' and 'int'"."""
+# test_a_blank_attachment_is_refused_in_the_broker_s_language RETIRED
+# (whole-branch review finding 2, 2026-08-21): it posted a blank
+# `attach_cents` to prove a broker never saw the raw
+# "unsupported operand type(s) for %: 'NoneType' and 'int'" the field used to
+# produce. The field itself is gone from this form now — the route always
+# calls `sync.add_layer(..., attach_cents=None, ...)` on purpose, which is a
+# deliberate value, never a blank one a broker typed — so there is nothing
+# left on THIS surface that can reach the crash. The same regression is now
+# guarded directly against `sync.add_layer` itself, where the None really
+# comes from: see
+# test_add_layer_with_no_typed_attach_seats_on_the_existing_top in
+# test_program_edits.py.
+def test_a_blank_limit_is_refused_in_the_broker_s_language(app_and_org):
+    """LIMIT is still a required, typed field on this form (attach is not,
+    since finding 2 above) — the same historical class of bug (a blank
+    required money field reaching towerkit as a raw type error) is still
+    reachable through it, so it is still guarded here."""
     client, org = app_and_org
     placement, _ = _first_layer(client.app.state.conn, org)
 
     refused = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
         data={"name": "No Money", "line": _first_line(client.app.state.conn, placement),
-              "attach_cents": "", "limit_cents": "", "premium_cents": ""},
+              "limit_cents": "", "premium_cents": ""},
     )
 
-    assert "attaches at is required" in refused.text
+    assert "limit is required" in refused.text
     assert "NoneType" not in refused.text
 
 
