@@ -5,6 +5,7 @@ Spec: docs/superpowers/specs/2026-08-21-web-tower-builder-design.md
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -687,3 +688,58 @@ def test_a_buffer_is_labelled_in_the_drawing(app_and_org) -> None:
     drawing = _tower_panel_markup(page)
 
     assert "\u2014 buffer" in drawing, "the drawing hatches but never says so"
+
+
+def test_a_buffer_reads_uninsured_not_to_be_placed(app_and_org) -> None:
+    """The word must be in the VISIBLE text a client is shown, not just a
+    hover tooltip, and it must not say the OPPOSITE thing.
+
+    Fix round 2 (Grant, 2026-08-21): a buffer has no participants, so before
+    towerkit's fix, `is_pending` (signed_bps == 0) was true for it exactly
+    as for a genuinely pending layer, and the buffer's own block printed
+    "To be placed" — telling a reader cover is coming to a band the broker
+    deliberately left uninsured. A hover tooltip saying "buffer" (the
+    earlier assertion in this file) did not offset a wrong visible word.
+
+    SCOPED to the buffer's own `.tower-block` (the VISIBLE `tower-line`
+    spans), not the whole drawing and not the outline `<div>`'s `title`
+    attribute — both `.tower-layer` (outline) and `.tower-block` (visible
+    text) carry the same `data-layer-id`, so a plain substring search would
+    find the title attribute's "— buffer" first and prove nothing about
+    what is actually rendered on screen.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+    anchor = program.layers_for_line(line_id)[-1]
+
+    sync.insert_layer(
+        conn, placement.id, line_id=line_id, anchor_layer_id=anchor.id,
+        position="above", name="Uninsured band", limit_cents=5_000_000_00,
+        buffer=True,
+    )
+    fresh = sync.linked_program(conn, placement.id).program
+    buf = next(ly for ly in fresh.layers if ly.name == "Uninsured band")
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    drawing = _tower_panel_markup(page)
+
+    block_pattern = re.compile(
+        r'<div class="tower-block[^"]*"\s+data-layer-id="'
+        + re.escape(buf.id)
+        + r'"[^>]*>(.*?)</div>',
+        re.DOTALL,
+    )
+    match = block_pattern.search(drawing)
+    assert match, "the buffer's own tower-block is not in the drawing"
+    visible_lines = re.findall(r'<span class="tower-line">([^<]*)</span>', match.group(1))
+
+    assert visible_lines, "no visible text on the buffer's own block"
+    assert any("Uninsured" in line for line in visible_lines), (
+        f"the buffer's visible text never says so: {visible_lines}"
+    )
+    assert not any("To be placed" in line for line in visible_lines), (
+        f"the buffer's visible text claims cover is coming: {visible_lines}"
+    )
