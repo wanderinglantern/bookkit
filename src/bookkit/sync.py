@@ -1747,6 +1747,9 @@ def layer_details_of(program: Program | None) -> list[dict[str, Any]]:
                 # cover" from "a layer whose limit happens to be zero" — the two
                 # are opposite facts that arithmetic alone renders identical.
                 "statutory": layer.statutory,
+                # A buffer is drawn and counted differently from cover, so the surface
+                # needs it on the row rather than re-opening the file to ask.
+                "buffer": layer.buffer,
                 "follows_underlying": layer.follows_underlying,
                 "participants": [
                     {

@@ -486,6 +486,15 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
         "(towerkit 2026-08-21) rather than after it — this ledger going red is "
         "the ticket, and the ticket was closed in the same change."
     ),
+    "Layer.buffer": (
+        "the stack editor's `insert buffer`, beside `insert layer` "
+        "(routes/program.py). A deliberate uninsured band: it seats the stack "
+        "above it like any slab, carries no carriers and no premium, and "
+        "suppresses the `line-gap` it would otherwise be reported as. NOT an "
+        "inline cell — a band that became insured by someone clearing a "
+        "checkbox would silently change what the client is covered for; it is "
+        "converted through its own control, confirm-first."
+    ),
     "Layer.period": "details row: policy effective / policy expiry cells",
     "Layer.follows_underlying": "details row: one-click toggle",
     "Layer.applies_to": "details row: applies-to chips",
