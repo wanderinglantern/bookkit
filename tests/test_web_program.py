@@ -636,7 +636,6 @@ def test_adding_a_layer_appends_it_pending(app_and_org):
         data={
             "name": "3rd Excess",
             "line": line,
-            "attach_cents": str(top // 100),
             "limit_cents": "5,000,000",
             "premium_cents": "",
         },
@@ -897,7 +896,7 @@ def test_an_added_layer_lands_on_the_chosen_line(app_and_org, tmp_path):
 
     added = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
-        data={"name": "1st Excess Cyber", "line": "cy", "attach_cents": "2,000,000",
+        data={"name": "1st Excess Cyber", "line": "cy",
               "limit_cents": "5,000,000", "premium_cents": ""},
     )
 
@@ -917,7 +916,7 @@ def test_all_lines_means_all_lines(app_and_org, tmp_path):
     added = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
         data={"name": "Umbrella Everything", "line": "__all__",
-              "attach_cents": "2,000,000", "limit_cents": "10,000,000",
+              "limit_cents": "10,000,000",
               "premium_cents": ""},
     )
 
@@ -935,7 +934,7 @@ def test_a_made_up_line_is_refused(app_and_org, tmp_path):
 
     refused = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
-        data={"name": "Nowhere", "line": "marine", "attach_cents": "0",
+        data={"name": "Nowhere", "line": "marine",
               "limit_cents": "1,000,000", "premium_cents": ""},
     )
 
@@ -1309,7 +1308,7 @@ def test_toggling_a_line_on_rescopes_the_layer(app_and_org, tmp_path):
     placement = _two_line_placement(client, org, tmp_path)
     added = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
-        data={"name": "Umbrella Both", "line": "__all__", "attach_cents": "2,000,000",
+        data={"name": "Umbrella Both", "line": "__all__",
               "limit_cents": "5,000,000", "premium_cents": ""},
     )
     assert added.status_code == 200
