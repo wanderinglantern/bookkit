@@ -153,7 +153,7 @@ def test_adding_a_contact_replaces_the_panel_exactly_once(app_and_org):
 
 def test_a_non_editable_key_is_404_not_a_write(app_and_org):
     """first_name is display-only server-side, not just in the template —
-    CONTACT_INLINE (and its web mirror, CONTACT_FIELDS) never declares it,
+    contact_inline (and its web mirror, CONTACT_FIELDS) never declares it,
     so the cell route must refuse it rather than silently accepting a POST
     the table never offers a control for."""
     client, org = app_and_org

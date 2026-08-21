@@ -82,7 +82,20 @@ ADDABLE = ("placements", "contacts", "opportunities", "tasks", "projects", "requ
 # modal forms, and each commit is one undoable field write. The Field list
 # itself lives in forms/inline.py: which fields are inline-editable is not a
 # per-surface choice, only the column position is.
-CONTACT_INLINE = dict(zip((2, 3, 4, 5), forms_inline.CONTACT_FIELDS, strict=True))
+CONTACT_COLUMNS = (2, 3, 4, 5)  # role, title, email, phone
+
+
+def contact_inline(conn: sqlite3.Connection) -> dict[int, Field]:
+    """The contact column map, with the role picker's options and the title
+    suggestions carrying the book's own values. Built per fill, not once at
+    import, for the reason task_inline gives — and here there is a second one:
+    `role` is a SELECT, so its options are what parse_value will accept, and a
+    module-level constant could only ever offer the declared eleven. A contact
+    whose role predates that vocabulary would then be unable to save its own
+    stored value back."""
+    return dict(
+        zip(CONTACT_COLUMNS, forms_inline.contact_fields(conn), strict=True)
+    )
 TASK_COLUMNS = (0, 1, 2, 3)  # due, task, category, description
 # Assignee sits at column 6 on the task tables WIDE ENOUGH TO CARRY IT, after
 # the four above and the two (detail, status/account) that were already laid
@@ -891,7 +904,7 @@ class NavigatorScreen(Screen):
                 )
         elif group == "contacts":
             table.add_columns("", "name", "role", "title", "email", "phone")
-            table.inline_fields = CONTACT_INLINE
+            table.inline_fields = contact_inline(conn)
             for c in contacts.for_org(conn, org_id):
                 key = f"contact:{c.id}"
                 self._row_org[key] = org_id

@@ -179,9 +179,13 @@ def test_inline_field_sets_are_shared_not_duplicated(conn: sqlite3.Connection):
     ones as cells. Tasks go through inline.task_fields(conn) — same fields, in
     the same order, with the category vocabulary attached."""
     from bookkit.forms import inline
-    from bookkit.tui.screens.navigator import CONTACT_INLINE, task_inline
+    from bookkit.tui.screens.navigator import contact_inline, task_inline
 
-    assert tuple(CONTACT_INLINE.values()) == inline.CONTACT_FIELDS
+    assert tuple(contact_inline(conn).values()) == inline.contact_fields(conn)
+    assert (
+        tuple(f.key for f in inline.contact_fields(conn))
+        == tuple(f.key for f in inline.CONTACT_FIELDS)
+    )
     assert tuple(task_inline(conn).values()) == inline.task_fields(conn)
     assert (
         tuple(f.key for f in inline.task_fields(conn))
@@ -212,11 +216,16 @@ def test_inline_task_category_completes_from_the_vocabulary(conn: sqlite3.Connec
     assert all(f.suggestions == () for f in inline.TASK_FIELDS)
 
 
-def test_rfi_item_inline_is_shared_not_duplicated():
+def test_rfi_item_inline_is_shared_not_duplicated(conn):
+    """The TUI's column map is BUILT FROM forms.inline, never re-declared —
+    and now it is built from the vocabulary-carrying builder, so the group
+    cell completes on the terminal exactly as it does in the browser."""
     from bookkit.forms import inline
-    from bookkit.tui.screens.account import RFI_ITEM_INLINE
+    from bookkit.tui.screens.account import rfi_item_inline
 
-    assert tuple(RFI_ITEM_INLINE.values()) == inline.RFI_ITEM_FIELDS
+    fields = tuple(rfi_item_inline(conn).values())
+    assert [f.key for f in fields] == [f.key for f in inline.RFI_ITEM_FIELDS]
+    assert fields == inline.rfi_item_fields(conn)
 
 
 @pytest.mark.parametrize("field", [

@@ -43,7 +43,12 @@ from ...forms.entities import (
     rfi_item_form,
     task_form,
 )
-from ...forms.inline import RFI_ITEM_FIELDS, TASK_FIELDS, task_fields
+from ...forms.inline import (
+    RFI_ITEM_FIELDS,
+    TASK_FIELDS,
+    rfi_item_fields,
+    task_fields,
+)
 from ...forms.spec import Field, initial_text, parse_value
 from ...models import Org, RfiRequest, Task, is_internal_category
 from ...repo import assignees as assignees_repo
@@ -552,11 +557,27 @@ def _item_display_cell(
     )
 
 
+def _item_editor_field(request: Request, key: str) -> Field:
+    """The same field, carrying the book's RFI category vocabulary — the cell
+    macro renders it as a <datalist>. The mirror of _task_editor_field, and it
+    did not exist: rfi_item_form has completed the category from
+    repo.vocab.rfi_categories all along, so the modal offered the book's own
+    grouping labels and the INLINE CELL — the primary edit path — offered
+    nothing at all.
+
+    Only the EDITOR needs it (a display cell has nothing to complete), so the
+    query runs once per opened cell rather than once per cell of every row.
+    WHICH field gets the vocabulary is forms.inline.rfi_item_fields' call, not
+    this route's: the TUI's inline cell reads the identical list."""
+    _item_field(key)  # the editable-set guard, before any query runs
+    return {f.key: f for f in rfi_item_fields(_conn(request))}[key]
+
+
 def _item_editor_cell(
     request: Request, ref: str, request_id: str, item_id: str, key: str,
     error: str | None = None, typed: str | None = None,
 ) -> HTMLResponse:
-    field = _item_field(key)
+    field = _item_editor_field(request, key)
     existing = rfi_repo.get_item(_conn(request), item_id)
     value = typed if typed is not None else initial_text(field, getattr(existing, key, None))
     action = _item_cell_action(ref, request_id, item_id, key)

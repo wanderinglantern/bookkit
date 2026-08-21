@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from ...models import Submission, Task
     from ..app import BookkitApp
 
+import sqlite3
 import subprocess
 import sys
 from datetime import date
@@ -128,7 +129,17 @@ TAB_HINTS: dict[str, str] = {
 # Showing it at all is the point — it used to be typed into the form and then
 # be invisible everywhere in the TUI, reachable only through the export.
 # the Field list itself lives in forms/inline.py — see the comment there.
-RFI_ITEM_INLINE = dict(zip((0, 3, 4, 7), forms_inline.RFI_ITEM_FIELDS, strict=True))
+RFI_ITEM_COLUMNS = (0, 3, 4, 7)  # item, group, needed by, response
+
+
+def rfi_item_inline(conn: sqlite3.Connection) -> dict[int, Field]:
+    """The RFI item column map, with the group cell carrying the book's own
+    category vocabulary. Built per fill, not once at import, for the reason
+    task_inline gives: a vocabulary is data, and a group typed a minute ago
+    has to be offered."""
+    return dict(
+        zip(RFI_ITEM_COLUMNS, forms_inline.rfi_item_fields(conn), strict=True)
+    )
 
 # narrower than this and a wrapped detail column is not worth the rows it
 # costs: the note comes out three characters wide, three lines tall, saying
@@ -926,7 +937,7 @@ class AccountScreen(Screen):
             title.update("no request selected")
             return
         title.update(f"{request.ref} — {request.title}")
-        items.inline_fields = RFI_ITEM_INLINE
+        items.inline_fields = rfi_item_inline(conn)
         for item in rfi_repo.items_for_request(conn, request.id):
             items.add_row(
                 item.prompt, detail_cell(item.detail), item.kind,

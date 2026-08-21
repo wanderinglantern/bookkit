@@ -42,7 +42,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ...forms.entities import apply_contact, apply_interaction, contact_form, interaction_form
-from ...forms.inline import CONTACT_FIELDS
+from ...forms.inline import CONTACT_FIELDS, contact_fields
 from ...forms.spec import Field, initial_text, parse_value
 from ...models import Interaction, InteractionType, Org
 from ...repo import contacts as contacts_repo
@@ -81,6 +81,24 @@ def _contact_field(key: str) -> Field:
     return field
 
 
+def _contact_editor_field(request: Request, key: str) -> Field:
+    """The same field, carrying the book's own vocabularies — `role`'s picker
+    options and `title`'s <datalist>. The mirror of work.py's
+    _task_editor_field, and WHICH field gets what is forms.inline's call, not
+    this route's: the TUI's inline cell reads the identical list.
+
+    THE SAVE PATH USES THIS TOO, unlike the task cells' — and it must.
+    `role` is a select, so forms.spec.checked_option is authoritative on the
+    way in; parsing against the module-level CONTACT_FIELDS would check the
+    posted value against only the ELEVEN DECLARED roles and refuse every role
+    the book already stores, which is exactly the "picker that refuses what is
+    already on the record" failure repo.vocab.contact_roles exists to prevent.
+    Rebuilding the field server-side from the same query that built it for the
+    GET is the pattern checked_option's own docstring describes."""
+    _contact_field(key)  # the editable-set guard, before any query runs
+    return {f.key: f for f in contact_fields(_conn(request))}[key]
+
+
 _CONTACT_FIELD_LABELS: dict[str, str] = {"role": "ROLE", "email": "EMAIL", "phone": "PHONE"}
 
 
@@ -95,7 +113,7 @@ def _contact_row(request: Request, ref: str, contact: Any) -> dict[str, Any]:
     Every cell passes tag="div": there's no <table> here for a bare <td> to
     live in, and one dropped silently by the HTML parser is worse than one
     that's merely wrong. first_name/last_name stay plain text — the TUI's
-    CONTACT_INLINE has no entry for them either, so neither surface makes
+    contact_inline has no entry for them either, so neither surface makes
     them inline-editable."""
     fields_by_key = {f.key: f for f in CONTACT_FIELDS}
 
@@ -477,7 +495,7 @@ def _contact_editor_cell(
     request: Request, ref: str, contact_id: str, key: str,
     error: str | None = None, typed: str | None = None,
 ) -> HTMLResponse:
-    field = _contact_field(key)
+    field = _contact_editor_field(request, key)
     existing = contacts_repo.get(_conn(request), contact_id)
     value = typed if typed is not None else initial_text(field, getattr(existing, key, None))
     action = _cell_action(ref, contact_id, key)
@@ -507,7 +525,7 @@ async def contact_cell_save(request: Request, ref: str, contact_id: str, key: st
     org = _org(request, ref)
     conn = _conn(request)
     existing = _owned(conn, org, "contact", contact_id, contacts_repo.get)
-    field = _contact_field(key)
+    field = _contact_editor_field(request, key)
     raw = str((await request.form()).get(key, ""))
     try:
         value = parse_value(field, raw)

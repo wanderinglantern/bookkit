@@ -82,7 +82,8 @@ def edit_placement(screen: Screen, placement: Placement) -> None:
     """Dual-owner edit for linked placements (name/dates write through the
     towerkit file), plain form for unlinked ones."""
     from ...forms import entities as ef
-    from ...forms.spec import BatchSpec, Field, FormSpec
+    from ...forms.inline import PLACEMENT_FIELDS
+    from ...forms.spec import BatchSpec, FormSpec
     from .forms import FormModal
 
     conn = _app(screen).conn
@@ -94,19 +95,18 @@ def edit_placement(screen: Screen, placement: Placement) -> None:
         )
         return
 
+    # forms.inline.PLACEMENT_FIELDS, NOT a hand-rolled copy of it. This form
+    # had re-declared all five fields, including a THIRD spelling of the
+    # placement statuses as a string tuple — the other two being
+    # models.PlacementStatus and forms/entities.py's own literal — so the one
+    # a status typo would fall out of every filtered view through was the one
+    # no enum and no type checker could see (CLAUDE.md, DRY: the copy that
+    # quietly DIFFERS is the risk). The keys are the same set either way:
+    # PLACEMENT_FIELDS' docstring says they ARE placement_edit's FILE_OWNED +
+    # BOOK_OWNED vocabulary, which is exactly what `commit` below hands it.
     spec = FormSpec(
         f"edit {placement.ref} (dates/name write to the towerkit file)",
-        [
-            Field("program_name", "program name", required=True),
-            Field("period_from", "effective", "date", required=True),
-            Field("period_to", "expiry", "date", required=True),
-            Field(
-                "status", "status", "select",
-                tuple((s, s) for s in
-                      ("prospective", "submitted", "quoted", "bound", "lapsed")),
-            ),
-            Field("commission_bps", "commission (bps)", "int"),
-        ],
+        list(PLACEMENT_FIELDS),
         initial={
             "program_name": placement.program_name,
             "period_from": placement.period_from,

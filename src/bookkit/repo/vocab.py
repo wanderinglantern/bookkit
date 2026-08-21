@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from ..models import INTERNAL_CATEGORY
+from ..models import CONTACT_ROLES, INTERNAL_CATEGORY
 from . import base
 
 
@@ -73,3 +73,39 @@ def task_categories(conn: sqlite3.Connection) -> list[str]:
 
 def rfi_categories(conn: sqlite3.Connection) -> list[str]:
     return _dedupe(_column(conn, "rfi_item", "category"))
+
+
+def contact_roles(conn: sqlite3.Connection) -> list[str]:
+    """The DECLARED contact-role vocabulary (models.CONTACT_ROLES) plus every
+    role the book already uses — the option set for the role PICKER, on both
+    surfaces.
+
+    Both halves are load-bearing, and for opposite reasons. Without the
+    declared list a fresh book offers nothing and `role` is a text box again,
+    so nobody discovers that "broker_of_record" is a thing the field can say.
+    Without the book's own values the picker would REFUSE a role already
+    stored — `forms.spec.checked_option` is authoritative on the way in, so a
+    bare select over CONTACT_ROLES would make every contact whose role was
+    typed before this existed unsaveable until somebody re-classified them
+    (Grant, 2026-08-20: constrain new entry, strand nothing already typed).
+
+    The book comes FIRST so its own spelling wins a case collision — _dedupe
+    folds case and keeps the first spelling, the same rule task_categories
+    relies on so a book saying "internal" does not gain a sibling. A stored
+    role therefore always appears in the options EXACTLY as stored, which is
+    what a select needs to pre-select it."""
+    return _dedupe([*_column(conn, "contact", "role"), *CONTACT_ROLES])
+
+
+def contact_titles(conn: sqlite3.Connection) -> list[str]:
+    """Job titles the book's contacts already carry.
+
+    SUGGESTIONS, not a picker: a title is prose off a signature block ("VP,
+    Risk Management & Insurance"), so the valid set is not knowable and a
+    select would refuse the next real one. Completion still stops "VP Risk"
+    and "V.P. Risk" from both existing at the same company.
+
+    Contacts only — team_member.title is a different population (our internal
+    grades, not a client's org chart) and mixing them would offer a broker
+    title on a client contact and the reverse."""
+    return _dedupe(_column(conn, "contact", "title"))

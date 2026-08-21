@@ -15,16 +15,66 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import replace
 
-from ..models import PlacementStatus
+from ..models import CONTACT_ROLES, PlacementStatus
 from ..repo import assignees, vocab
 from .spec import Field
 
 CONTACT_FIELDS: tuple[Field, ...] = (
-    Field("role", "role"),
+    # A PICKER, not a text box. The modal form has offered a select over
+    # CONTACT_ROLES since it was written, while this — the PRIMARY edit path
+    # on both surfaces — took anything at all, so "risk manager", "Risk
+    # Manager" and "RM" could all sit on the same book beside the eleven
+    # declared spellings and no filter would ever gather them.
+    #
+    # These are only the DECLARED options; `contact_fields(conn)` widens them
+    # to include what the book already stores, and every route that PARSES a
+    # role must use that widened field (checked_option is authoritative on the
+    # way in, so the narrow list would refuse a role already on the record).
+    # The suggestions half is for the TUI, whose inline editor is a one-line
+    # Input for every kind — it completes from the same list the web renders
+    # as <option>s, so neither surface is the weaker one.
+    Field(
+        "role", "role", "select",
+        tuple((r, r) for r in CONTACT_ROLES),
+        optional_select=True, suggestions=CONTACT_ROLES,
+    ),
     Field("title", "title"),
     Field("email", "email", "email"),
     Field("phone", "phone", "phone"),
 )
+
+
+def contact_fields(conn: sqlite3.Connection) -> tuple[Field, ...]:
+    """CONTACT_FIELDS with the role and title vocabularies filled in from the
+    book — the same shape task_fields has, and for the same reason.
+
+    `role` becomes a picker over the declared vocabulary UNION every role
+    already stored (repo.vocab.contact_roles). That constrains new entry
+    without stranding anything already typed: a select whose options are only
+    the declared eleven would make `checked_option` refuse a legacy role on
+    its own record, and the cell would then be unsaveable until somebody
+    re-classified the contact — a picker must offer only what is storable, and
+    equally must not refuse what is already stored.
+
+    `title` gets SUGGESTIONS, not options: a title is prose off a signature
+    block, so the valid set is not knowable and a select would refuse the next
+    real one. Completion is the whole win there.
+
+    A function, not a constant, because a vocabulary is DATA and grows as the
+    book does. Field ORDER is unchanged, because each screen maps column
+    positions off it."""
+    roles = tuple(vocab.contact_roles(conn))
+    titles = tuple(vocab.contact_titles(conn))
+    widened: dict[str, Field] = {}
+    for f in CONTACT_FIELDS:
+        if f.key == "role":
+            widened[f.key] = replace(
+                f, options=tuple((r, r) for r in roles), suggestions=roles
+            )
+        elif f.key == "title":
+            widened[f.key] = replace(f, suggestions=titles)
+    return tuple(widened.get(f.key, f) for f in CONTACT_FIELDS)
+
 
 TASK_FIELDS: tuple[Field, ...] = (
     Field("due_on", "due", "date"),
@@ -139,3 +189,26 @@ RFI_ITEM_FIELDS: tuple[Field, ...] = (
     Field("due_on", "needed by", "date"),
     Field("response", "response"),
 )
+
+
+def rfi_item_fields(conn: sqlite3.Connection) -> tuple[Field, ...]:
+    """RFI_ITEM_FIELDS with the category cell's vocabulary filled in — the
+    mirror of task_fields, and it was missing.
+
+    `rfi_item_form` has completed the category from repo.vocab.rfi_categories
+    since it was written, so the SECONDARY edit path (the whole-record modal)
+    offered the book's own grouping labels while the PRIMARY one (the inline
+    cell, on both surfaces) offered nothing. The categories are what a request
+    is grouped by on the client-facing export, so two spellings of the same
+    group split one section into two.
+
+    SUGGESTIONS, not options: unlike a contact's role there is no declared RFI
+    category vocabulary — the labels are whatever this book files asks under —
+    so the set is open and a select would refuse the next new one. On an empty
+    book this is legitimately empty, and the cell renders with no datalist
+    rather than with an empty one."""
+    categories = tuple(vocab.rfi_categories(conn))
+    return tuple(
+        replace(f, suggestions=categories) if f.key == "category" else f
+        for f in RFI_ITEM_FIELDS
+    )

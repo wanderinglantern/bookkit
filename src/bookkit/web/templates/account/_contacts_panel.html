@@ -9,7 +9,7 @@
    no <table> ancestor for a bare <td> to live in, and the wrapping element
    now tracks the caller's actual container (see forms_render.py). The
    value/action/error wiring lives in Python (routes/relationship.py), not
-   here. first_name and last_name stay plain text: CONTACT_INLINE (the
+   here. first_name and last_name stay plain text: contact_inline (the
    TUI's shared source of truth, bookkit.forms.inline.CONTACT_FIELDS) never
    declares them, so neither surface makes them inline-editable — and they
    render without the dashed-editable underline, on purpose, so the
