@@ -19,6 +19,7 @@ The load-bearing assertions here are the safety ones, not the happy path:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -362,19 +363,28 @@ class TestTheConfirmStep:
 
         assert "undo brings the RECORD back" in page
 
-    def test_the_confirm_offers_no_remove_button_when_it_would_be_refused(
+    def test_the_confirm_never_offers_the_stranding_removal(
         self, app_and_org
     ) -> None:
-        """Said before the click, not after it: a button that always comes back
-        as an error is worse than no button."""
+        """Said before the click, not after it. The plain removal WOULD strand
+        the records, so it is not offered; what is offered is Merge (keeps the
+        work) and the cascade (does not), and the cascade names its own count
+        so the button is the sentence."""
         client, org = app_and_org
         conn = client.app.state.conn
         placement = _blocked(conn, org)
 
         page = client.get(self._url(org, placement)).text
 
-        assert "Remove program" not in page
-        assert "Merge" in page
+        flat = re.sub(r"\s+", " ", page)
+        assert 'hx-vals=\'{"cascade": "1"}\'' in flat
+        assert "Remove program and 1 record</button>" in flat, (
+            "the cascade button does not say how much it takes"
+        )
+        assert ">Remove program</button>" not in flat, (
+            "the removal that would strand records is on offer"
+        )
+        assert "Merge" in flat
 
     def test_the_post_removes_and_answers_with_the_tab(self, app_and_org) -> None:
         client, org = app_and_org
@@ -427,3 +437,197 @@ class TestTheConfirmStep:
         page = client.get(f"/accounts/{org.ref}/program").text
 
         assert f'hx-get="{self._url(org, placement)}"' in page
+
+
+# --- taking the work with it -----------------------------------------------------
+
+
+class TestCascade:
+    """`cascade=True`, on member_deactivate's shape (Grant, 2026-08-21).
+
+    Refusing while anything points at the program is right for the program
+    created by mistake, and wrong for the one that picked up a stray task on
+    its way to being a mistake. The dependants go WITH it, in ONE batch, so a
+    single revert puts every one of them back.
+    """
+
+    def _work(self, conn, org):
+        """A linked program carrying one of every kind that can hold it."""
+        from bookkit.repo import documents, orgs, submissions, tasks
+        from bookkit.repo import rfi as rfi_repo
+
+        placement = _removable(conn, org)
+        today = "2026-08-14"
+        tasks.create(conn, "chase the binder", org_id=org.id,
+                     placement_id=placement.id)
+        market = orgs.list_orgs(conn, kind="market")[0]
+        submissions.create(
+            conn, market_org_id=market.id, sent_on=today,
+            placement_id=placement.id, status="out",
+        )
+        documents.add(
+            conn, org_id=org.id, title="binder.pdf", path="/tmp/binder.pdf",
+            placement_id=placement.id,
+        )
+        request = rfi_repo.create_request(
+            conn, org_id=org.id, title="underwriting questions",
+            requested_on=today, placement_id=placement.id,
+        )
+        rfi_repo.add_item(conn, request.id, prompt="last three years of payroll")
+        return placement, request
+
+    def test_without_cascade_it_still_refuses(self, app_and_org) -> None:
+        client, org = app_and_org
+        conn = client.app.state.conn
+        placement, _ = self._work(conn, org)
+
+        with pytest.raises(program_remove.ProgramRemoveRefused) as refusal:
+            program_remove.remove(
+                conn, placement, open_batch=_open_batch, now=db.utc_now()
+            )
+
+        assert "as one revertible batch" in str(refusal.value), (
+            "the refusal does not name the other answer"
+        )
+
+    def test_cascade_takes_every_kind_with_it(self, app_and_org) -> None:
+        client, org = app_and_org
+        conn = client.app.state.conn
+        placement, _ = self._work(conn, org)
+        carried = placements_repo.dependant_rows(conn, placement.id)
+        assert len({table for table, _ in carried}) >= 4, "fixture drifted"
+
+        result = program_remove.remove(
+            conn, placement, open_batch=_open_batch, now=db.utc_now(),
+            cascade=True,
+        )
+
+        assert result.cascaded == len(carried)
+        assert not placements_repo.dependant_rows(conn, placement.id)
+        assert _deleted_at(conn, placement.id) is not None
+
+    def test_a_request_takes_its_items_with_it(self, app_and_org) -> None:
+        """Through services.rfi, not the repo: an item is reachable only
+        through its request, so one left behind is unreachable rather than
+        preserved."""
+        from bookkit.repo import rfi as rfi_repo
+
+        client, org = app_and_org
+        conn = client.app.state.conn
+        placement, request = self._work(conn, org)
+        assert rfi_repo.items_for_request(conn, request.id)
+
+        program_remove.remove(
+            conn, placement, open_batch=_open_batch, now=db.utc_now(),
+            cascade=True,
+        )
+
+        assert not rfi_repo.items_for_request(conn, request.id)
+
+    def test_it_is_ONE_batch_that_puts_everything_back(self, app_and_org) -> None:
+        """The whole reason a cascade is offerable at all. The dependant verbs
+        open batches of their own; db.transaction nests by joining, so they
+        land in this one."""
+        from bookkit.repo import batches as batches_repo
+
+        client, org = app_and_org
+        conn = client.app.state.conn
+        placement, request = self._work(conn, org)
+        carried = placements_repo.dependant_rows(conn, placement.id)
+
+        program_remove.remove(
+            conn, placement, open_batch=_open_batch, now=db.utc_now(),
+            cascade=True,
+        )
+        batches = batches_repo.recent(conn, "0000", limit=5)
+        assert batches[0].tool == "remove_program"
+        assert str(len(carried)) in batches[0].summary
+        # ONE row, not one per dependant service that opened a batch of its
+        # own. services/rfi.remove_request opens one; nested, it joins this
+        # batch and creates no row, or the changes list would carry a phantom
+        # "removed information request" that reverts nothing (services/
+        # batches.open_batch, 2026-08-21).
+        assert len(batches) == 1, (
+            f"a nested service left an orphan batch row: "
+            f"{[b.tool for b in batches]}"
+        )
+
+        batches_svc.revert(conn, batches[0].ref, now=db.utc_now())
+
+        assert _deleted_at(conn, placement.id) is None
+        assert len(placements_repo.dependant_rows(conn, placement.id)) == len(carried)
+
+    def test_an_answered_request_refuses_the_whole_cascade(
+        self, app_and_org
+    ) -> None:
+        """The one refusal that survives cascade. Deleting the question deletes
+        the client's ANSWER with it, and no amount of certainty about a program
+        is consent to that. Nothing is removed — not even the parts that could
+        have been."""
+        from bookkit.repo import rfi as rfi_repo
+
+        client, org = app_and_org
+        conn = client.app.state.conn
+        placement, request = self._work(conn, org)
+        item = rfi_repo.items_for_request(conn, request.id)[0]
+        rfi_repo.update_item(conn, item.id, response="payroll attached")
+
+        with pytest.raises(program_remove.ProgramRemoveRefused) as refusal:
+            program_remove.remove(
+                conn, placement, open_batch=_open_batch, now=db.utc_now(),
+                cascade=True,
+            )
+
+        assert "answered" in str(refusal.value)
+        assert _deleted_at(conn, placement.id) is None
+        assert placements_repo.dependant_rows(conn, placement.id), (
+            "a refused cascade removed something anyway"
+        )
+        assert sync.program_file(conn, placement).exists()
+
+    def test_the_confirm_declines_before_the_click_when_it_cannot_cascade(
+        self, app_and_org
+    ) -> None:
+        from bookkit.repo import rfi as rfi_repo
+
+        client, org = app_and_org
+        conn = client.app.state.conn
+        placement, request = self._work(conn, org)
+        item = rfi_repo.items_for_request(conn, request.id)[0]
+        rfi_repo.update_item(conn, item.id, response="payroll attached")
+
+        page = client.get(
+            f"/accounts/{org.ref}/program/{placement.id}/remove"
+        ).text
+
+        assert "answered" in page
+        assert "cascade" not in page, "a button that cannot work is on offer"
+
+    def test_the_post_cascades_when_asked_and_not_otherwise(
+        self, app_and_org
+    ) -> None:
+        client, org = app_and_org
+        conn = client.app.state.conn
+        placement, _ = self._work(conn, org)
+        url = f"/accounts/{org.ref}/program/{placement.id}/remove"
+
+        refused = client.post(url)
+        assert "still has" in refused.text
+        assert _deleted_at(conn, placement.id) is None
+
+        done = client.post(url, data={"cascade": "1"})
+        assert done.status_code == 200
+        assert _deleted_at(conn, placement.id) is not None
+
+    def test_every_dependant_table_has_a_verb(self) -> None:
+        """A table added to repo.placements._DEPENDANTS and forgotten in
+        `_remove_dependant` would be SKIPPED by a cascade and stranded — the
+        exact hazard the refusal exists to prevent, reintroduced by a
+        migration. The two lists are checked against each other."""
+        from bookkit.repo.placements import _DEPENDANTS
+        from bookkit.services.program_remove import _remove_dependant
+
+        source = _remove_dependant.__code__.co_consts
+        named = {c for c in source if isinstance(c, str)}
+        missing = [t for t, _one, _many in _DEPENDANTS if t not in named]
+        assert not missing, f"no removal verb for: {missing}"

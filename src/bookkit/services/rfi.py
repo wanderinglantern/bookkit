@@ -50,6 +50,38 @@ def _answered(items: list[RfiItem]) -> list[RfiItem]:
     return [i for i in items if i.response or i.status == "received" or i.received_on]
 
 
+def check_removable(conn: sqlite3.Connection, request_id: str) -> None:
+    """Raise if this request may not be removed. Returns nothing when it may.
+
+    Extracted from `remove_request` so a caller can ask BEFORE it starts — the
+    program cascade (services/program_remove.py) needs to decline in the
+    confirm rather than half-way through a batch, and the alternative was a
+    second copy of "what counts as answered", which is the copy that quietly
+    differs. One rule, one home; `remove_request` still calls it, so the two
+    cannot disagree about a single request.
+    """
+    from ..repo import base
+
+    row = base.raw_row(conn, "rfi_request", request_id)
+    if row is None:
+        raise ValueError(
+            f"no information request {request_id!r} — read the account's "
+            f"requests for exact ids"
+        )
+    if row["deleted_at"]:
+        raise ValueError(f"{row['ref']} was already removed on {row['deleted_at'][:10]}")
+
+    request = rfi_repo.get_request(conn, request_id)
+    answered = _answered(rfi_repo.items_for_request(conn, request_id))
+    if answered:
+        named = ", ".join(f"{i.prompt[:40]!r}" for i in answered[:3])
+        raise ValueError(
+            f"{request.ref} has {len(answered)} answered item(s) — {named}. "
+            f"Deleting the question deletes the client's answer with it. Set "
+            f"cancelled_at to withdraw the request instead, and keep the record."
+        )
+
+
 def remove_request(
     conn: sqlite3.Connection, request_id: str, *, source: str
 ) -> Removal:
@@ -77,28 +109,11 @@ def remove_request(
 
     `source` is the surface: 'mcp' | 'tui' | 'web'.
     """
-    from ..repo import base
     from ..services import batches as batches_svc
 
-    row = base.raw_row(conn, "rfi_request", request_id)
-    if row is None:
-        raise ValueError(
-            f"no information request {request_id!r} — read the account's "
-            f"requests for exact ids"
-        )
-    if row["deleted_at"]:
-        raise ValueError(f"{row['ref']} was already removed on {row['deleted_at'][:10]}")
-
+    check_removable(conn, request_id)
     request = rfi_repo.get_request(conn, request_id)
     items = rfi_repo.items_for_request(conn, request_id)
-    answered = _answered(items)
-    if answered:
-        named = ", ".join(f"{i.prompt[:40]!r}" for i in answered[:3])
-        raise ValueError(
-            f"{request.ref} has {len(answered)} answered item(s) — {named}. "
-            f"Deleting the question deletes the client's answer with it. Set "
-            f"cancelled_at to withdraw the request instead, and keep the record."
-        )
 
     with batches_svc.open_batch(
         conn, source=source, tool="request_remove", org_id=request.org_id,

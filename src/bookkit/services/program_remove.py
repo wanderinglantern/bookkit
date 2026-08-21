@@ -24,11 +24,20 @@ which is recoverable by hand and by re-running.
 NOTHING LIVE MAY POINT AT IT. A soft-deleted placement whose submissions,
 tasks or requests still reference it leaves readers holding a dead foreign key
 — the same hazard services/merge.py exists to move records away from. So this
-REFUSES while any of them are alive and names each one, rather than cascading:
-a program with real work filed against it is not the mistake this is for, and
-the honest answer is Merge (to keep the work) or moving the records first.
-`member_deactivate`'s `cascade=True` is the shape to add if that proves too
-strict; it is deliberately not here yet.
+REFUSES BY DEFAULT while any of them are alive and names each one, because a
+program with real work filed against it is usually not the mistake this is for
+and the honest answer is Merge, which keeps the work.
+
+`cascade=True` is the other answer, on `member_deactivate`'s shape (Grant,
+2026-08-21): the dependants go WITH the program, in ONE batch, so a single
+revert puts every one of them back. Two things make that safe enough to offer.
+Each row is removed through its own kind's VERB, never a blanket UPDATE — an
+information request takes its items with it, because an item is reachable only
+through its request and one left behind is unreachable rather than preserved.
+And one refusal survives cascade entirely: a request somebody has ANSWERED.
+Deleting the question deletes the client's answer with it, and no amount of
+"yes I am sure" about a *program* is consent to that — services/rfi.py owns
+that rule and this defers to it rather than restating it.
 
 UNDO IS HALF A STORY, AND THE CONFIRM SAYS SO. The placement comes back —
 `deleted_at` is one field in one batch. The file does not follow it out of
@@ -64,6 +73,44 @@ class Removal:
     program_name: str
     file_from: str | None
     file_to: str | None
+    # how many rows went WITH the program, when cascade was asked for
+    cascaded: int = 0
+
+
+# Which verb takes each kind of dependant off the book. NOT a blanket UPDATE
+# over the six tables: a request has to go through the service that takes its
+# ITEMS with it, and routing every kind through its own door is what stops this
+# module from becoming a seventh place that knows how to delete a submission.
+# A table added to repo.placements._DEPENDANTS and missing here refuses loudly
+# rather than being skipped — asserted by tests/test_program_remove.py.
+def _remove_dependant(
+    conn: sqlite3.Connection, table: str, row_id: str, *, source: str
+) -> None:
+    from ..repo import documents, projects, submissions, tasks, team
+    from . import rfi as rfi_svc
+
+    if table == "submission":
+        submissions.delete(conn, row_id)
+    elif table == "task":
+        tasks.delete(conn, row_id)
+    elif table == "rfi_request":
+        # THE SERVICE, not the repo: an item is reachable only through its
+        # request, so a request removed without its items leaves them
+        # unreachable rather than preserved. It opens its own batch, which
+        # JOINS this one (db.transaction nests by joining), so the whole
+        # cascade stays one undo unit.
+        rfi_svc.remove_request(conn, row_id, source=source)
+    elif table == "document":
+        documents.delete(conn, row_id)
+    elif table == "team_assignment":
+        team.unassign(conn, row_id)
+    elif table == "project_need":
+        projects.delete_need(conn, row_id)
+    else:  # pragma: no cover - the guard is the point; the test proves it
+        raise ProgramRemoveRefused([
+            f"{table} rows point at this program and nothing here knows how "
+            f"to remove one — add its verb to _remove_dependant",
+        ])
 
 
 def blockers(conn: sqlite3.Connection, placement_id: str) -> list[str]:
@@ -77,6 +124,31 @@ def blockers(conn: sqlite3.Connection, placement_id: str) -> list[str]:
         f"{count} {label}"
         for label, count in placements.dependants(conn, placement_id)
     ]
+
+
+def cascade_refusals(conn: sqlite3.Connection, placement_id: str) -> list[str]:
+    """What a cascade STILL cannot take, in the words the confirm shows.
+
+    Separate from `blockers` because they answer different questions:
+    `blockers` is "what would be stranded", which cascade resolves, and this is
+    "what would be destroyed that is not ours to destroy", which it does not.
+
+    Today that is exactly one thing — an ANSWERED information request. The rule
+    and its wording live in services/rfi.remove_request; this asks the same
+    question ahead of time so the confirm can decline before the click rather
+    than half-way through a batch.
+    """
+    from . import rfi as rfi_svc
+
+    refusals: list[str] = []
+    for table, row_id in placements.dependant_rows(conn, placement_id):
+        if table != "rfi_request":
+            continue
+        try:
+            rfi_svc.check_removable(conn, row_id)
+        except ValueError as exc:
+            refusals.append(str(exc))
+    return refusals
 
 
 def consequences(conn: sqlite3.Connection, placement: Placement) -> list[str]:
@@ -126,22 +198,40 @@ def remove(
     *,
     open_batch: object,
     now: str,
+    source: str = "web",
+    cascade: bool = False,
 ) -> Removal:
     """Remove one program: refuse, then write, then move the file.
 
     `open_batch` is passed in rather than imported, the same way
     services/program_files.write takes it — this module depends on neither
-    surface, and each caller supplies its own source stamp.
+    surface. `source` is only for the dependant verbs that stamp one of their
+    own (services/rfi), and it defaults rather than being required because the
+    batch row already records the surface.
+
+    `cascade=True` takes the dependants with it, in the SAME batch, so one
+    revert puts every one of them back. It does not override
+    `cascade_refusals`: an answered information request is not this decision's
+    to make.
     """
     from .. import sync as sync_mod
 
     held = blockers(conn, placement.id)
-    if held:
+    if held and not cascade:
         raise ProgramRemoveRefused([
             f"{placement.ref} still has " + ", ".join(held),
             "move them to the surviving program (or Merge, which does it for "
-            "you) and remove this one after",
+            "you) and remove this one after — or remove them WITH it, as one "
+            "revertible batch",
         ])
+    carried = placements.dependant_rows(conn, placement.id) if cascade else []
+    if carried:
+        refused = cascade_refusals(conn, placement.id)
+        if refused:
+            raise ProgramRemoveRefused([
+                f"{placement.ref} cannot take everything with it:",
+                *refused,
+            ])
 
     source_file: Path | None = None
     if placement.program_path:
@@ -167,12 +257,21 @@ def remove(
     # like any other. A prefixed name would have routed `u` into the file-side
     # path and refused an undo that works perfectly well (caught by the test
     # that reverts it, 2026-08-21).
+    summary = f"removed {placement.program_name}"
+    if carried:
+        summary += f" and {len(carried)} record{'s' if len(carried) != 1 else ''}"
     with open_batch(  # type: ignore[operator]
         conn,
         tool="remove_program",
         org_id=placement.org_id,
-        summary=f"removed {placement.program_name}",
+        summary=summary,
     ):
+        # DEPENDANTS FIRST, then the placement. The order is not cosmetic: each
+        # dependant verb reads the row it is removing, and one of them
+        # (rfi_svc.remove_request) reads the request's own org — none of which
+        # is helped by the placement already being a tombstone.
+        for table, row_id in carried:
+            _remove_dependant(conn, table, row_id, source=source)
         projection.replace_for_placement(conn, placement.id, now, [], [], [])
         placements.delete(conn, placement.id)
 
@@ -185,6 +284,7 @@ def remove(
         program_name=placement.program_name,
         file_from=str(source_file) if source_file else None,
         file_to=str(destination) if destination else None,
+        cascaded=len(carried),
     )
 
 
@@ -217,6 +317,7 @@ __all__ = [
     "ProgramRemoveRefused",
     "Removal",
     "blockers",
+    "cascade_refusals",
     "consequences",
     "remove",
     "retired_path",

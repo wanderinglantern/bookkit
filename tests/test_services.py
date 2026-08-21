@@ -2387,3 +2387,40 @@ def test_information_requests_detail_column_matches_open_items_width(conn, tmp_p
     # row 1 header, row 2 the leading "Items we need from you" label,
     # row 3 the request's own section label, row 4 the item row
     assert ws.row_dimensions[4].height >= 54.0
+
+
+def test_a_nested_open_batch_joins_and_leaves_no_orphan_row(seeded) -> None:
+    """ONE WRITER ACTION IS ONE UNDO UNIT, and one row in the changes list.
+
+    db.transaction has always JOINED rather than nested and has always ignored
+    an inner `batch=`, so events written by a nested service already landed on
+    the outer batch. What open_batch still did was insert a row for the inner
+    action anyway — a row with zero events, describing an action, offering a
+    Revert, and reverting nothing.
+
+    Found via the program cascade calling services/rfi.remove_request inside
+    its own batch (2026-08-21). Asserted here rather than there because it is a
+    property of the seam, not of that caller.
+    """
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.services import batches as batches_svc
+
+    org = orgs_repo.list_orgs(seeded, kind="client")[0]
+    before = len(batches_repo.recent(seeded, "0000", limit=50))
+
+    with batches_svc.open_batch(
+        seeded, source="web", tool="outer", summary="outer action",
+        org_id=org.id,
+    ) as outer:
+        with batches_svc.open_batch(
+            seeded, source="web", tool="inner", summary="inner action",
+            org_id=org.id,
+        ) as inner:
+            orgs_repo.update(seeded, org.id, notes="touched")
+            assert inner.id == outer.id, "the inner call opened its own batch"
+
+    rows = batches_repo.recent(seeded, "0000", limit=50)
+    assert len(rows) == before + 1, "a nested open_batch left an extra row"
+    assert rows[0].tool == "outer", "the inner action named the undo unit"
+    assert batches_repo.events_for(seeded, outer.id), "the events went nowhere"

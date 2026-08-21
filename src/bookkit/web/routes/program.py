@@ -2365,6 +2365,8 @@ def program_remove_confirm(
             "header": {"org": org},
             "placement": placement,
             "blockers": program_remove.blockers(conn, placement.id),
+            "cascade_refusals": program_remove.cascade_refusals(conn, placement.id),
+            "carried": len(placements_repo.dependant_rows(conn, placement.id)),
             "notes": program_remove.consequences(conn, placement),
             "file_from": str(source) if source else None,
             "file_to": (
@@ -2379,7 +2381,9 @@ def program_remove_confirm(
 
 
 @router.post("/accounts/{ref}/program/{placement_id}/remove", response_class=HTMLResponse)
-def program_remove_save(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+async def program_remove_save(
+    request: Request, ref: str, placement_id: str
+) -> HTMLResponse:
     """The confirmed removal. Answers with the whole TAB, not the section: the
     section it would have swapped is the one that just stopped existing."""
     from ...services import program_remove as removal
@@ -2387,9 +2391,14 @@ def program_remove_save(request: Request, ref: str, placement_id: str) -> HTMLRe
     org = _org(request, ref)
     conn = _conn(request)
     placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    # The cascade is a SEPARATE BUTTON, not a checkbox on the same one: it is a
+    # different act with a different sentence, and a checkbox somebody leaves
+    # ticked from last time is exactly the prefill nobody checks.
+    cascade = str((await request.form()).get("cascade", "")) == "1"
     try:
         removal.remove(
-            conn, placement, open_batch=_open_batch_web, now=db.utc_now()
+            conn, placement, open_batch=_open_batch_web, now=db.utc_now(),
+            source="web", cascade=cascade,
         )
     except removal.ProgramRemoveRefused as exc:
         return _programs_panel(request, ref, org, error="; ".join(exc.reasons))
