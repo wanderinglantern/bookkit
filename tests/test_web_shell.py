@@ -682,3 +682,63 @@ def test_no_hover_revealed_control_is_hidden_from_the_keyboard():
         "a control hidden with `visibility: hidden` cannot be focused, so any "
         f"focus-based reveal for it is dead: {offenders}"
     )
+
+
+# --- blur-commit must not be able to wedge itself off ------------------------
+#
+# SOURCE ASSERTIONS, and they are the weakest kind — there is no JS harness in
+# this project, so nothing here EXECUTES inline-cell.js. They exist because the
+# bug they pin was invisible to every other test and cost Grant real work: the
+# behaviour was verified in a real browser (Playwright, 2026-08-21) and these
+# guard the two lines that verification turned on.
+
+
+def _inline_cell_js() -> str:
+    from bookkit.web import app as app_mod
+
+    return (app_mod.HERE / "static" / "inline-cell.js").read_text()
+
+
+def test_the_committing_flag_resets_without_inspecting_the_swapped_element():
+    """THE BUG, pinned. `committing` suppresses the focusout that a commit's
+    own swap causes, and it used to reset only when `htmx:afterRequest` carried
+    `detail.elt` that was the `.cell-editor` which submitted.
+
+    That is never true when the response swaps away the form's own ancestors —
+    every save on the Program tab, because `_panel` retargets onto the whole
+    section. htmx fires the event on the requesting element and, finding it no
+    longer in the document, RE-FIRES on the nearest attached ancestor with
+    `detail.elt` set to that ancestor (`if(!le(r))` in htmx.min.js). A <section>
+    is not a .cell-editor, so the flag stayed true and every later focusout on
+    the page returned early: blur-commit was dead from the first such save until
+    a reload, while Enter kept working because Enter is a native submit.
+
+    Grant, 2026-08-21: "sometimes i need to hit enter, other times not".
+    """
+    js = _inline_cell_js()
+    handler = js[js.index('addEventListener("htmx:afterRequest"') :]
+    handler = handler[: handler.index("});")]
+
+    assert "committing = false" in handler
+    assert "cell-editor" not in handler, (
+        "the reset is gated on the swapped element again — a retargeted panel "
+        "swap re-fires afterRequest on an ancestor, so this can never match"
+    )
+
+
+def test_a_saved_cell_gets_a_visible_signal():
+    """Grant, 2026-08-21: "unclear when changes are saved as it just stays
+    blue". A committed cell swaps back to a display cell identical to the one
+    that was there before, so nothing said the write had landed."""
+    from bookkit.web import app as app_mod
+
+    js = _inline_cell_js()
+    css = (app_mod.HERE / "static" / "app.css").read_text()
+
+    assert "cell-saved" in js
+    assert ".cell.cell-saved" in css
+    # Raised from BOTH swap shapes: a plain cell save swaps the cell, a program
+    # write swaps the whole section and only `refocus` knows which cell to mark.
+    # Flashing from one place silently did nothing on the Program tab.
+    assert js.count("flashSaved(") >= 3, "one of the two save shapes is unmarked"
+    assert "prefers-reduced-motion" in css

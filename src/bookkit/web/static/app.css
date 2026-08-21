@@ -1086,6 +1086,37 @@ table.rows td.mono {
   background: var(--paper);
 }
 
+/* A SAVE HAS TO LOOK LIKE SOMETHING (Grant, 2026-08-21: "unclear when changes
+   are saved as it just stays blue"). A committed cell swaps back to a display
+   cell identical to the one that was there before, so nothing on screen said
+   the write had landed.
+
+   It fades OUT rather than in: the change is already done by the time this is
+   painted, and a signal that grows makes a finished thing look like a starting
+   one. `--good-badge` is the same wash the status pills use for a good state,
+   so this is the palette's existing "fine" and not a new colour.
+
+   COLOUR IS SIGNAL, NOT DECORATION, so it is deliberately brief and carries no
+   text: a permanent mark would compete with .cell-error, which is the one thing
+   on this cell that must always win the eye. */
+.cell.cell-saved {
+  animation: cell-saved-fade 1.2s ease-out;
+}
+
+@keyframes cell-saved-fade {
+  from { background: var(--good-badge); }
+  to   { background: transparent; }
+}
+
+/* Someone who has asked for less motion still needs to know the write landed,
+   so the signal stays and only the animation goes. */
+@media (prefers-reduced-motion: reduce) {
+  .cell.cell-saved {
+    animation: none;
+    background: var(--good-badge);
+  }
+}
+
 .cell.cell-error {
   outline: 1px solid var(--danger);
   outline-offset: -1px;

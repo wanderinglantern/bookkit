@@ -65,15 +65,30 @@
   // Reset once the request/swap/settle cycle for that submit is over, so a
   // later genuine blur (e.g. clicking away after a refused save left the
   // editor open) is not permanently suppressed.
-  document.body.addEventListener("htmx:afterRequest", function (evt) {
-    if (
-      evt.detail &&
-      evt.detail.elt &&
-      evt.detail.elt.classList &&
-      evt.detail.elt.classList.contains("cell-editor")
-    ) {
-      committing = false;
-    }
+  //
+  // UNCONDITIONAL, and that is the fix (Grant, 2026-08-21: "unclear when
+  // changes are saved… sometimes i need to hit enter, other times not").
+  //
+  // This used to reset only when `evt.detail.elt` was the `.cell-editor` that
+  // submitted, which looks right and is wrong whenever the response swaps away
+  // the form's own ancestors — which is EVERY save on the Program tab, because
+  // routes/program.py `_panel` retargets onto the whole section. htmx fires
+  // `htmx:afterRequest` on the requesting element, and when that element is no
+  // longer in the document it re-fires the event on the nearest still-attached
+  // ancestor instead (`if(!le(r))` in htmx.min.js) — with `detail.elt` set to
+  // THAT ancestor. The ancestor is a <section>, not a .cell-editor, so the old
+  // check never matched, `committing` stayed true forever, and every later
+  // focusout on the page returned early. Blur-commit was dead from the first
+  // panel-retargeting save until a reload; Enter kept working, because Enter is
+  // a native form submit and never consults this flag. That is exactly the
+  // "sometimes" in the report.
+  //
+  // Resetting unconditionally is safe because the flag only has to survive from
+  // the submit to the swap that removes the focused input, and THAT focusout
+  // fires synchronously while the swap detaches the node — long before any
+  // request completes.
+  document.body.addEventListener("htmx:afterRequest", function () {
+    committing = false;
   });
 
   // BLUR COMMITS (Grant, 2026-08-20). It used to cancel, which meant
@@ -199,6 +214,15 @@
   // by design: a structure write (statutory, follows, applies-to) closes the
   // details row its control lived in, so there is nothing to return to, and
   // doing nothing is the right answer rather than guessing at another cell.
+  // The saved signal, in one place because two call sites raise it — see the
+  // comment at the swap handler for why there are two.
+  function flashSaved(cell) {
+    cell.classList.add("cell-saved");
+    window.setTimeout(function () {
+      cell.classList.remove("cell-saved");
+    }, 1200);
+  }
+
   function refocus(section, token) {
     var parts = token.split(":");
     var scope = parts[0];
@@ -209,7 +233,10 @@
         : section.querySelector('[data-layer-row="' + CSS.escape(scope) + '"]');
     if (!row) return;
     var cell = row.querySelector('.cell[data-field="' + CSS.escape(field) + '"]');
-    if (cell) cell.focus();
+    if (cell) {
+      cell.focus();
+      flashSaved(cell);
+    }
   }
 
   // A commit's outerHTML swap replaces the editing cell with a plain
@@ -232,6 +259,28 @@
       el.setAttribute("data-opened-with", input ? input.value : "");
       if (input) input.focus();
       return;
+    }
+
+    // A SAVE HAS TO LOOK LIKE SOMETHING (Grant, 2026-08-21: "unclear when
+    // changes are saved as it just stays blue"). A committed cell swaps back
+    // to a display cell that is, by design, identical to the one that was
+    // there before the edit — so a save that changed nothing visible, or
+    // changed a value the eye was already on, gave no sign it had happened.
+    //
+    // The flash is on the DISPLAY cell only. A refusal comes back still
+    // `.cell-editing` (commit-in-place) and is handled above, so this cannot
+    // congratulate the user on a write that was refused.
+    //
+    // TWO PLACES, because there are two shapes of successful save and only one
+    // of them swaps a cell. A plain cell save swaps the cell itself and is
+    // caught here; a program write answers with the WHOLE section, so the
+    // swapped element is a <section> and there is no cell to flash — that one
+    // is caught in `refocus` below, on the cell the caret is being put back
+    // into. Flashing only here looked right and silently did nothing on the
+    // Program tab, which is the surface the report came from (verified in a
+    // browser, 2026-08-21).
+    if (el.classList.contains("cell") && el.hasAttribute("data-field")) {
+      flashSaved(el);
     }
 
     // A write answers with the WHOLE program section (routes/program.py
