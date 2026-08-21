@@ -310,19 +310,23 @@ def _owner_column(path: Path) -> dict[str, str]:
     return {
         str(row[0].value): str(row[-1].value)
         for row in sheet.iter_rows(min_row=2)
-        if row[0].value and row[-1].value in ("You", "Us")
+        if row[0].value and row[-1].value
     }
 
 
-def test_the_owner_column_is_derived_from_the_kind_not_from_a_name(
+def test_the_owner_column_names_the_person_on_the_task(
     conn, book, tmp_path
 ) -> None:
-    """THE test this feature exists for.
+    """THE test this feature exists for, REVERSED by Grant on 2026-08-21.
 
-    Four tasks, four assignees, one workbook. A contact on the CLIENT'S OWN
-    account is theirs; our colleague, the underwriter at Zurich and a
-    freeform third party are all ours — and so is a task nobody has claimed,
-    because unassigned work is ours until someone says otherwise."""
+    It used to assert the opposite: the column answered "You" or "Us" and the
+    assignee's NAME was deliberately withheld. He asked for the individual
+    instead — "Owner shows individual not 'us'" — so every resolved assignee
+    now prints as a person, ours and the market's alike. I recommended against
+    the market half and he chose it; it is recorded, not re-argued.
+
+    Unassigned is the one thing unchanged, and for the original reason:
+    unassigned work is ours until someone says otherwise."""
     from bookkit.services.export_open_items import write
 
     client = book["client"]
@@ -340,24 +344,34 @@ def test_the_owner_column_is_derived_from_the_kind_not_from_a_name(
 
     owners = _owner_column(write(conn, client.id, tmp_path / "c.xlsx", TODAY))
     assert owners == {
-        "Return signed TRIA form": "You",
-        "Draft the renewal strategy": "Us",
-        "Chase Zurich on the loss run": "Us",
-        "Get the appraisal back": "Us",
-        "Nobody has claimed this": "Us",
+        "Return signed TRIA form": "Rae Okafor",       # their own person
+        "Draft the renewal strategy": "Dana Reyes",    # our colleague
+        "Chase Zurich on the loss run": "Jo Chen",     # the underwriter
+        "Get the appraisal back": "Marisa at Lockton", # an unresolved name
+        "Nobody has claimed this": "Us",               # nobody is on it
     }, owners
 
 
-def test_the_same_name_on_both_sides_does_not_flip_the_column(
+def test_the_same_name_on_both_sides_prints_the_same_name(
     conn, book, tmp_path
 ) -> None:
-    """The collision, end to end and on the client's own copy.
+    """The collision, end to end — and WHAT THE NEW RULE COSTS.
 
-    Two people called Dana Reyes — one ours, one theirs. The two tasks are
-    told apart by the QUALIFIED label, so they land on opposite sides even
-    though the string a name-matcher would compare is identical. And a task
-    assigned by the bare ambiguous name reads Us: a refusal to guess lands on
-    the recoverable side of a document the client reads."""
+    Two people called Dana Reyes, one ours and one theirs. Under the old
+    You/Us column they landed on opposite sides, because the qualified label
+    told them apart and the column was about SIDES.
+
+    The column is about PEOPLE now (Grant, 2026-08-21), and both people are
+    called Dana Reyes, so all three rows print the same string and the client
+    cannot tell which Dana a row means. That is inherent in naming individuals
+    and is recorded here rather than hidden: the book still knows the
+    difference — `assignees.label_of` carries the qualifier — and the fix, if
+    this ever bites, is to print the qualified label on a collision, not to go
+    back to You/Us.
+
+    The third row is the ambiguous assignment, and it now prints the name that
+    was typed rather than refusing. It is honest about what the book holds; it
+    is no longer a refusal to guess."""
     from bookkit.services.export_open_items import write
 
     client = book["client"]
@@ -373,18 +387,24 @@ def test_the_same_name_on_both_sides_does_not_flip_the_column(
 
     owners = _owner_column(write(conn, client.id, tmp_path / "d.xlsx", TODAY))
     assert owners == {
-        "Countersign the schedule": "You",
-        "Bind the layer": "Us",
-        "Confirm the SIR": "Us",
+        "Countersign the schedule": "Dana Reyes",  # theirs
+        "Bind the layer": "Dana Reyes",            # ours
+        "Confirm the SIR": "Dana Reyes",           # ambiguous, printed as typed
     }, owners
 
 
 def test_a_contact_at_ANOTHER_client_is_not_this_clients_problem(
     conn, book, tmp_path
 ) -> None:
-    """The comparison is against the account being EXPORTED, not against
-    "is a client contact at all". Rae works at Atomic; on Borealis's workbook
-    she is not the reader's own person and the row is not theirs."""
+    """The one case the "name everybody" rule does NOT cover, and the reason
+    is confidentiality between clients rather than anything Grant decided.
+
+    Rae works at Atomic. On BOREALIS's workbook, naming her would put one
+    client's people on another client's deliverable — which was not in front
+    of him when he chose to name underwriters and wholesalers, so it is not a
+    decision he made. A contact at another CLIENT stays "Us"; a contact at a
+    market does not. `export_open_items.owner_of` is the only place this
+    lives, so deleting that branch is the whole reversal if he wants it."""
     from bookkit.services.export_open_items import write
 
     other = orgs.create(conn, name="Borealis Foods", kind="client")
@@ -412,11 +432,16 @@ def test_a_submission_row_carries_an_owner_too(conn, book, tmp_path) -> None:
     assert owners == {"Submission to Zurich": "Us"}, owners
 
 
-def test_the_assignees_NAME_never_reaches_the_client(conn, book, tmp_path) -> None:
-    """The internal fact stays internal. The CFO asked whose an item is, not
-    who at our firm is handling it — and a client-facing sheet naming our
-    staff, or naming an underwriter we are negotiating with, is a disclosure
-    nobody signed off."""
+def test_the_assignees_NAME_now_reaches_the_client(conn, book, tmp_path) -> None:
+    """REVERSED by Grant on 2026-08-21, and worth keeping as a test because
+    the reversal is a DISCLOSURE decision, not a formatting one.
+
+    This asserted the opposite until today: our colleague's name and the
+    underwriter's name were both withheld from the client's copy. Grant asked
+    for the individual and, told explicitly that it would name the market
+    contact we are chasing, chose it anyway. So the assertion is inverted —
+    if these names ever have to come back out, this is the test that says so
+    and `export_open_items.owner_of` is the single seam that does it."""
     from openpyxl import load_workbook
 
     from bookkit.services.export_open_items import write
@@ -435,8 +460,8 @@ def test_the_assignees_NAME_never_reaches_the_client(conn, book, tmp_path) -> No
         for c in row
         if c.value is not None
     ]
-    assert not any("Dana Reyes" in v for v in values), "our colleague is named"
-    assert not any("Jo Chen" in v for v in values), "the underwriter is named"
+    assert any("Dana Reyes" in v for v in values), "our colleague should be named"
+    assert any("Jo Chen" in v for v in values), "the underwriter should be named"
 
 
 # --- the add / edit form ----------------------------------------------------
