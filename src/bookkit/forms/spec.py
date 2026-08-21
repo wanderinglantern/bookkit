@@ -14,6 +14,8 @@ from typing import Any
 
 from ..dates import parse_human_date
 from ..money import (
+    BPS_SCALE,
+    ENTRY_FORMS,
     MoneyParseError,
     format_cents,
     format_share_pct,
@@ -45,6 +47,25 @@ class Field:
     # existing-record vocabulary: dropdown menu (tab/enter picks) plus inline
     # ghost text (right arrow accepts) — data consistency by completion
     suggestions: tuple[str, ...] = ()
+    # numeric bounds, in the STORED unit (cents for money, bps for share).
+    # Left None a field takes anything its kind parses; BOUNDS below fills
+    # these in by column for the ones that have a real range.
+    min_value: int | None = None
+    max_value: int | None = None
+
+    def __post_init__(self) -> None:
+        """A column's range is declared ONCE, by column name.
+
+        `commission_bps` is spelled out at three Field sites and
+        `probability_pct` at two; a bound copied per site is a bound that
+        eventually differs, and the one that differs is the one nobody
+        notices (CLAUDE.md, DRY). A field may still state its own — an
+        explicit bound wins over the registry."""
+        if self.min_value is None and self.max_value is None:
+            bounds = BOUNDS.get(self.key)
+            if bounds is not None:
+                object.__setattr__(self, "min_value", bounds[0])
+                object.__setattr__(self, "max_value", bounds[1])
 
 
 @dataclass
@@ -83,9 +104,24 @@ class BatchSpec:
         )
 
 
+# The range a column will accept, keyed by the column it constrains. Without
+# these an out-of-range number reached SQLite and came back as `CHECK
+# constraint failed: probability_pct BETWEEN 0 AND 100` — the schema talking to
+# a broker, on a screen that had just refused to save and could not say why.
+BOUNDS: dict[str, tuple[int, int]] = {
+    "probability_pct": (0, 100),
+    # a commission is a share, and the share range is towerkit's: 0-10000 bps.
+    # Declared against BPS_SCALE rather than a literal 10000 so there is one
+    # place the scale is written down.
+    "commission_bps": (0, BPS_SCALE),
+}
+
 PLACEHOLDERS = {
     "date": "today · fri · +2w · 2026-10-15",
-    "money": "1.5m · 250k · 1,500,000",
+    # the same three forms the money refusal names (money.ENTRY_FORMS): a hint
+    # and a refusal that recommend different things are how a user learns to
+    # trust neither.
+    "money": " · ".join(ENTRY_FORMS),
     "phone": "312 555 0142 · +44 …",
     "email": "name@company.com",
     "linkedin": "profile URL or handle",
@@ -135,6 +171,85 @@ def date_refusal(text: str) -> str:
     )
 
 
+# what a number IS on each numeric kind, so one refusal covers all three
+# without three copies of the sentence.
+_NOUNS = {"money": "an amount", "share": "a share", "int": "a whole number"}
+
+# how many of a picker's own options a refusal spells out before it counts
+# the rest — every market in the book is a wall of text, not a remedy.
+_SHOWN_CHOICES = 8
+
+
+def bounds_phrase(field: Field) -> str:
+    """'from 0 to 100', in the units the user TYPES — empty when unbounded.
+
+    initial_text is what renders a stored number back as entry text (cents to
+    dollars, bps to percent), and the range has to be quoted in the same units
+    or a refusal on a share would read 'from 0 to 10000' about a field where
+    100 is the maximum anyone can type."""
+    low, high = field.min_value, field.max_value
+    if low is not None and high is not None:
+        return f"from {initial_text(field, low)} to {initial_text(field, high)}"
+    if low is not None:
+        return f"no lower than {initial_text(field, low)}"
+    if high is not None:
+        return f"no higher than {initial_text(field, high)}"
+    return ""
+
+
+def range_refusal(field: Field, text: str) -> str:
+    """The one sentence every surface gives when a number is out of range.
+
+    Shaped like date_refusal: the offending value, then what would be
+    accepted. Without it an out-of-range probability reached SQLite and the
+    user was shown `CHECK constraint failed: probability_pct BETWEEN 0 AND
+    100`."""
+    noun = _NOUNS.get(field.kind, "a value")
+    return f"{text!r} is out of range — enter {noun} {bounds_phrase(field)}"
+
+
+def int_refusal(field: Field, text: str) -> str:
+    """The one sentence for something that is not a whole number at all. The
+    accepted set IS the field's range when it has one, which beats an invented
+    example: 'enter a whole number from 0 to 100' names the fix exactly."""
+    span = bounds_phrase(field)
+    fix = f"enter a whole number {span}" if span else "enter digits only, like 0, 25 or 100"
+    return f"{text!r} is not a whole number — {fix}"
+
+
+def select_refusal(field: Field, text: str) -> str:
+    """The one sentence for a value a select does not offer.
+
+    A vocabulary is built as `(s, s)` so naming the offered set IS the remedy;
+    a picker is built as `(label, opaque_id)`, where the ids would be noise and
+    are not ours to print back — so it names the LABELS instead, which is what
+    the person was choosing between. Both name a fix, which the bare
+    `is not one of the choices offered` did not. Long pickers are truncated:
+    a refusal that prints two hundred markets is not a remedy either."""
+    if not field.options:
+        return f"{text!r} is not one of the choices offered — this field offers none yet"
+    vocabulary = all(label == value for label, value in field.options)
+    labels = (
+        sorted(v for _, v in field.options)
+        if vocabulary
+        else [label for label, _ in field.options]
+    )
+    shown, rest = labels[:_SHOWN_CHOICES], len(labels) - _SHOWN_CHOICES
+    offered = ", ".join(shown) + (f" (and {rest} more)" if rest > 0 else "")
+    if vocabulary:
+        return f"{text!r} must be one of {offered}"
+    return f"{text!r} is not one of the choices offered — pick one of {offered}"
+
+
+def bounded(field: Field, value: int, text: str) -> int:
+    """Enforce a field's own range. int/money/share all land here so the
+    check cannot be wired to two of three."""
+    low, high = field.min_value, field.max_value
+    if (low is not None and value < low) or (high is not None and value > high):
+        raise ValueError(range_refusal(field, text))
+    return value
+
+
 def checked_option(field: Field, text: str) -> str:
     """A select's OWN OPTIONS are the authority on what it may store.
 
@@ -176,12 +291,9 @@ def checked_option(field: Field, text: str) -> str:
     picker is built as `(f"{p.ref} — {p.program_name}", p.id)` so the values
     are opaque ids that would be noise in a refusal and are not ours to
     print back."""
-    allowed = {value for _, value in field.options}
-    if text in allowed:
+    if text in {value for _, value in field.options}:
         return text
-    if field.options and all(label == value for label, value in field.options):
-        raise ValueError(f"{text!r} must be one of {sorted(allowed)}")
-    raise ValueError(f"{text!r} is not one of the choices offered")
+    raise ValueError(select_refusal(field, text))
 
 
 def parse_value(field: Field, raw: str | None) -> Any:
@@ -203,7 +315,7 @@ def parse_value(field: Field, raw: str | None) -> Any:
         return parsed.isoformat()
     if field.kind == "money":
         try:
-            return parse_money_cents(text)
+            return bounded(field, parse_money_cents(text), text)
         except MoneyParseError as exc:
             raise ValueError(str(exc)) from exc
     if field.kind == "share":
@@ -212,14 +324,15 @@ def parse_value(field: Field, raw: str | None) -> Any:
         # conversion is how the same share becomes 3333 bps on one surface
         # and 333300 on another.
         try:
-            return parse_share_bps(text)
+            return bounded(field, parse_share_bps(text), text)
         except MoneyParseError as exc:
             raise ValueError(str(exc)) from exc
     if field.kind == "int":
         try:
-            return int(text)
+            value = int(text)
         except ValueError as exc:
-            raise ValueError(f"{text!r} is not a whole number") from exc
+            raise ValueError(int_refusal(field, text)) from exc
+        return bounded(field, value, text)
     cleaner = CLEANERS.get(field.kind, clean_text)
     return cleaner(text)
 

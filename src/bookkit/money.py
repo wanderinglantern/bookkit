@@ -14,6 +14,8 @@ from towerkit.money import MoneyParseError, format_money, format_money_compact, 
 
 __all__ = [
     "MoneyParseError",
+    "ENTRY_FORMS",
+    "money_refusal",
     "parse_money_cents",
     "format_cents",
     "format_cents_compact",
@@ -26,10 +28,45 @@ __all__ = [
 _LOCALE = "en_US"
 BPS_SCALE = 10_000
 
+# The forms a money entry may take, named ONCE: the placeholder every surface
+# shows (forms.spec.PLACEHOLDERS) and the sentence every refusal gives are the
+# same three examples, so a hint and a refusal can never recommend different
+# things. Cents are one of them on purpose — bookkit stores cents and
+# format_cents renders them, so a message that only showed whole amounts would
+# be telling people to destroy the cents they were just handed.
+ENTRY_FORMS = ("1.5m", "250k", "1,234.56")
+
 
 # a plain decimal amount: "1,234.56", "$1234.5". Shorthand ("2m", "250k")
 # and thousands-separated whole amounts go to towerkit's parser below.
-_CENTS_RE = re.compile(r"^\$?\s*(-?\d{1,3}(?:,\d{3})*|-?\d+)\.(\d{1,2})$")
+# NO leading minus: negatives are refused above, by name (Grant, 2026-08-20).
+_CENTS_RE = re.compile(r"^\$?\s*(\d{1,3}(?:,\d{3})*|\d+)\.(\d{1,2})$")
+
+# towerkit's generic "it did not parse" wording, which says nothing our own
+# sentence does not already say better. Its SPECIFIC objections (an unknown
+# suffix, mixed grouping) do add something and are kept.
+_GENERIC = "cannot parse money value"
+
+
+def money_refusal(text: str, why: str = "") -> str:
+    """The one sentence every surface gives when an amount will not parse.
+
+    Same shape as forms.spec.date_refusal, which is the house model: name the
+    offending value, then name three forms that WOULD be accepted, then the
+    specific objection when there is one. The old message was towerkit's
+    `cannot parse money value: '1.2mm'` — an objection with no remedy, which
+    the data-entry rules call half a message."""
+    forms = ", ".join(ENTRY_FORMS[:-1]) + f" or {ENTRY_FORMS[-1]}"
+    return f"{text!r} is not an amount — enter one like {forms}" + (f"; {why}" if why else "")
+
+
+def _objection(exc: MoneyParseError, text: str) -> str:
+    """towerkit's specific complaint with the value stripped back out — the
+    sentence around it already names the value once, and twice reads as a
+    stutter."""
+    message = str(exc).replace(f" in {text!r}", "").replace(f": {text!r}", "")
+    message = message.replace(f"{text!r} ", "")
+    return "" if message.startswith(_GENERIC) else message
 
 
 def parse_money_cents(text: str) -> int:
@@ -43,14 +80,25 @@ def parse_money_cents(text: str) -> int:
 
     The whole-dollar rule belongs to towerkit files, not to entry, and it
     stays enforced where it applies: cents_to_dollars still refuses sub-dollar
-    amounts on write-through."""
-    match = _CENTS_RE.match(text.strip())
+    amounts on write-through.
+
+    NEGATIVES ARE REFUSED (Grant, 2026-08-20). They were refused
+    INCONSISTENTLY, which is worse than either answer: "-1000" and "-1m" fell
+    through to towerkit and were refused, while "-1,000.00" took the cents
+    branch and stored -100000 — a premium that subtracts from the book on one
+    entry form and not on another. The check is here, ahead of both branches,
+    so every surface (forms, MCP arguments, the importers) inherits it."""
+    text = text.strip()
+    if text.lstrip("$").strip().startswith("-"):
+        raise MoneyParseError(money_refusal(text, "amounts are positive"))
+    match = _CENTS_RE.match(text)
     if match:
-        whole_text, frac_text = match.group(1), match.group(2).ljust(2, "0")
-        whole = int(whole_text.replace(",", ""))
-        cents = abs(whole) * 100 + int(frac_text)
-        return -cents if whole_text.lstrip("$ ").startswith("-") else cents
-    return parse_money(text) * 100
+        whole, frac_text = match.group(1).replace(",", ""), match.group(2).ljust(2, "0")
+        return int(whole) * 100 + int(frac_text)
+    try:
+        return parse_money(text) * 100
+    except MoneyParseError as exc:
+        raise MoneyParseError(money_refusal(text, _objection(exc, text))) from exc
 
 
 def format_cents(cents: int) -> str:
