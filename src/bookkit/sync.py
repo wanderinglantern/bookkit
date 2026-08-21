@@ -1381,11 +1381,14 @@ def remove_layer(
     """Remove one layer, ITS SEATS WITH IT (D2, 2026-08-19 — before this no
     bookkit surface could take off a mis-added layer at all).
 
-    towerkit's validator still gates the result: removing a middle layer
-    strands the one above it over a gap, and that refusal — in towerkit's
-    words, with nothing written — is exactly the answer a surface should
-    show. `_find_layer` runs first so an unknown id refuses with the re-sync
-    hint instead of towerkit's KeyError, which _mutate would not catch."""
+    Removing a middle layer leaves the one above it over an open band, and
+    the write SUCCEEDS: `line-gap` is a warning, not an error
+    (towerkit/validate.py, 2026-08-21), so the file is saveable and the
+    diagnostics strip says GAP until something fills it or it is declared a
+    buffer. Sliding the layers above down to close the tower is not done — it
+    would silently change what the client is covered for. `_find_layer` runs
+    first so an unknown id refuses with the re-sync hint instead of
+    towerkit's KeyError, which _mutate would not catch."""
 
     def mutate(program: Program) -> None:
         _find_layer(program, layer_id)

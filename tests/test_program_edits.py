@@ -556,10 +556,13 @@ def test_remove_layer_refuses_an_unknown_id(linked) -> None:
     assert path.read_bytes() == before
 
 
-def test_remove_layer_refuses_to_strand_a_gap(linked) -> None:
-    """Removing a middle layer leaves the one above floating; towerkit's
-    validator refuses and nothing is written — the refusal in towerkit's
-    words is the whole value."""
+def test_remove_layer_leaves_the_gap_stated_not_refused(linked) -> None:
+    """Removing a middle layer leaves the one above floating over an open
+    band. line-gap is a WARNING, not a refusal (2026-08-21): sliding
+    '2nd Excess' down to close the tower is not done — that would silently
+    change what the client is covered for — so the write SUCCEEDS and the
+    gap is stated, in towerkit's own words, rather than hidden by a silent
+    reseat."""
     conn, _, placement, path = linked
     assert sync.add_layer(
         conn, placement.id, "1st Excess", ["gl"],
@@ -573,8 +576,13 @@ def test_remove_layer_refuses_to_strand_a_gap(linked) -> None:
 
     diags = sync.remove_layer(conn, placement.id, "1st-excess")
 
-    assert not diags.ok
-    assert path.read_bytes() == before
+    assert diags.ok, [d.message for d in diags.errors]
+    assert path.read_bytes() != before
+    assert any(d.code == "line-gap" for d in diags.warnings)
+    # 2nd Excess did NOT reseat onto Primary GL's top — the invariant itself
+    remaining = load_program(path).layers_for_line("gl")
+    survivor = next(ly for ly in remaining if ly.id == "2nd-excess")
+    assert survivor.attach == 7_000_000, "the tower closed up and moved cover"
 
 
 # --- phase 3: lines become bookkit-editable (D1) -------------------------------

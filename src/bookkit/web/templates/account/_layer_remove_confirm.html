@@ -3,9 +3,13 @@
    wrote NOTHING; only [remove layer] writes.
 
    The blast radius is named up front: the seats go with the layer (D2), and
-   that list is the fact a person needs before answering. A refusal (towerkit
-   will not strand the layer above over a gap) re-renders this row with the
-   message. #}
+   that list is the fact a person needs before answering. A refusal
+   re-renders this row with the message.
+
+   The tower does NOT close up. Moving the layers above down would change
+   what the client is covered for without anybody choosing that; leaving
+   the band open is true, and the diagnostics strip says GAP until it is
+   resolved — by placing something there, or by declaring it a buffer. #}
 <tr class="layer-details layer-remove-confirm">
   <td class="row-expand"></td>
   <td colspan="6" class="prose" role="alertdialog" aria-label="Remove {{ layer.name }}">
@@ -14,6 +18,11 @@
     {%- if seats %} — {{ seats | join(", ") }} come{{ "s" if seats | length == 1 else "" }} off with it
     {%- else %} — nobody is on it
     {%- endif %}? the change list can revert it
+    <ul>
+      <li>The layers above stay where they are, so this leaves an open band.
+          The tower will report a <strong>GAP</strong> until you place something
+          there or declare it a <strong>buffer</strong>.</li>
+    </ul>
     <button type="button" class="row-action-btn row-action-danger"
             hx-post="{{ remove_url }}"
             hx-target="closest tr" hx-swap="outerHTML">remove layer</button>

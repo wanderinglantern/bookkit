@@ -654,17 +654,18 @@ def test_adding_a_layer_appends_it_pending(app_and_org):
     assert batch.source == "web" and batch.tool == "program_layer_add"
 
 
-def test_a_layer_that_would_leave_a_gap_is_refused_and_says_so(app_and_org):
-    """towerkit refuses a gap as firmly as an overlap, and the refusal names
-    the layers it is between — that message is the whole value of not writing
-    it."""
+def test_a_layer_that_would_leave_a_gap_saves_and_says_so(app_and_org):
+    """line-gap is a WARNING, not a refusal (2026-08-21): the write that
+    leaves a gap SUCCEEDS, and the gap still names the layers it is between —
+    that message is now the panel's diagnostics strip, not a refusal, and
+    stating a true gap is the point, not a reason to lose the write."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement, _ = _first_layer(conn, org)
     path = Path(placement.program_path)
     before = path.read_bytes()
 
-    refused = client.post(
+    added = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
         data={
             "name": "Floating Excess",
@@ -675,9 +676,9 @@ def test_a_layer_that_would_leave_a_gap_is_refused_and_says_so(app_and_org):
         },
     )
 
-    assert refused.status_code == 200
-    assert "GAP" in refused.text or "gap" in refused.text
-    assert path.read_bytes() == before
+    assert added.status_code == 200
+    assert "GAP" in added.text or "gap" in added.text
+    assert path.read_bytes() != before
 
 
 def test_binding_a_market_onto_a_layer(app_and_org):
@@ -1716,9 +1717,12 @@ def test_a_removed_layer_is_gone_seats_and_all(app_and_org):
     _assert_panel_swap(removed, placement.id)
 
 
-def test_a_refused_layer_removal_answers_in_place(app_and_org, tmp_path):
-    """Removing a middle layer strands the one above; towerkit refuses and
-    the refusal must land where the question was asked, file untouched."""
+def test_a_layer_removal_that_leaves_a_gap_saves_in_place(app_and_org, tmp_path):
+    """Removing a middle layer strands the one above over an open band.
+    line-gap is a WARNING, not a refusal (2026-08-21): the write SUCCEEDS —
+    sliding '2nd Excess' down to close the tower is not done, since that
+    would silently change what the client is covered for — and the gap is
+    stated where the question was asked, file changed."""
     client, org = app_and_org
     placement = _two_line_placement(client, org, tmp_path)
     for name, attach in (("1st Excess", "2,000,000"), ("2nd Excess", "7,000,000")):
@@ -1731,11 +1735,11 @@ def test_a_refused_layer_removal_answers_in_place(app_and_org, tmp_path):
     path = Path(placement.program_path)
     before = path.read_bytes()
 
-    refused = client.post(_layer_remove_url(org, placement, "1st-excess"))
+    removed = client.post(_layer_remove_url(org, placement, "1st-excess"))
 
-    assert refused.status_code == 200
-    assert path.read_bytes() == before
-    assert "gap" in refused.text.lower()
+    assert removed.status_code == 200
+    assert path.read_bytes() != before
+    assert "gap" in removed.text.lower()
 
 
 def _placement_cell(org, placement, key):
@@ -1945,7 +1949,12 @@ def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
     """The refusal used to be a bare message, and every control that could
     trigger it swapped the whole <section class="program"> — so a refused add
     deleted the layers table, the add controls and the panel's own id, leaving
-    the placement unusable until a full page reload."""
+    the placement unusable until a full page reload.
+
+    Attach at $123 — well inside the bottom layer's span on any seeded org —
+    to force a `line-overlap`, which is STILL an error (2026-08-21;
+    `line-gap` is now a warning and would no longer refuse this add, so it
+    can no longer stand in for "refused" here)."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement, _ = _first_layer(conn, org)
@@ -1955,7 +1964,7 @@ def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
         data={
             "name": "Floating Excess",
             "line": _first_line(conn, placement),
-            "attach_cents": "900,000,000",
+            "attach_cents": "12,300",
             "limit_cents": "5,000,000",
             "premium_cents": "",
         },
@@ -1964,7 +1973,7 @@ def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
     assert refused.status_code == 200
     assert "<form" in refused.text, "the form did not come back"
     assert "Floating Excess" in refused.text, "the typed name was thrown away"
-    assert "900,000,000" in refused.text, "the typed attachment was thrown away"
+    assert "12,300" in refused.text, "the typed attachment was thrown away"
 
 
 def test_the_add_form_posts_into_the_form_host_not_over_the_panel(app_and_org):

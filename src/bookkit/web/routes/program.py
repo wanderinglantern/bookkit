@@ -1604,8 +1604,12 @@ def layer_remove(
     request: Request, ref: str, placement_id: str, layer_id: str
 ) -> HTMLResponse:
     """The layer goes, its seats with it — one batched, snapshotted write
-    (sync.remove_layer, D2). A refusal — towerkit will not strand the layer
-    above over a gap — re-renders the confirm in place with the message."""
+    (sync.remove_layer, D2). The layers above stay put: sliding them down to
+    close the tower would silently change what the client is covered for, so
+    the write leaves an open band and towerkit reports it as a `line-gap`
+    WARNING, not a refusal (towerkit/validate.py, 2026-08-21) — the confirm
+    says this before the click. A genuine refusal (a different error) still
+    re-renders the confirm in place with the message."""
     org = _org(request, ref)
     conn = _conn(request)
     placement, layer = _owned_layer(request, org, placement_id, layer_id)

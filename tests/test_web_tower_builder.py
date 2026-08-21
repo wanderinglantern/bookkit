@@ -484,3 +484,99 @@ def test_a_multi_line_layer_says_it_appears_in_other_stacks(
     page = client.get(f"/accounts/{org.ref}/program").text
 
     assert "also on" in page
+
+
+def _arrange_three_single_line_slabs(conn, placement, line_id):
+    """The seeded first line (gl) carries only Primary GL (single-line) and
+    Umbrella (spans gl+al). Umbrella is FOLLOWS-UNDERLYING once anything is
+    inserted beneath it (`sync.insert_layer` sets `follows_underlying` on any
+    multi-line slab in the column, 2026-08-21), so removing the slab directly
+    below it makes Umbrella legitimately RESEAT via `heal_follows` — that is
+    not the bug this feature exists to catch, and asserting against it would
+    prove nothing (confirmed by running it: Umbrella's attach moved from 7M
+    back to 2M, no gap, because it closed correctly onto its true underlying).
+
+    So two inserts, not one: Mid 1 seats on Primary GL, Mid 2 seats on Mid 1.
+    Mid 2 is single-line and NOT follows-underlying, so removing Mid 1 (its
+    neighbour below) cannot legitimately move it — any movement there is the
+    silent-reseat bug. `sync.insert_layer` is Task 4's proven verb; using it
+    twice is still one honest way to reach a three-slab stack, not a shortcut
+    around the invariant being tested."""
+    program = sync.linked_program(conn, placement.id).program
+    stack = program.layers_for_line(line_id)
+    bottom = stack[0]
+
+    diags = sync.insert_layer(
+        conn, placement.id, line_id=line_id, anchor_layer_id=bottom.id,
+        position="above", name="Mid 1", limit_cents=3_000_000_00,
+    )
+    assert diags.ok, [d.message for d in diags.errors]
+    mid1 = next(
+        ly for ly in sync.linked_program(conn, placement.id).program.layers_for_line(line_id)
+        if ly.name == "Mid 1"
+    )
+
+    diags = sync.insert_layer(
+        conn, placement.id, line_id=line_id, anchor_layer_id=mid1.id,
+        position="above", name="Mid 2", limit_cents=2_000_000_00,
+    )
+    assert diags.ok, [d.message for d in diags.errors]
+
+    fresh = sync.linked_program(conn, placement.id).program
+    stack = fresh.layers_for_line(line_id)
+    middle = next(ly for ly in stack if ly.name == "Mid 1")
+    above = next(ly for ly in stack if ly.name == "Mid 2")
+    assert not above.follows_underlying, "picked the wrong neighbour — it can legitimately reseat"
+    return middle, above
+
+
+def test_removing_a_mid_stack_slab_leaves_the_gap(app_and_org) -> None:
+    """Closing the tower up silently would MOVE cover the client bought. The
+    gap is true, and the diagnostics strip says so."""
+    from towerkit.validate import validate_program
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+
+    middle, above = _arrange_three_single_line_slabs(conn, placement, line_id)
+    above_attach_before = above.attach
+
+    resp = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers/{middle.id}/remove"
+    )
+    assert resp.status_code == 200
+
+    fresh = sync.linked_program(conn, placement.id).program
+    remaining = fresh.layers_for_line(line_id)
+    # 1. the removed slab is gone
+    assert all(ly.id != middle.id for ly in remaining)
+    # 2. the slab above did NOT move down — the value it had BEFORE the
+    # removal, not merely "some slab still sits at the old attachment".
+    survivor = next(ly for ly in remaining if ly.id == above.id)
+    assert survivor.attach == above_attach_before, (
+        "the tower closed up and moved cover the client bought"
+    )
+    # 3. the file is still saveable — a gap is STATED, not refused
+    diags = validate_program(fresh)
+    assert diags.ok, [d.message for d in diags.errors]
+    gaps = [d for d in diags.warnings if d.code == "line-gap" and d.ref == ("line", line_id)]
+    assert gaps, [d.code for d in diags.items]
+
+
+def test_the_remove_confirm_says_a_gap_will_be_left(app_and_org) -> None:
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+    middle, _above = _arrange_three_single_line_slabs(conn, placement, line_id)
+
+    page = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/layers/{middle.id}/remove"
+    ).text
+
+    assert "gap" in page.lower()
+    assert "buffer" in page.lower(), "the confirm does not offer the other answer"

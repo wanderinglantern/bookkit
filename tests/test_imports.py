@@ -568,16 +568,20 @@ def test_stage_renewal_nothing_matched_is_error(db_path: Path, tmp_path: Path) -
         connection.close()
 
 
-def test_commit_renewal_surfaces_refused_deltas(db_path: Path, tmp_path: Path) -> None:
+def test_commit_renewal_surfaces_a_gap_warning(db_path: Path, tmp_path: Path) -> None:
+    """Shrinking Primary to 8M opens a gap under the 15M xs 10M layer.
+    line-gap is a WARNING, not a refusal (2026-08-21), so the delta COMMITS —
+    and the gap must still be visible, now in diags.warnings rather than
+    diags.errors (it used to refuse the whole delta; that assertion inverts,
+    same as the sync-level and web-level remove tests)."""
     connection = db.connect(db_path)
     try:
         placement = _linked_placement(connection, tmp_path)
-        # shrinking Primary to 8M opens a gap under the 15M xs 10M layer, so
-        # write-through refuses the delta — that refusal must be visible
         staged = stage_renewal(connection, placement.id, "Primary 8M — Chubb — 200k\n")
         new_id, diags = commit_renewal(connection, staged, placement.id, db_path)
         assert new_id is not None
-        assert diags.errors
+        assert diags.ok, [d.message for d in diags.errors]
+        assert any(d.code == "line-gap" for d in diags.warnings)
     finally:
         connection.close()
 
