@@ -1,4 +1,5 @@
 """The Work tab — open tasks, information requests, and (per request) their
+import re
 items.
 
 The assertion is deliberately NOT 'the field changed'. A plain outcome check
@@ -13,6 +14,7 @@ chance or skipping (a skipped test protects nothing)."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -924,3 +926,124 @@ def test_the_page_offers_both_removals(app_and_org):
 
     assert f"/requests/{request.id}/remove" in work
     assert "/remove" in items and "items/" in items
+
+
+# --- the assignee cell reads as a person, and edits as a resolvable one -------
+
+
+def _input_value(html: str, name: str) -> str:
+    """The `value` of the `<input name="...">` in a rendered editor cell.
+
+    Deliberately NOT a substring search over the whole fragment: the editor
+    also renders a datalist whose options carry the same strings, so a naive
+    `in` check cannot tell the pre-filled value from a suggestion."""
+    match = re.search(
+        rf'<input[^>]*\bname="{re.escape(name)}"[^>]*>', html
+    )
+    assert match, f"no <input name={name!r}> in the editor fragment"
+    value = re.search(r'\bvalue="([^"]*)"', match.group(0))
+    return value.group(1) if value else ""
+
+
+def _a_team_member(conn):
+    """Somebody on OUR team, so the qualified label carries "— our team" —
+    the exact suffix Grant asked to stop seeing on the row."""
+    from bookkit.repo import team
+
+    members = team.list_members(conn)
+    assert members, "fixture drifted — no team members to assign"
+    return members[0]
+
+
+def test_the_assignee_cell_shows_the_person_without_the_qualifier(app_and_org):
+    """Grant, 2026-08-21: "i do not like the ' — our team' suffix that is added.
+    It should just be the person"."""
+    from bookkit.repo import assignees as assignees_repo
+    from bookkit.repo import tasks as tasks_repo
+
+    client, org, _ = app_and_org
+    conn = client.app.state.conn
+    member = _a_team_member(conn)
+    task = tasks_repo.create(conn, "Bind the layer", org_id=org.id)
+    assignees_repo.set_on_task(
+        conn, task.id, f"{member.name} — our team", org_id=org.id
+    )
+
+    cell = client.get(f"/accounts/{org.ref}/tasks/{task.id}/cell/assignee").text
+
+    assert member.name in cell
+    assert "our team" not in cell, "the qualifier is back on the row"
+
+
+def test_the_assignee_EDITOR_still_prefills_the_qualified_label(app_and_org):
+    """THE HALF THAT MUST NOT MOVE, and the reason the suffix could not simply
+    be deleted.
+
+    What a form pre-fills has to be a value its own resolver accepts back
+    unchanged. Pre-fill the plain name and opening a task and pressing save
+    silently downgrades a resolved assignee to freeform — the same failure
+    CLAUDE.md's ENTRY ACCEPTS CENTS rule describes on a different field.
+
+    The two forms can differ at all only because the editor is fetched from the
+    server in its own request, so what the row displays never reaches the
+    input.
+    """
+    from bookkit.repo import assignees as assignees_repo
+    from bookkit.repo import tasks as tasks_repo
+
+    client, org, _ = app_and_org
+    conn = client.app.state.conn
+    member = _a_team_member(conn)
+    task = tasks_repo.create(conn, "Draft the strategy", org_id=org.id)
+    assignees_repo.set_on_task(
+        conn, task.id, f"{member.name} — our team", org_id=org.id
+    )
+
+    editor = client.get(
+        f"/accounts/{org.ref}/tasks/{task.id}/cell/assignee/edit"
+    ).text
+
+    # THE INPUT's value, not merely the string somewhere on the fragment. The
+    # first version of this test asserted `value="… — our team"` appeared in
+    # the response and passed with the editor pre-filling the PLAIN name —
+    # because the qualified label is also one of the datalist's <option
+    # value="…"> suggestions. A mutation caught it (2026-08-21).
+    assert _input_value(editor, "assignee") == f"{member.name} — our team", editor[:500]
+
+
+def test_saving_an_untouched_assignee_keeps_it_resolved(app_and_org):
+    """The round trip the two rules above exist to protect, end to end: open
+    the cell, save what it pre-filled, and the assignee is still the resolved
+    team member.
+
+    THE COLLISION IS THE POINT. An unambiguous name resolves perfectly well on
+    its own, so this test proved nothing until a contact at the client was
+    given the SAME name as our colleague — a mutation pre-filling the plain
+    name passed without it (2026-08-21). With two candidates, only the
+    qualified label says which person, and a plain name is a refusal to guess.
+    """
+    from bookkit.repo import assignees as assignees_repo
+    from bookkit.repo import contacts as contacts_repo
+    from bookkit.repo import tasks as tasks_repo
+
+    client, org, _ = app_and_org
+    conn = client.app.state.conn
+    member = _a_team_member(conn)
+    first, _, last = member.name.partition(" ")
+    contacts_repo.create(conn, org.id, first_name=first, last_name=last)
+    task = tasks_repo.create(conn, "Confirm the SIR", org_id=org.id)
+    assignees_repo.set_on_task(
+        conn, task.id, f"{member.name} — our team", org_id=org.id
+    )
+
+    editor = client.get(
+        f"/accounts/{org.ref}/tasks/{task.id}/cell/assignee/edit"
+    ).text
+    prefilled = _input_value(editor, "assignee")
+    client.post(
+        f"/accounts/{org.ref}/tasks/{task.id}/cell/assignee",
+        data={"assignee": prefilled},
+    )
+
+    saved = tasks_repo.get(conn, task.id)
+    assert saved.assignee_id == member.id, "the assignee stopped resolving"

@@ -139,22 +139,46 @@ def _task_category_suffix(task: Task) -> str:
             if is_internal_category(task.category) else "")
 
 
-def _task_cell_value(conn: sqlite3.Connection, task: Task, key: str) -> str:
-    """The raw text a task cell shows — and pre-fills its editor with.
+def _task_cell_value(
+    conn: sqlite3.Connection, task: Task, key: str, *, qualified: bool
+) -> str:
+    """The raw text a task cell holds — and what its editor pre-fills with.
 
     `assignee` is the one cell whose value is not an attribute of the row:
-    three columns hold it and repo.assignees renders them, as the QUALIFIED
-    label ("Sam Garcia — Atomic Industries"), because the editor pre-fills
-    from here and what a form pre-fills has to survive its own resolver."""
+    three columns hold it and repo.assignees renders them. IT HAS TWO FORMS,
+    and which one you want depends on whether a person or a parser is about to
+    read it:
+
+    * `qualified=False` — the PLAIN name, for DISPLAY. Grant, 2026-08-21: "i do
+      not like the ' — our team' suffix that is added. It should just be the
+      person". He is right about the cell he reads all day: the qualifier is
+      disambiguation machinery, and it is noise on a row that is not ambiguous.
+    * `qualified=True` — "Sam Garcia — our team", for the EDITOR. What a form
+      pre-fills has to be a value its own resolver accepts back UNCHANGED, or
+      opening a task and pressing save quietly downgrades a resolved assignee
+      to freeform. That is the ENTRY ACCEPTS CENTS rule in CLAUDE.md applied to
+      a different field, and it is why the suffix cannot simply be deleted.
+
+    Splitting them is safe because the editor is fetched from the server in its
+    own request (`hx-get="{action}/edit"`), so the displayed string is never
+    what lands in the input.
+
+    NO DEFAULT, deliberately. The two forms have different consequences and the
+    dangerous one is silent — a caller that guessed wrong would keep working
+    and lose assignee resolution on save.
+    """
     if key == "assignee":
-        return assignees_repo.label_of(conn, task)
+        return (
+            assignees_repo.label_of(conn, task) if qualified
+            else assignees_repo.name_of(conn, task)
+        )
     return initial_text(_TASK_CELLS[key], getattr(task, key, None))
 
 
 def _task_row(request: Request, ref: str, task: Task) -> dict[str, Any]:
     def cell(key: str, *, suffix: str = "") -> str:
         field = _TASK_CELLS[key]
-        value = _task_cell_value(_conn(request), task, key)
+        value = _task_cell_value(_conn(request), task, key, qualified=False)
         action = _task_cell_action(ref, task.id, key)
         return render_cell_display(
             request, field, value, action,
@@ -212,7 +236,10 @@ async def task_create(request: Request, ref: str) -> HTMLResponse:
 def _task_display_cell(request: Request, ref: str, task_id: str, key: str) -> HTMLResponse:
     field = _task_field(key)
     existing = tasks_repo.get(_conn(request), task_id)
-    value = _task_cell_value(_conn(request), existing, key)
+    # DISPLAY, so the plain name — this is the cell that comes back after a
+    # save, and it has to match what the row rendered before the edit or a
+    # saved assignee would visibly gain a suffix its neighbours do not have.
+    value = _task_cell_value(_conn(request), existing, key, qualified=False)
     action = _task_cell_action(ref, task_id, key)
     extra_class = _TASK_CELL_CLASS.get(key, "")
     # the badge has to come back with the saved cell, or flagging a task
@@ -235,7 +262,7 @@ def _task_editor_cell(
     field = _task_editor_field(request, key, existing.org_id)
     value = (
         typed if typed is not None
-        else _task_cell_value(_conn(request), existing, key)
+        else _task_cell_value(_conn(request), existing, key, qualified=True)
     )
     action = _task_cell_action(ref, task_id, key)
     return HTMLResponse(
