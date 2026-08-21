@@ -18,6 +18,7 @@ the tab badge counted the placements it was claiming did not exist.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -1113,10 +1114,52 @@ def layer_details_row(
     """The chevron's row: the layer's long tail (policy number, policy dates)
     plus its STRUCTURE — applies-to chips, statutory, follows-underlying —
     the writes that used to live only behind the TUI's `o` into towerkit's
-    editor, which a browser does not have (Grant, 2026-08-19)."""
+    editor, which a browser does not have (Grant, 2026-08-19).
+
+    IT ANSWERS WITH A ROW WHATEVER HAPPENS. htmx swaps nothing on a 4xx or a
+    5xx, so a route that refuses or raises here leaves the chevron looking
+    simply DEAD — no modal, no message, no change, which reads as a broken app
+    (Grant, 2026-08-21: "the little toggle arrow on left side is non
+    functional", and the network tab said 500). That is the same failure the
+    navigator's silent row actions had, and CLAUDE.md's rule is the same one:
+    a refusal says something.
+
+    So both outcomes come back as a details row carrying the reason. The
+    exception is NOT swallowed — it is re-raised into the server log after the
+    row is built, because a 500 is still a bug that somebody has to fix; what
+    changes is that the person who clicked can see WHY instead of clicking a
+    dead arrow.
+    """
     org = _org(request, ref)
-    _, layer = _owned_layer(request, org, placement_id, layer_id)
-    return _details_row(request, ref, placement_id, layer)
+    try:
+        _, layer = _owned_layer(request, org, placement_id, layer_id)
+        return _details_row(request, ref, placement_id, layer)
+    except HTTPException as refused:
+        return _details_refusal(request, placement_id, layer_id, str(refused.detail))
+    except Exception as exc:  # noqa: BLE001 - re-raised below, after logging
+        logging.getLogger(__name__).exception(
+            "layer details failed for %s/%s", placement_id, layer_id
+        )
+        return _details_refusal(
+            request, placement_id, layer_id,
+            f"this layer's details could not be read — {type(exc).__name__}: {exc}",
+        )
+
+
+def _details_refusal(
+    request: Request, placement_id: str, layer_id: str, message: str
+) -> HTMLResponse:
+    """A details row that says why there is no details row.
+
+    A `<tr>`, because that is what the chevron's `hx-swap="afterend"` inserts
+    into a table body — anything else is foster-parented out of the fragment by
+    the HTML parser before htmx sees it, which would be the silent failure
+    again wearing a different hat.
+    """
+    return TEMPLATES.TemplateResponse(
+        request, "account/_layer_details_refusal.html",
+        {"message": message, "layer_id": layer_id, "placement_id": placement_id},
+    )
 
 
 @router.post(

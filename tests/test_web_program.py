@@ -3072,3 +3072,64 @@ def test_a_theme_that_is_gone_refuses_the_download_instead_of_quietly_substituti
     assert "regression-theme" in drawn.text
     assert "themes" in drawn.text
     assert not drawn.content.startswith(b"<?xml"), "it rendered anyway"
+
+
+# --- the chevron never looks dead (Grant, 2026-08-21) --------------------------
+
+
+def test_a_refused_details_row_comes_back_as_a_row_that_says_why(app_and_org):
+    """htmx swaps NOTHING on a 4xx or a 5xx, so a details route that refuses
+    leaves the chevron looking simply broken — no modal, no message, no change,
+    which is exactly what Grant reported ("the little toggle arrow on left side
+    is non functional", network tab said 500).
+
+    Same rule as the navigator's silent row actions: a refusal says something.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _layer = _first_layer(conn, org)
+
+    got = client.get(_details_url(org, placement, "no-such-layer"))
+
+    assert got.status_code == 200, "a bare 4xx swaps nothing and reads as dead"
+    assert got.text.lstrip().startswith("<tr"), (
+        "not a <tr> — the parser foster-parents it out before htmx sees it"
+    )
+    assert "no-such-layer" in got.text
+
+
+def test_an_exception_in_the_details_row_is_shown_not_swallowed(
+    app_and_org, monkeypatch
+):
+    """The row names the failure AND the exception still reaches the log: a 500
+    is a bug somebody has to fix, and hiding it would trade one silence for
+    another. What changes is that the person who clicked can see why."""
+    from bookkit.web.routes import program as program_route
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("the file moved under it")
+
+    monkeypatch.setattr(program_route.sync, "policy_partners", boom)
+
+    got = client.get(_details_url(org, placement, layer["id"]))
+
+    assert got.status_code == 200
+    assert got.text.lstrip().startswith("<tr")
+    assert "the file moved under it" in got.text
+    assert "RuntimeError" in got.text
+
+
+def test_the_refusal_row_can_be_closed_like_any_details_row(app_and_org):
+    """It replaces a row the user opened, so it has to be closable — otherwise
+    the only way out of an error is a page reload."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _layer = _first_layer(conn, org)
+
+    got = client.get(_details_url(org, placement, "no-such-layer"))
+
+    assert "data-row-close" in got.text
