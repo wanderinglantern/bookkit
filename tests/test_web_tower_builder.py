@@ -384,3 +384,29 @@ def test_another_accounts_program_is_a_404(app_and_org) -> None:
     )
 
     assert got.status_code == 404
+
+
+def test_an_unrecognised_kind_is_refused_before_the_write(app_and_org) -> None:
+    """`position` is checked (sync.insert_layer raises on anything but
+    "above"/"below"); `kind` was not — anything but the literal string
+    "buffer" silently coerced to a plain layer. Fails safe, but the
+    project's rule is that a constrained field is checked SERVER-SIDE too:
+    "markup constrains a mouse and nothing else." A refusal names the fix,
+    so the message names both legal values."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+    before = len(_stack_of(conn, placement, line_id))
+
+    refused = client.post(
+        _insert_url(org, placement, line_id),
+        data={"name": "Sneaky Kind", "limit_cents": "1m", "anchor": "",
+              "position": "above", "kind": "sneaky"},
+    )
+
+    assert refused.status_code == 200
+    assert "Sneaky Kind" not in refused.text
+    assert "layer" in refused.text.lower() and "buffer" in refused.text.lower()
+    assert len(_stack_of(conn, placement, line_id)) == before

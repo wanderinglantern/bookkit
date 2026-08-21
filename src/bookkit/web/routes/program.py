@@ -1220,6 +1220,11 @@ async def stack_insert(
         )
     if not name:
         return _programs_panel(request, ref, org, error="a slab needs a name")
+    if kind not in ("layer", "buffer"):
+        return _programs_panel(
+            request, ref, org,
+            error=f"kind must be 'layer' or 'buffer', not {kind!r}",
+        )
     try:
         limit_cents = int(parse_value(_LAYER_CELLS["limit_cents"], raw_limit) or 0)
     except ValueError as exc:
