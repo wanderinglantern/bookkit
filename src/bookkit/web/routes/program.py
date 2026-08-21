@@ -215,8 +215,25 @@ def _diagnostics(linked: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _stacks(request: Request, ref: str, placement: Any) -> list[dict[str, Any]]:
+def _stacks(
+    request: Request, ref: str, placement: Any, layers: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """One stack per LINE, bottom-up — the editor's model.
+
+    Built from the SAME `layer_details` rows `_section_html` already fetched
+    for the table above this editor (`layers_for`) — not by walking the
+    towerkit model a second time. `signed`, `carriers`, `statutory` and
+    `buffer` are already on those rows, computed once in sync.py; deriving
+    them again here from `linked.program` would be a second copy of facts
+    that can drift, which is the violation this project cares most about.
+    `attach`/`limit` come off `attach_cents`/`limit_cents` on the rows — both
+    already converted by `dollars_to_cents` at the source — so this function
+    does no money conversion of its own, keeping that rule (sync.py /
+    money.py only) trivially true rather than merely followed.
+
+    `program.lines` is the one thing still read off the parsed program: it is
+    a LINE fact (id, name, label), never duplicated by a layer_details row,
+    so there is no second copy to avoid.
 
     A layer spanning several lines appears in EACH of their stacks, because it
     does. `also_on` carries the other lines so the row can say so: a layer that
@@ -226,37 +243,41 @@ def _stacks(request: Request, ref: str, placement: Any) -> list[dict[str, Any]]:
     linked = linked_for(request, conn, placement.id)
     if linked.program is None:
         return []
-    program = linked.program
+    lines = linked.program.lines
     base = f"/accounts/{ref}/program/{placement.id}"
     out: list[dict[str, Any]] = []
-    for line in program.lines:
+    for line in lines:
+        rows = sorted(
+            (row for row in layers if line.id in row["applies_to"]),
+            key=lambda row: row["attach_cents"],
+        )
         slabs = []
-        for slab in program.layers_for_line(line.id):
+        for row in rows:
             others = [
                 other.label
-                for other in program.lines
-                if other.id != line.id and other.id in slab.applies_to
+                for other in lines
+                if other.id != line.id and other.id in row["applies_to"]
             ]
             slabs.append({
-                "id": slab.id,
-                "name": slab.name,
-                "attach": format_cents_compact(slab.attach * 100),
-                "limit": format_cents_compact(slab.limit * 100),
-                "buffer": slab.buffer,
-                "statutory": slab.statutory,
+                "id": row["id"],
+                "name": row["name"],
+                "attach": format_cents_compact(row["attach_cents"]),
+                "limit": format_cents_compact(row["limit_cents"]),
+                "buffer": row["buffer"],
+                "statutory": row["statutory"],
                 "also_on": others,
                 "carriers": [
-                    {"name": p.carrier, "share": f"{p.share_bps / 100:g}%"}
-                    for p in slab.participants
+                    {"name": p["carrier"], "share": f"{p['share_pct']:g}%"}
+                    for p in row["participants"]
                 ],
-                "signed": f"{slab.signed_bps / 100:g}%",
+                "signed": f"{row['signed_pct']:g}%",
                 # Amendment (a): the finished URL, published from the context
                 # rather than assembled in the template — `_stacks` already
                 # has `base` as a local, and a bare `base` in the template
                 # context rendered as an empty string under this Jinja
                 # environment (no StrictUndefined), which made `+ carrier`
                 # post to a URL nothing serves.
-                "carrier_action": f"{base}/layers/{slab.id}/markets/new",
+                "carrier_action": f"{base}/layers/{row['id']}/markets/new",
             })
         out.append({
             "line_id": line.id,
@@ -340,7 +361,7 @@ def _section_html(
             else {}
         ),
         layers=[_layer_row(request, ref, placement.id, layer) for layer in layers],
-        stacks=_stacks(request, ref, placement),
+        stacks=_stacks(request, ref, placement, layers),
         refocus=refocus,
         expanded=expanded,
         expanded_row=_expanded_row_html(request, ref, placement.id, expanded),

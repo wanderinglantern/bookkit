@@ -424,17 +424,49 @@ def test_the_stack_editor_has_no_attachment_input(app_and_org) -> None:
     assert 'name="position"' in editor
 
 
+def _slab_blocks(editor: str) -> str:
+    """Every `<div class="slab...">` in the editor, concatenated — each
+    bounded by the next slab or by the stack's own `<form class="stack-insert">`,
+    whichever comes first. "+ carrier" living somewhere in the page proves
+    nothing about WHERE it lives; this proves it is inside a slab and not,
+    say, the insert form."""
+    blocks = []
+    start = editor.find('<div class="slab')
+    while start != -1:
+        next_slab = editor.find('<div class="slab', start + 1)
+        next_form = editor.find('<form class="stack-insert"', start + 1)
+        candidates = [c for c in (next_slab, next_form) if c != -1]
+        stop = min(candidates) if candidates else len(editor)
+        blocks.append(editor[start:stop])
+        start = next_slab
+    return "\n".join(blocks)
+
+
+def _stack_insert_form(editor: str) -> str:
+    """The stack's own insert form, bounded by its own `</form>` — it does
+    not nest another form, so the naive index-of-close is exact."""
+    start = editor.index('<form class="stack-insert"')
+    stop = editor.index("</form>", start) + len("</form>")
+    return editor[start:stop]
+
+
 def test_add_carrier_sits_on_the_slab_and_add_layer_on_the_stack(
     app_and_org
 ) -> None:
     """The whole fix for the reported bug: sharing a slab and adding a layer
-    are visibly different acts, in different places."""
+    are visibly different acts, in different places.
+
+    Scoped to WHERE each control lives, not merely that its words appear
+    somewhere on the page — "+ carrier" anywhere in the document would have
+    passed even sitting on the stack's own form."""
     client, org = app_and_org
     page = client.get(f"/accounts/{org.ref}/program").text
+    editor = page[page.index("stack-editor") :]
 
-    assert "+ carrier" in page
-    assert "insert layer" in page or "+ layer" in page
-    assert "insert buffer" in page
+    assert "+ carrier" in _slab_blocks(editor)
+    form = _stack_insert_form(editor)
+    assert "insert layer" in form or "+ layer" in form
+    assert "insert buffer" in form
 
 
 def test_a_multi_line_layer_says_it_appears_in_other_stacks(

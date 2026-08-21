@@ -3125,6 +3125,39 @@ tr:hover .market .chip-remove {
 
 .stack-insert { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; margin-top: 0.4rem; }
 
+/* This form's `<label class="field"><span class="field-label">...</span>`
+   shape does not nest a `<label>` inside `.field` the way `.entity-form`'s
+   forms do, so `.entity-form .field label` never matched it and the insert
+   form rendered with no field styling at all (review finding, 2026-08-21).
+   Same visual weight as `.entity-form .field` / `.entity-form .field label`,
+   scoped to this form rather than widening `.entity-form` to match a shape
+   it was not written for. */
+.stack-insert .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.stack-insert .field-label {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--label-size);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+/* `.mono` had no bare (unscoped) rule anywhere in this file — only
+   `table.rows td.mono` and `.book-cell.mono` — so the slab band and the
+   carrier share figures rendered in the body font despite carrying the
+   class. Scoped to the stack editor rather than added unscoped, so it does
+   not reach into either of those other two contexts. */
+.stack-editor .mono {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-variant-numeric: tabular-nums;
+}
+
 .project-about {
   display: flex;
   align-items: baseline;
