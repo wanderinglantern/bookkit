@@ -31,6 +31,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import date
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
@@ -65,7 +66,21 @@ def _labels(conn: sqlite3.Connection, tasks: list[Task]) -> dict[str, Any]:
     return orgs_repo.labels_for(conn, {t.org_id for t in tasks if t.org_id})
 
 
-def _row(request: Request, task: Task, labels: dict[str, Any]) -> dict[str, Any]:
+def _view_query(*, overdue_only: bool, ref: str | None) -> str:
+    """The current filter as a query string, ready to append — "" when the view
+    is the whole book. One builder, because the two writer buttons and any
+    later one must all send back the view they were rendered under."""
+    parts = []
+    if ref:
+        parts.append(f"account={quote(ref)}")
+    if overdue_only:
+        parts.append("overdue=1")
+    return f"?{'&'.join(parts)}" if parts else ""
+
+
+def _row(
+    request: Request, task: Task, labels: dict[str, Any], view: str = ""
+) -> dict[str, Any]:
     """One task, with its cells pointing at ITS OWN account's edit routes.
 
     The ref comes from the task's account rather than from the page, which is
@@ -114,11 +129,19 @@ def _row(request: Request, task: Task, labels: dict[str, Any]) -> dict[str, Any]
             if label is not None
             else {}
         ),
-        "done_url": f"/items/tasks/{task.id}/done",
+        # THE URLS CARRY THE PAGE'S OWN FILTER. The filters live in the query
+        # string so a view is a link; a write that answers with the UNFILTERED
+        # page throws that away, and the broker who was looking at one client's
+        # open items is handed the whole book instead (Grant, 2026-08-21 —
+        # "clicked done on a task in a client view but was redirected to /items
+        # showing all open items"). The task completed correctly; what was lost
+        # was where he was standing. Same query-string vocabulary as the GET,
+        # so there is one spelling of "which view is this".
+        "done_url": f"/items/tasks/{task.id}/done{view}",
         # Drop needs no account — it is one field on the task itself — so a
         # row with no client, which cannot open a single cell here, can still
         # be taken off the list.
-        "drop_url": f"/items/tasks/{task.id}/drop",
+        "drop_url": f"/items/tasks/{task.id}/drop{view}",
     }
 
 
@@ -145,7 +168,10 @@ def _context(request: Request, *, overdue_only: bool, ref: str | None) -> dict[s
     requests = [dict(r) for r in rfi_repo.outstanding_request_rows(conn)]
     return {
         "section": "items",
-        "tasks": [_row(request, t, labels) for t in tasks],
+        "tasks": [
+            _row(request, t, labels, _view_query(overdue_only=overdue_only, ref=ref))
+            for t in tasks
+        ],
         "accounts": labels,
         "overdue_count": sum(
             1 for t in tasks if t.due_on is not None and t.due_on < today
@@ -214,7 +240,12 @@ async def task_create(request: Request) -> HTMLResponse:
 
 
 @router.post("/items/tasks/{task_id}/done", response_class=HTMLResponse)
-def task_done(request: Request, task_id: str) -> HTMLResponse:
+def task_done(
+    request: Request,
+    task_id: str,
+    overdue: str | None = None,
+    account: str | None = None,
+) -> HTMLResponse:
     """Done is a distinct writer action — `complete` stamps status AND
     completed_at together, which a one-column cell edit cannot.
 
@@ -225,11 +256,16 @@ def task_done(request: Request, task_id: str) -> HTMLResponse:
     task = task_or_404(conn, task_id)
     org: Org | None = orgs_repo.get(conn, task.org_id) if task.org_id else None
     complete_task(conn, org, task_id)
-    return _page(request, overdue_only=False, ref=None)
+    return _page(request, overdue_only=overdue == "1", ref=account)
 
 
 @router.post("/items/tasks/{task_id}/drop", response_class=HTMLResponse)
-def task_drop(request: Request, task_id: str) -> HTMLResponse:
+def task_drop(
+    request: Request,
+    task_id: str,
+    overdue: str | None = None,
+    account: str | None = None,
+) -> HTMLResponse:
     """Dropped is not done. `complete` stamps completed_at and `drop` does
     not, because a task filed in error or overtaken by events is not finished
     work and must not be counted as any.
@@ -241,4 +277,4 @@ def task_drop(request: Request, task_id: str) -> HTMLResponse:
     task = task_or_404(conn, task_id)
     org: Org | None = orgs_repo.get(conn, task.org_id) if task.org_id else None
     drop_task(conn, org, task_id)
-    return _page(request, overdue_only=False, ref=None)
+    return _page(request, overdue_only=overdue == "1", ref=account)

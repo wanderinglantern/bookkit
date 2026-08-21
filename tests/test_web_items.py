@@ -198,3 +198,77 @@ def test_the_nav_carries_the_section_and_marks_it_current(client):
     assert 'href="/items"' in page
     at = page.index('href="/items"')
     assert "is-current-section" in page[at - 200 : at + 200]
+
+
+# --- the filter is the view, and a write must not throw it away ----------------
+
+
+def test_completing_a_task_keeps_the_account_filter(client):
+    """Grant, 2026-08-21: "clicked done on a task in a client view but was
+    redirected to /items showing all open items".
+
+    /items filtered to one account IS the client view of open items — the
+    filters live in the query string precisely so a view is a link you can
+    keep. `done` re-rendered the page with `ref=None`, so the write silently
+    threw the filter away and answered with the whole book. The task was
+    completed correctly; what was lost was where you were standing.
+    """
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import tasks as tasks_repo
+
+    conn = client.app.state.conn
+    task = next(t for t in tasks_repo.open_tasks(conn) if t.org_id)
+    org = orgs_repo.get(conn, task.org_id)
+    others = [t for t in tasks_repo.open_tasks(conn) if t.org_id != task.org_id]
+    assert others, "fixture drifted — need another account's task to leak"
+
+    done = client.post(f"/items/tasks/{task.id}/done?account={org.ref}")
+
+    assert done.status_code == 200
+    assert f'value="{org.ref}" selected' in done.text, "the account filter was lost"
+    for stray in others:
+        assert f"/items/tasks/{stray.id}/done" not in done.text, (
+            "another account's tasks came back on a filtered view"
+        )
+
+
+def test_dropping_a_task_keeps_the_account_filter(client):
+    """Same route shape, same trap — drop copied done's re-render."""
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import tasks as tasks_repo
+
+    conn = client.app.state.conn
+    task = next(t for t in tasks_repo.open_tasks(conn) if t.org_id)
+    org = orgs_repo.get(conn, task.org_id)
+
+    dropped = client.post(f"/items/tasks/{task.id}/drop?account={org.ref}")
+
+    assert f'value="{org.ref}" selected' in dropped.text
+
+
+def test_a_write_keeps_the_overdue_filter_too(client):
+    from bookkit.repo import tasks as tasks_repo
+
+    conn = client.app.state.conn
+    task = next(t for t in tasks_repo.open_tasks(conn) if t.org_id)
+
+    done = client.post(f"/items/tasks/{task.id}/done?overdue=1")
+
+    assert "checkbox" in done.text and "checked" in done.text
+
+
+def test_the_buttons_carry_the_filter_they_were_rendered_under(client):
+    """The route can only keep a filter the button sends it. Asserted on the
+    RENDERED page, because a route that handles the query string and a template
+    that never puts one there is the same bug with more code."""
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import tasks as tasks_repo
+
+    conn = client.app.state.conn
+    task = next(t for t in tasks_repo.open_tasks(conn) if t.org_id)
+    org = orgs_repo.get(conn, task.org_id)
+
+    page = client.get(f"/items?account={org.ref}").text
+
+    assert f"/items/tasks/{task.id}/done?account={org.ref}" in page
+    assert f"/items/tasks/{task.id}/drop?account={org.ref}" in page
