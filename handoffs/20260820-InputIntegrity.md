@@ -170,15 +170,27 @@ observable on a legacy bad row.
   `scratchpad/programs/`; a theme test needs a RELATIVE `themes/` dir beside the
   server's cwd (deliberately not committed).
 
+## Production checks — BOTH CLEARED (Grant, 2026-08-21)
+
+Two changes shipped with a dependency on real data. Grant ran both on the
+production machine and both came back empty:
+
+- **Negatives**: no negative money anywhere in the book, so refusing them
+  cannot make an existing record unsaveable. The risk noted in `0f493b0`'s
+  commit message is closed — do not re-raise it.
+- **Commissions under 1%**: none, so nothing was imported at one hundredth of
+  its value by the old percent-formatted-cell parse. The fix in `9ea55a5` is
+  forward-looking only; there is no historical data to correct.
+
+Queries kept at `scratchpad/negatives-check.sql` and
+`scratchpad/commission-check.sql` if either ever needs re-running after a bulk
+import.
+
 ## Open for Grant
 
 1. **Sublimits / aggregate model** — deferred by him, pending a conversation.
    The research is in the skill; the gap is real and affects what a schedule of
    insurance can say.
-2. **Import commission ambiguity** (agent E) — a percent-formatted cell reads as
-   15 bps instead of 1500. Instruction given: REFUSE and name both readings,
-   never silently reinterpret, because a silent 100× correction is the same
-   class of bug as the silent 100× error. Confirm that is what he wants.
-3. Whether `/items` should also edit RFI items in place (today it links to the
+2. Whether `/items` should also edit RFI items in place (today it links to the
    account's Work tab, on the grounds that an item belongs to a request and
    editing one properly means seeing its request).
