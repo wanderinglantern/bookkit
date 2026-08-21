@@ -166,7 +166,12 @@ def test_the_escape_and_unchanged_guards_survive():
     without writing. Anything added to this file has to leave both standing."""
     js = _inline_cell_js()
 
-    assert "cancelling" in js and "if (!cell || committing || cancelling) return;" in js
+    # Marks on the nodes since 2026-08-21, not globals: the global Escape
+    # flag reset on a zero-timer, lost the race to its own revert's network
+    # round trip, and COMMITTED the discarded value to the database.
+    assert "__bkCancelled" in js
+    assert "if (!cell || cell.__bkCancelled) return;" in js
+    assert "if (!form || form.__bkCommitting) return;" in js
     assert 'cell.getAttribute("data-opened-with")' in js
     assert "revert(cell);" in js
     # the unchanged branch returns BEFORE the submit below it
