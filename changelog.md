@@ -85,6 +85,12 @@ All notable changes to bookkit, newest date first.
   carries nobody and draws hatched, so the band is stated rather than left as a
   hole nobody explained. Removing a layer from the middle of a tower leaves the
   gap open and says so, rather than sliding everything above it down.
+- **Export the Work tab.** `Export .xlsx` above the open-tasks and
+  information-requests panels writes just those two tables, through the same
+  sheet builders as the client deliverable — the two files cannot disagree
+  about what an open item is, and a test compares them cell by cell to keep it
+  that way. Two sheets rather than one tab: the two tables have different
+  columns, and stacking them would leave half of one blank by construction.
 
 ### Fixed
 - **Completing or dropping a task on a filtered Open items view no longer
@@ -92,6 +98,18 @@ All notable changes to bookkit, newest date first.
   a link you can keep; the write answered with the unfiltered page, so a
   broker looking at one client's open items was handed the whole book back.
   The task was recorded correctly — what was lost was where you were standing.
+- **Blur saves again, every time.** Saving a cell on the Program tab wedged a
+  guard flag on, and from then on clicking away from ANY cell silently kept it
+  open with unsaved text — while Enter kept working, which is why it read as
+  "sometimes I need to hit enter, other times not". A committed cell also
+  flashes briefly now, so a save that changes nothing visible still says it
+  happened; the flash knows a write from a walk-away, so Escape is never
+  congratulated.
+- **Escape no longer commits the value it discards.** The discard guard reset
+  on a zero-timer while its revert made a network round trip, so pressing
+  Escape after typing could write the very text being thrown away — it reached
+  the database with an event-log row. Live since blur-commit shipped; found by
+  watching the database after a discard, which nothing had done.
 - A service that opens an undo batch and is called from *inside* another one
   no longer leaves an empty batch behind — a line in the changes list
   describing an action, offering a Revert, and reverting nothing. The events
@@ -101,6 +119,21 @@ All notable changes to bookkit, newest date first.
 - Today completes a task through the same shared write the other two
   surfaces use, instead of its own hand-rolled copy of the batch and its
   sentence.
+- **The client's workbook stops explaining itself and starts naming people.**
+  The standing scope sentence, the Information Requests banner, the
+  "asked [date]" labels and the Type column are gone — the withholding rules
+  they narrated are unchanged. The Owner column names the individual on each
+  item instead of answering "You" or "Us"; unassigned work still reads "Us",
+  and a contact at another client is never named on this one's copy.
+- **The Schedule of Insurance is bound cover.** Each programme lists what is
+  actually bound under its own name, and anything not bound — quoted,
+  submitted, or run off — sits in its own "not bound" block below with its own
+  subtotal. Bound and unbound premium were never added together; now they are
+  not interleaved either.
+- The assignee cell on open items shows the person's name alone; the
+  "— our team" qualifier survives only inside the editor, where it is what
+  keeps a saved assignee resolving to the right person when two people share
+  a name.
 
 ## 2026-08-20
 
