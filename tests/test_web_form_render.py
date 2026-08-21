@@ -319,21 +319,26 @@ def test_the_editor_cell_has_no_declarative_focusout_trigger():
 
 
 def test_the_committing_guard_is_actually_read():
-    """The bug fix round 2 caught: `committing` existed in inline-cell.js,
+    """The bug fix round 2 caught: the commit guard existed in inline-cell.js,
     set on submit and cleared on htmx:afterRequest, referenced nowhere else
     — a flag nothing ever consulted is not a guard, however confidently the
     surrounding comments describe it as one. This is a static/textual
     check, not a behavioural proof — this repo has no JS test harness to
-    drive a real browser — but it is real: it fails if `committing` reverts
-    to being set-and-forgotten, which is exactly the mistake that shipped."""
+    drive a real browser — but it is real: it fails if the guard reverts
+    to being set-and-forgotten, which is exactly the mistake that shipped.
+
+    The guard is `__bkCommitting`, A MARK ON THE FORM, since 2026-08-21 —
+    the page-global `committing` it replaced shipped three bugs in one week
+    (see inline-cell.js's header). Same property pinned: the mark must be
+    READ in a conditional, not merely set and cleared."""
     import re
     from pathlib import Path
 
     import bookkit
 
     js = (Path(bookkit.__file__).parent / "web" / "static" / "inline-cell.js").read_text()
-    assert re.search(r"if\s*\([^)]*\bcommitting\b[^)]*\)", js), (
-        "committing is set/cleared but never read inside a conditional"
+    assert re.search(r"if\s*\([^)]*__bkCommitting\b[^)]*\)", js), (
+        "the commit mark is set/cleared but never read inside a conditional"
     )
 
 

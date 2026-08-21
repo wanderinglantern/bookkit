@@ -688,9 +688,9 @@ def test_no_hover_revealed_control_is_hidden_from_the_keyboard():
 #
 # SOURCE ASSERTIONS, and they are the weakest kind — there is no JS harness in
 # this project, so nothing here EXECUTES inline-cell.js. They exist because the
-# bug they pin was invisible to every other test and cost Grant real work: the
-# behaviour was verified in a real browser (Playwright, 2026-08-21) and these
-# guard the two lines that verification turned on.
+# bugs they pin were invisible to every other test and cost Grant real work:
+# each behaviour was verified in a real browser (Playwright, 2026-08-21) and
+# these guard the exact lines that verification turned on.
 
 
 def _inline_cell_js() -> str:
@@ -699,37 +699,57 @@ def _inline_cell_js() -> str:
     return (app_mod.HERE / "static" / "inline-cell.js").read_text()
 
 
-def test_the_committing_flag_resets_without_inspecting_the_swapped_element():
-    """THE BUG, pinned. `committing` suppresses the focusout that a commit's
-    own swap causes, and it used to reset only when `htmx:afterRequest` carried
-    `detail.elt` that was the `.cell-editor` which submitted.
+def test_the_commit_mark_lives_on_the_form_not_in_a_global():
+    """TWO bugs, one week, both from a page-global flag — pinned here.
 
-    That is never true when the response swaps away the form's own ancestors —
-    every save on the Program tab, because `_panel` retargets onto the whole
-    section. htmx fires the event on the requesting element and, finding it no
-    longer in the document, RE-FIRES on the nearest attached ancestor with
-    `detail.elt` set to that ancestor (`if(!le(r))` in htmx.min.js). A <section>
-    is not a .cell-editor, so the flag stayed true and every later focusout on
-    the page returned early: blur-commit was dead from the first such save until
-    a reload, while Enter kept working because Enter is a native submit.
+    First the flag reset only when the completed request's element was the
+    `.cell-editor` that submitted. That is never true after a save whose
+    response swaps away the form's ancestors (every Program-tab save): htmx
+    re-fires `htmx:afterRequest` on the nearest attached ancestor, a <section>
+    is not a .cell-editor, so the flag stuck ON and blur-commit was dead until
+    a reload. Grant: "sometimes i need to hit enter, other times not".
 
-    Grant, 2026-08-21: "sometimes i need to hit enter, other times not".
+    Then the reset was widened to unconditional — and fresh-eyes review showed
+    ANY unrelated request completing (another cell's Escape-revert) cleared the
+    flag while a commit was still in flight, reopening the double-submit race
+    the flag exists to prevent.
+
+    The fix is no global at all: the mark lives on the form element itself
+    (`__bkCommitting`), so one form's traffic cannot touch another's, and a
+    detached form's mark dies with the node. The afterRequest reset touches
+    only `detail.elt` when it IS the still-attached form — the network-error
+    path, the one case where nothing swapped and blur must work again.
     """
     js = _inline_cell_js()
-    handler = js[js.index('addEventListener("htmx:afterRequest"') :]
-    handler = handler[: handler.index("});")]
 
-    assert "committing = false" in handler
-    assert "cell-editor" not in handler, (
-        "the reset is gated on the swapped element again — a retargeted panel "
-        "swap re-fires afterRequest on an ancestor, so this can never match"
-    )
+    assert "__bkCommitting" in js
+    assert "var committing" not in js, "the page-global flag is back"
+
+    # The focusout guard consults the FORM's own mark.
+    focusout = js[js.index('addEventListener("focusout"') :]
+    focusout = focusout[: focusout.index("});")]
+    assert "form.__bkCommitting" in focusout
+
+    # The afterRequest reset touches only the element that owned the request,
+    # and only when it is a cell-editor — never a page-global, never a sweep.
+    reset = js[js.index('addEventListener("htmx:afterRequest"') :]
+    reset = reset[: reset.index("});")]
+    assert "__bkCommitting = false" in reset
+    assert 'classList.contains("cell-editor")' in reset
 
 
-def test_a_saved_cell_gets_a_visible_signal():
+def test_the_saved_flash_only_fires_on_a_write():
     """Grant, 2026-08-21: "unclear when changes are saved as it just stays
     blue". A committed cell swaps back to a display cell identical to the one
-    that was there before, so nothing said the write had landed."""
+    that was there before, so a flash marks the save.
+
+    THE GATE IS THE POINT, not the flash: every revert — Escape's discard, the
+    unchanged-value blur-close — is a GET returning the IDENTICAL markup a
+    successful POST save returns, so the swapped element alone cannot say
+    whether anything was written. Ungated, the flash congratulated the user on
+    Escape — the exact opposite of "Escape discards" (fresh-eyes review,
+    2026-08-21, driving the discard path the original browser check missed).
+    """
     from bookkit.web import app as app_mod
 
     js = _inline_cell_js()
@@ -737,8 +757,40 @@ def test_a_saved_cell_gets_a_visible_signal():
 
     assert "cell-saved" in js
     assert ".cell.cell-saved" in css
-    # Raised from BOTH swap shapes: a plain cell save swaps the cell, a program
-    # write swaps the whole section and only `refocus` knows which cell to mark.
-    # Flashing from one place silently did nothing on the Program tab.
-    assert js.count("flashSaved(") >= 3, "one of the two save shapes is unmarked"
     assert "prefers-reduced-motion" in css
+
+    swap = js[js.index('addEventListener("htmx:afterSwap"') :]
+    assert 'requestConfig.verb === "post"' in swap, "the flash lost its verb gate"
+    # Raised from BOTH swap shapes — a plain cell save swaps the cell, a
+    # program write swaps the whole section and only `refocus` knows which
+    # cell to mark — and gated in both.
+    assert js.count("flashSaved(") >= 3, "one of the two save shapes is unmarked"
+    assert "if (wrote) flashSaved(cell);" in js, "the refocus flash lost its gate"
+
+
+def test_escape_cannot_lose_its_race_to_a_timer():
+    """PRE-EXISTING DATA-INTEGRITY BUG, found 2026-08-21 while verifying the
+    saved-flash fix with real keys: Escape COMMITTED the value it discarded.
+
+    The old guard was a global `cancelling` flag reset by `setTimeout(0)` —
+    and the revert it guards is a network GET, so the swap-fired focusout
+    arrives long after timeout zero. Flag false, value changed, the focusout
+    handler submitted the discarded text; it landed in the database with an
+    event-log row. Every earlier check had driven blur-commit, never
+    Escape-then-watch-the-DB.
+
+    The fix is a mark on the CELL node (`__bkCancelled`), which needs no
+    timer: the revert's own swap replaces the cell and the new node arrives
+    unmarked. So the property to pin is the absence of the timer as much as
+    the presence of the mark.
+    """
+    js = _inline_cell_js()
+
+    escape = js[js.index('if (evt.key !== "Escape") return;\n    pendingHop') :]
+    escape = escape[: escape.index("});")]
+    assert "__bkCancelled = true" in escape
+    assert "setTimeout" not in escape, "the zero-timer race is back"
+
+    focusout = js[js.index('addEventListener("focusout"') :]
+    focusout = focusout[: focusout.index("});")]
+    assert "cell.__bkCancelled" in focusout

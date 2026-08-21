@@ -21,11 +21,16 @@
  *   - Blur commits (2026-08-20; it cancelled until then). Every path that
  *     ends an edit — a commit's own outerHTML swap, Escape's revert — also
  *     removes the focused input and therefore fires focusout, so the
- *     listener has to know which one it is looking at. That is what
- *     `committing` and `cancelling` are for, and both are READ on every
- *     focusout rather than merely carried: fix round 2, 2026-08-17, found a
- *     `committing` flag that was set and cleared and never consulted, so
- *     every commit raced a spurious revert GET against its own save.
+ *     listener has to know which one it is looking at. That is what the
+ *     `__bkCommitting` (on the form) and `__bkCancelled` (on the cell) marks
+ *     are for, and both are READ on every focusout rather than merely
+ *     carried: fix round 2, 2026-08-17, found a flag that was set and
+ *     cleared and never consulted, so every commit raced a spurious revert
+ *     GET against its own save. They are marks on the NODES, not globals —
+ *     a global flag shipped three bugs in one week (stuck on after a panel
+ *     swap; cleared early by an unrelated request; and a zero-timer reset
+ *     that lost the race to Escape's own revert and committed the
+ *     discarded value).
  *   - An unchanged cell reverts instead of committing, so opening a cell to
  *     read it costs nothing.
  *
@@ -40,55 +45,58 @@
 
   var RECORD_SCOPE = "tr, .contact-card";
 
-  var committing = false;
-  var cancelling = false;
   var pendingHop = null; // { scope: <element>, nextCell: <element> } set by a Tab keydown
 
   function editableCells(scope) {
     return Array.prototype.slice.call(scope.querySelectorAll(".cell[data-field]"));
   }
 
-  // Capture phase: runs before htmx's own submit listener, so `committing`
-  // is already true by the time htmx issues the request — and therefore
-  // already true by the time the eventual outerHTML swap's own focusout
-  // reaches the listener below.
+  // THE COMMIT MARK LIVES ON THE FORM, not in a page-global flag. A global
+  // had two failure modes in one week: reset only when the completed
+  // request's element was the .cell-editor (never true after a panel-
+  // retargeting swap, so the flag stuck ON and blur-commit died page-wide),
+  // then reset unconditionally (any unrelated request completing — another
+  // cell's Escape-revert — cleared it while a commit was still in flight,
+  // reopening the double-submit race it exists to prevent; fresh-eyes
+  // review, 2026-08-21). A mark on the form itself has neither: form A's
+  // mark is invisible to form B's traffic, and a detached form's mark
+  // simply dies with the node.
+  //
+  // Capture phase: runs before htmx's own submit listener, so the mark is
+  // set by the time htmx issues the request — and therefore by the time the
+  // eventual outerHTML swap's own focusout reaches the listener below.
   document.body.addEventListener(
     "submit",
     function (evt) {
       if (evt.target && evt.target.classList && evt.target.classList.contains("cell-editor")) {
-        committing = true;
+        evt.target.__bkCommitting = true;
       }
     },
     true
   );
 
-  // Reset once the request/swap/settle cycle for that submit is over, so a
-  // later genuine blur (e.g. clicking away after a refused save left the
-  // editor open) is not permanently suppressed.
-  //
-  // UNCONDITIONAL, and that is the fix (Grant, 2026-08-21: "unclear when
-  // changes are saved… sometimes i need to hit enter, other times not").
-  //
-  // This used to reset only when `evt.detail.elt` was the `.cell-editor` that
-  // submitted, which looks right and is wrong whenever the response swaps away
-  // the form's own ancestors — which is EVERY save on the Program tab, because
-  // routes/program.py `_panel` retargets onto the whole section. htmx fires
-  // `htmx:afterRequest` on the requesting element, and when that element is no
-  // longer in the document it re-fires the event on the nearest still-attached
-  // ancestor instead (`if(!le(r))` in htmx.min.js) — with `detail.elt` set to
-  // THAT ancestor. The ancestor is a <section>, not a .cell-editor, so the old
-  // check never matched, `committing` stayed true forever, and every later
-  // focusout on the page returned early. Blur-commit was dead from the first
-  // panel-retargeting save until a reload; Enter kept working, because Enter is
-  // a native form submit and never consults this flag. That is exactly the
-  // "sometimes" in the report.
-  //
-  // Resetting unconditionally is safe because the flag only has to survive from
-  // the submit to the swap that removes the focused input, and THAT focusout
-  // fires synchronously while the swap detaches the node — long before any
-  // request completes.
-  document.body.addEventListener("htmx:afterRequest", function () {
-    committing = false;
+  // Un-mark once the form's own request settles, so a later genuine blur
+  // (clicking away after a NETWORK ERROR left the editor open) is not
+  // suppressed forever. Only the error/no-swap path needs this: a
+  // successful save and a refusal both swap in a fresh element whose mark is
+  // unset by construction, and on those paths the old form is detached — its
+  // afterRequest re-fires on an attached ancestor (`if(!le(r))` in
+  // htmx.min.js), which this check correctly ignores, leaving the mark to
+  // die with the node. Only when NOTHING swapped is `detail.elt` still the
+  // form itself, and that is exactly the case that needs the reset.
+  document.body.addEventListener("htmx:afterRequest", function (evt) {
+    var elt = evt.detail && evt.detail.elt;
+    if (!elt || !elt.classList) return;
+    if (elt.classList.contains("cell-editor")) {
+      elt.__bkCommitting = false;
+    }
+    // The Escape mark's only surviving case: a revert whose GET failed, so
+    // nothing swapped and the marked cell is still attached — clear it so a
+    // later blur on that editor can commit again. The revert's request
+    // element is the CELL (the declarative trigger lives on it).
+    if (elt.classList.contains("cell-editing")) {
+      elt.__bkCancelled = false;
+    }
   });
 
   // BLUR COMMITS (Grant, 2026-08-20). It used to cancel, which meant
@@ -99,12 +107,16 @@
   // and macros/cell.html says so beside the input. Enter and Tab unchanged.
   //
   // Three guards, all load-bearing:
-  //   `committing`  — a commit's own outerHTML swap removes the focused
+  //   `__bkCommitting` (a mark ON the form, see the submit listener above)
+  //                 — a commit's own outerHTML swap removes the focused
   //                   input, firing focusout again; without this the cell
   //                   would post twice.
-  //   `cancelling`  — Escape's declarative revert ALSO removes the input and
+  //   `__bkCancelled` (a mark ON the cell, see the Escape listener below)
+  //                 — Escape's declarative revert ALSO removes the input and
   //                   fires focusout. Without this, Escape would commit the
-  //                   very value it exists to discard.
+  //                   very value it exists to discard — and DID, while this
+  //                   was a global reset on a zero-timer that lost the race
+  //                   against the revert's own network round trip.
   //   unchanged     — an untouched cell must not write. Opening a cell to
   //                   read it and clicking away would otherwise cost a
   //                   write-through, a rewritten towerkit file and an undo
@@ -123,9 +135,9 @@
 
   document.body.addEventListener("focusout", function (evt) {
     var cell = evt.target.closest && evt.target.closest(".cell-editing");
-    if (!cell || committing || cancelling) return;
+    if (!cell || cell.__bkCancelled) return;
     var form = cell.querySelector("form.cell-editor");
-    if (!form) return;
+    if (!form || form.__bkCommitting) return;
     var opened = cell.getAttribute("data-opened-with");
     if (opened !== null && currentValue(cell) === opened) {
       revert(cell); // nothing typed — close it, exactly as blur used to
@@ -195,19 +207,31 @@
     form.requestSubmit();
   });
 
-  // Escape is the discard. It sets `cancelling` BEFORE the cell's own
-  // declarative hx-trigger="keyup[key=='Escape']" revert fires, so the
+  // Escape is the discard. It marks THE CELL as cancelled before the cell's
+  // own declarative hx-trigger="keyup[key=='Escape']" revert fires, so the
   // focusout that revert causes cannot be read as a commit. keydown, not
   // keyup, for exactly that ordering.
+  //
+  // A MARK ON THE NODE, NOT A GLOBAL WITH A TIMER. This was
+  // `cancelling = true` with a setTimeout(0) reset, and the timer LOST THE
+  // RACE it existed to win: the revert is a network GET, so its swap — and
+  // the focusout that swap fires — arrives long after timeout zero. By then
+  // the flag was false, the value differed from data-opened-with, and the
+  // focusout handler committed THE VERY VALUE ESCAPE DISCARDED. Driven with
+  // real keys against a live app: the discarded text landed in the database
+  // with an event-log row (2026-08-21). Every earlier check had exercised
+  // blur-commit, never Escape-then-watch-the-DB.
+  //
+  // The mark needs no reset at all on the ordinary path: the revert's swap
+  // replaces the whole cell, and the new cell arrives unmarked. Only a
+  // revert that FAILS (network error, nothing swapped) leaves a marked cell
+  // behind, and the afterRequest listener below clears exactly that case —
+  // the same shape as the form's own commit mark, for the same reasons.
   document.body.addEventListener("keydown", function (evt) {
     if (evt.key !== "Escape") return;
     pendingHop = null;
-    if (evt.target.closest && evt.target.closest(".cell-editing")) {
-      cancelling = true;
-      window.setTimeout(function () {
-        cancelling = false;
-      }, 0);
-    }
+    var cell = evt.target.closest && evt.target.closest(".cell-editing");
+    if (cell) cell.__bkCancelled = true;
   });
 
   // Put the caret back on the cell a panel-wide swap replaced. Best effort
@@ -223,7 +247,7 @@
     }, 1200);
   }
 
-  function refocus(section, token) {
+  function refocus(section, token, wrote) {
     var parts = token.split(":");
     var scope = parts[0];
     var field = parts.slice(1).join(":");
@@ -235,7 +259,7 @@
     var cell = row.querySelector('.cell[data-field="' + CSS.escape(field) + '"]');
     if (cell) {
       cell.focus();
-      flashSaved(cell);
+      if (wrote) flashSaved(cell);
     }
   }
 
@@ -247,6 +271,18 @@
   document.body.addEventListener("htmx:afterSwap", function (evt) {
     var el = evt.target;
     if (!el || !el.classList) return;
+    // WAS THIS SWAP A WRITE? Every revert — Escape's discard, the unchanged-
+    // value blur-close — is a GET that returns the *identical* display-cell
+    // markup a successful save does, so the swapped element alone cannot say
+    // whether anything was written. The verb can: every save is a POST and
+    // every revert is a GET. Without this gate the saved flash fired on
+    // Escape, congratulating the user on a write that never happened — found
+    // by fresh-eyes review driving the discard path in a live app
+    // (2026-08-21); the original browser check had only driven the save path.
+    var wrote =
+      evt.detail &&
+      evt.detail.requestConfig &&
+      evt.detail.requestConfig.verb === "post";
 
     // Any newly-swapped editor gets focus — covers opening a cell fresh,
     // re-showing it after a refusal, and the hop's own second swap below.
@@ -279,7 +315,7 @@
     // into. Flashing only here looked right and silently did nothing on the
     // Program tab, which is the surface the report came from (verified in a
     // browser, 2026-08-21).
-    if (el.classList.contains("cell") && el.hasAttribute("data-field")) {
+    if (wrote && el.classList.contains("cell") && el.hasAttribute("data-field")) {
       flashSaved(el);
     }
 
@@ -290,7 +326,10 @@
     // what keeps a run of edits down one column from becoming a run of
     // hunting for where the row went.
     if (el.hasAttribute && el.hasAttribute("data-refocus")) {
-      refocus(el, el.getAttribute("data-refocus"));
+      // data-refocus only rides write responses today, but the flash inside
+      // refocus() is gated on the verb anyway — one rule, both call sites,
+      // so a future GET that grows the attribute cannot resurrect the bug.
+      refocus(el, el.getAttribute("data-refocus"), wrote);
     }
 
     if (!pendingHop) return;
