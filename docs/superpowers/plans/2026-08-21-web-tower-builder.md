@@ -1327,7 +1327,15 @@ def test_a_buffer_draws_as_a_buffer(app_and_org) -> None:
 
     page = client.get(f"/accounts/{org.ref}/program").text
 
-    assert "is-buffer" in page
+    # SCOPED TO THE DRAWING. The stack editor also emits `is-buffer`, so an
+    # unscoped assertion would pass on Task 6's markup alone and prove nothing
+    # about the tower panel (caught in the pre-flight scan, ruling R3).
+    assert 'class="tower-layer' in page
+    drawn = [
+        frag for frag in page.split('class="tower-layer')[1:]
+        if "is-buffer" in frag.split(">")[0]
+    ]
+    assert drawn, "the drawing does not mark the buffer"
 ```
 
 - [ ] **Step 2: Run them to make sure they fail**
