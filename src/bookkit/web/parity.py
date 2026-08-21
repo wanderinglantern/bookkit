@@ -141,6 +141,37 @@ IMPLEMENTED: dict[str, str] = {
         "<two-word-slug>-<period year>.json — mirrored rather than reinvented, "
         "so a file scaffolded from either surface lands in the same place."
     ),
+    "delete_row": (
+        "BUILT 2026-08-21. `D` resolves by focused table: seven tables, FOUR "
+        "kinds of row (contact, interaction, task, team assignment — "
+        "AccountScreen.DELETABLE), and all four now have a web route — plus "
+        "request items and whole requests, which the TUI cannot remove at all "
+        "(POST .../requests/{request_id}/items/{item_id}/remove), so the web "
+        "is AHEAD here (audit-corrected 2026-08-19 — this entry used to deny "
+        "it). Contacts: /accounts/{ref}/contacts/{contact_id}/remove "
+        "(services.contacts.remove). Interactions: /accounts/{ref}/"
+        "interactions/{interaction_id}/delete (services.interactions.delete). "
+        "Both are a confirm GET that writes nothing followed by a POST to the "
+        "same path, both routes/relationship.py, both through the same "
+        "service the TUI calls, so neither surface can differ on the "
+        "consequences shown, on the soft delete, or on the one revertible "
+        "batch. Contacts were built ahead of their turn because it was a LIVE "
+        "DATA problem: MCP filed a wholesaler as a client contact and no "
+        "surface could take it off. Team assignments joined 2026-08-20 "
+        "(gap 7): confirm GET + POST /accounts/{ref}/team/{assignment_id}/"
+        "remove, routes/team.py, one batch with the TUI D-flow's own tool and "
+        "summary. TASKS are the last one in, and they are DROPPED, not "
+        "deleted, exactly as in the TUI: POST /accounts/{ref}/tasks/"
+        "{task_id}/drop (routes/work.drop_task, tool='task_drop', "
+        "tasks_repo.drop), rendered as a Drop button beside Done on all THREE "
+        "surfaces that list a task — the account Work tab, /items and /today "
+        "— because 'done' and 'not happening' are different facts and only "
+        "done stamps completed_at. No confirm STEP for that one, matching the "
+        "TUI's own reasoning: a drop is one field write that takes no other "
+        "record with it, so the undo pill puts it straight back and there is "
+        "no plan a fragment could show that the button's own hx-confirm "
+        "sentence does not."
+    ),
 }
 
 # action name -> why it is not covered yet
@@ -189,30 +220,6 @@ PENDING: dict[str, str] = {
     "import_here": (
         "deferred by decision, not yet reached: bulk paste-import needs a "
         "browser-side parser design of its own; the TUI flow does not port"
-    ),
-    "delete_row": (
-        "PARTLY built. `D` resolves by focused table: seven tables, FOUR kinds "
-        "of row (contact, interaction, task, team assignment — AccountScreen."
-        "DELETABLE), and request items are not removable in the TUI — but the WEB "
-        "removes both request items (POST .../requests/{request_id}/items/"
-        "{item_id}/remove) and whole requests; the web is ahead here "
-        "(audit-corrected 2026-08-19 — this entry used to deny it). "
-        "TWO kinds have a web route, each a confirm GET that writes nothing "
-        "followed by a POST to the same path: contacts via "
-        "/accounts/{ref}/contacts/{contact_id}/remove "
-        "(services.contacts.remove) and interactions via "
-        "/accounts/{ref}/interactions/{interaction_id}/delete "
-        "(services.interactions.delete) — both routes/relationship.py, both "
-        "through the same service the TUI calls, so neither surface can "
-        "differ on the consequences shown, on the soft delete, or on the one "
-        "revertible batch. Contacts were built ahead of their turn because it "
-        "was a LIVE DATA problem: MCP filed a wholesaler as a client contact "
-        "and no surface could take it off. Team assignments joined 2026-08-20 "
-        "(gap 7): confirm GET + POST /accounts/{ref}/team/{assignment_id}/"
-        "remove, routes/team.py, one batch with the TUI D-flow's own tool and "
-        "summary. Tasks (dropped, not deleted, in the TUI) and request items "
-        "still have no web removal, so the action as a whole stays PENDING — "
-        "do not promote this entry until they do."
     ),
     "mark_primary": (
         "not built on the web; the pending aria-disabled span it used to "

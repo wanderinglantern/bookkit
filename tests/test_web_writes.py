@@ -1280,16 +1280,28 @@ def test_a_filter_link_does_not_resurrect_the_revert_toast(timeline):
 
 def test_the_parity_ledger_records_the_interaction_routes():
     """web/parity.py is the ledger that stops "narrowed slice" from becoming
-    "silently missing". Interactions now have a web edit and a web delete, and
-    both actions stay PENDING because each covers rows this task did not build
-    — partial coverage belongs in the reason, never in a false IMPLEMENTED."""
+    "silently missing". Interactions have both a web edit and a web delete, and
+    the ledger must still name each of them wherever its action now sits.
+
+    `edit_here` stays PENDING: it covers rows this task did not build, and
+    partial coverage belongs in the reason, never in a false IMPLEMENTED.
+    `delete_row` MOVED to IMPLEMENTED on 2026-08-21, when tasks — the last of
+    AccountScreen.DELETABLE's four row kinds with no web route — got their
+    Drop. Whichever dict it sits in, it must still name the interaction
+    route, because the promotion is what makes a dropped sentence invisible.
+    """
     from bookkit.web.parity import IMPLEMENTED, PENDING
 
-    assert "edit_here" in PENDING and "delete_row" in PENDING
+    assert "edit_here" in PENDING
     assert "interaction" in PENDING["edit_here"], (
         "the ledger does not record the interaction edit form"
     )
-    assert "/interactions/" in PENDING["delete_row"], (
+    assert "edit_here" not in IMPLEMENTED
+
+    assert "delete_row" in IMPLEMENTED and "delete_row" not in PENDING
+    assert "/interactions/" in IMPLEMENTED["delete_row"], (
         "the ledger still says interactions have no web removal"
     )
-    assert "edit_here" not in IMPLEMENTED and "delete_row" not in IMPLEMENTED
+    assert "/drop" in IMPLEMENTED["delete_row"], (
+        "the ledger does not record the task drop that closed this action"
+    )

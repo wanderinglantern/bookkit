@@ -1148,6 +1148,16 @@ table.rows td.mono {
   color: var(--accent);
 }
 
+/* The destructive sibling in a row-actions pair (task "Drop" beside "Done").
+   Muted at rest like its neighbour — a row of forty must not read as forty
+   warnings — and --danger on hover/focus, so the colour arrives exactly when
+   the pointer is on the thing it applies to. Colour is not the only signal:
+   the two buttons say different words, and Drop asks before it writes. */
+.row-action-btn.is-danger:hover,
+.row-action-btn.is-danger:focus-visible {
+  color: var(--danger);
+}
+
 .work-section-gap {
   height: 1.5rem;
 }
