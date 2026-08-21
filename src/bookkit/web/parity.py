@@ -299,6 +299,20 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "tui": "L, applies-to select required",
         "mcp": "program_layer_add",
     },
+    "insert_layer": {
+        "web": "the stack editor's insert-above / insert-below control on a "
+        "slab row (routes/program.py; lands in Task 5 of the 2026-08-21 "
+        "tower-builder plan) — the only way to add a layer with a computed, "
+        "not typed, attachment",
+        "tui": "NOT BUILT, and not going to be — the design that added this "
+        "verb (2026-08-21) retires the standing rule sending tower structure "
+        "to towerkit's editor via `o`: bookkit's TUI is being deleted, and "
+        "this insert has no towerkit-editor equivalent to jump to (it "
+        "computes attach from stack position, which towerkit's own editor "
+        "does not)",
+        "mcp": "DEFERRED — structure from an assistant is undecided, same "
+        "call as add_layer's siblings",
+    },
     "remove_layer": {
         "web": "details row -> remove layer, confirm names the seats (D2)",
         "tui": "D on a placeholder carriers row, confirm names the seats",

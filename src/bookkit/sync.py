@@ -914,6 +914,101 @@ def add_layer(
     return _mutate(conn, placement_id, mutate)
 
 
+def insert_layer(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    *,
+    line_id: str,
+    anchor_layer_id: str | None,
+    position: str,
+    name: str,
+    limit_cents: int,
+    buffer: bool = False,
+) -> Diagnostics:
+    """Put a slab INTO a stack, and let the position decide the attachment.
+
+    THERE IS NO ATTACHMENT ARGUMENT, deliberately. A typed attachment is how
+    two slabs come to share one — Grant built a quota share as two layers at
+    `$5M xs $5M` and the renderer drew them on top of each other with their
+    labels overprinting (2026-08-21). Position decides: a slab seats on the
+    top of the one beneath it, or at $0 when it is the first.
+
+    ONE MUTATION FOR THE WHOLE COLUMN. Inserting mid-stack pushes everything
+    above it up, and those attachments are recomputed HERE, inside the same
+    mutation, because `write_through` only accepts a file that validates — a
+    two-step insert would have to write a half-shifted tower to get there.
+    That is also why towerkit's `restack` is not wanted: web/parity.py records
+    it as unreachable through the guarded seam for exactly this reason.
+
+    `anchor_layer_id=None` seats the slab at the bottom of the line.
+    """
+    if position not in ("above", "below"):
+        raise ValueError(f"position is 'above' or 'below', not {position!r}")
+
+    def mutate(program: Program) -> None:
+        limit = _require_dollars(limit_cents, "limit")
+        stack = program.layers_for_line(line_id)
+        layer = edit_add_layer(program, [line_id])
+        layer.name = name
+        layer.limit = limit
+        layer.buffer = buffer
+        layer.participants = []
+        layer.premium = None
+
+        order = [ly for ly in stack if ly.id != layer.id]
+        if anchor_layer_id is None:
+            order.insert(0, layer)
+        else:
+            index = next(
+                (i for i, ly in enumerate(order) if ly.id == anchor_layer_id), None
+            )
+            if index is None:
+                raise ValueError(f"no layer {anchor_layer_id!r} on {line_id}")
+            order.insert(index + 1 if position == "above" else index, layer)
+
+        # RESEAT THE WHOLE COLUMN, bottom up.
+        #
+        # A SLAB THAT SPANS SEVERAL LINES GETS `follows_underlying`, NOT A
+        # NUMBER. This column's arithmetic is not true of the others: an
+        # umbrella over GL and AL sits on a different stack in each, so pinning
+        # GL's figure onto it opens a gap in AL and towerkit refuses the whole
+        # write. `follows_underlying` is exactly this case — `heal_follows`
+        # re-derives the attachment per column on every write, and `validate`
+        # checks it per column too. (Found by the implementer, 2026-08-21: the
+        # seeded umbrella spans GL and AL, and every insert below it was
+        # refused until this branch existed.)
+        #
+        # `slab.attach = floor` is set for EVERY slab, follows-underlying ones
+        # included — not a hardcoded figure, a THRESHOLD SEED. towerkit's
+        # `underlying_tops` decides what counts as "beneath" a follows layer by
+        # `other.attach < layer.attach`, using whatever `layer.attach` already
+        # holds; a newly-inserted slab seats exactly at the OLD threshold, so
+        # leaving that stale (as the ruling's literal loop did) excludes it by
+        # one strict comparison, `heal_follows` never bumps the shared layer,
+        # and the write is refused with a false OVERLAP. `heal_follows` runs
+        # before every write anyway and always overwrites this with the true
+        # per-column derivation, so the seed never survives as a wrong pinned
+        # number — it only has to be high enough to be seen. (Found by the
+        # implementer, 2026-08-21, running R7 against the seeded GL/AL
+        # umbrella: `gl: OVERLAP Umbrella→Test Excess at $27,000,000 vs
+        # $2,000,000` — reported back rather than silently patched.)
+        floor = 0
+        for slab in order:
+            if len(slab.applies_to) > 1:
+                slab.follows_underlying = True
+            slab.attach = floor
+            # In THIS column every slab seats on the floor — whether its
+            # attachment is a real figure or a threshold seed `heal_follows`
+            # will overwrite — so the next one tops out a limit higher.
+            # Contiguous by construction. (`floor += slab.limit`, never
+            # `slab.attach + slab.limit`: a follows slab's attach here is that
+            # seed, not yet the healed truth, so reading it back would carry a
+            # wrong number into the next slab's floor.)
+            floor += slab.limit
+
+    return _mutate(conn, placement_id, mutate)
+
+
 def _find_line(program: Program, line_id: str) -> None:
     """A ValueError towerkit's KeyError-raising _line would bypass _mutate
     with — same reason remove_layer pre-checks via _find_layer."""
