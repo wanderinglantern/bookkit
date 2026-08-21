@@ -66,6 +66,45 @@
   backups/ before the first row changes. Migrations are additive-only so
   far; call out anything destructive before writing it.
 
+## A SCHEMA CHANGE IS NOT DONE UNTIL AN AGENT CAN SEE IT (Grant, 2026-08-21)
+
+Adding a field, a table or a verb is half a change. The other half is the MCP
+surface: if the assistant cannot READ the new fact or WRITE it, the feature is
+"built but not accessible" for the one user who works through tools rather than
+screens. Do not close a schema change without walking this chain and saying in
+the commit which links you touched.
+
+**towerkit model change** (a field on Layer/Program/Line/...):
+1. `src/towerkit/model.py` — the field itself, with a comment saying WHY.
+2. `uv run --group dev python tools/sync_schema.py`, then hand-write the
+   `description` into BOTH `schema/program.schema.json` and
+   `src/towerkit/schema/program.schema.json`; `--check` must say it is in sync.
+   The schema is `additionalProperties: false` at nine sites, so a field missing
+   here makes the file towerkit's OWN writer produced fail validation.
+3. `mcpsurface.SURFACE` is DERIVED and picks the field up unaided — that is the
+   seam working. `tests/test_mcp_surface.py`'s reviewed-count gate then goes red
+   ON PURPOSE, to force a human to look at what the assistant just gained. Raise
+   the count AND write the reason in the docstring.
+4. If the change adds a FUNCTION to `edit.py`, place it in `mcpparity.py` —
+   MUTATIONS (naming the tool that reaches it), DEFERRED_MUTATIONS (naming the
+   verb that would), or NOT_A_MUTATION. `test_mcp_parity` fails until you do.
+
+**bookkit side of a towerkit change:**
+5. `web/parity.py::TOWERKIT_MODEL_FIELDS` — red until the field is named, and
+   the red test IS the ticket.
+6. `web/parity.py::SYNC_VERBS` — a new `sync.*` program mutator needs a row
+   saying what reaches it on web / tui / mcp. `insert_layer` was written without
+   one on 2026-08-21 and only the existing gate caught it.
+7. `routes/program.py::_PLACED` if the field should be editable in the browser.
+
+**bookkit's own schema change** (a migration): the tables MCP reads are
+`mcpserver.py`'s business; a column no tool can read or write is a column the
+assistant will confidently tell Grant does not exist.
+
+The rule behind all of it: bookkit has three surfaces and one of them is an
+agent. A change that lands on the web and not on MCP has shipped to two thirds
+of its users.
+
 ## DRY — the standing rule (Grant, 2026-08-20)
 
 DON'T REPEAT YOURSELF, in code, in what the user has to type, and in how the
@@ -132,9 +171,15 @@ The load-bearing ones:
 
 ## THE WEB IS THE PRODUCT (Grant, 2026-08-21)
 
-THE TUI IS RETIRED. Not deleted — retired: it keeps working and the suite keeps
-it green, but it is no longer where features land and no longer the yardstick
-the web is measured against. Design decisions are made FOR THE BROWSER, and
+THE TUI IS RETIRED AND WILL BE DELETED. Grant does not use it. Until the
+deletion lands it keeps working and the suite keeps it green, but it is no
+longer where features land and no longer the yardstick the web is measured
+against — and no web decision should be shaped by what the TUI does.
+
+DO NOT SPEND EFFORT ON IT. Every hour keeping a retired surface green is an
+hour taxed onto a surface nobody opens; if a change would require TUI work to
+keep the suite passing, say so and ask whether to bring the deletion forward
+rather than paying it quietly. Design decisions are made FOR THE BROWSER, and
 "more modern surfaces to interact with the data layers" is the direction.
 
 What this changes, concretely:
