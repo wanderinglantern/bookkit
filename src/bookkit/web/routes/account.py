@@ -37,6 +37,8 @@ from ...models import (
     Interaction,
     Org,
     Placement,
+    Project,
+    ProjectNeed,
     RfiItem,
     RfiRequest,
     Task,
@@ -71,6 +73,7 @@ TABS: tuple[tuple[str, str], ...] = (
     ("relationship", "Relationship"),
     ("work", "Work"),
     ("pipeline", "Pipeline"),
+    ("projects", "Projects"),
 )
 DEFAULT_TAB = "relationship"
 
@@ -118,7 +121,21 @@ def _org(request: Request, ref: str) -> Org:
 # in relationship.py, thirteen in work.py — and tests/test_web_scoping.py
 # drives every one of them.)
 
-_Owned = TypeVar("_Owned", Contact, Task, RfiRequest, RfiItem, Interaction, Placement)
+# A VALUE-CONSTRAINED TypeVar, not a bound: `_owned` hands the entity back
+# TYPED, so each caller gets its own record type rather than the union. A kind
+# added to `_owner_org_ids` must be added here too or the guard silently stops
+# accepting it — mypy catches that, which is how Project/ProjectNeed arrived.
+_Owned = TypeVar(
+    "_Owned",
+    Contact,
+    Task,
+    RfiRequest,
+    RfiItem,
+    Interaction,
+    Placement,
+    Project,
+    ProjectNeed,
+)
 
 
 def _not_here(kind: str, entity_id: str, org: Org) -> HTTPException:
@@ -131,7 +148,14 @@ def _not_here(kind: str, entity_id: str, org: Org) -> HTTPException:
 
 def _owner_org_ids(
     conn: sqlite3.Connection,
-    entity: Contact | Task | RfiRequest | RfiItem | Interaction | Placement,
+    entity: Contact
+    | Task
+    | RfiRequest
+    | RfiItem
+    | Interaction
+    | Placement
+    | Project
+    | ProjectNeed,
 ) -> set[str]:
     """Which account(s) an entity belongs to — the ownership rule itself.
 
@@ -141,8 +165,17 @@ def _owner_org_ids(
     `task.org_id == org.id` alone would 404 rows the same page just rendered.
     An item belongs to whoever its request does — items carry no org of their
     own."""
-    if isinstance(entity, Contact | RfiRequest | Interaction | Placement):
+    if isinstance(entity, Contact | RfiRequest | Interaction | Placement | Project):
         return {entity.org_id}
+    if isinstance(entity, ProjectNeed):
+        # A need carries no org of its own: it belongs to whoever its PROJECT
+        # does, exactly as an RFI item belongs to its request. Same treatment
+        # of a vanished parent, and for the same reason — letting the KeyError
+        # out of here is a 500, and htmx drops a 5xx exactly as it drops a 4xx.
+        try:
+            return _owner_org_ids(conn, projects_repo.get_project(conn, entity.project_id))
+        except KeyError:
+            return set()
     if isinstance(entity, RfiItem):
         try:
             return _owner_org_ids(conn, rfi_repo.get_request(conn, entity.request_id))
@@ -321,8 +354,19 @@ def _counts(conn: sqlite3.Connection, org: Org, open_work: int) -> dict[str, int
         len(submissions_repo.for_placement(conn, p.id))
         for p in placements_repo.for_org(conn, org.id)
     )
+    # OPEN needs, not every need: a completed project's placed cover is not
+    # work, and a badge that counts it never falls to zero. Same rule the
+    # `work` count follows.
+    projects = projects_repo.projects_for_org(conn, org.id)
+    open_needs = sum(
+        1
+        for project in projects
+        for need in projects_repo.needs_for_project(conn, project.id)
+        if need.status in projects_repo.ATTENTION_STATUSES
+    )
     return {
         "program": len(placements_repo.for_org(conn, org.id)),
+        "projects": open_needs,
         "relationship": len(contacts) + len(interactions),
         "work": open_work,
         "pipeline": len(opportunities) + submissions_count,

@@ -1,0 +1,128 @@
+{# The Projects tab: the client's jobs, and the cover each one still needs.
+
+   MASTER/DETAIL, the shape the TUI's tab 5 uses — projects above, the selected
+   project's needs below. Selection is a LINK carrying ?project=, not a click
+   handler, so the view is a URL and the back button behaves (the same rule
+   /items' filters follow).
+
+   Every value in both tables is an inline cell; `line`, `needed_by`, the two
+   money fields and both statuses are editable where they are read. What has no
+   cell — and must not grow one — is a need's opportunity_id/placement_id: they
+   are set by LINKING and shown as a derived word, because a cell offering to
+   retype an id writes nothing anybody can reason about. #}
+<div id="projects-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if error %}
+    <div class="panel-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <div class="people-head">
+    <h2 class="people-label">Projects</h2>
+    <span class="people-count">{{ projects | length }}</span>
+    <span class="people-head-spacer"></span>
+    <button type="button" class="people-add"
+            hx-get="/accounts/{{ header.org.ref }}/projects/new"
+            hx-target="#projects-form-host" hx-swap="innerHTML">+ Add project</button>
+  </div>
+
+  {% if projects %}
+    <div class="table-scroll">
+      <table class="rows rows-fit">
+        <thead>
+          <tr><th>Ref</th><th>Project</th><th>Site</th><th>Status</th>
+              <th>Start</th><th>End</th><th class="right">Open needs</th></tr>
+        </thead>
+        <tbody>
+          {% for project in projects %}
+            {# aria-current marks the selected row for a screen reader, not
+               just for the eye — the class alone says nothing out loud. #}
+            <tr class="{{ 'is-selected' if project.is_selected else '' }}"
+                {% if project.is_selected %}aria-current="true"{% endif %}>
+              <td class="mono">
+                <a href="/accounts/{{ header.org.ref }}/projects?project={{ project.id }}"
+                   title="show this project's needs">{{ project.ref }}</a>
+              </td>
+              {{ project.cells.name | safe }}
+              {{ project.cells.site | safe }}
+              {{ project.cells.status | safe }}
+              {{ project.cells.start_on | safe }}
+              {{ project.cells.end_on | safe }}
+              <td class="num">{{ project.open_needs }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="panel-empty"><p>no projects yet — add the first one</p></div>
+  {% endif %}
+
+  <div class="work-section-gap"></div>
+
+  <div class="people-head">
+    <h2 class="people-label">
+      {% if selected %}Needs — {{ selected.name }}{% else %}Needs{% endif %}
+    </h2>
+    <span class="people-count">{{ needs | length }}</span>
+    <span class="people-head-spacer"></span>
+    {% if selected %}
+      <button type="button" class="people-add"
+              hx-get="/accounts/{{ header.org.ref }}/projects/{{ selected.id }}/needs/new"
+              hx-target="#projects-form-host" hx-swap="innerHTML">+ Add need</button>
+    {% endif %}
+  </div>
+
+  {# THE DESCRIPTION SITS HERE, not as an eighth column in the table above: a
+     prose column would set every row's height from the longest sentence and
+     destroy the rhythm that makes a list of twenty scannable. It belongs beside
+     the needs it explains, which is where a reader asks "what is this job?" —
+     and it stays an inline cell, because a field PROJECT_FIELDS declares
+     editable that no surface renders is built-but-not-accessible. #}
+  {% if selected %}
+    <p class="project-about">
+      <span class="detail-label">about</span>{{ selected_description | safe }}
+    </p>
+  {% endif %}
+
+  {% if needs %}
+    <div class="table-scroll">
+      <table class="rows rows-fit">
+        <thead>
+          <tr><th>Line</th><th>Needed by</th><th class="right">Limit</th>
+              <th class="right">Premium indication</th><th>Status</th>
+              <th>Linked</th><th>Notes</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for need in needs %}
+            <tr class="{{ 'is-settled' if need.settled else '' }}">
+              {{ need.cells.line | safe }}
+              {{ need.cells.needed_by | safe }}
+              {{ need.cells.limit_cents | safe }}
+              {{ need.cells.premium_indication_cents | safe }}
+              {{ need.cells.status | safe }}
+              {# DERIVED, never a cell — see the panel note above. #}
+              <td class="prose">
+                {% if need.linked %}<span class="detail-label">{{ need.linked }}</span>
+                {% else %}<span class="muted">—</span>{% endif %}
+              </td>
+              {{ need.cells.notes | safe }}
+              <td class="row-actions-cell">
+                {% if need.can_promote %}
+                  <button type="button" class="row-action-btn"
+                          title="create a pre-filled opportunity and link it"
+                          hx-post="/accounts/{{ header.org.ref }}/projects/needs/{{ need.id }}/opportunity"
+                          hx-target="#projects-panel" hx-swap="outerHTML">→ opportunity</button>
+                {% else %}
+                  <span class="detail-label" title="this need already has one">linked</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% elif selected %}
+    <div class="panel-empty"><p>nothing needed yet — add the first need</p></div>
+  {% else %}
+    <div class="panel-empty"><p>add a project to record what it needs</p></div>
+  {% endif %}
+</div>

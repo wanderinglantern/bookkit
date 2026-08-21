@@ -24,9 +24,15 @@ from __future__ import annotations
 
 # action name -> the web route that covers it
 IMPLEMENTED: dict[str, str] = {
-    "show_tab": "GET /accounts/{ref}/{tab} — Program/Relationship/Work/Pipeline, "
-    "each a real route with its own count badge (see routes/account.py, "
-    "docs/superpowers/specs/2026-08-17-web-visual-direction.md)",
+    "show_tab": "GET /accounts/{ref}/{tab} — Program/Relationship/Work/Pipeline/"
+    "Projects, each a real route with its own count badge (see "
+    "routes/account.py, docs/superpowers/specs/2026-08-17-web-visual-"
+    "direction.md). PROJECTS landed 2026-08-21 (routes/projects.py), the last "
+    "of the TUI's account tabs a browser did not have: master/detail like the "
+    "TUI's tab 5, selection in the query string so a view is a link, every "
+    "project and need field an inline cell, and the TUI's `o` (need -> "
+    "opportunity) as a row action. Its badge counts OPEN needs only — a "
+    "completed project's placed cover is not work.",
     "inline_edit": (
         "GET/POST /accounts/{ref}/contacts/{contact_id}/cell/{key} — click-to-edit "
         "cells for role/title/email/phone (bookkit.forms.inline.CONTACT_FIELDS), "
@@ -191,8 +197,11 @@ PENDING: dict[str, str] = {
         "POST .../pipeline/opportunities/new and "
         "POST .../pipeline/submissions/{id}/subjectivities/new, the same "
         "focus-dependent pair the TUI's `a` resolves on that tab "
-        "(routes/pipeline.py); projects does not yet, and the action covers "
-        "all of them, so it stays PENDING as a whole"
+        "(routes/pipeline.py), and PROJECTS has both as of 2026-08-21 — "
+        "POST .../projects/new and .../projects/{project_id}/needs/new, the "
+        "same focus-dependent pair the TUI's `a` resolves on tab 5. Every tab "
+        "the TUI can add on now has a web add; the action moves to IMPLEMENTED "
+        "when somebody has checked the last one by hand."
     ),
     "edit_here": (
         "generic per-tab edit ('e', a whole-form modal) — for contacts, tasks "

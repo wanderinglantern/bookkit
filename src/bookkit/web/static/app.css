@@ -3049,6 +3049,18 @@ tr:hover .market .chip-remove {
    own type rather than the browser default, so it sits on the same baseline as
    the cells beside it instead of pushing the policy line taller than the
    coverage one under it. */
+/* The selected project's description, above its needs. A label rail and one
+   line of prose — the same shape the layer details row uses, for the same
+   reason: a value with a word beside it is read; a value floating alone is
+   guessed at. */
+.project-about {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  margin: 0 0 0.75rem;
+  font-size: var(--hint-size);
+}
+
 .policy-link {
   font: inherit;
   font-size: var(--hint-size);

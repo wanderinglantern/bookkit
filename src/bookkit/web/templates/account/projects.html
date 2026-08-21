@@ -1,0 +1,10 @@
+{% extends "account/page.html" %}
+{% block panel %}
+  {# THE FORM HOST SITS OUTSIDE #projects-panel, the placement pipeline.html
+     argues for: adding a project or a need answers with the whole panel out of
+     band, and an OOB swap of a panel that CONTAINED the host would detach the
+     very element a refusal — with the typed input intact — is swapped into.
+     htmx would swap into the detached node and the user would see nothing. #}
+  <div class="form-host" id="projects-form-host"></div>
+  {% include "account/_projects_panel.html" %}
+{% endblock %}

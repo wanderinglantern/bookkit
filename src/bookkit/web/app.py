@@ -238,6 +238,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
         orgs,
         pipeline,
         program,
+        projects,
         relationship,
         search,
         team,
@@ -272,6 +273,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
     app.include_router(relationship.router)
     app.include_router(work.router)
     app.include_router(pipeline.router)
+    app.include_router(projects.router)
     # program.router owns GET /accounts/{ref}/program — same two-segment shape
     # as the generic {tab} route below, so it must be registered first.
     app.include_router(program.router)

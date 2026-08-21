@@ -2687,19 +2687,23 @@ def _resolve_theme(stored: str | None) -> Path | None:
     """
     if not stored:
         return None
-    from towerkit.theme import available_themes
+    from towerkit.theme import resolve_theme
 
-    direct = Path(stored)
-    if direct.is_file():
-        return direct
-    for candidate in available_themes():
-        if candidate.stem == direct.stem:
-            return candidate
-    raise FileNotFoundError(
-        f"this program is set to render with the {direct.stem!r} theme, and no "
-        f"theme by that name is installed here — pick another on the Program "
-        f"tab's chart strip, or put {direct.name} in ./themes"
-    )
+    # ONE RESOLUTION RULE, and it is towerkit's. This module had its own copy —
+    # try the literal path, else match by stem — written before towerkit had
+    # one, and a second answer to "where is this theme" is how the renderer and
+    # the validator came to disagree in the first place (towerkit
+    # fix/theme-by-name, 2026-08-21). The refusal is re-worded here because
+    # this surface can name the control that fixes it; the RULE is not
+    # re-implemented.
+    try:
+        return resolve_theme(stored)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"this program is set to render with the {Path(stored).stem!r} theme, "
+            f"and no theme by that name is installed here — pick another on the "
+            f"Program tab's chart strip, or put {Path(stored).name} in ./themes"
+        ) from None
 
 
 def _export_tower(
@@ -3281,14 +3285,33 @@ def _theme_choices() -> tuple[tuple[str, str], ...]:
 
     The built-in default is the blank option, and it is a real answer: a
     cleared `render.theme` is what "use towerkit's own theme" means.
+
+    UPDATED 2026-08-21, and the update is the whole point of towerkit's theme
+    fix. This used to FILTER OUT every absolute path, which meant filtering out
+    every PACKAGED theme — because a program file may not name one, and offering
+    a choice that fails validation is worse than not offering it. The cost was
+    invisible until Grant's folders moved: with no `./themes` beside the running
+    process, the packaged set is ALL there is, and the picker came up completely
+    empty (he reported exactly that).
+
+    towerkit now resolves a stored theme BY NAME when the literal relative path
+    misses, so `themes/marsh.json` finds the packaged marsh anywhere. That makes
+    the portable spelling a real, storable answer for every theme this machine
+    can see — so the picker offers them all, and offers them under that
+    spelling rather than under the absolute path they were found at.
     """
     from towerkit.theme import available_themes
 
-    return tuple(
-        (path.stem, str(path))
-        for path in available_themes()
-        if not path.is_absolute()
-    )
+    # THE PORTABLE SPELLING, for every theme, whatever path it was found at.
+    # `themes/<stem>.json` is what a program file may legally hold and what
+    # towerkit's `resolve_theme` now finds — a packaged theme included. Sorted
+    # and de-duplicated by stem because ./themes wins on a name clash upstream
+    # (towerkit.theme.available_themes) and two options reading "marsh" would
+    # be a picker asking a question with no distinguishable answers.
+    seen: dict[str, str] = {}
+    for path in available_themes():
+        seen.setdefault(path.stem, f"themes/{path.stem}.json")
+    return tuple(sorted(seen.items()))
 
 
 # A picker's options are DATA, discovered per request, so a theme added to

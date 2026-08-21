@@ -15,7 +15,12 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import replace
 
-from ..models import CONTACT_ROLES, PlacementStatus
+from ..models import (
+    CONTACT_ROLES,
+    NEED_STATUSES,
+    PROJECT_STATUSES,
+    PlacementStatus,
+)
 from ..repo import assignees, vocab
 from .spec import Field
 
@@ -181,6 +186,61 @@ PARTICIPANT_FIELDS: tuple[Field, ...] = (
 rule. The key says pct and the stored value is bps on purpose — the same
 distinction layer_details already draws, so nobody compares a participant's
 share to a layer total and lands a hundred out."""
+
+
+PROJECT_FIELDS: tuple[Field, ...] = (
+    Field("name", "project", required=True),
+    Field("site", "site"),
+    Field("status", "status", "select", tuple((s, s) for s in PROJECT_STATUSES)),
+    Field("start_on", "start", "date"),
+    Field("end_on", "end", "date"),
+    Field("description", "description"),
+)
+"""A client project's editable facts.
+
+KEYS ARE `projects_repo.update_project`'S OWN COLUMN NAMES, so a cell route
+passes `**{key: value}` straight through — the same rule LAYER_FIELDS follows.
+
+`ref` is not here and must not be: it is minted by `ids.next_ref` and printed
+so a person can quote it, which is the opposite of a value they may retype.
+The status vocabulary is models.PROJECT_STATUSES — controlled but extensible,
+the TEAM_ROLES pattern — and NOT a hand-written list, so a status added to the
+model appears here without a second edit."""
+
+NEED_FIELDS: tuple[Field, ...] = (
+    Field("line", "line of cover", required=True),
+    Field("needed_by", "needed by", "date", required=True),
+    Field("limit_cents", "limit", "money"),
+    Field("premium_indication_cents", "premium indication", "money"),
+    Field("status", "status", "select", tuple((s, s) for s in NEED_STATUSES)),
+    Field("notes", "notes"),
+)
+"""One insurance need on a project.
+
+`line` stays FREE TEXT with completion rather than becoming a picker, and that
+is a deliberate reading of the constrained-input rule: the valid set has to be
+knowable for a picker to be right, and lines of cover are not — a broker will
+name cover this book has never carried. A picker there would refuse a real
+answer, which the research says is worse than no picker. `need_fields()` below
+wires the suggestions.
+
+`opportunity_id` and `placement_id` are NOT editable cells. They are set by
+linking (the need → opportunity flow) and are shown as a derived "linked"
+column; a cell offering to retype an id writes nothing a person can reason
+about and reads as broken — the same reason `signed_pct` is kept out of
+LAYER_FIELDS."""
+
+
+def need_fields(conn: sqlite3.Connection) -> tuple[Field, ...]:
+    """NEED_FIELDS with the line cell's vocabulary filled in — the mirror of
+    task_fields and rfi_item_fields, and for the same reason: the whole-record
+    form completes `line` from the book's own lines (forms.entities.need_form),
+    so an inline cell that did not would offer less than the modal beside it."""
+    lines = tuple(vocab.lines(conn))
+    return tuple(
+        replace(field, suggestions=lines) if field.key == "line" else field
+        for field in NEED_FIELDS
+    )
 
 
 RFI_ITEM_FIELDS: tuple[Field, ...] = (
