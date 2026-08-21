@@ -102,7 +102,7 @@ def _row(
         return render_cell_display(
             request,
             _TASK_CELLS[key],
-            _task_cell_value(conn, task, key),
+            _task_cell_value(conn, task, key, qualified=False),
             _task_cell_action(ref, task.id, key),
             extra_class=_TASK_CELL_CLASS.get(key, ""),
             suffix=suffix,
