@@ -20,18 +20,24 @@ from ..models import (
     SUBJECTIVITY_STATUSES,
     TEAM_ROLES,
     Appetite,
+    AppetiteLevel,
     Contact,
     Interaction,
     InteractionType,
+    MarketType,
     Opportunity,
     Org,
+    OrgKind,
+    OrgStatus,
     Placement,
+    PlacementStatus,
     Project,
     ProjectNeed,
     RfiItem,
     RfiRequest,
     Subjectivity,
     Submission,
+    SubmissionStatus,
     Task,
     TeamAssignment,
     TeamMember,
@@ -50,18 +56,29 @@ from ..repo import (
 from ..repo import projects as projects_repo
 from ..repo import rfi as rfi_repo
 from ..repo import tasks as tasks_repo
+from ..services import consistency
 from .spec import Field, FormSpec, dropped
 
-_STATUS = tuple((s, s) for s in ("prospect", "active", "dormant", "lost", "declined"))
-_KINDS = tuple((k, k) for k in ("client", "market", "other"))
-_MARKET_TYPES = tuple((m, m) for m in ("carrier", "mga", "wholesaler", "reinsurer", "lloyds"))
+# SELECT OPTIONS ARE READ FROM THE ENUM, NEVER RESTATED (DRY, CLAUDE.md).
+# These five were hand-typed copies of StrEnums that models.py already
+# defines and that every stored value is validated against — a second spelling
+# of a vocabulary, in the one place a user picks from it. A copy that merely
+# repeats is noise; a copy that DIFFERS is a picker offering a value the model
+# refuses, or hiding one it accepts, and nothing would have caught either.
+_STATUS = tuple((s.value, s.value) for s in OrgStatus)
+_KINDS = tuple((k.value, k.value) for k in OrgKind)
+_MARKET_TYPES = tuple((m.value, m.value) for m in MarketType)
 _ROLES = tuple((r, r) for r in CONTACT_ROLES)
-_PLACEMENT_STATUS = tuple(
-    (s, s) for s in ("prospective", "submitted", "quoted", "bound", "lapsed")
-)
+_PLACEMENT_STATUS = tuple((s.value, s.value) for s in PlacementStatus)
 _PRIORITY = (("1 — high", "1"), ("2 — normal", "2"), ("3 — low", "3"))
-_APPETITE = tuple((a, a) for a in ("target", "will_consider", "selective", "no"))
-_RESPONSE = tuple((s, s) for s in ("quoted", "declined", "bound", "withdrawn"))
+_APPETITE = tuple((a.value, a.value) for a in AppetiteLevel)
+# Every submission status EXCEPT 'out'. 'out' is the state a submission is
+# already in when this form opens — it is not a legal OUTCOME to record, and
+# the comment on response_form spells out what offering it would do (Select
+# rejects a value missing from its options, so it would be an unfixable form).
+_RESPONSE = tuple(
+    (s.value, s.value) for s in SubmissionStatus if s is not SubmissionStatus.OUT
+)
 
 
 # --- org ----------------------------------------------------------------------
@@ -69,7 +86,7 @@ _RESPONSE = tuple((s, s) for s in ("quoted", "declined", "bound", "withdrawn"))
 
 def org_form(
     existing: Org | None = None,
-    default_kind: str = "client",
+    default_kind: str = OrgKind.CLIENT.value,
     *,
     conn: sqlite3.Connection | None = None,
 ) -> FormSpec:
@@ -100,7 +117,15 @@ def org_form(
             if existing
             else {
                 "kind": default_kind,
-                "status": "prospect" if default_kind == "client" else "active",
+                # a NEW client is a prospect; a new market is already in use.
+                # Read from the enum like the options above, so a renamed
+                # status cannot leave the default naming a value the picker
+                # no longer offers — which Select refuses outright.
+                "status": (
+                    OrgStatus.PROSPECT.value
+                    if default_kind == OrgKind.CLIENT.value
+                    else OrgStatus.ACTIVE.value
+                ),
             }
         ),
     )
@@ -115,7 +140,7 @@ def apply_org(
     org = (
         orgs.update(conn, existing.id, **core) if existing else orgs.create(conn, **core)
     )
-    if org.kind == "market" and (market_type or rating):
+    if org.kind == OrgKind.MARKET and (market_type or rating):
         profile: dict[str, Any] = {}
         if market_type:
             profile["market_type"] = market_type
@@ -212,7 +237,7 @@ def task_form(
     ]
     if conn is not None:
         client_options = tuple(
-            (org.name, org.id) for org in orgs.list_orgs(conn, kind="client")
+            (org.name, org.id) for org in orgs.list_orgs(conn, kind=OrgKind.CLIENT.value)
         )
         if client_options:
             fields.append(
@@ -278,7 +303,11 @@ def placement_form(
             Field("commission_bps", "commission (bps)", "int",
                   placeholder="1250 = 12.5%"),
         ],
-        initial=existing.model_dump() if existing else {"status": "prospective"},
+        initial=(
+            existing.model_dump()
+            if existing
+            else {"status": PlacementStatus.PROSPECTIVE.value}
+        ),
     )
 
 
@@ -289,6 +318,17 @@ def apply_placement(
     existing: Placement | None = None,
 ) -> Placement:
     core = dropped(values)
+    # THE ROW AS IT WILL BE, not the half that was typed: an edit that moves
+    # only the expiry has to be compared against the inception already stored.
+    # The rule exists twice already — towerkit's validator behind
+    # sync.update_program for a linked program, imports/mappers/book.py for a
+    # spreadsheet row — and was missing from exactly the door a human types
+    # through, because placement_edit.split folds both dates into the book
+    # half when there is no program_path and towerkit never sees them.
+    consistency.check_placement_period(
+        core.get("period_from") or (existing.period_from if existing else None),
+        core.get("period_to") or (existing.period_to if existing else None),
+    )
     if existing:
         return placements.update(conn, existing.id, **core)
     return placements.create(
@@ -356,7 +396,9 @@ def underwriter_options(conn: sqlite3.Connection) -> tuple[tuple[str, str], ...]
 
 
 def submission_form(conn: sqlite3.Connection) -> FormSpec:
-    markets = tuple((o.name, o.id) for o in orgs.list_orgs(conn, kind="market"))
+    markets = tuple(
+        (o.name, o.id) for o in orgs.list_orgs(conn, kind=OrgKind.MARKET.value)
+    )
     return FormSpec(
         "new submission",
         [
@@ -433,13 +475,30 @@ def response_form(existing: Submission, conn: sqlite3.Connection) -> FormSpec:
 def apply_response(
     conn: sqlite3.Connection, submission_id: str, values: dict[str, Any]
 ) -> Submission:
-    return submissions.update(conn, submission_id, **dropped(values))
+    core = dropped(values)
+    # sent_on is not on this form and cannot be — it belongs to the submission
+    # already out — so the stored row is the only place to read it from, and
+    # the two dates that ARE on the form have to be compared against it. A
+    # quote expiry typed with last year's year is the failure this catches:
+    # nothing objected, and the row landed straight in the expired bucket
+    # while the quote was live.
+    existing = submissions.get(conn, submission_id)
+    consistency.check_submission_dates(
+        existing.sent_on,
+        core.get("response_on", existing.response_on),
+        core.get("quote_expires_on", existing.quote_expires_on),
+    )
+    return submissions.update(conn, submission_id, **core)
 
 
 # --- subjectivities -----------------------------------------------------------
 
 
 _SUBJECTIVITY_STATUS = tuple((s, s) for s in SUBJECTIVITY_STATUSES)
+# The one status that OWNS satisfied_on. 'waived' settles a subjectivity
+# without satisfying it, so it carries no satisfied date — the same shape
+# rfi_item has, where 'waived' carries no received_on.
+SUBJECTIVITY_MET_STATUS = "met"
 
 
 def subjectivity_form(existing: Subjectivity | None = None) -> FormSpec:
@@ -479,6 +538,26 @@ def apply_subjectivity(
     existing: Subjectivity | None = None,
 ) -> Subjectivity:
     core = dropped(values)
+    # status OWNS satisfied_on, exactly as it owns received_on on an rfi_item
+    # (apply_rfi_item, below, calls the same rule). This form is the only door
+    # onto a subjectivity on either surface — there is no `d`-style mark-met
+    # key — so without it 'met' with no date and 'outstanding' still carrying a
+    # satisfied date both saved, and the datasheet printed a settled date
+    # beside a row it also printed as still open.
+    status = core.get("status") or (
+        existing.status if existing else SUBJECTIVITY_OPEN_STATUS
+    )
+    core["satisfied_on"] = consistency.settlement_date(
+        status,
+        values.get("satisfied_on"),
+        existing.satisfied_on if existing else None,
+        settled_status=SUBJECTIVITY_MET_STATUS,
+        date_label="satisfied on",
+        today=date.today().isoformat(),
+    )
+    # NB: due_on and satisfied_on are deliberately NOT compared. Clearing a
+    # subjectivity late is the normal case, not an error, and refusing it
+    # would make the tool unusable on exactly the accounts it exists for.
     if existing:
         return submissions.update_subjectivity(conn, existing.id, **core)
     return submissions.add_subjectivity(
@@ -623,6 +702,15 @@ def apply_project(
     existing: Project | None = None,
 ) -> Project:
     core = dropped(values)
+    # This pair leaves the building: services/export_open_items.py prints
+    # "HQ Tower (start → end)" into the CLIENT-FACING workbook, so a reversed
+    # range is a document sent out with nonsense on it, not an internal
+    # untidiness. Compared as the row will be — an edit that moves only the
+    # end date is checked against the stored start.
+    consistency.check_project_dates(
+        core.get("start_on") or (existing.start_on if existing else None),
+        core.get("end_on") or (existing.end_on if existing else None),
+    )
     if existing:
         return projects_repo.update_project(conn, existing.id, **core)
     name = core.pop("name")
@@ -672,7 +760,7 @@ def request_form(
     markets: tuple[tuple[str, str], ...] = ()
     if conn is not None:
         markets = tuple(
-            (o.name, o.id) for o in orgs.list_orgs(conn, kind="market")
+            (o.name, o.id) for o in orgs.list_orgs(conn, kind=OrgKind.MARKET.value)
         )
     # the scope link lives on the REQUEST and the items inherit it, so it is
     # set here or nowhere; org_id is what makes the client's own placements
@@ -760,6 +848,14 @@ def apply_request(
     }
     if scope["placement_id"] and scope["project_id"]:
         raise ValueError("a request is about a placement OR a project, not both")
+    # A response due before the request was asked opens life overdue: the
+    # chase queue reads `item.due_on or request.due_on` against today, so the
+    # queue that exists to say what to chase starts with a row nobody can act
+    # on. Equal dates are legal — "asked this morning, need it today".
+    consistency.check_request_dates(
+        core.get("requested_on") or (existing.requested_on if existing else None),
+        core.get("due_on") or (existing.due_on if existing else None),
+    )
     if existing:
         return rfi_repo.update_request(conn, existing.id, **core)
     title = core.pop("title")
@@ -841,18 +937,32 @@ def apply_rfi_item(
     # door — and the TUI's only way to WAIVE an item. Putting an item back to
     # outstanding used to leave the date stamped, so the datasheet rendered an
     # outstanding row carrying a date in its "received" column.
+    #
+    # The rule moved to services/consistency.settlement_date on 2026-08-20 so
+    # a subjectivity could inherit it rather than carry a hand-copied twin —
+    # and the move closed two holes this version had: on CREATE, and on an
+    # edit of an item that had no date yet, a received date typed BESIDE an
+    # outstanding status was written through unchallenged.
     status = core.get("status") or (existing.status if existing else "outstanding")
-    if status != "received":
-        if existing and existing.received_on:
-            core["received_on"] = None
-    elif not core.get("received_on"):
-        # a blank date on a received item stamps today, unless one was already
-        # recorded — back-dating stays possible, it just cannot be lost
-        core["received_on"] = (
-            existing.received_on
-            if existing and existing.received_on
-            else date.today().isoformat()
-        )
+    core["received_on"] = consistency.settlement_date(
+        status,
+        values.get("received_on"),
+        existing.received_on if existing else None,
+        settled_status="received",
+        date_label="received on",
+        today=date.today().isoformat(),
+    )
+    # "needed by" against the date the REQUEST was asked. The request's own
+    # guard does not reach here: the chase queue prints `item.due_on or
+    # request.due_on`, so an item-level date opens life overdue just as easily.
+    request_row = rfi_repo.get_request(conn, existing.request_id if existing else request_id)
+    consistency.check_item_due(
+        request_row.requested_on,
+        # `core` already carries an explicit None for a date the user cleared
+        # (the blanking loop above), so membership — not truthiness — is what
+        # says whether this save changes the field.
+        core["due_on"] if "due_on" in core else (existing.due_on if existing else None),
+    )
     if existing:
         return rfi_repo.update_item(conn, existing.id, **core)
     prompt = core.pop("prompt")

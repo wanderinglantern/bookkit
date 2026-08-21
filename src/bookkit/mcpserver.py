@@ -70,6 +70,7 @@ from mcp.server.mcpserver import MCPServer
 
 from . import db, mcpsurface
 from .models import EventBatch, RfiItem, RfiRequest, is_internal_category
+from .services import consistency
 
 # _DUP_CUTOFF: score_cutoff for the near-duplicate title guards below
 # (rapidfuzz WRatio, 0-100). 'Henderson Grp' vs 'Henderson Group' scores ~95;
@@ -1377,6 +1378,10 @@ def _project_create(
         fields["start_on"] = _clean_typed("date", "start_on", start_on)
     if end_on:
         fields["end_on"] = _clean_typed("date", "end_on", end_on)
+    # Refused before the batch opens: the pair reaches a client through
+    # services/export_open_items, so a reversed range must not exist even for
+    # the length of a transaction that a later revert would have to clean up.
+    consistency.check_project_dates(fields.get("start_on"), fields.get("end_on"))
     with _open_batch(
         conn, tool="project_create", org_id=org.id,
         summary=f"created project {name!r} for {org.name}",
@@ -2041,6 +2046,50 @@ _RENAME_GUARDS: dict[tuple[str, str], Callable[[sqlite3.Connection, str, Any], N
 }
 
 
+def _consistency_project(conn: sqlite3.Connection, row: Any, field: str, value: Any) -> None:
+    consistency.check_project_dates(
+        value if field == "start_on" else row.start_on,
+        value if field == "end_on" else row.end_on,
+    )
+
+
+def _consistency_request(conn: sqlite3.Connection, row: Any, field: str, value: Any) -> None:
+    consistency.check_request_dates(
+        value if field == "requested_on" else row.requested_on,
+        value if field == "due_on" else row.due_on,
+    )
+
+
+def _consistency_item_due(conn: sqlite3.Connection, row: Any, field: str, value: Any) -> None:
+    from .repo import rfi as rfi_repo
+
+    consistency.check_item_due(rfi_repo.get_request(conn, row.request_id).requested_on, value)
+
+
+# CROSS-FIELD GUARDS, keyed by the field whose write could break the pair.
+#
+# `_edit_field` writes ONE column through `base.update`, which is exactly the
+# shape a consistency rule is invisible to: nothing in a single-column write
+# has any reason to look at the column beside it. The apply_* functions in
+# forms/entities.py inherit the same rules from services/consistency.py, so
+# the TUI, the web and the assistant refuse the same combinations with the
+# same sentence — which is the whole reason those rules are a module and not
+# five inline comparisons.
+#
+# Keyed BOTH WAYS on purpose: `end_on` typed before `start_on` and `start_on`
+# typed after `end_on` are the same broken row, and a table that only guarded
+# one of them would just teach a caller which order to break it in.
+_CONSISTENCY_GUARDS: dict[
+    tuple[str, str], Callable[[sqlite3.Connection, Any, str, Any], None]
+] = {
+    ("project", "start_on"): _consistency_project,
+    ("project", "end_on"): _consistency_project,
+    ("rfi_request", "requested_on"): _consistency_request,
+    ("rfi_request", "due_on"): _consistency_request,
+    ("rfi_item", "due_on"): _consistency_item_due,
+}
+
+
 def _edit_field(
     conn: sqlite3.Connection,
     kind: str,
@@ -2098,6 +2147,9 @@ def _edit_field(
     guard = _RENAME_GUARDS.get((kind, field))
     if guard is not None:
         guard(conn, entity_id, cleaned)
+    pair_guard = _CONSISTENCY_GUARDS.get((kind, field))
+    if pair_guard is not None:
+        pair_guard(conn, row, field, cleaned)
     with _open_batch(
         conn, tool="edit_field", org_id=org_id,
         summary=f"edited {kind}.{field} on {ref}",
@@ -2239,11 +2291,17 @@ def _request_create(
     fields: dict[str, Any] = {}
     if market:
         fields["market_org_id"] = _resolve_market(conn, market).id
+    requested_on = date.today().isoformat()
     if due_on:
         parsed = parse_human_date(due_on)
         if parsed is None:
             raise ValueError(date_refusal(due_on))
         fields["due_on"] = parsed.isoformat()
+        # A request is always asked TODAY on this surface, so "by last friday"
+        # — which parse_human_date happily reads — would file a request that is
+        # overdue in the same breath it is created. Same rule the form path
+        # inherits in forms/entities.apply_request.
+        consistency.check_request_dates(requested_on, fields["due_on"])
     if placement_ref:
         placement = placements.find(conn, placement_ref)
         if placement is None or placement.org_id != org.id:
@@ -2272,7 +2330,7 @@ def _request_create(
         summary=f"created request {title!r} for {org.name}",
     ) as batch:
         request = rfi_repo.create_request(
-            conn, org.id, title, date.today().isoformat(), **fields)
+            conn, org.id, title, requested_on, **fields)
         _provenance(conn, "rfi_request", request.id)
         for prompt in prompts:
             # insertion order is paste order: items_for_request breaks the

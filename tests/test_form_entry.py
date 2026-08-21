@@ -173,3 +173,59 @@ def test_a_share_pre_fills_as_the_percent_it_was_typed_as():
     field = Field("share_pct", "share", "share")
 
     assert parse_value(field, initial_text(field, 3333)) == 3333
+
+
+# --- vocabularies are read from the enum, never restated ----------------------
+
+
+def test_every_form_select_vocabulary_reads_its_enum() -> None:
+    """forms/entities.py hand-typed five vocabularies that models.py already
+    defines as StrEnums, in the one place a user PICKS from them (DRY,
+    CLAUDE.md 2026-08-20). Restating a vocabulary is not merely noise: a copy
+    that drifts either offers a value the model refuses, or hides one it
+    accepts, and neither mypy nor any test would have seen it — the same
+    failure that put a fourth copy of towerkit's retention types inside a
+    Jinja template.
+
+    Asserted here, and by inspecting the module SOURCE, because reading the
+    tuples back proves only that they agree today."""
+    import inspect
+
+    from bookkit.forms import entities as ef
+    from bookkit.models import (
+        AppetiteLevel,
+        MarketType,
+        OrgKind,
+        OrgStatus,
+        PlacementStatus,
+        SubmissionStatus,
+    )
+
+    assert ef._STATUS == tuple((s.value, s.value) for s in OrgStatus)
+    assert ef._KINDS == tuple((k.value, k.value) for k in OrgKind)
+    assert ef._MARKET_TYPES == tuple((m.value, m.value) for m in MarketType)
+    assert ef._PLACEMENT_STATUS == tuple((s.value, s.value) for s in PlacementStatus)
+    assert ef._APPETITE == tuple((a.value, a.value) for a in AppetiteLevel)
+    # every outcome EXCEPT 'out', which is the state the submission is
+    # already in and is not a legal thing to RECORD
+    assert ef._RESPONSE == tuple(
+        (s.value, s.value) for s in SubmissionStatus if s is not SubmissionStatus.OUT
+    )
+
+    # ...and the module must not spell any of those values out AT ALL: the
+    # defaults were the other half of the copy ("prospect" as an initial, a
+    # "market" kind passed to a query). A default naming a value the enum has
+    # since renamed is worse than a stale option — Select refuses a value
+    # missing from its own options, so the form would not open.
+    # Field LABELS are excluded: "market" is both a value of OrgKind and the
+    # word printed beside the market picker, and a scan that cannot tell them
+    # apart would either fail on correct code or be switched off.
+    source = "\n".join(
+        line for line in inspect.getsource(ef).splitlines() if "Field(" not in line
+    )
+    spelled = [
+        member.value
+        for member in (*OrgStatus, *OrgKind, *MarketType, *PlacementStatus, *AppetiteLevel)
+        if f'"{member.value}"' in source
+    ]
+    assert spelled == [], f"vocabulary values spelled out again: {spelled}"

@@ -25,6 +25,7 @@ from typing import Any
 
 from .. import sync
 from ..repo import placements as placements_repo
+from . import consistency
 
 # Owned by the towerkit file WHEN the placement is linked; on the row when it
 # is not (an unlinked placement's name and dates have nowhere else to live).
@@ -52,6 +53,16 @@ def split(
     if file_changes and not placement.program_path:
         book_changes.update(file_changes)
         file_changes = {}
+    # The period, as the row will be. This is the seam the web's one-field
+    # cell edit passes through, and it is the reason an unlinked placement had
+    # no ordering guard at all: the fold above hands both dates to the book
+    # half, so towerkit's validator — which owns this rule for a LINKED
+    # program — never sees them. Checked before either half is written so a
+    # refusal costs no snapshot and no batch.
+    consistency.check_placement_period(
+        diffs.get("period_from", placement.period_from),
+        diffs.get("period_to", placement.period_to),
+    )
     return file_changes, book_changes
 
 
