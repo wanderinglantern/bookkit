@@ -83,7 +83,31 @@
         <select name="{{ field.key }}" aria-label="{{ field.label }}"
                 aria-describedby="cell-keys" title="Enter or click away saves · Esc discards"
                 {% if field.required %}required{% endif %} autofocus>
-          {% if field.optional_select or not field.required %}<option value=""></option>{% endif %}
+        {# THE BLANK OPTION IS ALWAYS RENDERED, required or not — the same rule
+           macros/form.html carries, for the same reason. A <select> with no
+           empty option pre-selects its FIRST option, and `required` is then
+           satisfied by a value nobody chose. This macro rendered it only for
+           optional selects, so a REQUIRED select cell whose stored value is
+           empty opened with option one already highlighted.
+
+           Two things make this subtler on THIS surface than on a form, and
+           neither of them makes it safe:
+
+             - blur commits here, but the "unchanged value closes without
+               writing" guard holds (inline-cell.js reads `data-opened-with`,
+               which equals the pre-selected value), so clicking away reverts
+               rather than writing. Nothing was silently saved by drifting
+               past a cell.
+             - what it DID do is misrepresent the record: a cell showing an
+               em-dash opened claiming a real option was chosen, and Enter or
+               Tab from there commits that claim. The user is answering a
+               question the browser already answered for them.
+
+           `required` still refuses an empty submit. A value that should
+           arrive set comes from the stored value, or from the spec's
+           `initial` — a default the reader can SEE, which is a different
+           thing from the browser picking row one. #}
+          <option value=""></option>
           {% for label, val in field.options %}
             <option value="{{ val }}"{% if value == val %} selected{% endif %}>{{ label }}</option>
           {% endfor %}
@@ -104,6 +128,12 @@
           </datalist>
         {% endif %}
       {% endif %}
+      {# Both halves of the refusal — the `cell-error` class on the cell above
+         and this message — are cleared by inline-cell.js on the first
+         keystroke into the input, not at the next POST. A message that
+         survives its own fix makes a corrected value read as still refused.
+         The two class names are the contract between this macro and that
+         listener; rename either and the message becomes permanent again. #}
       {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
     </form>
   </{{ tag }}>

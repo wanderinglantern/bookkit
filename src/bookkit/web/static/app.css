@@ -2140,6 +2140,35 @@ table.rows tr.is-waived td {
   width: 5rem;
 }
 
+/* The applies-to checkboxes are inside a .market-add-form too, and the 11rem
+   above was stretching each one into a wide grey slab. A checkbox is its own
+   size. */
+.market-add-form input[type="checkbox"] {
+  width: auto;
+}
+
+/* --- a visible label on every in-row control ------------------------------
+   PLACEHOLDER-AS-LABEL VANISHES ON THE FIRST KEYSTROKE, so the moment the
+   row is being used it no longer says what the box is for — and a
+   placeholder is not an accessible name either. The in-row add forms are
+   not an exception to "every input gets a real label"
+   (.claude/skills/data-entry-integrity, rule 6); they just have to stay
+   compact, because they sit inside a table row.
+
+   So the label rides IN FRONT of its control on the same baseline, in the
+   same small muted key type the details row already uses for its own keys
+   (.pair-k) — the house pattern from _layer_details.html, one step smaller.
+   The control is nested INSIDE the <label>, which is what makes the
+   association implicit: these fragments repeat once per layer and once per
+   term, and a for=/id= pair would mint duplicate ids down the page. */
+
+.inline-field {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  margin: 0;
+}
+
 .row-expand-col {
   width: 1.6rem;
 }
@@ -3001,16 +3030,24 @@ tr:hover .market .chip-remove {
   opacity: 0.9;
 }
 
-/* --- a carrier the book does not know ----------------------------------- */
+/* --- a carrier the book does not know -----------------------------------
+   NOT AN ERROR, AND NOT A WARNING. "this carrier is not a market in the book
+   yet" is a neutral fact about work nobody has done — no write was refused,
+   nothing is invalid — and it was wearing warn colour AND a warn wash AND a
+   warn border: three stacked signals on a state that carries none, which is
+   the pattern NN/g calls hostile and the data-entry-integrity skill's rule 4
+   forbids ("reserve error styling for actual errors — never for a neutral
+   empty state"). Colour still is not the signal on its own: the WORD "new"
+   is, the accent says the badge is a link to where the resolving happens,
+   and the hairline border keeps it a badge in greyscale. */
 
 .market-unlinked {
   font-size: 0.625rem;
   line-height: 1.4;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--warn);
-  background: var(--warn-wash);
-  border: 1px solid var(--warn);
+  color: var(--accent);
+  border: 1px solid var(--border);
   border-radius: 2px;
   padding: 0 0.2rem;
   margin-left: 0.15rem;
@@ -3025,9 +3062,15 @@ tr:hover .market .chip-remove {
 
 /* --- a file that will not open, and what the last sync recorded ---------- */
 
+/* ONE SIGNAL, NOT THREE. This one IS a real error, so it keeps a strong
+   one — the red rule down its left edge — plus the message that names the
+   file and the fix. The danger WASH behind it was the redundant third: it
+   added no information the rule and the red heading did not already carry,
+   and it tinted the one line here worth reading (the loader's own words,
+   which are often a path). */
+
 .panel-broken {
   border-left: 3px solid var(--danger);
-  background: var(--danger-wash);
   padding: 0.75rem 1rem;
   border-radius: 0 3px 3px 0;
 }

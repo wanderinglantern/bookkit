@@ -119,6 +119,49 @@
     form.requestSubmit();
   });
 
+  // --- a refusal clears on the FIRST KEYSTROKE ----------------------------
+  // Researched rule, not a preference: validating while typing measurably
+  // RAISES error rates, so bookkit validates on blur — but the other half of
+  // that finding is that a message which survives the correction makes a
+  // now-valid entry read as still broken, and people stop trusting the
+  // messages at all (Baymard, "premature error blindness"; NN/g on hostile
+  // error messages; .claude/skills/data-entry-integrity rule 3).
+  //
+  // Until this listener, EVERY web refusal persisted until the next POST: the
+  // red .cell-error outline and its .cell-error-msg sat under the input while
+  // the fix was typed, and .form-error stayed pinned at the top of a form
+  // through the whole correction. The TUI never had this problem — its
+  // refusals are notify() toasts that dismiss themselves — so the two
+  // surfaces disagreed about how long a "no" lasts.
+  //
+  // Delegated, like everything else in this file: the fragments this has to
+  // cover are swapped in by htmx long after load, and an inline handler per
+  // input would be a copy of this rule per template (the house rule the
+  // form Cancel and the toast close below already follow).
+  //
+  // Scopes are walked UPWARDS, not matched once, because a refusal is not
+  // always rendered inside the form that caused it: a refused named-limit add
+  // re-renders the whole layer-details row with the message at the top of the
+  // <td>, OUTSIDE the .market-add-form whose input is being corrected
+  // (_layer_details.html). Clearing only the nearest scope would leave that
+  // one on screen — the exact failure this listener exists to end.
+  var ERROR_SCOPE = ".cell-editing, .entity-form, .market-add-form, .layer-details";
+
+  function clearError(scope) {
+    scope.classList.remove("cell-error");
+    var msgs = scope.querySelectorAll(".cell-error-msg, .form-error");
+    for (var i = 0; i < msgs.length; i++) msgs[i].remove();
+  }
+
+  document.body.addEventListener("input", function (evt) {
+    if (!evt.target.closest) return;
+    var scope = evt.target.closest(ERROR_SCOPE);
+    while (scope) {
+      clearError(scope);
+      scope = scope.parentElement && scope.parentElement.closest(ERROR_SCOPE);
+    }
+  });
+
   document.body.addEventListener("keydown", function (evt) {
     if (evt.key !== "Tab") return;
     var form = evt.target.closest && evt.target.closest("form.cell-editor");

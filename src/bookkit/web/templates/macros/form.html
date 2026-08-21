@@ -45,6 +45,14 @@
   <form class="entity-form" method="post" action="{{ action }}"
         hx-post="{{ action }}" hx-target="closest .form-host" hx-swap="innerHTML">
     <h2 class="form-title">{{ spec.title }}</h2>
+    {# THE REFUSAL DIES ON THE FIRST KEYSTROKE. It is rendered here once, by
+       the server, on the re-render that commit-in-place already does — and
+       then inline-cell.js's delegated `input` listener removes it the moment
+       any field in this form is touched. It used to sit at the top of the
+       form through the entire correction, which is how a valid entry comes
+       to read as still broken (Baymard; data-entry-integrity rule 3). The
+       class name IS the contract: the listener clears `.form-error`, so
+       renaming it here silently un-clears the message. #}
     {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
     {% for row in rows %}{{ render_field(row.field, row.value, row.placeholder) }}{% endfor %}
     <div class="form-actions">

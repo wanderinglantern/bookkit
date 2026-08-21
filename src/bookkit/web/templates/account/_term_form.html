@@ -2,13 +2,22 @@
 
    APPLIES-TO IS CHECKBOXES, not a select: a retention can span a SUBSET of
    the program's lines, and a single-select with an "all lines" catch-all
-   would silently widen a two-of-three-lines term on its next edit. #}
+   would silently widen a two-of-three-lines term on its next edit.
+
+   EVERY CONTROL HAS A VISIBLE LABEL. Three of the four had only a
+   placeholder standing in for one and the select had nothing at all, so this
+   strip stopped saying which figure was which the moment somebody began
+   answering it. Each label wraps its own control (.inline-field), which is
+   both the association — no ids, and this fragment repeats once per term —
+   and the reason the row still reads left to right. `placeholder` survives
+   only where it is a FORMAT example ("250,000"), never as the label. #}
 <span class="term-chip term-form">
   <form class="market-add-form" hx-post="{{ action }}"
         hx-target="closest .term-chip" hx-swap="outerHTML">
     {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
     {% if kind == "retentions" %}
-      <select name="type" aria-label="retention type" required>
+      <label class="inline-field"><span class="pair-k">type</span><select
+              name="type" aria-label="retention type" required>
         {# blank first — see macros/form.html. Without it the browser answers
            "what kind of retention is this?" with "deductible" and the form
            looks filled in. #}
@@ -16,13 +25,15 @@
         {% for t in retention_types %}
           <option value="{{ t }}"{% if values.get("type") == t %} selected{% endif %}>{{ t }}</option>
         {% endfor %}
-      </select>
+      </select></label>
     {% else %}
-      <input type="text" name="name" aria-label="sublimit name" placeholder="sublimit"
-             value="{{ values.get('name', '') }}" required>
+      <label class="inline-field"><span class="pair-k">sublimit</span><input
+             type="text" name="name" aria-label="sublimit name"
+             value="{{ values.get('name', '') }}" required></label>
     {% endif %}
-    <input type="text" name="amount" aria-label="amount" placeholder="250,000"
-           value="{{ values.get('amount', '') }}" required>
+    <label class="inline-field"><span class="pair-k">amount</span><input
+           type="text" name="amount" aria-label="amount" placeholder="250,000"
+           value="{{ values.get('amount', '') }}" required></label>
     {% for line in lines %}
       <label class="term-line">
         <input type="checkbox" name="line" value="{{ line.id }}"
@@ -34,8 +45,9 @@
        own so the note is saved in the same write as the figure it qualifies —
        one file write, one undo unit. Emptying it CLEARS the note (sync's
        `set_notes`), which towerkit's own `notes=` keyword cannot express. #}
-    <input type="text" name="notes" aria-label="notes" placeholder="note (optional)"
-           value="{{ values.get('notes', '') }}">
+    <label class="inline-field"><span class="pair-k">note (optional)</span><input
+           type="text" name="notes" aria-label="note (optional)"
+           value="{{ values.get('notes', '') }}"></label>
     <button type="submit" class="row-action-btn">save</button>
     <button type="button" class="row-action-btn"
             hx-get="{{ cancel_url }}"

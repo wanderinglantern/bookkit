@@ -82,10 +82,19 @@
                   hx-post="{{ base }}/named-limits/{{ nl.index }}/remove"
                   hx-target="closest tr" hx-swap="outerHTML">&times;</button></span>
         {% endfor %}
+        {# Both boxes had NO label and NO accessible name — only a
+           placeholder, which vanishes on the first keystroke and is never an
+           accessible name to begin with. Each is now wrapped in its own
+           visible label (.inline-field, the same key type as the rail above
+           it); the amount keeps its placeholder because that one is a FORMAT
+           example rather than the label wearing a disguise. #}
         <form class="market-add-form" hx-post="{{ base }}/named-limits"
               hx-target="closest tr" hx-swap="outerHTML">
-          <input type="text" name="name" placeholder="named limit" required>
-          <input type="text" name="amount" placeholder="1.5m &middot; 250k" required>
+          <label class="inline-field"><span class="pair-k">name</span><input
+                 type="text" name="name" aria-label="named limit name" required></label>
+          <label class="inline-field"><span class="pair-k">amount</span><input
+                 type="text" name="amount" aria-label="named limit amount"
+                 placeholder="1.5m &middot; 250k" required></label>
           <button type="submit" class="row-action-btn">add limit</button>
         </form>
       </div>
@@ -109,11 +118,18 @@
       <div class="detail-inline">
         {% if statutory %}
           {# leaving statutory NEEDS the replacing dollar limit — the inline form
-             asks for it; a bare toggle would have to invent a number #}
+             asks for it; a bare toggle would have to invent a number.
+
+             The ask was a placeholder and nothing else: no label, no
+             accessible name, and the sentence disappeared as soon as the
+             number went in. It is a real label now. #}
           <form class="market-add-form" hx-post="{{ base }}/statutory"
                 hx-target="closest tr" hx-swap="outerHTML">
             <input type="hidden" name="statutory" value="false">
-            <input type="text" name="limit" placeholder="dollar limit to restore" required>
+            <label class="inline-field"><span class="pair-k">dollar limit</span><input
+                   type="text" name="limit" aria-label="dollar limit to restore"
+                   title="the per-occurrence dollar limit that replaces statutory cover"
+                   placeholder="1.5m &middot; 250k" required></label>
             <button type="submit" class="row-action-btn">leave statutory</button>
           </form>
         {% else %}
