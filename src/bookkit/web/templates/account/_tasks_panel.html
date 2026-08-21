@@ -46,10 +46,22 @@
               {{ row.category_cell | safe }}
               {{ row.assignee_cell | safe }}
               {{ row.description_cell | safe }}
-              <td>
+              {# TWO WAYS OFF THE LIST, and they are not the same fact. Done
+                 stamps completed_at; Drop does not, because a task filed in
+                 error or overtaken by events was never work that got done and
+                 must not answer "what did you finish" (routes/work.py
+                 drop_task). Drop carries an hx-confirm naming the task — it
+                 sits beside Done and a misclick is not obvious afterwards,
+                 since the row simply goes. Both are one field write and the
+                 top bar's Undo puts either back. #}
+              <td class="row-actions-cell">
                 <button type="button" class="row-action-btn"
                         hx-post="/accounts/{{ header.org.ref }}/tasks/{{ row.id }}/done"
                         hx-target="#tasks-panel" hx-swap="outerHTML">Done</button>
+                <button type="button" class="row-action-btn is-danger"
+                        hx-post="/accounts/{{ header.org.ref }}/tasks/{{ row.id }}/drop"
+                        hx-confirm="Drop {{ row.title }}? It leaves the list without counting as done."
+                        hx-target="#tasks-panel" hx-swap="outerHTML">Drop</button>
               </td>
             </tr>
           {% endfor %}

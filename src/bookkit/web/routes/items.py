@@ -15,9 +15,9 @@ edit is made from the account's Work tab or from here. A second write path for
 the same field is how two surfaces come to disagree about what a task is, and
 it is the thing the derived-field work spent all of D6 avoiding.
 
-The one exception is completing a task, which the account tab answers with its
-own panel; the write itself is shared (`work.complete_task`) and only the
-re-render differs.
+The one exception is a task LEAVING the list — done or dropped — which the
+account tab answers with its own panel; both writes are shared
+(`work.complete_task`, `work.drop_task`) and only the re-render differs.
 
 Data-entry rules, from the research pass (see .claude/skills/data-entry-
 integrity): the account is a picker and never free text, the picker offers a
@@ -50,6 +50,8 @@ from .work import (
     _task_cell_value,
     _task_due_suffix,
     complete_task,
+    drop_task,
+    task_or_404,
 )
 
 router = APIRouter()
@@ -113,6 +115,10 @@ def _row(request: Request, task: Task, labels: dict[str, Any]) -> dict[str, Any]
             else {}
         ),
         "done_url": f"/items/tasks/{task.id}/done",
+        # Drop needs no account — it is one field on the task itself — so a
+        # row with no client, which cannot open a single cell here, can still
+        # be taken off the list.
+        "drop_url": f"/items/tasks/{task.id}/drop",
     }
 
 
@@ -216,7 +222,23 @@ def task_done(request: Request, task_id: str) -> HTMLResponse:
     re-render differs, because there is no account panel to answer with here.
     """
     conn = _conn(request)
-    task = tasks_repo.get(conn, task_id)
+    task = task_or_404(conn, task_id)
     org: Org | None = orgs_repo.get(conn, task.org_id) if task.org_id else None
     complete_task(conn, org, task_id)
+    return _page(request, overdue_only=False, ref=None)
+
+
+@router.post("/items/tasks/{task_id}/drop", response_class=HTMLResponse)
+def task_drop(request: Request, task_id: str) -> HTMLResponse:
+    """Dropped is not done. `complete` stamps completed_at and `drop` does
+    not, because a task filed in error or overtaken by events is not finished
+    work and must not be counted as any.
+
+    The WRITE is work.drop_task, shared with the account tab and Today; only
+    the re-render differs, for the same reason Done's does.
+    """
+    conn = _conn(request)
+    task = task_or_404(conn, task_id)
+    org: Org | None = orgs_repo.get(conn, task.org_id) if task.org_id else None
+    drop_task(conn, org, task_id)
     return _page(request, overdue_only=False, ref=None)

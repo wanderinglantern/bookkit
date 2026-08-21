@@ -22,7 +22,13 @@ together (services.rfi.mark_received) — a cell edit would let either pair
 disagree. Both target the panel's own id directly (hx-swap="outerHTML"),
 not "closest .form-host": the button lives inside a table row, not inside
 the form, so there is no nested-panel risk to route around the way
-contact_create's OOB swap does."""
+contact_create's OOB swap does.
+
+`Drop` is Done's sibling and NOT a synonym for it: done stamps completed_at,
+dropped does not, because a task filed in error or overtaken by events was
+never work that got finished and must not be counted as any. The TUI has kept
+the pair apart since it had a task list (`d` vs `D`); drop_task below is that
+write, shared by all three web surfaces that list a task."""
 
 from __future__ import annotations
 
@@ -157,6 +163,9 @@ def _task_row(request: Request, ref: str, task: Task) -> dict[str, Any]:
 
     return {
         "id": task.id,
+        # the raw title, for the Drop confirm's sentence — title_cell is a
+        # rendered <td> and cannot be read back out of
+        "title": task.title,
         "due_cell": cell("due_on", suffix=_task_due_suffix(task)),
         "title_cell": cell("title"),
         "category_cell": cell("category", suffix=_task_category_suffix(task)),
@@ -297,6 +306,20 @@ def task_done(request: Request, ref: str, task_id: str) -> HTMLResponse:
     return _tasks_panel(request, org)
 
 
+def task_or_404(conn: sqlite3.Connection, task_id: str) -> Task:
+    """A task by id, or a 404 — for the two BOOK-WIDE surfaces, which address
+    a task by id alone and have no account to run `_owned` against.
+
+    Here rather than in either of them because both need it and a stale id is
+    ordinary: a page held open while the same task is completed in another tab
+    posts an id that no longer resolves, and a bare KeyError renders that as a
+    500 with a traceback rather than "no such task"."""
+    try:
+        return tasks_repo.get(conn, task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="no such task") from None
+
+
 def complete_task(
     conn: sqlite3.Connection, org: Org | None, task_id: str
 ) -> None:
@@ -315,6 +338,51 @@ def complete_task(
         org_id=org.id if org else None,
     ):
         tasks_repo.complete(conn, task_id)
+
+
+@router.post("/accounts/{ref}/tasks/{task_id}/drop", response_class=HTMLResponse)
+def task_drop(request: Request, ref: str, task_id: str) -> HTMLResponse:
+    """Drop — the OTHER way a task leaves the list, and the reason it is a
+    second button rather than a `done` with a shrug.
+
+    Done means it happened; dropped means it is not happening. They are
+    different facts about the same row and the book asks different questions
+    of them: completed_at is when work got finished, and a task filed in
+    error or overtaken by events must not answer that question with a lie.
+    The TUI has kept the two apart since it had a task list (`d` vs `D`,
+    AccountScreen._drop_task); this is that key, on the web.
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    _owned(conn, org, "task", task_id, tasks_repo.get)
+    drop_task(conn, org, task_id)
+    return _tasks_panel(request, org)
+
+
+def drop_task(conn: sqlite3.Connection, org: Org | None, task_id: str) -> None:
+    """The write, shared by all three surfaces that list a task — the account
+    Work tab, the book-wide list (routes/items.py) and Today (routes/today.py).
+
+    Same rule as complete_task above: only the RE-RENDER differs between them,
+    so only the re-render is written three times. The batch, its tool name and
+    its sentence live here once, matching the TUI's own `task_drop` batch, or
+    the changes list would describe one action four ways.
+
+    No confirm step, deliberately, and the same reasoning the TUI wrote down:
+    this is ONE field write, so the undo pill puts it straight back. The
+    confirm-then-POST fragments (contacts, interactions, requests) exist
+    because those removals take other records with them and the row alone
+    cannot show what goes; a dropped task takes nothing. What the button DOES
+    carry is an hx-confirm naming the task, because it sits a few pixels from
+    Done and the two are not interchangeable.
+    """
+    existing = tasks_repo.get(conn, task_id)
+    with batches_svc.open_batch(
+        conn, source="web", tool="task_drop",
+        summary=f"dropped {existing.title}",
+        org_id=org.id if org else None,
+    ):
+        tasks_repo.drop(conn, task_id)
 
 
 # --- requests (master) ------------------------------------------------------

@@ -89,10 +89,22 @@
                   <td class="prose">—</td>
                   <td class="prose">—</td>
                 {% endif %}
-                <td>
+                {# done and drop are DIFFERENT FACTS, not two words for the
+                   same one: done stamps completed_at, drop does not, because a
+                   task filed in error was never finished work. Both are one
+                   field write and the account's Undo puts either back — drop
+                   still names the task in an hx-confirm, because it sits
+                   beside done and the row just goes. Neither needs the
+                   account, so a row with no client (its cells uneditable
+                   here) can still be cleared. #}
+                <td class="row-actions-cell">
                   <button type="button" class="row-action-btn"
                           hx-post="{{ task.done_url }}"
                           hx-target="body" hx-swap="outerHTML">done</button>
+                  <button type="button" class="row-action-btn is-danger"
+                          hx-post="{{ task.drop_url }}"
+                          hx-confirm="Drop {{ task.title }}? It leaves the list without counting as done."
+                          hx-target="body" hx-swap="outerHTML">drop</button>
                 </td>
               </tr>
             {% endfor %}

@@ -2,6 +2,22 @@
 
 All notable changes to bookkit, newest date first.
 
+## 2026-08-21
+
+### Added
+- **Drop a task, as against completing one**, on the web — on the account's
+  Work tab, on Open items and on Today. `Done` stamps a completion date;
+  `Drop` does not, because a task filed in error or overtaken by events was
+  never work that got finished and must not be counted as any. It is the
+  TUI's `D` key, one field write, revertible with Undo, and it asks which
+  task before it writes. This closes the last of the four deletable row
+  kinds the parity ledger was holding `delete_row` open for.
+
+### Changed
+- Today completes a task through the same shared write the other two
+  surfaces use, instead of its own hand-rolled copy of the batch and its
+  sentence.
+
 ## 2026-08-20
 
 ### Added
