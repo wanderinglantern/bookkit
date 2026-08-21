@@ -1813,8 +1813,9 @@ def test_compose_soi_linked_unbound_placement_overrides_every_row(conn, tmp_path
 
 def test_soi_sheet_prints_the_status_column_and_both_subtotals(conn, tmp_path):
     """End to end, in the file a client opens: the Status column carries the
-    word, and the two subtotal lines separate cover in force from cover that
-    is not."""
+    word, and cover in force is in a different BLOCK from cover that is not —
+    each with its own subtotal, never one mingled list with two lines under
+    it (Grant, 2026-08-21)."""
     from openpyxl import load_workbook
 
     from bookkit.services.export_open_items import write
@@ -1841,28 +1842,29 @@ def test_soi_sheet_prints_the_status_column_and_both_subtotals(conn, tmp_path):
         isinstance(c, str) and c.endswith("(Bound)") for c in flat
     ), "the label suffix survived the move to a Status column"
     assert "Bound" in flat and "Quoted" in flat
-    # two sections, each with its own pair of subtotal lines: walk the sheet
-    # and file every subtotal under the section label above it
-    subtotals: dict[str, dict[str, object]] = {}
+    # ONE BLOCK PER SECTION PER BOUND-NESS since 2026-08-21 (Grant): the
+    # primary schedule is bound cover, and anything not bound is lifted into
+    # its own block below with its own single subtotal. So a wholly-bound
+    # placement grows no unbound line at all, and a wholly-unbound one appears
+    # ONLY under a "— not bound" heading. Walk the sheet and file every
+    # subtotal under whichever block heading was above it.
+    subtotals: dict[str, object] = {}
     current = ""
     for row in cells:
         head = row[0]
         if not isinstance(head, str):
             continue
-        if head in ("Bound Property", "Quoted Casualty"):
+        if head.startswith(("Bound Property", "Quoted Casualty")):
             current = head
         elif "premium subtotal" in head:
-            subtotals.setdefault(current, {})[head] = row[-1]
+            subtotals[f"{current} / {head}"] = row[-1]
     assert subtotals == {
-        "Bound Property": {
-            "Bound cover — premium subtotal": 100_000,
-            "Unbound cover — premium subtotal": "\u2014",
-        },
-        "Quoted Casualty": {
-            "Bound cover — premium subtotal": "\u2014",
-            "Unbound cover — premium subtotal": 40_000,
-        },
-    }
+        "Bound Property / Bound cover — premium subtotal": 100_000,
+        "Quoted Casualty — not bound / Unbound cover — premium subtotal": 40_000,
+    }, subtotals
+    # And the claim that matters to a reader: nothing anywhere on the sheet
+    # adds the two together.
+    assert 140_000 not in flat
 
 
 # --- client safety on the Schedule of Insurance ----------------------------

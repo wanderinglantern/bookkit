@@ -41,6 +41,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from towerkit.model import Program, load_program
 from towerkit.soi import SoiRow, SoiSection, SoiStatus, build_soi
@@ -1045,31 +1046,36 @@ def _prose_row_height(*columns: tuple[str, float]) -> float:
     return 18.0 * max(lines, 2)
 
 
-def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) -> Path:
-    """The client deliverable — Open Items · Information Requests · Projects
-    · Schedule of Insurance — rendered via towerkit so every sheet carries
-    SOI formatting exactly (the money.parse_share pattern: formatting
-    authority in one place). Information Requests appears only when the
-    client has outstanding items; Projects only when live projects exist;
-    the SOI sheet only when some placement is still in force; finalize runs
-    ONCE."""
-    from towerkit.render.soi_xlsx import render_soi_sheet
+def _towerkit_table() -> tuple[Any, Any, Any, Any]:
+    """towerkit's table writer, imported once for every sheet builder here.
+
+    Function-local because bookkit has no xlsx dependency of its own — the
+    rendering lives in towerkit and this module only composes.
+    """
     from towerkit.render.table_xlsx import (
         TableColumn,
         TableSection,
-        finalize_workbook,
-        new_workbook,
         render_table_sheet,
         sanitize_sheet_title,
     )
-    from towerkit.theme import load_theme
 
-    from .export_rfi import compose_information_requests
+    return TableColumn, TableSection, render_table_sheet, sanitize_sheet_title
 
-    org = orgs.get(conn, org_id)
-    theme = load_theme(None)
-    wb = new_workbook()
 
+def _add_open_items_sheet(
+    wb: Any, conn: sqlite3.Connection, org: Org, org_id: str, today: date,
+    theme: Any,
+) -> None:
+    """The Open Items sheet, onto `wb`'s first worksheet.
+
+    EXTRACTED 2026-08-21 so the client deliverable and the Work-tab export are
+    the SAME sheet and cannot drift. Two writers each composing "open items"
+    would be the second copy the DRY rule is about — and an invisible one,
+    because each would look right read on its own.
+    """
+    TableColumn, TableSection, render_table_sheet, sanitize_sheet_title = (
+        _towerkit_table()
+    )
     # Sheet 1 — Open Items. It opened on a standing SCOPE_NOTE ("This report
     # lists items owned by you or by us…") until Grant removed it 2026-08-21:
     # the sentence explained the document to a reader who had not asked, and he
@@ -1098,6 +1104,19 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
         ),
     )
 
+
+def _add_rfi_sheet(
+    wb: Any, conn: sqlite3.Connection, org_id: str, today: date, theme: Any,
+) -> bool:
+    """The Information Requests sheet — or nothing at all when the client owes
+    us nothing. Returns whether a sheet was added, so a caller that must not
+    produce an empty workbook can tell.
+    """
+    from .export_rfi import compose_information_requests
+
+    TableColumn, TableSection, render_table_sheet, sanitize_sheet_title = (
+        _towerkit_table()
+    )
     # Sheet 2 — Information Requests: omitted (not blank) when the client
     # has nothing outstanding. It carried its own banner row ("Items we need
     # from you, and what you have already sent") until 2026-08-21; the sheet is
@@ -1130,7 +1149,77 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
                 *(((str(values[3]), _RFI_RESPONSE_COLUMN[1]),) if answered else ()),
             ),
         )
+    return bool(rfi_sections)
 
+
+def write_work(
+    conn: sqlite3.Connection, org_id: str, out_path: Path, today: date
+) -> Path:
+    """The WORK TAB's two tables, and nothing else — Grant, 2026-08-21: "an
+    export to .xlsx on the Work page for open tasks and information requests to
+    export just these tables into a tab".
+
+    Same sheets as the client deliverable's first two, through the SAME
+    builders: `write()` and this share `_add_open_items_sheet` and
+    `_add_rfi_sheet` rather than composing their own, so the Work export can
+    never quietly disagree with the workbook the client is sent.
+
+    TWO SHEETS, NOT ONE. He wrote "into a tab", singular, and I have not
+    followed that literally: open tasks and information requests have different
+    columns (an ask has no Owner; a task has no Needed-by-them), so one sheet
+    means one of the two wears a shape that is not its own and half its cells
+    are blank by construction. Flagging rather than assuming — if he wants them
+    genuinely stacked on one tab, that is a different composition and it should
+    be built deliberately.
+
+    WHAT IT WITHHOLDS is inherited and deliberate: `_add_open_items_sheet`
+    composes through `compose()`, whose Internal-category rule keeps our own
+    file notes out, and neither sheet's column tuple includes `ref` or
+    `internal`. This is a client-shareable file by construction, the same as
+    the deliverable — it is narrower, not looser.
+
+    The Information Requests sheet is OMITTED when the client owes us nothing,
+    exactly as it is in the deliverable, so this workbook can be a single sheet.
+    """
+    from towerkit.render.table_xlsx import finalize_workbook, new_workbook
+    from towerkit.theme import load_theme
+
+    org = orgs.get(conn, org_id)
+    theme = load_theme(None)
+    wb = new_workbook()
+    _add_open_items_sheet(wb, conn, org, org_id, today, theme)
+    _add_rfi_sheet(wb, conn, org_id, today, theme)
+    return finalize_workbook(wb, out_path)
+
+
+def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) -> Path:
+    """The client deliverable — Open Items · Information Requests · Projects
+    · Schedule of Insurance — rendered via towerkit so every sheet carries
+    SOI formatting exactly (the money.parse_share pattern: formatting
+    authority in one place). Information Requests appears only when the
+    client has outstanding items; Projects only when live projects exist;
+    the SOI sheet only when some placement is still in force; finalize runs
+    ONCE."""
+    from towerkit.render.soi_xlsx import render_soi_sheet
+    from towerkit.render.table_xlsx import (
+        TableColumn,
+        TableSection,
+        finalize_workbook,
+        new_workbook,
+        render_table_sheet,
+        sanitize_sheet_title,
+    )
+    from towerkit.theme import load_theme
+
+
+    org = orgs.get(conn, org_id)
+    theme = load_theme(None)
+    wb = new_workbook()
+
+    _add_open_items_sheet(wb, conn, org, org_id, today, theme)
+
+
+    _add_rfi_sheet(wb, conn, org_id, today, theme)
     # Sheet 3 — Projects: omitted (not blank) when no live projects.
     project_sections = compose_projects(conn, org_id)
     if project_sections:
