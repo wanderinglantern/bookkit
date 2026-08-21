@@ -646,3 +646,44 @@ def test_a_buffer_draws_as_a_buffer(app_and_org) -> None:
         if "is-buffer" in frag.split(">")[0]
     ]
     assert drawn, "the drawing does not mark the buffer"
+
+
+def test_a_buffer_is_labelled_in_the_drawing(app_and_org) -> None:
+    """Hatch alone is a convention the reader has to already know — the spec
+    calls for hatched AND LABELLED so an uninsured band reads as a DECISION,
+    not a rendering artefact (fix round 1). The word comes from towerkit's
+    `layer_terms` (render/labels.py), which appends "— buffer" to the
+    outline's own terms the same way `_stack_editor.html` prints "buffer"
+    beside a slab, so the two surfaces never describe the fact in different
+    vocabulary. It lands in the outline `<div>`'s `title` attribute
+    (`title="{{ layer.name }} — {{ layer.terms }}"` in `_tower_panel.html`).
+
+    SCOPED TO THE DRAWING (`_tower_panel_markup`). The stack editor also
+    prints "buffer" beside a slab, so an unscoped assertion would pass on
+    Task 6's markup alone and prove nothing about the tower panel — the same
+    trap `test_a_buffer_draws_as_a_buffer` above already dodges.
+
+    SCOPED WITHIN THE DRAWING TOO: the outline div already carries an
+    `is-buffer` CSS class (task 8's first cut), and `"buffer" in drawing`
+    alone is satisfied by that class name — a machine convention, not a
+    word a reader sees — without `layer_terms` contributing anything at all
+    (a mutant that proved this: see the report). "— buffer" (the em dash
+    `layer_terms` actually emits) cannot be satisfied by the class name.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+    anchor = program.layers_for_line(line_id)[-1]
+
+    sync.insert_layer(
+        conn, placement.id, line_id=line_id, anchor_layer_id=anchor.id,
+        position="above", name="Uninsured band", limit_cents=5_000_000_00,
+        buffer=True,
+    )
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    drawing = _tower_panel_markup(page)
+
+    assert "\u2014 buffer" in drawing, "the drawing hatches but never says so"
