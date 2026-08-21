@@ -636,7 +636,6 @@ def test_adding_a_layer_appends_it_pending(app_and_org):
         data={
             "name": "3rd Excess",
             "line": line,
-            "attach_cents": str(top // 100),
             "limit_cents": "5,000,000",
             "premium_cents": "",
         },
@@ -654,30 +653,18 @@ def test_adding_a_layer_appends_it_pending(app_and_org):
     assert batch.source == "web" and batch.tool == "program_layer_add"
 
 
-def test_a_layer_that_would_leave_a_gap_is_refused_and_says_so(app_and_org):
-    """towerkit refuses a gap as firmly as an overlap, and the refusal names
-    the layers it is between — that message is the whole value of not writing
-    it."""
-    client, org = app_and_org
-    conn = client.app.state.conn
-    placement, _ = _first_layer(conn, org)
-    path = Path(placement.program_path)
-    before = path.read_bytes()
-
-    refused = client.post(
-        f"/accounts/{org.ref}/program/{placement.id}/layers",
-        data={
-            "name": "Floating Excess",
-            "line": _first_line(conn, placement),
-            "attach_cents": "900,000,000",
-            "limit_cents": "5,000,000",
-            "premium_cents": "",
-        },
-    )
-
-    assert refused.status_code == 200
-    assert "GAP" in refused.text or "gap" in refused.text
-    assert path.read_bytes() == before
+# test_a_layer_that_would_leave_a_gap_saves_and_says_so RETIRED (whole-branch
+# review finding 2, 2026-08-21): it forced a gap by typing a far-above attach
+# on the "Add layer" form, the exact mechanism finding 2 removed from that
+# form (`sync.add_layer` no longer takes an attach a caller can aim anywhere
+# it likes — `_layer_add_fields` has no attach field, and the route always
+# calls `attach_cents=None`, which leaves towerkit's own contiguous
+# suggested-attach standing). Typing an attach into `layer_add` can no longer
+# create a gap at all. The property this test protected — line-gap is a
+# WARNING, the write SUCCEEDS, and the message is stated in the panel, not a
+# refusal — is still covered, through the mechanism that can actually still
+# produce a gap: removing a mid-stack layer.  See
+# test_a_layer_removal_that_leaves_a_gap_saves_in_place, below.
 
 
 def test_binding_a_market_onto_a_layer(app_and_org):
@@ -909,7 +896,7 @@ def test_an_added_layer_lands_on_the_chosen_line(app_and_org, tmp_path):
 
     added = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
-        data={"name": "1st Excess Cyber", "line": "cy", "attach_cents": "2,000,000",
+        data={"name": "1st Excess Cyber", "line": "cy",
               "limit_cents": "5,000,000", "premium_cents": ""},
     )
 
@@ -929,7 +916,7 @@ def test_all_lines_means_all_lines(app_and_org, tmp_path):
     added = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
         data={"name": "Umbrella Everything", "line": "__all__",
-              "attach_cents": "2,000,000", "limit_cents": "10,000,000",
+              "limit_cents": "10,000,000",
               "premium_cents": ""},
     )
 
@@ -947,7 +934,7 @@ def test_a_made_up_line_is_refused(app_and_org, tmp_path):
 
     refused = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
-        data={"name": "Nowhere", "line": "marine", "attach_cents": "0",
+        data={"name": "Nowhere", "line": "marine",
               "limit_cents": "1,000,000", "premium_cents": ""},
     )
 
@@ -1321,7 +1308,7 @@ def test_toggling_a_line_on_rescopes_the_layer(app_and_org, tmp_path):
     placement = _two_line_placement(client, org, tmp_path)
     added = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
-        data={"name": "Umbrella Both", "line": "__all__", "attach_cents": "2,000,000",
+        data={"name": "Umbrella Both", "line": "__all__",
               "limit_cents": "5,000,000", "premium_cents": ""},
     )
     assert added.status_code == 200
@@ -1716,9 +1703,12 @@ def test_a_removed_layer_is_gone_seats_and_all(app_and_org):
     _assert_panel_swap(removed, placement.id)
 
 
-def test_a_refused_layer_removal_answers_in_place(app_and_org, tmp_path):
-    """Removing a middle layer strands the one above; towerkit refuses and
-    the refusal must land where the question was asked, file untouched."""
+def test_a_layer_removal_that_leaves_a_gap_saves_in_place(app_and_org, tmp_path):
+    """Removing a middle layer strands the one above over an open band.
+    line-gap is a WARNING, not a refusal (2026-08-21): the write SUCCEEDS —
+    sliding '2nd Excess' down to close the tower is not done, since that
+    would silently change what the client is covered for — and the gap is
+    stated where the question was asked, file changed."""
     client, org = app_and_org
     placement = _two_line_placement(client, org, tmp_path)
     for name, attach in (("1st Excess", "2,000,000"), ("2nd Excess", "7,000,000")):
@@ -1731,11 +1721,11 @@ def test_a_refused_layer_removal_answers_in_place(app_and_org, tmp_path):
     path = Path(placement.program_path)
     before = path.read_bytes()
 
-    refused = client.post(_layer_remove_url(org, placement, "1st-excess"))
+    removed = client.post(_layer_remove_url(org, placement, "1st-excess"))
 
-    assert refused.status_code == 200
-    assert path.read_bytes() == before
-    assert "gap" in refused.text.lower()
+    assert removed.status_code == 200
+    assert path.read_bytes() != before
+    assert "gap" in removed.text.lower()
 
 
 def _placement_cell(org, placement, key):
@@ -1945,7 +1935,18 @@ def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
     """The refusal used to be a bare message, and every control that could
     trigger it swapped the whole <section class="program"> — so a refused add
     deleted the layers table, the add controls and the panel's own id, leaving
-    the placement unusable until a full page reload."""
+    the placement unusable until a full page reload.
+
+    A sub-dollar limit forces the refusal now (2026-08-21, whole-branch
+    review finding 2): the form used to type an attach INSIDE an existing
+    layer's span to force a `line-overlap`, but that typed attachment is
+    exactly what finding 2 removed from this form — `sync.add_layer` no
+    longer takes one a caller can aim, so it can no longer be made to overlap
+    from here. towerkit's whole-dollar rule on the LIMIT still refuses
+    (`_require_dollars`, unaffected by this branch), and it is refused
+    inside the mutation exactly like the stack editor's own version of this
+    same test, so this still proves the write-side refusal path, not just
+    the parser's."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement, _ = _first_layer(conn, org)
@@ -1955,8 +1956,7 @@ def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
         data={
             "name": "Floating Excess",
             "line": _first_line(conn, placement),
-            "attach_cents": "900,000,000",
-            "limit_cents": "5,000,000",
+            "limit_cents": "1.50",
             "premium_cents": "",
         },
     )
@@ -1964,7 +1964,7 @@ def test_a_refused_add_keeps_the_panel_and_the_typed_values(app_and_org):
     assert refused.status_code == 200
     assert "<form" in refused.text, "the form did not come back"
     assert "Floating Excess" in refused.text, "the typed name was thrown away"
-    assert "900,000,000" in refused.text, "the typed attachment was thrown away"
+    assert "dollar" in refused.text.lower() or "limit" in refused.text.lower()
 
 
 def test_the_add_form_posts_into_the_form_host_not_over_the_panel(app_and_org):
@@ -1980,19 +1980,33 @@ def test_the_add_form_posts_into_the_form_host_not_over_the_panel(app_and_org):
     assert "closest .program" not in form
 
 
-def test_a_blank_attachment_is_refused_in_the_broker_s_language(app_and_org):
-    """It used to reach sync.add_layer as None and come back as
-    "unsupported operand type(s) for %: 'NoneType' and 'int'"."""
+# test_a_blank_attachment_is_refused_in_the_broker_s_language RETIRED
+# (whole-branch review finding 2, 2026-08-21): it posted a blank
+# `attach_cents` to prove a broker never saw the raw
+# "unsupported operand type(s) for %: 'NoneType' and 'int'" the field used to
+# produce. The field itself is gone from this form now — the route always
+# calls `sync.add_layer(..., attach_cents=None, ...)` on purpose, which is a
+# deliberate value, never a blank one a broker typed — so there is nothing
+# left on THIS surface that can reach the crash. The same regression is now
+# guarded directly against `sync.add_layer` itself, where the None really
+# comes from: see
+# test_add_layer_with_no_typed_attach_seats_on_the_existing_top in
+# test_program_edits.py.
+def test_a_blank_limit_is_refused_in_the_broker_s_language(app_and_org):
+    """LIMIT is still a required, typed field on this form (attach is not,
+    since finding 2 above) — the same historical class of bug (a blank
+    required money field reaching towerkit as a raw type error) is still
+    reachable through it, so it is still guarded here."""
     client, org = app_and_org
     placement, _ = _first_layer(client.app.state.conn, org)
 
     refused = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
         data={"name": "No Money", "line": _first_line(client.app.state.conn, placement),
-              "attach_cents": "", "limit_cents": "", "premium_cents": ""},
+              "limit_cents": "", "premium_cents": ""},
     )
 
-    assert "attaches at is required" in refused.text
+    assert "limit is required" in refused.text
     assert "NoneType" not in refused.text
 
 

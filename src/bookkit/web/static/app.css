@@ -2050,6 +2050,16 @@ table.rows tr.is-waived td {
   border-style: dashed;
 }
 
+/* A buffer in the drawing: hatched, never filled with a carrier colour. The
+   same treatment the stack editor gives it, because a band nobody is on must
+   not read as cover in either place. */
+.tower-layer.is-buffer {
+  background: repeating-linear-gradient(
+    45deg, transparent, transparent 5px, var(--unplaced) 5px, var(--unplaced) 10px
+  );
+  border-style: dashed;
+}
+
 .tower-block {
   position: absolute;
   overflow: hidden;
@@ -3083,6 +3093,79 @@ tr:hover .market .chip-remove {
 .diagnostic-warning .diagnostic-mark,
 .diagnostic-warning .diagnostic-said {
   color: var(--warn);
+}
+
+/* The stack editor. Top of tower first, matching the drawing, so the two
+   read in the same direction — a list that ran the other way would make the
+   reader flip every comparison. */
+.stack-editor { display: flex; flex-wrap: wrap; gap: 1.25rem; margin: 0 0 1rem; }
+.stack { min-width: 18rem; flex: 1 1 18rem; }
+.stack-line { font-size: var(--hint-size); margin: 0 0 0.35rem; }
+
+.slab {
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  padding: 0.35rem 0.5rem;
+  margin-bottom: 0.25rem;
+  background: var(--paper);
+}
+
+/* Hatched, and the same grey the drawing gives unplaced capacity: a band
+   nobody is on should not read as cover in either place. */
+.slab.is-buffer {
+  background: repeating-linear-gradient(
+    45deg, var(--wash), var(--wash) 5px, var(--stone) 5px, var(--stone) 10px
+  );
+  border-style: dashed;
+}
+
+.slab-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
+.slab-name { font-weight: 700; font-size: 0.9rem; }
+.slab-band { font-size: var(--hint-size); color: var(--muted); }
+
+.slab-carriers {
+  list-style: none;
+  margin: 0.2rem 0 0;
+  padding-left: 0.75rem;
+  font-size: var(--hint-size);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.stack-insert { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; margin-top: 0.4rem; }
+
+/* This form's `<label class="field"><span class="field-label">...</span>`
+   shape does not nest a `<label>` inside `.field` the way `.entity-form`'s
+   forms do, so `.entity-form .field label` never matched it and the insert
+   form rendered with no field styling at all (review finding, 2026-08-21).
+   Same visual weight as `.entity-form .field` / `.entity-form .field label`,
+   scoped to this form rather than widening `.entity-form` to match a shape
+   it was not written for. */
+.stack-insert .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.stack-insert .field-label {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--label-size);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+/* `.mono` had no bare (unscoped) rule anywhere in this file — only
+   `table.rows td.mono` and `.book-cell.mono` — so the slab band and the
+   carrier share figures rendered in the body font despite carrying the
+   class. Scoped to the stack editor rather than added unscoped, so it does
+   not reach into either of those other two contexts. */
+.stack-editor .mono {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-variant-numeric: tabular-nums;
 }
 
 .project-about {

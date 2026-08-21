@@ -299,6 +299,20 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "tui": "L, applies-to select required",
         "mcp": "program_layer_add",
     },
+    "insert_layer": {
+        "web": "the stack editor's insert-above / insert-below control on a "
+        "slab row (routes/program.py; lands in Task 5 of the 2026-08-21 "
+        "tower-builder plan) — the only way to add a layer with a computed, "
+        "not typed, attachment",
+        "tui": "NOT BUILT, and not going to be — the design that added this "
+        "verb (2026-08-21) retires the standing rule sending tower structure "
+        "to towerkit's editor via `o`: bookkit's TUI is being deleted, and "
+        "this insert has no towerkit-editor equivalent to jump to (it "
+        "computes attach from stack position, which towerkit's own editor "
+        "does not)",
+        "mcp": "DEFERRED — structure from an assistant is undecided, same "
+        "call as add_layer's siblings",
+    },
     "remove_layer": {
         "web": "details row -> remove layer, confirm names the seats (D2)",
         "tui": "D on a placeholder carriers row, confirm names the seats",
@@ -485,6 +499,21 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
         "towerfields -> sync.set_tower_field). Landed with the field itself "
         "(towerkit 2026-08-21) rather than after it — this ledger going red is "
         "the ticket, and the ticket was closed in the same change."
+    ),
+    "Layer.buffer": (
+        "the stack editor's `insert buffer`, beside `insert layer` "
+        "(routes/program.py, `kind='buffer'` in `stack_insert` -> "
+        "sync.insert_layer). A deliberate uninsured band: it has an "
+        "attachment and a limit like any slab and carries no carriers and no "
+        "premium. It needs NO gap-suppression rule — a slab with an "
+        "attachment and a limit fills the band, so there is no gap left to "
+        "report; the suppression rule that used to live here was DELETED "
+        "(R2, 2026-08-21: a mutation proved it dead, and it also hid a real "
+        "gap above an under-sized buffer, which is the one thing this "
+        "feature exists to make honest). NOT an inline cell, and there is no "
+        "conversion control either direction — the only way to get a buffer "
+        "is inserting one as a new slab; nothing flips an existing layer's "
+        "`buffer` flag."
     ),
     "Layer.period": "details row: policy effective / policy expiry cells",
     "Layer.follows_underlying": "details row: one-click toggle",

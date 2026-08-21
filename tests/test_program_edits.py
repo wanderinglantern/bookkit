@@ -98,6 +98,53 @@ def test_add_layer_pending(linked) -> None:
     assert not any(d["statutory"] for d in details)
 
 
+def test_add_layer_with_no_typed_attach_seats_on_the_existing_top(linked) -> None:
+    """`attach_cents=None` is the web's own calling convention now (whole-
+    branch review finding 2, 2026-08-21): the "Add layer" form dropped its
+    typed attachment input, and `layer_add` always calls `sync.add_layer`
+    this way. This used to reach as blank/None and crash with "unsupported
+    operand type(s) for %: 'NoneType' and 'int'" (found 2026-08-19,
+    formerly guarded by a web-level test that assumed a broker COULD type a
+    blank attach — that surface is gone, so the regression is guarded here
+    instead, directly against the function that must never regress it).
+
+    Leaving `attach_cents` out lets `edit.add_layer`'s own suggested attach —
+    the top of the existing stack for these lines — stand, unmodified: same
+    "position decides the attachment" rule the stack editor already proves,
+    for the form that can still span every line or price at creation."""
+    conn, _, placement, path = linked
+    before_top = max(
+        (
+            ly.attach + ly.limit
+            for ly in load_program(path).layers
+            if ly.limit > 0 and "gl" in ly.applies_to
+        ),
+        default=0,
+    )
+
+    first = sync.add_layer(
+        conn, placement.id, "1st Excess", ["gl"],
+        attach_cents=None, limit_cents=10_000_000_00,
+    )
+    assert first.ok, [d.message for d in first.errors]
+    second = sync.add_layer(
+        conn, placement.id, "2nd Excess", ["gl"],
+        attach_cents=None, limit_cents=5_000_000_00,
+    )
+    assert second.ok, [d.message for d in second.errors]
+
+    program = load_program(path)
+    first_layer = next(ly for ly in program.layers if ly.name == "1st Excess")
+    second_layer = next(ly for ly in program.layers if ly.name == "2nd Excess")
+    assert first_layer.attach == before_top, (
+        "the first layer did not seat on the existing top of the gl line"
+    )
+    assert second_layer.attach == first_layer.attach + first_layer.limit, (
+        "the second layer did not seat on top of the first — a typed attach "
+        "is gone, but a GAP or an OVERLAP must not take its place"
+    )
+
+
 def test_add_participant_and_oversign_refused(linked) -> None:
     conn, _, placement, path = linked
     diags = sync.add_layer(
@@ -556,10 +603,13 @@ def test_remove_layer_refuses_an_unknown_id(linked) -> None:
     assert path.read_bytes() == before
 
 
-def test_remove_layer_refuses_to_strand_a_gap(linked) -> None:
-    """Removing a middle layer leaves the one above floating; towerkit's
-    validator refuses and nothing is written — the refusal in towerkit's
-    words is the whole value."""
+def test_remove_layer_leaves_the_gap_stated_not_refused(linked) -> None:
+    """Removing a middle layer leaves the one above floating over an open
+    band. line-gap is a WARNING, not a refusal (2026-08-21): sliding
+    '2nd Excess' down to close the tower is not done — that would silently
+    change what the client is covered for — so the write SUCCEEDS and the
+    gap is stated, in towerkit's own words, rather than hidden by a silent
+    reseat."""
     conn, _, placement, path = linked
     assert sync.add_layer(
         conn, placement.id, "1st Excess", ["gl"],
@@ -573,8 +623,13 @@ def test_remove_layer_refuses_to_strand_a_gap(linked) -> None:
 
     diags = sync.remove_layer(conn, placement.id, "1st-excess")
 
-    assert not diags.ok
-    assert path.read_bytes() == before
+    assert diags.ok, [d.message for d in diags.errors]
+    assert path.read_bytes() != before
+    assert any(d.code == "line-gap" for d in diags.warnings)
+    # 2nd Excess did NOT reseat onto Primary GL's top — the invariant itself
+    remaining = load_program(path).layers_for_line("gl")
+    survivor = next(ly for ly in remaining if ly.id == "2nd-excess")
+    assert survivor.attach == 7_000_000, "the tower closed up and moved cover"
 
 
 # --- phase 3: lines become bookkit-editable (D1) -------------------------------

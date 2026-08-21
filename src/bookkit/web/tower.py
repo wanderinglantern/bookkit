@@ -97,6 +97,13 @@ def context(web: WebTower) -> dict[str, Any]:
                 "terms": layer.terms,
                 "pending": layer.pending,
                 "statutory": layer.statutory,
+                # The drawing must not present an uninsured band as cover.
+                # Same word the stack editor uses (`is-buffer`), so one CSS
+                # rule serves both. Direct access, not getattr-with-default:
+                # a default of False would let a missing/older towerkit
+                # silently drop the flag and leave the drawing disagreeing
+                # with the file — `pending` and `statutory` are direct too.
+                "buffer": layer.buffer,
                 "outlines": [_rect(r, span) for r in layer.outlines],
             }
             for layer in web.layers

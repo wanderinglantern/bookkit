@@ -1,0 +1,99 @@
+{# The stack, per line, top of tower first — the order the drawing shows.
+
+   POSITION IS THE STRUCTURE. There is no attachment field anywhere in here,
+   and that absence is the feature: a typed attachment is how two slabs come to
+   share one, which is what drew two D&O excess layers on top of each other
+   with their labels overprinting (Grant, 2026-08-21). A slab seats on the one
+   beneath it.
+
+   `+ carrier` sits ON the slab; `insert layer` sits on the stack. Sharing a
+   slab and adding a layer are different acts and look it — nothing here
+   invites a second layer as the way to add a second carrier. #}
+<div class="stack-editor" id="stack-{{ placement.id }}">
+  {% for stack in stacks %}
+    <section class="stack" aria-label="{{ stack.name }} stack">
+      <h3 class="stack-line">{{ stack.name }} <span class="detail-label">{{ stack.label }}</span></h3>
+
+      {% for slab in stack.slabs %}
+        <div class="slab{% if slab.buffer %} is-buffer{% endif %}">
+          <div class="slab-head">
+            <span class="slab-name">{{ slab.name }}</span>
+            <span class="slab-band mono">{{ slab.limit }} xs {{ slab.attach }}</span>
+            {% if slab.buffer %}
+              <span class="detail-label" title="a deliberate uninsured band">buffer</span>
+            {% elif slab.statutory %}
+              <span class="detail-label">statutory</span>
+            {% else %}
+              <span class="detail-label">{{ slab.signed }} signed</span>
+            {% endif %}
+            {% if slab.also_on %}
+              {# It appears in those stacks too, and an edit here moves them. #}
+              <span class="detail-label"
+                    title="this slab spans more than one line — editing it here changes those columns too"
+                    >also on {{ slab.also_on | join(", ") }}</span>
+            {% endif %}
+          </div>
+
+          {% if not slab.buffer %}
+            <ul class="slab-carriers">
+              {% for carrier in slab.carriers %}
+                <li>{{ carrier.name }} <span class="mono">{{ carrier.share }}</span></li>
+              {% endfor %}
+              <li>
+                <button type="button" class="row-action-btn"
+                        hx-get="{{ slab.carrier_action }}"
+                        hx-target="#program-{{ placement.id }} .form-host"
+                        hx-swap="innerHTML">+ carrier</button>
+              </li>
+            </ul>
+          {% endif %}
+        </div>
+      {% endfor %}
+
+      {# The stack's own controls. `anchor` names which slab to sit against and
+         is a SELECT of this line's slabs — the picker's options are the
+         authority, re-checked server-side, and there is no free text to type
+         an id into. #}
+      {# A refusal keeps the typing: `insert_error`/`insert_typed` come from
+         `stack_insert` and belong to THIS stack alone (`_stacks` only
+         attaches them to the line that was posted to), so every other
+         stack's form on the page stays exactly as it was. #}
+      <form class="stack-insert" hx-post="{{ stack.insert_action }}"
+            hx-target="#programs-panel" hx-swap="outerHTML">
+        {% if stack.insert_error %}
+          <p class="form-error" role="alert">{{ stack.insert_error }}</p>
+        {% endif %}
+        <label class="field">
+          <span class="field-label">name</span>
+          <input type="text" name="name" required placeholder="2nd Excess"
+                 value="{{ stack.insert_typed.name if stack.insert_typed else '' }}">
+        </label>
+        <label class="field">
+          <span class="field-label">limit</span>
+          <input type="text" name="limit_cents" required placeholder="10m"
+                 value="{{ stack.insert_typed.limit_cents if stack.insert_typed else '' }}">
+        </label>
+        <label class="field">
+          <span class="field-label">goes</span>
+          <select name="position" required>
+            <option value=""></option>
+            <option value="above"{% if not stack.insert_typed or stack.insert_typed.position == "above" %} selected{% endif %}>above</option>
+            <option value="below"{% if stack.insert_typed and stack.insert_typed.position == "below" %} selected{% endif %}>below</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">this slab</span>
+          <select name="anchor">
+            <option value=""{% if stack.insert_typed and stack.insert_typed.anchor == "" %} selected{% endif %}>the ground ($0)</option>
+            {% for slab in stack.slabs %}
+              <option value="{{ slab.id }}"{% if stack.insert_typed and stack.insert_typed.anchor == slab.id %} selected{% endif %}>{{ slab.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit" class="btn btn-primary" name="kind" value="layer">insert layer</button>
+        <button type="submit" class="btn" name="kind" value="buffer"
+                title="a deliberate uninsured band">insert buffer</button>
+      </form>
+    </section>
+  {% endfor %}
+</div>

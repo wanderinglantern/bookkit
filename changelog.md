@@ -77,6 +77,14 @@ All notable changes to bookkit, newest date first.
   TUI's `D` key, one field write, revertible with Undo, and it asks which
   task before it writes. This closes the last of the four deletable row
   kinds the parity ledger was holding `delete_row` open for.
+- **Build a tower in the browser.** Layers are inserted above or below what is
+  already there and the attachment is worked out from the position — there is
+  no attachment to type, which is what made two carriers sharing one slab turn
+  into two layers drawn on top of each other. Carriers are added on the slab
+  they share. A deliberate uninsured band is a **buffer**: a real slab that
+  carries nobody and draws hatched, so the band is stated rather than left as a
+  hole nobody explained. Removing a layer from the middle of a tower leaves the
+  gap open and says so, rather than sliding everything above it down.
 
 ### Fixed
 - **Completing or dropping a task on a filtered Open items view no longer

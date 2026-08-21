@@ -215,6 +215,97 @@ def _diagnostics(linked: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _stacks(
+    request: Request,
+    ref: str,
+    placement: Any,
+    layers: list[dict[str, Any]],
+    *,
+    insert_error: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """One stack per LINE, bottom-up — the editor's model.
+
+    `insert_error` is the refused insert form's own message and typed values
+    (`{"line_id", "message", "typed"}`), attached to the ONE stack it belongs
+    to so a refusal keeps the typing instead of blanking every insert form on
+    the page — see `stack_insert`.
+
+    Built from the SAME `layer_details` rows `_section_html` already fetched
+    for the table above this editor (`layers_for`) — not by walking the
+    towerkit model a second time. `signed`, `carriers`, `statutory` and
+    `buffer` are already on those rows, computed once in sync.py; deriving
+    them again here from `linked.program` would be a second copy of facts
+    that can drift, which is the violation this project cares most about.
+    `attach`/`limit` come off `attach_cents`/`limit_cents` on the rows — both
+    already converted by `dollars_to_cents` at the source — so this function
+    does no money conversion of its own, keeping that rule (sync.py /
+    money.py only) trivially true rather than merely followed.
+
+    `program.lines` is the one thing still read off the parsed program: it is
+    a LINE fact (id, name, label), never duplicated by a layer_details row,
+    so there is no second copy to avoid.
+
+    A layer spanning several lines appears in EACH of their stacks, because it
+    does. `also_on` carries the other lines so the row can say so: a layer that
+    silently moves two other columns is worse than one that warns.
+    """
+    conn = _conn(request)
+    linked = linked_for(request, conn, placement.id)
+    if linked.program is None:
+        return []
+    lines = linked.program.lines
+    base = f"/accounts/{ref}/program/{placement.id}"
+    out: list[dict[str, Any]] = []
+    for line in lines:
+        rows = sorted(
+            (row for row in layers if line.id in row["applies_to"]),
+            key=lambda row: row["attach_cents"],
+        )
+        slabs = []
+        for row in rows:
+            others = [
+                other.label
+                for other in lines
+                if other.id != line.id and other.id in row["applies_to"]
+            ]
+            slabs.append({
+                "id": row["id"],
+                "name": row["name"],
+                "attach": format_cents_compact(row["attach_cents"]),
+                "limit": format_cents_compact(row["limit_cents"]),
+                "buffer": row["buffer"],
+                "statutory": row["statutory"],
+                "also_on": others,
+                "carriers": [
+                    {"name": p["carrier"], "share": f"{p['share_pct']:g}%"}
+                    for p in row["participants"]
+                ],
+                "signed": f"{row['signed_pct']:g}%",
+                # Amendment (a): the finished URL, published from the context
+                # rather than assembled in the template — `_stacks` already
+                # has `base` as a local, and a bare `base` in the template
+                # context rendered as an empty string under this Jinja
+                # environment (no StrictUndefined), which made `+ carrier`
+                # post to a URL nothing serves.
+                "carrier_action": f"{base}/layers/{row['id']}/markets/new",
+            })
+        line_error = (
+            insert_error
+            if insert_error is not None and insert_error["line_id"] == line.id
+            else None
+        )
+        out.append({
+            "line_id": line.id,
+            "label": line.label,
+            "name": line.name,
+            "slabs": list(reversed(slabs)),  # top of tower first, as drawn
+            "insert_action": f"{base}/lines/{line.id}/layers",
+            "insert_error": line_error["message"] if line_error else None,
+            "insert_typed": line_error["typed"] if line_error else None,
+        })
+    return out
+
+
 def _section_html(
     request: Request,
     ref: str,
@@ -223,6 +314,7 @@ def _section_html(
     *,
     refocus: str | None = None,
     expanded: str | None = None,
+    insert_error: dict[str, Any] | None = None,
 ) -> str:
     """ONE renderer for a program section, for every caller.
 
@@ -287,6 +379,7 @@ def _section_html(
             else {}
         ),
         layers=[_layer_row(request, ref, placement.id, layer) for layer in layers],
+        stacks=_stacks(request, ref, placement, layers, insert_error=insert_error),
         refocus=refocus,
         expanded=expanded,
         expanded_row=_expanded_row_html(request, ref, placement.id, expanded),
@@ -1185,6 +1278,86 @@ def layer_details_row(
         )
 
 
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/lines/{line_id}/layers",
+    response_class=HTMLResponse,
+)
+async def stack_insert(
+    request: Request, ref: str, placement_id: str, line_id: str
+) -> HTMLResponse:
+    """Put a slab into a line's stack. Position decides the attachment.
+
+    NO ATTACHMENT FIELD IS ACCEPTED, and that is the feature: a typed
+    attachment is how two slabs come to share one. `anchor` names the slab this
+    one goes above or below, and `""` means the bottom of the line.
+
+    The anchor arrives in the BODY, so it is checked against THIS placement's
+    own layers — an id in a body is only checked if somebody checks it, which
+    is the hole `forms.spec.checked_option` exists to close.
+
+    A REFUSAL KEEPS THE TYPING (spec, section 2). Every refusal below answers
+    through `_panel(..., insert_error=...)` — the one placement's section,
+    retargeted onto itself — rather than `_programs_panel`, which rebuilds
+    every placement on the account from scratch and blanks every stack
+    editor's inputs on the page, not just the one the user was working
+    (found in whole-branch review, 2026-08-21: the spec's own words say the
+    opposite, and the sibling route `layer_add`/`_refused_form` already got
+    this right twelve lines away).
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    anchor = str(form.get("anchor", "")).strip() or None
+    position = str(form.get("position", "above"))
+    kind = str(form.get("kind", "layer"))
+    raw_limit = str(form.get("limit_cents", ""))
+    typed = {
+        "name": name, "limit_cents": raw_limit, "position": position,
+        "anchor": anchor or "", "kind": kind,
+    }
+
+    def refused(message: str) -> HTMLResponse:
+        return _panel(
+            request, ref, org, placement_id,
+            insert_error={"line_id": line_id, "message": message, "typed": typed},
+        )
+
+    known = {row["id"] for row in sync.layer_details(conn, placement_id)}
+    if anchor is not None and anchor not in known:
+        return refused(f"no layer {anchor!r} on {placement.ref} — reload the tab")
+    if not name:
+        return refused("a slab needs a name")
+    if kind not in ("layer", "buffer"):
+        return refused(f"kind must be 'layer' or 'buffer', not {kind!r}")
+    try:
+        limit_cents = int(parse_value(_LAYER_CELLS["limit_cents"], raw_limit) or 0)
+    except ValueError as exc:
+        return refused(str(exc))
+
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_add",
+            summary=(
+                f"inserted {name} on {line_id}"
+                if kind != "buffer"
+                else f"declared a buffer on {line_id}"
+            ),
+            mutate=lambda: sync.insert_layer(
+                conn, placement_id, line_id=line_id, anchor_layer_id=anchor,
+                position=position, name=name, limit_cents=limit_cents,
+                buffer=kind == "buffer",
+            ),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return refused(str(exc))
+    forget_program_reads(request)
+    return _programs_panel(request, ref, org)
+
+
 def _details_refusal(
     request: Request, placement_id: str, layer_id: str, message: str
 ) -> HTMLResponse:
@@ -1462,8 +1635,12 @@ def layer_remove(
     request: Request, ref: str, placement_id: str, layer_id: str
 ) -> HTMLResponse:
     """The layer goes, its seats with it — one batched, snapshotted write
-    (sync.remove_layer, D2). A refusal — towerkit will not strand the layer
-    above over a gap — re-renders the confirm in place with the message."""
+    (sync.remove_layer, D2). The layers above stay put: sliding them down to
+    close the tower would silently change what the client is covered for, so
+    the write leaves an open band and towerkit reports it as a `line-gap`
+    WARNING, not a refusal (towerkit/validate.py, 2026-08-21) — the confirm
+    says this before the click. A genuine refusal (a different error) still
+    re-renders the confirm in place with the message."""
     org = _org(request, ref)
     conn = _conn(request)
     placement, layer = _owned_layer(request, org, placement_id, layer_id)
@@ -1588,9 +1765,22 @@ async def layer_cell_save(
 def _layer_add_fields(
     conn: sqlite3.Connection, placement_id: str
 ) -> tuple[Field, ...]:
-    """A new layer's facts. `name`, `attach` and `limit` are required by
-    sync.add_layer; premium is optional because a layer is routinely placed
-    before it is priced.
+    """A new layer's facts. `name` and `limit` are required by sync.add_layer;
+    premium is optional because a layer is routinely placed before it is
+    priced.
+
+    NO ATTACHMENT FIELD, same rule as the stack editor a few lines below this
+    one on the same panel (whole-branch review finding 2, 2026-08-21): this
+    form still took a typed `attach_cents` after the stack editor shipped,
+    which is the exact mechanism ("add a layer" plus an attachment box) that
+    drew two D&O excess layers on top of each other in the first place. This
+    form is not superseded outright — it is the only web control that can add
+    a layer across ALL of a multi-line program's lines in one call, or price
+    one at creation — so it stays, minus the one input that made the overlap
+    typeable. `sync.add_layer(..., attach_cents=None, ...)` leaves towerkit's
+    own suggested-attach (the top of the existing stack for these lines)
+    standing, the same "position decides" rule, just for a layer that can span
+    more than one line.
 
     `line` is REQUIRED and asked, never guessed (F5): this form used to pass
     line_ids=[] and towerkit silently defaulted the new layer onto the FIRST
@@ -1605,7 +1795,6 @@ def _layer_add_fields(
     return (
         _LAYER_CELLS["name"],
         Field("line", "applies to", "select", options, required=True),
-        _LAYER_CELLS["attach_cents"],
         _LAYER_CELLS["limit_cents"],
         _LAYER_CELLS["premium_cents"],
     )
@@ -1633,6 +1822,7 @@ def _panel(
     *,
     refocus: str | None = None,
     expanded: str | None = None,
+    insert_error: dict[str, Any] | None = None,
 ) -> HTMLResponse:
     """Re-render this placement's whole panel, AND retarget the swap onto it.
 
@@ -1676,13 +1866,20 @@ def _panel(
     write, all three of which are made FROM that row. Re-rendering it here
     keeps the row the user is working in open across the write it caused,
     which is the whole reason the row exists.
+
+    `insert_error` is a refused stack-insert's message and typed values,
+    passed straight to `_section_html`/`_stacks` so the one stack the user was
+    working keeps what they typed (see `stack_insert`) — a refusal answers
+    200 with this section alone, retargeted here exactly as a success would
+    be, so it is still ONE RESPONSE, ONE TOP-LEVEL ELEMENT.
     """
     forget_program_reads(request)
     conn = _conn(request)
     placement = placements_repo.get(conn, placement_id)
     response = HTMLResponse(
         _section_html(
-            request, ref, org, placement, refocus=refocus, expanded=expanded
+            request, ref, org, placement,
+            refocus=refocus, expanded=expanded, insert_error=insert_error,
         )
     )
     response.headers["HX-Retarget"] = f"#program-{placement_id}"
@@ -1748,7 +1945,7 @@ async def layer_add(request: Request, ref: str, placement_id: str) -> HTMLRespon
             summary=f"added layer {values['name']}",
             mutate=lambda: sync.add_layer(
                 conn, placement_id, values["name"], line_ids,
-                attach_cents=values["attach_cents"],
+                attach_cents=None,  # position decides — see _layer_add_fields
                 limit_cents=values["limit_cents"],
                 premium_cents=values["premium_cents"],
             ),
