@@ -53,6 +53,43 @@
         <span class="pair"><span class="pair-k"
               title="the carrier audits at expiry and trues the premium up against actual payroll or sales"
               >auditable</span>{{ tower_cells.auditable | safe }}</span>
+        {# ONE POLICY, SEVERAL LAYERS. Workers' compensation Part A is
+           statutory and Part B carries a dollar limit, so towerkit cannot make
+           them one layer — the schematic draws them apart, correctly, and
+           until now nothing said they were one policy (Grant, 2026-08-21).
+
+           A PICKER of this program's other layers, never a text box: towerkit
+           mints the token and no screen should ever print one, so the only
+           storable answers are the other layers and "not linked". The blank
+           option is a REAL answer here and unlinks — without it, unlinking
+           would be unreachable from the only control that offers it.
+
+           It posts on change and answers with this row. No Save button,
+           because there is nothing to type and nothing to lose to a stray
+           click: the value IS the choice, and `u` puts it back. #}
+        {% if policy_link_options %}
+          {# A REAL <label>, wrapping the control, not a span beside it. The
+             first cut used the same `pair-k` span every value in this rail
+             uses and leant on aria-label — which is an accessible name and NOT
+             a visible label association, and
+             tests/test_web_input_integrity.py caught it. The rail's own class
+             carries the look; the element carries the meaning. #}
+          <label class="pair"
+                 title="two layers of one issued policy — WC Part A and Part B are the standard case">
+            <span class="pair-k">same policy as</span>
+            <select class="policy-link" name="policy_group"
+                    aria-label="same policy as"
+                    hx-post="{{ policy_link_action }}"
+                    hx-trigger="change"
+                    hx-target="closest tr" hx-swap="outerHTML">
+              <option value="">not linked</option>
+              {% for value, name in policy_link_options %}
+                <option value="{{ value }}"
+                        {% if policy_linked_to and value == policy_linked_to[0][0] %}selected{% endif %}>{{ name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        {% endif %}
       </div>
 
       {# D6: the coverage facts towerkit prints on the SOI and the schematic and

@@ -14,6 +14,14 @@ All notable changes to bookkit, newest date first.
   Nothing is guessed — an unrecognised piece is stored as typed so the
   validator can say it is not a US code, and a near-miss is never quietly
   corrected.
+- **Say that two layers are one policy.** Workers' compensation Part A
+  (statutory benefits, no dollar limit) and Part B (employers liability, a
+  real limit) come on one policy from one carrier, and a layer cannot be
+  both — so the schematic draws them apart and nothing said they belonged
+  together. The layer details row gains a **same policy as** picker of the
+  program's other layers; blank unlinks. It carries a rule rather than being
+  a note: two parts stating different policy numbers is refused, and parts
+  running on different periods warn.
 - **Renewals list the policy, not the program.** A row was one placement,
   carrying the program's whole cover label beside one countdown — so an
   Inland Marine layer expiring three months early made "GL, AL, IM · 70d

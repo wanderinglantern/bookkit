@@ -1048,6 +1048,18 @@ def _details_row(
             "policy_cell": cell("policy_number"),
             "from_cell": cell("period_from"),
             "to_cell": cell("period_to"),
+            # ONE POLICY, SEVERAL LAYERS — WC Part A and Part B. A PICKER of
+            # this program's other layers and never a text box: towerkit mints
+            # the token and no screen should print one, so the only storable
+            # answers are the other layers and "not linked". Built here with
+            # the rest of the row so the row keeps its one renderer.
+            "policy_link_action": f"{base}/policy",
+            "policy_link_options": [
+                (str(other["id"]), str(other["name"]))
+                for other in sync.layer_details(conn, placement_id)
+                if str(other["id"]) != layer_id
+            ],
+            "policy_linked_to": sync.policy_partners(conn, placement_id, layer_id),
             # D6: the coverage facts a broker states on a quote and towerkit
             # prints on the SOI and the schematic. Reachable only from
             # towerkit's own editor until now — "built but not accessible"
@@ -1219,6 +1231,76 @@ async def statutory_save(
         request, ref, org, placement_id,
         refocus=f"{layer_id}:statutory", expanded=layer_id,
     )
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/policy",
+    response_class=HTMLResponse,
+)
+async def policy_link_save(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """Put this layer on the same POLICY as another, or take it off.
+
+    Workers' compensation is why it exists: Part A is statutory and Part B
+    carries a dollar limit, so towerkit cannot make them one layer, and until
+    now nothing said they were one policy. The write is towerkit's own
+    `link_policy` — which joins rather than assigns and refuses to merge two
+    populated policies silently — through the same program-file seam every
+    other structure edit uses, so it is validated, snapshotted and revertible.
+
+    AN EMPTY CHOICE IS A REAL ANSWER and unlinks. The select renders a blank
+    option for exactly that reason; treating empty as "no change" would make
+    unlinking unreachable from the only control that offers it.
+
+    `checked_option` is the guard: the picker's own options are the authority,
+    and markup constrains a mouse and nothing else.
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    other_id = str((await request.form()).get("policy_group", "")).strip()
+    siblings = [
+        (str(row["id"]), str(row["name"]))
+        for row in sync.layer_details(conn, placement_id)
+        if str(row["id"]) != layer_id
+    ]
+    if other_id:
+        # THE PICKER'S OWN OPTIONS ARE THE AUTHORITY, rebuilt server-side from
+        # the same query that built them for the GET — which is also the scope
+        # check: a layer id from another placement is simply not in this list.
+        try:
+            checked_option(
+                Field(
+                    "policy_group", "same policy as", "select",
+                    options=tuple((name, value) for value, name in siblings),
+                ),
+                other_id,
+            )
+        except ValueError as exc:
+            return _details_row(request, ref, placement_id, layer, str(exc))
+    partner = dict(siblings).get(other_id, "")
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_edit",
+            summary=(
+                f"{layer['name']} shares a policy with {partner}"
+                if other_id
+                else f"{layer['name']} is its own policy"
+            ),
+            mutate=lambda: (
+                sync.link_policy(conn, placement_id, layer_id, other_id)
+                if other_id
+                else sync.unlink_policy(conn, placement_id, layer_id)
+            ),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _details_row(request, ref, placement_id, layer, str(exc))
+    forget_program_reads(request)
+    _, fresh = _owned_layer(request, org, placement_id, layer_id)
+    return _details_row(request, ref, placement_id, fresh)
 
 
 @router.post(

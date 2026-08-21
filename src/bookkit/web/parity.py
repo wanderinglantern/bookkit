@@ -269,6 +269,22 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "tui": "l on the placements tab",
         "mcp": "program_layer_edit",
     },
+    "link_policy": {
+        "web": "details row -> 'same policy as' picker "
+        "(POST .../layers/{layer_id}/policy)",
+        "tui": "NOT BUILT — bookkit's own TUI has no layer sheet; towerkit's "
+        "editor has the picker, behind `o`",
+        "mcp": "DEFERRED — layer.policyGroup is writable through "
+        "program_edit_field, so an assistant can set the token on each side; "
+        "the JOIN rule (whose group survives, and the refusal when two "
+        "populated policies would merge) has no tool of its own yet",
+    },
+    "unlink_policy": {
+        "web": "the same picker's blank option — a real answer, not a no-op",
+        "tui": "NOT BUILT — see link_policy",
+        "mcp": "DEFERRED — clearing layer.policyGroup through "
+        "program_edit_field IS unlinking; see link_policy",
+    },
     "add_layer": {
         "web": "+ Add layer, applies-to select required (POST .../layers)",
         "tui": "L, applies-to select required",
@@ -443,6 +459,17 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
     "Layer.id": "identity — towerkit owns it (slugify/unique_id); never typed",
     "Layer.name": "layer cell (POST .../layers/{id}/cell/name)",
     "Layer.policy_number": "details row cell",
+    "Layer.policy_group": (
+        "details row, POLICY group: a 'same policy as' PICKER of this "
+        "program's other layers (POST .../layers/{layer_id}/policy, "
+        "routes/program.py `policy_link_save` -> sync.link_policy / "
+        "sync.unlink_policy -> towerkit edit.link_policy). NOT the derived "
+        "field seam and deliberately so: the stored value is a machine-minted "
+        "token no screen should print, and the write joins two layers rather "
+        "than setting one scalar. Blank unlinks. WC Part A (statutory) and "
+        "Part B (a dollar limit) cannot be one layer, which is the whole "
+        "reason the field exists."
+    ),
     "Layer.auditable": (
         "details row, POLICY group: a yes/no cell beside the number and the "
         "dates, through the derived field seam (routes/program.py `_PLACED` -> "
@@ -616,6 +643,23 @@ TOWERKIT_EDIT_OPS: dict[str, str] = {
         "BRANCH-ONLY in towerkit; bookkit's sync.set_statutory writes the "
         "field directly (established field-write practice) so the web toggle "
         "does not depend on the in-flight branch"
+    ),
+    "link_policy": (
+        "BUILT 2026-08-21 with the field itself. sync.link_policy behind the "
+        "details row's 'same policy as' picker; towerkit owns the join rule "
+        "(a group joins rather than being assigned, and two populated "
+        "policies refuse to merge silently) and bookkit runs it inside "
+        "program_files.write, so the link is validated, snapshotted and "
+        "revertible like every other program edit."
+    ),
+    "unlink_policy": (
+        "BUILT 2026-08-21. The same picker's blank option — a real answer, not "
+        "a no-op, or unlinking would be unreachable from the only control "
+        "that offers it."
+    ),
+    "policy_group_members": (
+        "utility — reads one policy's layers; consumed by sync.policy_partners, "
+        "which is what the picker renders its selected option from."
     ),
     "set_states": (
         "MERGED to towerkit main 2026-08-20 and DECIDED: Grant took Layer.states "
