@@ -1206,6 +1206,64 @@ def set_statutory(
     return _mutate(conn, placement_id, mutate)
 
 
+def link_policy(
+    conn: sqlite3.Connection, placement_id: str, layer_id: str, other_id: str
+) -> Diagnostics:
+    """Put two layers on ONE issued policy — WC Part A and Part B being the
+    case it exists for, since the model cannot make them one layer.
+
+    towerkit's `edit.link_policy` owns the rule (a group joins rather than
+    being assigned, and two populated policies refuse to merge silently); this
+    is the wrapper that runs it inside bookkit's write-through, so the write is
+    validated, snapshotted and revertible like every other program edit.
+    """
+
+    def mutate(program: Program) -> None:
+        from towerkit import edit
+
+        edit.link_policy(program, layer_id, other_id)
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def unlink_policy(
+    conn: sqlite3.Connection, placement_id: str, layer_id: str
+) -> Diagnostics:
+    """Take ONE layer off its policy. The rest of the group keeps its token —
+    a policy does not stop being one because a part left it."""
+
+    def mutate(program: Program) -> None:
+        from towerkit import edit
+
+        edit.unlink_policy(program, layer_id)
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def policy_partners(
+    conn: sqlite3.Connection, placement_id: str, layer_id: str
+) -> list[tuple[str, str]]:
+    """(id, name) of the OTHER layers on this layer's policy, file order.
+
+    Read-only, and the thing a surface actually needs: the token is machine
+    minted and no screen should ever print it. Empty when the layer is not
+    linked.
+    """
+    from towerkit import edit
+
+    program = linked_program(conn, placement_id).program
+    if program is None:
+        return []
+    layer = next((ly for ly in program.layers if ly.id == layer_id), None)
+    if layer is None or not layer.policy_group:
+        return []
+    return [
+        (other.id, other.name)
+        for other in edit.policy_group_members(program, layer.policy_group)
+        if other.id != layer_id
+    ]
+
+
 def set_follows_underlying(
     conn: sqlite3.Connection, placement_id: str, layer_id: str, follows: bool
 ) -> Diagnostics:

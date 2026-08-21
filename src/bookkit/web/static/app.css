@@ -3045,6 +3045,26 @@ tr:hover .market .chip-remove {
    only opens a confirm — dressing the two identically would spend the strong
    signal on the harmless half and leave nothing louder for the real one. So
    it reads as an ordinary .btn until the pointer is on it. */
+/* The "same policy as" picker in the layer details row. Sized to the rail's
+   own type rather than the browser default, so it sits on the same baseline as
+   the cells beside it instead of pushing the policy line taller than the
+   coverage one under it. */
+.policy-link {
+  font: inherit;
+  font-size: var(--hint-size);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.05rem 0.25rem;
+  max-width: 14rem;
+}
+
+.policy-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .btn-quiet-danger:hover,
 .btn-quiet-danger:focus-visible {
   border-color: var(--danger);
