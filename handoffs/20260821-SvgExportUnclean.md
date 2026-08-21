@@ -37,9 +37,23 @@ wrong" from "the SVG writer is wrong" in one look.
   bookkit. If it does, the bug is entirely towerkit's and should be fixed and
   tested there.
 
-## Note on priority
+## Priority: answered
 
-He says PNG "were being exported" — past tense — which may mean PNG stopped
-working too, or simply that PNG is what he used to use. Worth clarifying: if
-PNG has ALSO regressed then this is a renderer regression rather than an SVG
-quirk, and it matters more than "use the PDF for now" suggests.
+PNG STILL WORKS; SVG alone is broken (Grant, 2026-08-21). So this is not a
+renderer regression and the geometry is fine — the same figure comes out right
+in two other formats. That points squarely at how matplotlib WRITES SVG rather
+than at anything towerkit computes, and it narrows the four candidates to
+essentially two: fonts not embedded (so the file renders with fallbacks
+elsewhere), or text emitted as `<text>` with a font nothing else has, rather
+than as paths.
+
+`render_program` passes `formats` through to matplotlib's savefig. The knob to
+look at first is `matplotlib.rcParams["svg.fonttype"]`: `"path"` converts text
+to outlines and is portable everywhere, `"none"` emits `<text>` and relies on
+the viewer having the font. towerkit vendors its own faces (Noto Sans, Noto
+Serif, JetBrains Mono), which almost nothing else on a corporate machine will
+have — so if the default is `"none"`, every SVG is being written to depend on
+fonts only that machine has.
+
+Still get a bad SVG and the viewer name before changing anything: the fix is
+cheap but the diagnosis should not be guessed.
