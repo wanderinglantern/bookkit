@@ -537,10 +537,15 @@ def test_the_file_is_never_written_with_an_overlap(app_and_org) -> None:
     anchor = program.layers_for_line(line_id)[0]
 
     for n in range(3):
-        sync.insert_layer(
+        diags = sync.insert_layer(
             conn, placement.id, line_id=line_id, anchor_layer_id=anchor.id,
             position="above", name=f"Excess {n}", limit_cents=5_000_000_00,
         )
+        # ASSERT THE WRITE HAPPENED. Without this the test passes when every
+        # insert is REFUSED — nothing was written, so of course nothing
+        # overlaps. It did exactly that until the implementer noticed
+        # (2026-08-21): a green test proving only that the feature did not run.
+        assert diags.ok, [d.message for d in diags.errors]
 
     fresh = sync.linked_program(conn, placement.id).program
     overlaps = [
@@ -659,14 +664,27 @@ def insert_layer(
                 raise ValueError(f"no layer {anchor_layer_id!r} on {line_id}")
             order.insert(index + 1 if position == "above" else index, layer)
 
-        # RESEAT THE WHOLE COLUMN, bottom up. A follows-underlying layer keeps
-        # its derived attachment — heal_follows owns that and re-derives it on
-        # write — so it is skipped rather than pinned to a number here.
+        # RESEAT THE WHOLE COLUMN, bottom up.
+        #
+        # A SLAB THAT SPANS SEVERAL LINES GETS `follows_underlying`, NOT A
+        # NUMBER. This column's arithmetic is not true of the others: an
+        # umbrella over GL and AL sits on a different stack in each, so pinning
+        # GL's figure onto it opens a gap in AL and towerkit refuses the whole
+        # write. `follows_underlying` is exactly this case — `heal_follows`
+        # re-derives the attachment per column on every write, and `validate`
+        # checks it per column too. (Found by the implementer, 2026-08-21: the
+        # seeded umbrella spans GL and AL, and every insert below it was
+        # refused until this branch existed.)
         floor = 0
         for slab in order:
-            if not slab.follows_underlying:
+            if len(slab.applies_to) > 1:
+                slab.follows_underlying = True
+            elif not slab.follows_underlying:
                 slab.attach = floor
-            floor = slab.attach + slab.limit
+            # In THIS column every slab seats on the floor — whether its
+            # attachment is pinned here or derived by heal_follows — so the
+            # next one tops out a limit higher. Contiguous by construction.
+            floor += slab.limit
 
     return _mutate(conn, placement_id, mutate)
 ```
