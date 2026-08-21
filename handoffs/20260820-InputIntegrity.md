@@ -91,7 +91,7 @@ picker. **It owns no writes**: every cell posts to the account-scoped route in
 alone and are therefore correct on any page. Only `done` differs, and only in
 what it re-renders — the write is `work.complete_task`, shared.
 
-## Overnight agent fan-out — IN FLIGHT AT TIME OF WRITING
+## Overnight agent fan-out — ALL FIVE LANDED
 
 Five agents, disjoint file ownership, none of them running git. Each was told
 to mutation-check every test it writes.
@@ -104,11 +104,61 @@ to mutation-check every test it writes.
 | D | cross-field consistency | new `services/consistency.py`, `forms/entities.py`, `mcpserver.py` |
 | E | data collection / imports | `imports/**`, `import_screen.py`, `paste_import.py` |
 
-**When they report: gate, then commit each area separately.** They were told not
-to touch each other's files; verify that held (`git status` before each commit).
+**All five reported. Full gate run by the orchestrator AFTER the last one
+finished — 1979 passed, mypy clean, ruff clean.** Each agent's own "green" was
+measured while others were still writing and is not authoritative; only the
+final gate is. Committed in six per-agent slices, `0f493b0`..`e5b3b7f`.
+
+Mutation totals, all killed: A 13, B 16, C 10, D 16, E 16. Three agents caught
+a vacuous test of their own and fixed it — B's two assertions were satisfied by
+the PROSE in inline-cell.js (its comments name every class it clears), and D's
+item-due guard survived a truthiness revert because the difference is only
+observable on a legacy bad row.
+
+### What each landed
+
+- **A** — negatives refused consistently (the sign was read in one of two parse
+  branches); `Field` min/max from one BOUNDS registry keyed by column, so
+  `probability_pct` says "enter a whole number from 0 to 100" instead of
+  surfacing SQLite's CHECK error; money/int/select refusals shaped like
+  `date_refusal`.
+- **B** — a delegated `input` listener clears `.cell-error` / `.cell-error-msg`
+  / `.form-error` on the first keystroke (scopes walked UPWARDS: a refused
+  named-limit add renders its message outside the form being corrected);
+  `.market-unlinked` de-stacked (it is a neutral state, not an error); visible
+  labels on six in-row forms, three of which had no accessible name at all;
+  the inline cell editor's blank option made unconditional.
+- **C** — contact role is a picker over declared ∪ book values, wired through
+  the SAVE path as well as the editor (only the save-path test caught the two
+  disagreeing); `rfi_item_fields(conn)` mirror; the third copy of the placement
+  statuses collapsed onto `PLACEMENT_FIELDS`.
+- **D** — `services/consistency.py`, called from `apply_*` and the MCP paths,
+  with `_edit_field` guarded BOTH ways per pair because a single-column write is
+  the shape a cross-field rule is invisible to. Service layer, not DB CHECKs, so
+  a pre-existing bad row stays repairable — two tests prove it.
+- **E** — the template's example row moved off the data sheet (the reader asks
+  by sheet NAME, so re-ordering tabs cannot feed it back); the percent-formatted
+  commission refuses rather than being reinterpreted; a matched update writes
+  the period it used to discard; zero records refuses before the snapshot; the
+  paste modal's failed re-stage no longer leaves the previous parse live under a
+  green verdict.
+
+### Verified by the orchestrator, not just reported
+- all six negative spellings refused, positives still parsing cents
+- `probability_pct` bounds reaching the real declared field
+- contact role: 11 declared + 1 book-only offered, the oddball re-saving, an
+  unknown one refused
+- the template's `Import` sheet header-only; an untouched template exiting 1;
+  the ambiguous commission naming both readings
+- the `input` listener delegated off `document.body` with comments stripped
+- every main page still 200 on the final code
 
 ## Gotchas carried forward
 
+- **Never `git add -A` while agents are running.** Mine swept partial work from
+  four of them into a commit whose message described only my own. Recovered with
+  `git reset --mixed` (working tree untouched) plus a safety patch, then
+  committed in slices. Same family as the mutation-harness trap below.
 - The Bash tool's cwd RESETS between calls — absolute paths or `git -C`, always.
   An hour of D6 was written into the main working tree because of this.
 - **Commit before mutation testing.** `git checkout -- <file>` in a mutation

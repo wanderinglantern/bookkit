@@ -5,6 +5,56 @@ All notable changes to bookkit, newest date first.
 ## 2026-08-20
 
 ### Added
+- **Open items across the whole book** (`/items`): every open task, overdue
+  first, editable where you read it, with filters that are URLs and capture
+  that asks which account. It owns no writes — each cell posts to the
+  account's own edit route, so editing from the book-wide list and from the
+  account's Work tab are the same write, the same guard and the same undo
+  unit.
+- Cross-field consistency rules, in one module both surfaces and the assistant
+  pass through: a placement can no longer end before it starts, a subjectivity
+  can no longer be "met" with no date or "outstanding" while carrying one, a
+  quote can no longer respond before it was sent, and a request can no longer
+  fall due before it was asked. Every refusal names both remedies, because
+  which of two dates is the typo is your knowledge and not the software's.
+- The researched rules for data entry, with their sources, as a skill the next
+  change reads before adding a field — plus DRY as a standing rule.
+
+### Changed
+- **The layer details row is grouped, not thinned.** The complaint was density;
+  the cause was proximity — administrative facts, coverage prose, named limits,
+  scope and structure were one undifferentiated run. Same eight values, nothing
+  hidden, now behind a label rail with exactly one column allowed to wrap, so a
+  long note stops shoving its neighbours sideways.
+- The chart theme is a picker offering only themes a program file may legally
+  name, and the export refuses a theme that has gone missing rather than
+  quietly rendering a client's chart in the wrong brand.
+- Contact roles and RFI categories complete from your own book on the inline
+  cell, which is the path you actually use — the modal always had them.
+
+### Fixed
+- **A market response left untouched filed itself as "quoted."** A required
+  dropdown with no blank option lets the browser pick its first entry and call
+  the field answered; five more did the same, including which colleague an
+  assignment went to and which line a new layer covered.
+- **Negative amounts are refused.** `-1,000.00` was storable while `-1000` was
+  not, so which spelling you typed decided whether a negative premium got in.
+- **The import template shipped a fake account as a real data row** — fill your
+  rows underneath it, re-import, and you created Atomic Industries carrying a
+  bound $250k placement.
+- **A percent-formatted commission column imported at one hundredth of its
+  value** (15% became 0.15%). It refuses now and names both readings rather
+  than guessing.
+- A re-import that corrected a renewal date reported "updated" and changed
+  nothing. An empty spreadsheet reported "OK to commit", took a backup and did
+  nothing. A failed re-stage in the paste window left the previous parse live
+  under a green light.
+- A refusal no longer survives the correction that fixes it.
+- Today printed an account's reference where every other section printed its
+  name.
+- Out-of-range figures say what range is accepted instead of surfacing a raw
+  database constraint error.
+
 - **Seventeen towerkit fields the browser could not reach.** A layer's states
   and its four prose fields (limits, retention and premium detail, notes) and
   its named limits, in the details row; a line's column label on the lines
