@@ -5,6 +5,20 @@ All notable changes to bookkit, newest date first.
 ## 2026-08-21
 
 ### Added
+- **A state list can be pasted the way a policy prints it.** Commas were the
+  whole entry syntax, so a workers-compensation schedule copied off a policy
+  — bare codes, no punctuation — became one long "state". Commas,
+  semicolons, slashes, pipes, newlines, tabs and plain spaces all split now,
+  and what is recognised is stored as its USPS code: `il`, `Illinois` and
+  `IL` are one value, and "New York NJ Rhode Island CT" is four states.
+  Nothing is guessed — an unrecognised piece is stored as typed so the
+  validator can say it is not a US code, and a near-miss is never quietly
+  corrected.
+- **Auditable, on a policy.** A yes/no fact recorded per layer: does the
+  carrier true the premium up at expiry? Workers' compensation and general
+  liability normally do; property does not, and two layers of one program
+  legitimately differ. Editable in towerkit's own editor and in the layer
+  details row in the browser, beside the policy number and the policy dates.
 - **Drop a task, as against completing one**, on the web — on the account's
   Work tab, on Open items and on Today. `Done` stamps a completion date;
   `Drop` does not, because a task filed in error or overtaken by events was

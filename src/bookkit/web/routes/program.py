@@ -1052,12 +1052,19 @@ def _details_row(
             # prints on the SOI and the schematic. Reachable only from
             # towerkit's own editor until now — "built but not accessible"
             # (statutory, 2026-08-19), which is a bug class, not a gap.
+            # DERIVED FROM `_PLACED`, not listed again. It was a hand-written
+            # tuple of five names until 2026-08-21, which made it a second
+            # placement table beside the first: `layer.auditable` was added to
+            # `_PLACED`, rendered nowhere, and only
+            # `test_every_placed_field_actually_renders_on_the_page` noticed.
+            # A key here that `_PLACED` does not carry would 404 at the user;
+            # a key there that this forgot is invisible. One list.
             "tower_cells": {
-                name: tower_cell("layer", name, _addr(layer_id, None))
-                for name in (
-                    "states", "limitsDetail", "retentionDetail",
-                    "premiumDetail", "notes",
+                key.split(".", 1)[1]: tower_cell(
+                    "layer", key.split(".", 1)[1], _addr(layer_id, None)
                 )
+                for key in _PLACED
+                if key.startswith("layer.")
             },
             "named_limits": [
                 {
@@ -2994,6 +3001,12 @@ class _Placed:
 # cannot still be described there as planned — that drift has shipped three
 # times).
 _PLACED: dict[str, _Placed] = {
+    # An administrative fact about the POLICY, so it sits in the policy group
+    # beside the number and the dates, not among the coverage facts. towerkit
+    # publishes it as a bool, which towerfields renders as a yes/no select —
+    # a constrained control, blank option included, with no cell of its own to
+    # hand-write here. The seam working as designed.
+    "layer.auditable": _Placed(tag="span"),
     # The layer's long tail, in the details row the chevron opens.
     "layer.states": _Placed(tag="span"),
     "layer.limitsDetail": _Placed(tag="span"),

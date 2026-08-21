@@ -437,6 +437,13 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
     "Layer.id": "identity — towerkit owns it (slugify/unique_id); never typed",
     "Layer.name": "layer cell (POST .../layers/{id}/cell/name)",
     "Layer.policy_number": "details row cell",
+    "Layer.auditable": (
+        "details row, POLICY group: a yes/no cell beside the number and the "
+        "dates, through the derived field seam (routes/program.py `_PLACED` -> "
+        "towerfields -> sync.set_tower_field). Landed with the field itself "
+        "(towerkit 2026-08-21) rather than after it — this ledger going red is "
+        "the ticket, and the ticket was closed in the same change."
+    ),
     "Layer.period": "details row: policy effective / policy expiry cells",
     "Layer.follows_underlying": "details row: one-click toggle",
     "Layer.applies_to": "details row: applies-to chips",
@@ -553,7 +560,21 @@ TOWERKIT_EDIT_OPS: dict[str, str] = {
     "ordinal": "utility — layer auto-naming inside edit.add_layer",
     "suggested_attach": "utility — default attachment inside edit.add_layer",
     "heal_follows": "utility — run by sync.write_through on every write",
-    "parse_states": "utility — state-list parsing consumed by set_states",
+    "parse_states": (
+        "utility — the ENTRY SYNTAX for a jurisdiction list, consumed by "
+        "set_states and by mcpsurface's comma-string path. Rewritten "
+        "2026-08-21 to read a list pasted straight off a policy (any of "
+        "comma, semicolon, slash, pipe, newline, tab or plain space) and to "
+        "normalise what it recognises to a USPS code. Nothing is guessed: an "
+        "unrecognised piece travels verbatim so towerkit's validator can say "
+        "it is not a US code."
+    ),
+    "canonical_states": (
+        "utility — the same normalisation for a LIST rather than a typed "
+        "string, so towerkit's two doors into layer.states cannot disagree "
+        "about case. Consumed by set_states; bookkit reaches it through the "
+        "states cell like any other derived field."
+    ),
     "adopt": "internal — towerkit's line-transfer flow; no bookkit use",
     # covered — a sync wrapper exists and a surface reaches it
     "add_line": "sync.add_line (phase 3); see SYNC_VERBS",
