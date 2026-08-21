@@ -27,8 +27,9 @@ vouched for as this account's (see _wrong_account); a file that is not, or
 that cannot be read, contributes no rows at all and its placement prints
 from book data under a heading that says so. Omitted (not blank) when
 nothing is in force.
-Sheet 1 opens on SCOPE_NOTE, the standing statement of what the report
-covers and what it withholds — invariant text, identical on every export.
+Sheet 1 opens straight on the body: it carried a standing SCOPE_NOTE
+describing the report and its withholding until 2026-08-21, when Grant took
+it out — the rule it narrated is unchanged, only the narration went.
 Determinism: `today` is a parameter, never the wall clock."""
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from towerkit.model import Program, load_program
 from towerkit.soi import SoiRow, SoiSection, SoiStatus, build_soi
@@ -56,21 +58,30 @@ from ..models import (
     reads_as_internal,
 )
 from ..money import MoneyParseError, cents_to_dollars, format_cents
-from ..repo import contacts, links, orgs, placements, submissions
+from ..repo import assignees, contacts, links, orgs, placements, submissions
 from ..repo import projects as projects_repo
 from ..repo import tasks as tasks_repo
 from ..sync import ProgramFileMissing, program_file
 
-CLIENT_OWNER = "You"
-OUR_OWNER = "Us"
-"""C4, Grant 2026-08-18 — the two words in the client's Owner column.
+UNASSIGNED_OWNER = "Us"
+"""What the Owner column says when NOBODY is on the row.
 
-The CFO asked for one column saying which open items are theirs and which
-are ours, and rated it above every formatting fix on the list, because
-"Return signed TRIA form" and "Chase Zurich on the loss run" render
-identically today. The AE then reframed it: the internal fact worth holding
-is a NAMED assignee, and You / Us is its projection onto the client's copy.
-So this is the projection, and nothing stores it."""
+C4 (Grant, 2026-08-18) had this column answer "You" or "Us" — which side of
+the table the item sits on — deliberately derived from the assignee's ORG and
+never from their name, so a market merge that moved somebody could not silently
+flip a column the client reads.
+
+GRANT REPLACED THAT WITH THE NAME ITSELF on 2026-08-21: "Owner shows individual
+not 'us'". Every resolved assignee now prints as a person, ours and theirs
+alike — and so does an underwriter or a wholesaler. I recommended against that
+last part and he chose it anyway, so it is recorded here rather than argued
+again: the client's copy of this sheet now names the market contact we are
+chasing. If that ever wants narrowing, the seam is `owner_of` and nothing else.
+
+Unassigned stays "Us", unchanged and for the original reason: unassigned work is
+ours until someone says otherwise, and so is an assignment whose person has
+since been removed — `assignees.name_of` returns "" for both and the answer
+falls to the safe side rather than to a stale claim."""
 
 
 @dataclass(frozen=True)
@@ -90,7 +101,7 @@ class ExportRow:
     # the flag itself can never print. ExportRow has no `category` field, so
     # without this an Internal task shown to an MCP caller under a PLACEMENT
     # section — which is labelled by program name — would carry no sign of it.
-    owner: str = OUR_OWNER  # C4 — "You" or "Us", and DERIVED, never stored.
+    owner: str = UNASSIGNED_OWNER  # C4 — "You" or "Us", and DERIVED, never stored.
     # Defaulted to ours: every row shape that cannot carry an assignee at all
     # (a submission out at market, an unmet project need) is ours by nature,
     # and so is a task nobody has claimed. The wrong-direction failure here is
@@ -130,32 +141,44 @@ def _status_label(status: str) -> str:
 
 
 def owner_of(conn: sqlite3.Connection, task: Task, org_id: str) -> str:
-    """WHICH SIDE OF THE TABLE this task sits on, derived from the assignee's
-    KIND and identity — never from their name.
+    """WHO is on this task, by name — or `UNASSIGNED_OWNER` when nobody is.
 
-    A contact at the account being exported is the client's own person, so
-    the row is theirs. Everyone else is ours: our team by definition, an
-    underwriter or wholesaler because chasing them is our job and not the
-    client's, and a freeform third party because a name we could not resolve
-    is a name we cannot make a claim about.
+    ONE RESOLVER, NOT A SECOND ONE. `repo.assignees.name_of` already answers
+    exactly this question for every surface that shows an assignee, reads the
+    name LIVE (a colleague renamed in the team screen is renamed on every task
+    they hold, with nothing left saying the old name) and returns "" for both
+    kinds of nobody — unassigned, and an id whose person has been removed.
+    Writing a second lookup here is how the client's workbook comes to disagree
+    with the book it was made from.
 
-    NO NAME IS COMPARED ANYWHERE IN HERE. Matching "Sam" against "Sam Garcia"
-    would flip a column a client reads, silently, in the one direction that
-    cannot be recovered — the failure models.is_internal_category spends
-    fourteen lines refusing on the neighbouring column. The comparison is
-    between two org ids.
+    `name_of`, not `label_of`: the label form appends a qualifier ("— our
+    team"), which Grant has separately asked to be rid of.
 
-    Unassigned is `Us`: unassigned work is ours until someone says otherwise
-    (Grant, 2026-08-18). So is an assignment whose contact row has since been
-    removed — `contacts.get` raises and the answer falls to the safe side
-    rather than to a stale claim."""
-    if task.assignee_kind is not AssigneeKind.CONTACT or not task.assignee_id:
-        return OUR_OWNER
+    ONE EXCEPTION, AND IT IS NOT THE ONE I ARGUED FOR. Grant's call was to name
+    everybody, underwriters and wholesalers included, and that is what this
+    does. But rewriting the tests surfaced a case neither of us had in view: a
+    contact at ANOTHER CLIENT can hold a task on this account, and naming them
+    puts one client's people on another client's deliverable. That is not a
+    disclosure decision he made — it was not in front of him — so those, and
+    only those, stay `UNASSIGNED_OWNER`. Everything he did decide is unchanged.
+    Reverse it by deleting this branch if he wants it gone.
+    """
+    if not task.assignee_id or task.assignee_kind is not AssigneeKind.CONTACT:
+        return assignees.name_of(conn, task) or UNASSIGNED_OWNER
     try:
         contact = contacts.get(conn, task.assignee_id)
+        foreign_client = (
+            contact.org_id != org_id
+            and orgs.get(conn, contact.org_id).kind == "client"
+        )
     except KeyError:
-        return OUR_OWNER
-    return CLIENT_OWNER if contact.org_id == org_id else OUR_OWNER
+        # The person or their org has gone. Falls to the safe side, the same
+        # way the C4 version did — a stale claim is the failure that cannot be
+        # recovered once the client has the file.
+        return UNASSIGNED_OWNER
+    if foreign_client:
+        return UNASSIGNED_OWNER
+    return assignees.name_of(conn, task) or UNASSIGNED_OWNER
 
 
 def _task_row(conn: sqlite3.Connection, task: Task, today: date, org_id: str) -> ExportRow:
@@ -968,13 +991,14 @@ def soi_note(conn: sqlite3.Connection, org_id: str, today: date) -> str:
 
 _COLUMNS: tuple[tuple[str, float], ...] = (
     ("Item", 30.0), ("Description", 50.0), ("Detail", 75.0), ("Type", 12.0),
-    ("Due / Needed by", 16.0), ("Status", 14.0), ("Owner", 10.0),
+    ("Due / Needed by", 16.0), ("Status", 14.0), ("Owner", 22.0),
 )
-# Owner is LAST and narrow on purpose: it is a two-letter answer, and putting
+# Owner is LAST on purpose: putting
 # it first would push the item it describes off the first screen of a sheet
 # whose whole job is the list. There is no viewport to overflow here — a
 # spreadsheet scrolls — so unlike the TUI panes nothing had to be dropped to
-# make room for it.
+# make room for it. It was 10.0 wide while it held "You" or "Us"; it holds a
+# person's name since 2026-08-21 and is sized for one.
 
 _PROJECT_COLUMNS: tuple[tuple[str, float], ...] = (
     ("Line", 28.0), ("Notes", 50.0), ("Needed by", 16.0),
@@ -982,8 +1006,13 @@ _PROJECT_COLUMNS: tuple[tuple[str, float], ...] = (
 )
 
 _RFI_COLUMNS: tuple[tuple[str, float], ...] = (
-    ("Item", 34.0), ("Detail", 75.0), ("Type", 12.0), ("Needed by", 16.0),
+    ("Item", 34.0), ("Detail", 75.0), ("Needed by", 16.0),
 )
+# NO `Type` COLUMN. It printed the ask's kind (document, figure, signature…),
+# which the client can see from the ask itself — "Return the signed TRIA form"
+# is visibly a signature — so the column spent 12 characters restating the
+# Item beside it (Grant, 2026-08-21). The kind is still stored and still shown
+# on our surfaces; it is the client's copy it has left.
 
 _RFI_RESPONSE_COLUMN: tuple[str, float] = ("Response", 60.0)
 """Printed only when something on the sheet has been answered.
@@ -993,57 +1022,6 @@ the client could read back. Always printing the column is the version to
 avoid: on the many accounts where nothing has been answered yet it is a blank
 band down a client deliverable, which reads as a form we forgot to fill in
 rather than a fact about the account."""
-
-_RFI_HEADER_LABEL = "Items we need from you, and what you have already sent"
-"""The sheet's own banner, and it has to be true of the WHOLE sheet.
-
-It read "Items we need from you" while the sheet was outstanding-only. Since
-2026-08-19 it also carries the asks the client has answered — Grant's call, so
-their copy keeps the record of what they sent rather than losing it the moment
-it stopped being outstanding — and a banner naming only half of that is a
-false statement about the other half. Same reasoning as SCOPE_NOTE below: the
-one sentence the client reads about this document has to describe the document
-they are holding."""
-
-SCOPE_NOTE = (
-    "This report lists items owned by you or by us on your account. "
-    "Internal administrative items are not included."
-)
-"""C8, Grant 2026-08-18 — the withholding rule, stated once, in the workbook.
-
-PER-EXPORT INVARIANT TEXT. It carries nothing about this account: no count,
-no names, no date, no branch on whether anything was actually withheld. A
-sentence that changed shape when something was held back would BE the count
-it replaces — the reviewer's objection to printing one was that it "converts
-a non-event into a standing question on every export". Same words every time
-means the omission is a known boundary rather than a discovery.
-
-It is NOT `withheld_note()`. That line is ours: it names a NEAR MISS — a task
-categorised e.g. "Internal Review" that WAS exported — to the operator on the
-CLI and the TUI toast at the moment the file is written. It never enters the
-workbook and the client never sees it.
-
-IT SPEAKS FOR THE WORKBOOK, NOT FOR SHEET 1. It says "this report" and
-"items", and it is the only statement of the rule the client ever sees, so
-every sheet it covers has to obey it. It did not: sheet 2 shipped an item
-categorised `Internal` under a heading naming it, which made this sentence a
-false statement about the document containing it — worse than either half
-alone, because a reader who checks is told the wrong thing by the document
-itself. Fixed by extending the rule (services/export_rfi._client_safe), not
-by narrowing these words: the alternative was "…on this sheet", which buys a
-true sentence at the price of the same category meaning two different things
-one tab apart, and leaves the leak it describes in place.
-
-It rides sheet 1 as a leading label-only section, the same mechanism
-_RFI_HEADER_LABEL uses. Sheet 1 is the ONLY unconditionally present sheet, so
-one line there is exactly once per export; repeating it on sheets 2-4 would
-make it conditional and redundant, and a rule stated twice invites the two
-statements to drift. It also survives C5 (towerkit's per-sheet header block) landing
-later: this is sheet BODY, not chrome, so a header block rendered above it
-pushes it down without duplicating it — a generic header block carries the
-account, the report name and the date, which is precisely what this sentence
-deliberately does not."""
-
 
 def _wrapped_line_count(text: str, width: float) -> int:
     """How many wrapped lines `text` needs at `width` characters — an
@@ -1068,12 +1046,157 @@ def _prose_row_height(*columns: tuple[str, float]) -> float:
     return 18.0 * max(lines, 2)
 
 
+def _towerkit_table() -> tuple[Any, Any, Any, Any]:
+    """towerkit's table writer, imported once for every sheet builder here.
+
+    Function-local because bookkit has no xlsx dependency of its own — the
+    rendering lives in towerkit and this module only composes.
+    """
+    from towerkit.render.table_xlsx import (
+        TableColumn,
+        TableSection,
+        render_table_sheet,
+        sanitize_sheet_title,
+    )
+
+    return TableColumn, TableSection, render_table_sheet, sanitize_sheet_title
+
+
+def _add_open_items_sheet(
+    wb: Any, conn: sqlite3.Connection, org: Org, org_id: str, today: date,
+    theme: Any,
+) -> None:
+    """The Open Items sheet, onto `wb`'s first worksheet.
+
+    EXTRACTED 2026-08-21 so the client deliverable and the Work-tab export are
+    the SAME sheet and cannot drift. Two writers each composing "open items"
+    would be the second copy the DRY rule is about — and an invisible one,
+    because each would look right read on its own.
+    """
+    TableColumn, TableSection, render_table_sheet, sanitize_sheet_title = (
+        _towerkit_table()
+    )
+    # Sheet 1 — Open Items. It opened on a standing SCOPE_NOTE ("This report
+    # lists items owned by you or by us…") until Grant removed it 2026-08-21:
+    # the sentence explained the document to a reader who had not asked, and he
+    # is the one sending it. The WITHHOLDING it described is unchanged — the
+    # Internal rule still runs, `withheld_note()` still tells the OPERATOR when
+    # something came close — so what went is the narration, not the rule.
+    columns = [TableColumn(h, w) for h, w in _COLUMNS]
+    body = [
+        TableSection(
+            s.label,
+            tuple((r.item, r.description, r.detail, r.kind, r.due, r.status, r.owner)
+                  for r in s.rows),
+        )
+        for s in compose(conn, org_id, today)
+    ] or [TableSection(None, ((f"No open items as of {today.isoformat()}",
+                               "", "", "", "", "", ""),))]
+    sections = body
+    ws = wb.active
+    assert ws is not None
+    ws.title = sanitize_sheet_title(f"Open Items — {org.name}"[:31])
+    render_table_sheet(
+        ws, columns, sections, theme=theme,
+        # Description and Detail both wrap; the taller of the two wins.
+        row_height=lambda values: _prose_row_height(
+            (str(values[1]), _COLUMNS[1][1]), (str(values[2]), _COLUMNS[2][1]),
+        ),
+    )
+
+
+def _add_rfi_sheet(
+    wb: Any, conn: sqlite3.Connection, org_id: str, today: date, theme: Any,
+) -> bool:
+    """The Information Requests sheet — or nothing at all when the client owes
+    us nothing. Returns whether a sheet was added, so a caller that must not
+    produce an empty workbook can tell.
+    """
+    from .export_rfi import compose_information_requests
+
+    TableColumn, TableSection, render_table_sheet, sanitize_sheet_title = (
+        _towerkit_table()
+    )
+    # Sheet 2 — Information Requests: omitted (not blank) when the client
+    # has nothing outstanding. It carried its own banner row ("Items we need
+    # from you, and what you have already sent") until 2026-08-21; the sheet is
+    # named Information Requests and the tab says so, which is the same fact
+    # without a sentence of it (Grant).
+    rfi_sections = compose_information_requests(conn, org_id, today)
+    if rfi_sections:
+        ws_rfi = wb.create_sheet(sanitize_sheet_title("Information Requests"))
+        # compose_information_requests always returns rows four wide; the
+        # fourth is printed only if it says something on THIS account.
+        answered = any(row[3] for section in rfi_sections for row in section.rows)
+        headers = _RFI_COLUMNS + (_RFI_RESPONSE_COLUMN,) if answered else _RFI_COLUMNS
+        rfi_columns = [TableColumn(h, w) for h, w in headers]
+        render_table_sheet(
+            ws_rfi, rfi_columns,
+            [
+                TableSection(
+                    s.label,
+                    tuple(row if answered else row[:3] for row in s.rows),
+                )
+                for s in rfi_sections
+            ],
+            theme=theme,
+            # Detail and Response are the multi-line columns here; same
+            # estimate, same family as sheet 1's row-height rule. A tall answer
+            # in a row sized for its question is clipped, which on this sheet
+            # loses the half the client wrote.
+            row_height=lambda values: _prose_row_height(
+                (str(values[1]), _RFI_COLUMNS[1][1]),
+                *(((str(values[3]), _RFI_RESPONSE_COLUMN[1]),) if answered else ()),
+            ),
+        )
+    return bool(rfi_sections)
+
+
+def write_work(
+    conn: sqlite3.Connection, org_id: str, out_path: Path, today: date
+) -> Path:
+    """The WORK TAB's two tables, and nothing else — Grant, 2026-08-21: "an
+    export to .xlsx on the Work page for open tasks and information requests to
+    export just these tables into a tab".
+
+    Same sheets as the client deliverable's first two, through the SAME
+    builders: `write()` and this share `_add_open_items_sheet` and
+    `_add_rfi_sheet` rather than composing their own, so the Work export can
+    never quietly disagree with the workbook the client is sent.
+
+    TWO SHEETS, NOT ONE. He wrote "into a tab", singular, and I have not
+    followed that literally: open tasks and information requests have different
+    columns (an ask has no Owner; a task has no Needed-by-them), so one sheet
+    means one of the two wears a shape that is not its own and half its cells
+    are blank by construction. Flagging rather than assuming — if he wants them
+    genuinely stacked on one tab, that is a different composition and it should
+    be built deliberately.
+
+    WHAT IT WITHHOLDS is inherited and deliberate: `_add_open_items_sheet`
+    composes through `compose()`, whose Internal-category rule keeps our own
+    file notes out, and neither sheet's column tuple includes `ref` or
+    `internal`. This is a client-shareable file by construction, the same as
+    the deliverable — it is narrower, not looser.
+
+    The Information Requests sheet is OMITTED when the client owes us nothing,
+    exactly as it is in the deliverable, so this workbook can be a single sheet.
+    """
+    from towerkit.render.table_xlsx import finalize_workbook, new_workbook
+    from towerkit.theme import load_theme
+
+    org = orgs.get(conn, org_id)
+    theme = load_theme(None)
+    wb = new_workbook()
+    _add_open_items_sheet(wb, conn, org, org_id, today, theme)
+    _add_rfi_sheet(wb, conn, org_id, today, theme)
+    return finalize_workbook(wb, out_path)
+
+
 def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) -> Path:
     """The client deliverable — Open Items · Information Requests · Projects
     · Schedule of Insurance — rendered via towerkit so every sheet carries
     SOI formatting exactly (the money.parse_share pattern: formatting
-    authority in one place). Sheet 1 opens on SCOPE_NOTE, the same words on
-    every export. Information Requests appears only when the
+    authority in one place). Information Requests appears only when the
     client has outstanding items; Projects only when live projects exist;
     the SOI sheet only when some placement is still in force; finalize runs
     ONCE."""
@@ -1088,70 +1211,14 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
     )
     from towerkit.theme import load_theme
 
-    from .export_rfi import compose_information_requests
 
     org = orgs.get(conn, org_id)
     theme = load_theme(None)
     wb = new_workbook()
 
-    # Sheet 1 — Open Items, under the standing scope line (SCOPE_NOTE): the
-    # rule is stated whether or not this account had anything withheld, and
-    # ahead of the body, so it is read before the contents it describes.
-    columns = [TableColumn(h, w) for h, w in _COLUMNS]
-    body = [
-        TableSection(
-            s.label,
-            tuple((r.item, r.description, r.detail, r.kind, r.due, r.status, r.owner)
-                  for r in s.rows),
-        )
-        for s in compose(conn, org_id, today)
-    ] or [TableSection(None, ((f"No open items as of {today.isoformat()}",
-                               "", "", "", "", "", ""),))]
-    sections = [TableSection(SCOPE_NOTE, ())] + body
-    ws = wb.active
-    assert ws is not None
-    ws.title = sanitize_sheet_title(f"Open Items — {org.name}"[:31])
-    render_table_sheet(
-        ws, columns, sections, theme=theme,
-        # Description and Detail both wrap; the taller of the two wins.
-        row_height=lambda values: _prose_row_height(
-            (str(values[1]), _COLUMNS[1][1]), (str(values[2]), _COLUMNS[2][1]),
-        ),
-    )
+    _add_open_items_sheet(wb, conn, org, org_id, today, theme)
 
-    # Sheet 2 — Information Requests: omitted (not blank) when the client
-    # has nothing outstanding. The leading merged row is a label-only
-    # section — the same mechanism every other section header uses, just
-    # with no rows under it.
-    rfi_sections = compose_information_requests(conn, org_id, today)
-    if rfi_sections:
-        ws_rfi = wb.create_sheet(sanitize_sheet_title("Information Requests"))
-        # compose_information_requests always returns rows five wide; the fifth
-        # is printed only if it says something on THIS account.
-        answered = any(row[4] for section in rfi_sections for row in section.rows)
-        headers = _RFI_COLUMNS + (_RFI_RESPONSE_COLUMN,) if answered else _RFI_COLUMNS
-        rfi_columns = [TableColumn(h, w) for h, w in headers]
-        render_table_sheet(
-            ws_rfi, rfi_columns,
-            [TableSection(_RFI_HEADER_LABEL, ())] +
-            [
-                TableSection(
-                    s.label,
-                    tuple(row if answered else row[:4] for row in s.rows),
-                )
-                for s in rfi_sections
-            ],
-            theme=theme,
-            # Detail and Response are the multi-line columns here; same
-            # estimate, same family as sheet 1's row-height rule. A tall answer
-            # in a row sized for its question is clipped, which on this sheet
-            # loses the half the client wrote.
-            row_height=lambda values: _prose_row_height(
-                (str(values[1]), _RFI_COLUMNS[1][1]),
-                *(((str(values[4]), _RFI_RESPONSE_COLUMN[1]),) if answered else ()),
-            ),
-        )
-
+    _add_rfi_sheet(wb, conn, org_id, today, theme)
     # Sheet 3 — Projects: omitted (not blank) when no live projects.
     project_sections = compose_projects(conn, org_id)
     if project_sections:

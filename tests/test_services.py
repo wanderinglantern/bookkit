@@ -20,7 +20,17 @@ from bookkit.repo import (
 )
 from bookkit.repo import projects as projects_repo
 from bookkit.services import book, capture, hit_rate, pipeline, renewals, sla, staleness, undo
-from bookkit.services.export_open_items import SCOPE_NOTE, compose
+from bookkit.services.export_open_items import compose
+
+_WITHDRAWN_SCOPE_NOTE = (
+    "This report lists items owned by you or by us on your account. "
+    "Internal administrative items are not included."
+)
+"""The standing scope line, REMOVED from the workbook 2026-08-21 (Grant).
+
+Kept here as a literal so the tests below can assert it never returns. The
+WITHHOLDING it described is unchanged and still asserted — what went is the
+sentence explaining the document to a reader who had not asked."""
 
 TODAY = date(2026, 8, 11)
 
@@ -736,8 +746,8 @@ def test_all_internal_account_exports_the_no_open_items_sheet(conn, tmp_path):
     path = write(conn, org.id, tmp_path / "q.xlsx", date(2026, 8, 12))
     from openpyxl import load_workbook
     ws = load_workbook(path).active
-    assert ws["A2"].value == SCOPE_NOTE  # the standing line, then the body
-    assert ws["A3"].value == "No open items as of 2026-08-12"
+    # The body starts at A2 now that no scope line precedes it.
+    assert ws["A2"].value == "No open items as of 2026-08-12"
 
 
 def test_compose_can_be_asked_for_the_internal_rows(conn):
@@ -785,7 +795,7 @@ def test_export_rows_flag_internal_but_the_workbook_cannot_print_it(conn, tmp_pa
     # label (column A only), the one surviving row. A wrong column tuple puts
     # a False here.
     status_column = [row[5].value for row in sheet.iter_rows()]
-    assert status_column == ["Status", None, None, "Open"], status_column
+    assert status_column == ["Status", None, "Open"], status_column
 
 
 def test_withheld_internal_lists_what_the_client_did_not_get(conn):
@@ -1038,7 +1048,7 @@ def test_suppressing_the_heading_does_not_swallow_the_operators_line(conn, tmp_p
 # --- C8: the withholding rule, stated once, in fixed wording ----------------
 
 
-def test_the_scope_line_opens_sheet_one(conn, tmp_path):
+def test_sheet_one_opens_straight_on_the_body(conn, tmp_path):
     from openpyxl import load_workbook
 
     from bookkit.services.export_open_items import write
@@ -1047,11 +1057,10 @@ def test_the_scope_line_opens_sheet_one(conn, tmp_path):
     tasks.create(conn, "renew GL", org_id=org.id, category="Renewal")
     path = write(conn, org.id, tmp_path / "s.xlsx", date(2026, 8, 18))
     ws = load_workbook(path).active
-    assert ws["A2"].value == (
-        "This report lists items owned by you or by us on your account. "
-        "Internal administrative items are not included."
-    )
-    assert ws["A3"].value == "Renewal — Scope Co"  # then the body, unchanged
+    # Row 1 is the header; the FIRST section label follows it directly. The
+    # scope line that used to sit between them was removed 2026-08-21 (Grant).
+    assert ws["A2"].value == "Renewal — Scope Co"
+    assert ws["A3"].value != _WITHDRAWN_SCOPE_NOTE
 
 
 def test_the_scope_line_is_the_same_words_whether_or_not_anything_was_withheld(
@@ -1077,7 +1086,14 @@ def test_the_scope_line_is_the_same_words_whether_or_not_anything_was_withheld(
 
     a = load_workbook(write(conn, clean.id, tmp_path / "a.xlsx", date(2026, 8, 18)))
     b = load_workbook(write(conn, held.id, tmp_path / "b.xlsx", date(2026, 8, 18)))
-    assert a.active["A2"].value == b.active["A2"].value == SCOPE_NOTE
+    # A2 is each account's own first section label now, so the two workbooks
+    # legitimately differ there. The invariant that MATTERED is below and is
+    # unchanged: the account that had something held back must not announce it,
+    # by the scope line or by any other route.
+    assert not any(
+        _WITHDRAWN_SCOPE_NOTE == str(c.value)
+        for wb in (a, b) for row in wb.active.iter_rows() for c in row
+    )
 
     # and no count of what was withheld reaches the file by any other route
     held_values = [str(c.value) for row in b.active.iter_rows() for c in row]
@@ -1085,9 +1101,7 @@ def test_the_scope_line_is_the_same_words_whether_or_not_anything_was_withheld(
     assert not any("our own file note" in v for v in held_values)
 
 
-def test_the_scope_line_appears_exactly_once_across_the_whole_workbook(
-    conn, tmp_path
-):
+def test_the_scope_line_appears_nowhere_in_the_workbook(conn, tmp_path):
     """Once per export, not once per sheet. Sheet 1 is the only sheet always
     present, so a line there is a line on every export. The sentence covers
     the whole workbook (it says "this report", and every sheet it covers obeys
@@ -1114,9 +1128,9 @@ def test_the_scope_line_appears_exactly_once_across_the_whole_workbook(
         for name in wb.sheetnames
         for row in wb[name].iter_rows()
         for c in row
-        if c.value == SCOPE_NOTE
+        if c.value == _WITHDRAWN_SCOPE_NOTE
     ]
-    assert hits == [("Open Items — Four Co", "A2")], hits
+    assert hits == [], hits
 
 
 def test_no_sheet_contradicts_the_scope_note(conn, tmp_path):
@@ -1148,10 +1162,11 @@ def test_no_sheet_contradicts_the_scope_note(conn, tmp_path):
         if c.value is not None
     ]
 
-    assert SCOPE_NOTE in values  # the claim is made
+    assert _WITHDRAWN_SCOPE_NOTE not in values  # the claim is no longer MADE
     assert "audited financials" in values  # the sheet is really there
-    # …and nothing anywhere in the workbook contradicts it
-    assert not any("nternal" in v for v in values if v != SCOPE_NOTE)
+    # …and the rule it used to state is still OBEYED, which is the half that
+    # mattered: no sheet ships anything internal, stated or not.
+    assert not any("nternal" in v for v in values)
     assert "pull prior loss runs from our file" not in values
     assert "our own file note" not in values
 
@@ -1198,9 +1213,9 @@ def test_the_scope_line_does_not_replace_the_operators_near_miss_line(
 
     wb = load_workbook(write(conn, org.id, tmp_path / "n.xlsx", date(2026, 8, 18)))
     values = [str(c.value) for row in wb.active.iter_rows() for c in row]
-    assert SCOPE_NOTE in values
+    assert _WITHDRAWN_SCOPE_NOTE not in values
     assert not any("only the exact category" in v for v in values)
-    assert SCOPE_NOTE not in note
+    assert _WITHDRAWN_SCOPE_NOTE not in note
 
 
 def test_write_open_items_deterministic_and_styled(conn, tmp_path):
@@ -1245,7 +1260,7 @@ def test_write_empty_book_says_so(conn, tmp_path):
     org = orgs.create(conn, name="Empty Co", kind="client")
     path = write(conn, org.id, tmp_path / "e.xlsx", date(2026, 8, 12))
     from openpyxl import load_workbook
-    assert load_workbook(path).active["A3"].value == "No open items as of 2026-08-12"
+    assert load_workbook(path).active["A2"].value == "No open items as of 2026-08-12"
 
 
 def test_write_three_tab_order_and_headers(conn, tmp_path):
@@ -1798,8 +1813,9 @@ def test_compose_soi_linked_unbound_placement_overrides_every_row(conn, tmp_path
 
 def test_soi_sheet_prints_the_status_column_and_both_subtotals(conn, tmp_path):
     """End to end, in the file a client opens: the Status column carries the
-    word, and the two subtotal lines separate cover in force from cover that
-    is not."""
+    word, and cover in force is in a different BLOCK from cover that is not —
+    each with its own subtotal, never one mingled list with two lines under
+    it (Grant, 2026-08-21)."""
     from openpyxl import load_workbook
 
     from bookkit.services.export_open_items import write
@@ -1826,28 +1842,29 @@ def test_soi_sheet_prints_the_status_column_and_both_subtotals(conn, tmp_path):
         isinstance(c, str) and c.endswith("(Bound)") for c in flat
     ), "the label suffix survived the move to a Status column"
     assert "Bound" in flat and "Quoted" in flat
-    # two sections, each with its own pair of subtotal lines: walk the sheet
-    # and file every subtotal under the section label above it
-    subtotals: dict[str, dict[str, object]] = {}
+    # ONE BLOCK PER SECTION PER BOUND-NESS since 2026-08-21 (Grant): the
+    # primary schedule is bound cover, and anything not bound is lifted into
+    # its own block below with its own single subtotal. So a wholly-bound
+    # placement grows no unbound line at all, and a wholly-unbound one appears
+    # ONLY under a "— not bound" heading. Walk the sheet and file every
+    # subtotal under whichever block heading was above it.
+    subtotals: dict[str, object] = {}
     current = ""
     for row in cells:
         head = row[0]
         if not isinstance(head, str):
             continue
-        if head in ("Bound Property", "Quoted Casualty"):
+        if head.startswith(("Bound Property", "Quoted Casualty")):
             current = head
         elif "premium subtotal" in head:
-            subtotals.setdefault(current, {})[head] = row[-1]
+            subtotals[f"{current} / {head}"] = row[-1]
     assert subtotals == {
-        "Bound Property": {
-            "Bound cover — premium subtotal": 100_000,
-            "Unbound cover — premium subtotal": "\u2014",
-        },
-        "Quoted Casualty": {
-            "Bound cover — premium subtotal": "\u2014",
-            "Unbound cover — premium subtotal": 40_000,
-        },
-    }
+        "Bound Property / Bound cover — premium subtotal": 100_000,
+        "Quoted Casualty — not bound / Unbound cover — premium subtotal": 40_000,
+    }, subtotals
+    # And the claim that matters to a reader: nothing anywhere on the sheet
+    # adds the two together.
+    assert 140_000 not in flat
 
 
 # --- client safety on the Schedule of Insurance ----------------------------
@@ -2259,16 +2276,15 @@ def test_write_four_sheet_order_when_rfi_outstanding(conn, tmp_path):
         "Schedule of Insurance",
     ]
     ws = wb["Information Requests"]
-    assert [c.value for c in ws[1]] == ["Item", "Detail", "Type", "Needed by"]
-    # row 2 is the leading merged header line
-    # The banner names BOTH halves as of 2026-08-19: the sheet carries answered
-    # asks too, and a banner naming only the outstanding ones is a false
-    # statement about the rest of the sheet.
-    assert ws["A2"].value == "Items we need from you, and what you have already sent"
+    # No `Type` column since 2026-08-21: it restated the ask beside it.
+    assert [c.value for c in ws[1]] == ["Item", "Detail", "Needed by"]
+    # No banner row either — the sheet is named Information Requests and the
+    # tab says so. Row 2 is the first request's own section label.
+    assert ws["A2"].value != "Items we need from you, and what you have already sent"
     values = [cell.value for row in ws.iter_rows() for cell in row]
     assert "how many locations?" in values
     assert "Please list them all." in values
-    assert "Sompo — property questions · asked 5 Aug · due 19 Aug" in values
+    assert "Sompo — property questions · due 19 Aug" in values
 
 
 def test_the_response_column_appears_only_once_something_is_answered(conn, tmp_path):
@@ -2285,14 +2301,14 @@ def test_the_response_column_appears_only_once_something_is_answered(conn, tmp_p
 
     unanswered = load_workbook(write(conn, client.id, tmp_path / "before.xlsx", date(2026, 8, 13)))
     assert [c.value for c in unanswered["Information Requests"][1]] == [
-        "Item", "Detail", "Type", "Needed by",
+        "Item", "Detail", "Needed by",
     ]
 
     rfi.update_item(conn, item.id, response="Fourteen, list attached.")
 
     answered = load_workbook(write(conn, client.id, tmp_path / "after.xlsx", date(2026, 8, 13)))
     ws = answered["Information Requests"]
-    assert [c.value for c in ws[1]] == ["Item", "Detail", "Type", "Needed by", "Response"]
+    assert [c.value for c in ws[1]] == ["Item", "Detail", "Needed by", "Response"]
     assert "Fourteen, list attached." in [c.value for row in ws.iter_rows() for c in row]
 
 
@@ -2355,9 +2371,9 @@ def test_open_items_long_unbroken_description_gets_three_line_height(conn, tmp_p
     path = write(conn, org.id, tmp_path / "w.xlsx", date(2026, 8, 13))
     from openpyxl import load_workbook
     ws = load_workbook(path).active
-    # row 1 header, row 2 the scope line, row 3 the "General — Long Co"
-    # section label, row 4 the task
-    assert ws.row_dimensions[4].height >= 54.0
+    # row 1 header, row 2 the "General — Long Co" section label, row 3 the
+    # task. The scope line that used to occupy row 2 is gone.
+    assert ws.row_dimensions[3].height >= 54.0
 
 
 def test_open_items_short_row_keeps_two_line_floor(conn, tmp_path):
@@ -2368,9 +2384,9 @@ def test_open_items_short_row_keeps_two_line_floor(conn, tmp_path):
     path = write(conn, org.id, tmp_path / "w.xlsx", date(2026, 8, 13))
     from openpyxl import load_workbook
     ws = load_workbook(path).active
-    # row 1 header, row 2 the scope line, row 3 the "General — Short Co"
-    # section label, row 4 the task
-    assert ws.row_dimensions[4].height == 36.0
+    # row 1 header, row 2 the "General — Short Co" section label, row 3 the
+    # task. The scope line that used to occupy row 2 is gone.
+    assert ws.row_dimensions[3].height == 36.0
 
 
 def test_information_requests_detail_column_matches_open_items_width(conn, tmp_path):
@@ -2384,9 +2400,9 @@ def test_information_requests_detail_column_matches_open_items_width(conn, tmp_p
     wb = load_workbook(path)
     ws = wb["Information Requests"]
     assert ws.column_dimensions["B"].width == 75.0  # Detail
-    # row 1 header, row 2 the leading "Items we need from you" label,
-    # row 3 the request's own section label, row 4 the item row
-    assert ws.row_dimensions[4].height >= 54.0
+    # row 1 header, row 2 the request's own section label, row 3 the item row.
+    # The "Items we need from you" banner that used to occupy row 2 is gone.
+    assert ws.row_dimensions[3].height >= 54.0
 
 
 def test_a_nested_open_batch_joins_and_leaves_no_orphan_row(seeded) -> None:

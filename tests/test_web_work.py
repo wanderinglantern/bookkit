@@ -924,3 +924,98 @@ def test_the_page_offers_both_removals(app_and_org):
 
     assert f"/requests/{request.id}/remove" in work
     assert "/remove" in items and "items/" in items
+
+
+# --- the Work tab's own export ----------------------------------------------
+
+
+def test_the_work_tab_offers_an_export(app_and_org):
+    """Grant, 2026-08-21: "an export to .xlsx on the Work page for open tasks
+    and information requests"."""
+    client, org, _ = app_and_org
+    page = client.get(f"/accounts/{org.ref}/work").text
+    assert f"/accounts/{org.ref}/export/work.xlsx" in page
+
+
+def test_the_work_export_carries_the_two_tables_and_nothing_else(app_and_org):
+    """"just these tables" — no Schedule of Insurance, no Projects. Those are
+    the client deliverable's business and this file is the working one."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    client, org, request = app_and_org
+    body = client.get(f"/accounts/{org.ref}/export/work.xlsx")
+
+    assert body.status_code == 200
+    assert "attachment" in body.headers["content-disposition"]
+    wb = load_workbook(BytesIO(body.content))
+    assert any(name.startswith("Open Items") for name in wb.sheetnames), wb.sheetnames
+    assert "Information Requests" in wb.sheetnames
+    assert "Schedule of Insurance" not in wb.sheetnames
+    assert "Projects" not in wb.sheetnames
+
+
+def test_the_work_export_and_the_deliverable_cannot_disagree(app_and_org, tmp_path):
+    """THE REASON THE SHEET BUILDERS WERE EXTRACTED. Two writers each composing
+    "open items" would each look right read on its own and drift apart on the
+    day one of them learned a rule the other did not.
+
+    Compared cell by cell rather than by sheet name: a shared name proves the
+    tabs match, not the rows.
+    """
+    from datetime import date as _date
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from bookkit.services.export_open_items import write
+
+    client, org, _ = app_and_org
+    conn = client.app.state.conn
+    today = _date.today()
+
+    work = load_workbook(
+        BytesIO(client.get(f"/accounts/{org.ref}/export/work.xlsx").content)
+    )
+    full = load_workbook(write(conn, org.id, tmp_path / "full.xlsx", today))
+
+    for name in ("Information Requests",):
+        assert name in work.sheetnames and name in full.sheetnames
+        assert [[c.value for c in row] for row in work[name].iter_rows()] == [
+            [c.value for c in row] for row in full[name].iter_rows()
+        ], f"{name} differs between the two workbooks"
+
+    open_items_work = next(n for n in work.sheetnames if n.startswith("Open Items"))
+    open_items_full = next(n for n in full.sheetnames if n.startswith("Open Items"))
+    assert [[c.value for c in row] for row in work[open_items_work].iter_rows()] == [
+        [c.value for c in row] for row in full[open_items_full].iter_rows()
+    ], "the Open Items sheets differ between the two workbooks"
+
+
+def test_the_work_export_withholds_internal_items(app_and_org):
+    """It is narrower than the client deliverable, not looser: it inherits
+    `compose()`'s Internal rule, so our own file notes stay ours."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from bookkit.repo import tasks as tasks_repo
+
+    client, org, _ = app_and_org
+    conn = client.app.state.conn
+    tasks_repo.create(
+        conn, "our own file note", org_id=org.id, category="Internal"
+    )
+
+    wb = load_workbook(
+        BytesIO(client.get(f"/accounts/{org.ref}/export/work.xlsx").content)
+    )
+    values = [
+        str(c.value)
+        for name in wb.sheetnames
+        for row in wb[name].iter_rows()
+        for c in row
+        if c.value is not None
+    ]
+    assert not any("our own file note" in v for v in values)

@@ -830,3 +830,37 @@ def work_tab(request: Request, ref: str, add: str | None = None) -> HTMLResponse
             request, spec, f"/accounts/{ref}/tasks/new"
         )
     return TEMPLATES.TemplateResponse(request, "account/work.html", context)
+
+
+@router.get("/accounts/{ref}/export/work.xlsx", response_class=HTMLResponse)
+def export_work_workbook(request: Request, ref: str) -> Any:
+    """The Work tab's two tables as a workbook — Grant, 2026-08-21.
+
+    NOT a second composition path. `services.export_open_items.write_work`
+    shares the sheet builders with the client deliverable, so this file and the
+    one a client is sent can never disagree about what an open item is.
+
+    Registered in routes/work.py rather than beside the deliverable's own
+    download in routes/program.py, because the button is on THIS tab and the
+    rows are this module's. The path stays under the same `/export/` prefix so
+    both downloads read as one family.
+    """
+    import tempfile
+    from datetime import date as _date
+    from pathlib import Path as _Path
+
+    from ...services import export_open_items as export_svc
+    from .program import _attachment
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = export_svc.write_work(
+            conn, org.id, _Path(tmp) / f"{org.ref}-work.xlsx", _date.today()
+        )
+        content = out.read_bytes()
+    return _attachment(
+        content,
+        f"{org.ref}-work.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )

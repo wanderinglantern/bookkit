@@ -3430,3 +3430,12 @@ tr:hover .market .chip-remove {
 .program-facts .fact-wide {
   flex-basis: 100%;
 }
+
+/* The Work tab's export sits above both panels, right-aligned, because it
+   covers BOTH of them — putting it in either panel's head would claim it
+   exported only that one. */
+.work-export {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 0.5rem;
+}

@@ -60,7 +60,7 @@ def test_compose_excludes_waived_items_but_keeps_the_request_alive(conn) -> None
     assert prompts == ["safety manual"]
 
 
-def test_compose_flat_request_one_section_with_asked_and_due(conn) -> None:
+def test_compose_flat_request_one_section_names_the_market_and_the_due(conn) -> None:
     org = _client(conn)
     market = orgs.create(conn, name="Sompo", kind="market")
     req = rfi.create_request(
@@ -70,7 +70,10 @@ def test_compose_flat_request_one_section_with_asked_and_due(conn) -> None:
     rfi.add_item(conn, req.id, "how many locations?")
     sections = compose_information_requests(conn, org.id, TODAY)
     assert len(sections) == 1
-    assert sections[0].label == "Sompo — property questions · asked 5 Aug · due 19 Aug"
+    # NO "asked 5 Aug". The date we asked on left the client's copy 2026-08-21
+    # (Grant): it measures how long we have been waiting, which is our fact and
+    # not a thing they act on. The DUE date is theirs and stays.
+    assert sections[0].label == "Sompo — property questions · due 19 Aug"
 
 
 def test_compose_flat_request_no_due_omits_due_suffix(conn) -> None:
@@ -78,7 +81,7 @@ def test_compose_flat_request_no_due_omits_due_suffix(conn) -> None:
     req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05")
     rfi.add_item(conn, req.id, "audited financials")
     sections = compose_information_requests(conn, org.id, TODAY)
-    assert sections[0].label == "— — onboarding docs · asked 5 Aug"
+    assert sections[0].label == "— — onboarding docs"
 
 
 def test_compose_item_row_shape(conn) -> None:
@@ -90,13 +93,16 @@ def test_compose_item_row_shape(conn) -> None:
         kind="document",
     )
     row = compose_information_requests(conn, org.id, TODAY)[0].rows[0]
-    # Five wide since 2026-08-19 — the last cell is the client's answer, blank
-    # here. The row shape does not depend on the account; whether the fifth
-    # column is PRINTED does (export_open_items._RFI_RESPONSE_COLUMN).
+    # FOUR wide since 2026-08-21 — the `Type` cell ("Document") came out: it
+    # restated the ask beside it for a reader who can see the ask (Grant). The
+    # last cell is the client's answer, blank here. The row shape does not
+    # depend on the account; whether the fourth column is PRINTED does
+    # (export_open_items._RFI_RESPONSE_COLUMN).
     assert row == (
         "audited financials", "Please send audited financials for the last 3 years.",
-        "Document", "2026-09-01", "",
+        "2026-09-01", "",
     )
+    assert "Document" not in row, "the ask's kind is ours, not the client's"
 
 
 def test_compose_item_due_falls_back_to_request_due(conn) -> None:
@@ -104,7 +110,7 @@ def test_compose_item_due_falls_back_to_request_due(conn) -> None:
     req = rfi.create_request(conn, org.id, "onboarding docs", "2026-08-05", due_on="2026-09-01")
     rfi.add_item(conn, req.id, "no own due date")
     row = compose_information_requests(conn, org.id, TODAY)[0].rows[0]
-    assert row[3] == "2026-09-01"
+    assert row[2] == "2026-09-01"
 
 
 def test_compose_subgroups_by_category_with_uncategorised_trailing(conn) -> None:
@@ -268,7 +274,7 @@ def test_a_request_whose_only_outstanding_item_is_internal_is_omitted(conn) -> N
 
     sections = compose_information_requests(conn, org.id, TODAY)
     assert [s.label for s in sections] == [
-        "— — Sompo questions · asked 1 Aug · due 1 Sep"
+        "— — Sompo questions · due 1 Sep"
     ]
 
 
@@ -316,7 +322,7 @@ def test_a_request_of_only_suppressed_headings_keeps_its_full_context(conn) -> N
     rfi.add_item(conn, req.id, "sign the audit letter", category="Internal Review")
 
     sections = compose_information_requests(conn, org.id, TODAY)
-    assert [s.label for s in sections] == ["— — onboarding docs · asked 5 Aug"]
+    assert [s.label for s in sections] == ["— — onboarding docs"]
 
 
 def test_the_operator_is_told_what_this_sheet_withheld(conn) -> None:
@@ -357,7 +363,7 @@ def test_an_answer_rides_along_with_the_item(conn) -> None:
 
     row = compose_information_requests(conn, org.id, TODAY)[0].rows[0]
 
-    assert row[4] == "Confirmed $4.2M, split 63/37.", "markdown is flattened, as elsewhere"
+    assert row[3] == "Confirmed $4.2M, split 63/37.", "markdown is flattened, as elsewhere"
 
 
 def test_a_received_item_keeps_its_answer_on_the_sheet(conn) -> None:
@@ -376,7 +382,7 @@ def test_a_received_item_keeps_its_answer_on_the_sheet(conn) -> None:
 
     rows = [row for section in sections for row in section.rows]
     assert [row[0] for row in rows] == ["payroll by class code"]
-    assert rows[0][4] == "Confirmed."
+    assert rows[0][3] == "Confirmed."
 
 
 # --- what the client has already told us (Grant, 2026-08-19) ------------------
@@ -399,7 +405,7 @@ def test_an_answered_item_stays_on_the_sheet_after_it_is_received(conn) -> None:
 
     rows = [row for section in sections for row in section.rows]
     assert any("payroll by class code" in row[0] for row in rows)
-    assert any("Confirmed $4.2M." == row[4] for row in rows)
+    assert any("Confirmed $4.2M." == row[3] for row in rows)
 
 
 def test_answered_items_sit_under_their_own_heading(conn) -> None:
@@ -466,7 +472,7 @@ def test_an_internal_item_stays_withheld_even_once_it_is_answered(conn) -> None:
 
     rows = [row for section in sections for row in section.rows]
     assert not any("our own file note" in row[0] for row in rows)
-    assert not any("done internally" in row[4] for row in rows)
+    assert not any("done internally" in row[3] for row in rows)
 
 
 def test_an_answered_internal_item_is_counted_as_withheld(conn) -> None:

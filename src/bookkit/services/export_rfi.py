@@ -10,12 +10,14 @@ Determinism: `today` is a parameter, never the wall clock, matching every
 other composer in this package.
 
 THE INTERNAL RULE APPLIES HERE TOO, both halves of it — see
-`_client_safe`. It did not until 2026-08-19: sheet 1's SCOPE_NOTE says
-"Internal administrative items are not included" and speaks for the whole
-workbook, while this sheet shipped an item categorised `Internal` under a
-heading naming it. A scope note that is false about the document it appears
-in is worse than either half alone: a reader who checks is told the wrong
-thing by the document itself."""
+`_client_safe`. It did not until 2026-08-19: the workbook then opened on a
+scope line promising "Internal administrative items are not included", while
+this sheet shipped an item categorised `Internal` under a heading naming it —
+a document whose own words were false about it. Grant removed the scope line
+on 2026-08-21 (the narration, not the rule), which changes NOTHING here: the
+withholding was never enforced by the sentence, and a client-facing sheet
+that leaks internal items is wrong whether or not any sentence claims
+otherwise."""
 
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ from babel.dates import format_date
 from ..models import RfiItem, RfiRequest, is_internal_category, reads_as_internal
 from ..repo import rfi as rfi_repo
 from . import rfi as rfi_svc
-from .export_open_items import SheetSection, _status_label, flatten_markdown
+from .export_open_items import SheetSection, flatten_markdown
 
 
 def _fmt_date(iso: str) -> str:
@@ -48,8 +50,8 @@ def _earliest_due(items: list[RfiItem], request: RfiRequest) -> str | None:
     return min(dues) if dues else None
 
 
-def _item_row(item: RfiItem, request: RfiRequest) -> tuple[str, str, str, str, str]:
-    """Five wide, always. Whether the fifth column is PRINTED is the
+def _item_row(item: RfiItem, request: RfiRequest) -> tuple[str, str, str, str]:
+    """Four wide, always. Whether the fourth column is PRINTED is the
     assembler's call (export_open_items: it appears only when something on the
     sheet has actually been answered), but composing it conditionally here
     would make the row shape depend on the account, and every downstream index
@@ -63,7 +65,6 @@ def _item_row(item: RfiItem, request: RfiRequest) -> tuple[str, str, str, str, s
     return (
         item.prompt,
         flatten_markdown(item.detail or ""),
-        _status_label(item.kind),
         _due_cell(item, request),
         flatten_markdown(item.response or ""),
     )
@@ -115,7 +116,11 @@ def _request_sections(
     prefix = f"{rfi_svc.asker_name(conn, request)} — {request.title}"
     if not any(item.category for item in items):
         # No sub-grouping: one section carries the full request context.
-        label = f"{prefix} · asked {_fmt_date(request.requested_on)}"
+        # NO "asked <date>". It dated the ASKING, which tells the client how
+        # long we have been waiting rather than anything they need to act on —
+        # and on an ask that has been chased twice it reads as a reproach
+        # (Grant, 2026-08-21). The DUE date stays: that one is theirs to act on.
+        label = prefix
         if request.due_on:
             label += f" · due {_fmt_date(request.due_on)}"
         return [SheetSection(label, tuple(_item_row(i, request) for i in items))]
@@ -160,7 +165,7 @@ def compose_information_requests(
     conn: sqlite3.Connection, org_id: str, today: date
 ) -> list[SheetSection]:
     """Sections per outstanding (request, category) pair, ready for
-    render_table_sheet's Item | Detail | Type | Needed by columns. Empty
+    render_table_sheet's Item | Detail | Needed by columns. Empty
     list means the sheet is omitted entirely (the assembler's job).
 
     `today` takes no part in the filter — this sheet has no date window,

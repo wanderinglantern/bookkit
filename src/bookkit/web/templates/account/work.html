@@ -1,5 +1,14 @@
 {% extends "account/page.html" %}
 {% block panel %}
+  {# The Work tab's own export (Grant, 2026-08-21): these two tables and
+     nothing else, distinct from the four-sheet client deliverable that
+     downloads from the Programs panel. A plain anchor GET with
+     Content-Disposition: attachment — the file-response decision recorded in
+     DECISIONS.md — never htmx, which cannot swap a binary body. #}
+  <div class="work-export">
+    <a class="people-add" href="/accounts/{{ header.org.ref }}/export/work.xlsx"
+       title="open tasks and information requests, as a workbook">Export .xlsx</a>
+  </div>
   {# Tasks 11-13: open tasks, information requests, and (per request) their
      items — the last reached via each request's "Items" link, a separate
      page under this same tab (request_detail.html). Project needs are a
