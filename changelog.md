@@ -30,6 +30,15 @@ All notable changes to bookkit, newest date first.
   each says what expires on it. Cover and Program are separate columns, and
   a placement with no program file linked prints an em dash under Cover
   instead of its own name — the book cannot know its lines, and says so.
+- **Remove a program *and* the work filed against it.** The removal refused
+  while any submission, task, request, document, team assignment or project
+  need pointed at the program, which is right for one created by mistake and
+  wrong for one that picked up a stray task on its way. The confirm now offers
+  a second button naming exactly how much goes with it, and the whole thing is
+  one batch, so one Undo puts every record back. Each row goes through its own
+  kind's verb — an information request takes its items with it — and one
+  refusal survives the cascade: a request somebody has **answered**, because
+  deleting the question deletes the client's answer with it.
 - **Remove a program that should not exist.** Merge folds two records of the
   same program together and refuses two file-backed placements on purpose;
   there was no way to say "this one was a mistake". Remove sits beside Merge
@@ -51,6 +60,17 @@ All notable changes to bookkit, newest date first.
   TUI's `D` key, one field write, revertible with Undo, and it asks which
   task before it writes. This closes the last of the four deletable row
   kinds the parity ledger was holding `delete_row` open for.
+
+### Fixed
+- **Completing or dropping a task on a filtered Open items view no longer
+  throws the filter away.** The filters live in the query string so a view is
+  a link you can keep; the write answered with the unfiltered page, so a
+  broker looking at one client's open items was handed the whole book back.
+  The task was recorded correctly — what was lost was where you were standing.
+- A service that opens an undo batch and is called from *inside* another one
+  no longer leaves an empty batch behind — a line in the changes list
+  describing an action, offering a Revert, and reverting nothing. The events
+  always landed on the outer batch; only the phantom row was new.
 
 ### Changed
 - Today completes a task through the same shared write the other two

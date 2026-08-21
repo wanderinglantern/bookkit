@@ -139,6 +139,28 @@ def open_batch(
                 yield candidate
             return
 
+    active = db.current_batch()
+    if active is not None:
+        # ALREADY INSIDE A BATCH — join it and create NO row.
+        #
+        # db.transaction has always joined rather than nested (SQLite has no
+        # nested BEGIN) and has always ignored an inner `batch=`, so the events
+        # written here were already landing on the OUTER batch. What this
+        # function still did was INSERT a batch row for the inner action
+        # anyway, and that row then had zero events: a line in the changes list
+        # describing an action, offering a Revert, and reverting nothing.
+        #
+        # Found when the program cascade called services/rfi.remove_request
+        # inside its own batch (2026-08-21) — the right call, because a request
+        # has to take its items with it — and the changes list grew a phantom
+        # "removed information request" beside the real removal. Every service
+        # that opens a batch and is reachable from inside another one had the
+        # same shape; this closes the class rather than teaching one caller to
+        # avoid it.
+        with db.transaction(conn):
+            yield batches_repo.get(conn, active.batch_id)
+        return
+
     batch_id = batches_repo.new_batch_id()
     with db.transaction(conn, batch=db.BatchState(batch_id=batch_id)):
         yield batches_repo.create(

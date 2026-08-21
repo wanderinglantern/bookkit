@@ -146,23 +146,36 @@ _DEPENDANTS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def dependants(conn: sqlite3.Connection, placement_id: str) -> list[tuple[str, int]]:
-    """Live rows pointing at this placement, as (plural-aware label, count),
-    in schema order — empty when nothing holds it.
+def dependant_rows(conn: sqlite3.Connection, placement_id: str) -> list[tuple[str, str]]:
+    """Live rows pointing at this placement, as (table, id), in schema order.
 
-    Counts, not records: the caller is composing a refusal, not a screen. The
-    label is returned WITH the count so no caller has to own the pluralisation
-    of "information request", which is the sort of thing two callers spell two
-    ways.
+    THE IDS, not just a count, because a cascade has to remove each of them —
+    and it must remove them through each kind's OWN verb, so the caller gets
+    the table name too. `dependants` below counts these rather than running its
+    own six queries: one query set, two questions.
     """
-    found: list[tuple[str, int]] = []
-    for table, one, many in _DEPENDANTS:
-        count = int(
-            conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE placement_id = ? AND {base.alive()}",
-                (placement_id,),
-            ).fetchone()[0]
-        )
-        if count:
-            found.append((one if count == 1 else many, count))
+    found: list[tuple[str, str]] = []
+    for table, _one, _many in _DEPENDANTS:
+        rows = conn.execute(
+            f"SELECT id FROM {table} WHERE placement_id = ? AND {base.alive()}",
+            (placement_id,),
+        ).fetchall()
+        found.extend((table, str(row[0])) for row in rows)
     return found
+
+
+def dependants(conn: sqlite3.Connection, placement_id: str) -> list[tuple[str, int]]:
+    """The same rows, as (plural-aware label, count), for composing a refusal.
+
+    The label is returned WITH the count so no caller has to own the
+    pluralisation of "information request", which is the sort of thing two
+    callers spell two ways.
+    """
+    counts: dict[str, int] = {}
+    for table, _id in dependant_rows(conn, placement_id):
+        counts[table] = counts.get(table, 0) + 1
+    return [
+        (one if counts[table] == 1 else many, counts[table])
+        for table, one, many in _DEPENDANTS
+        if counts.get(table)
+    ]

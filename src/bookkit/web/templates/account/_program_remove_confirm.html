@@ -25,15 +25,43 @@
   </p>
 
   {% if blockers %}
-    {# Refused, and said before the click rather than after it. #}
+    {# TWO ANSWERS, both said before the click. Removing the program alone
+       would strand these records on a program that is not there, so that is
+       not offered; what is offered is Merge (which keeps the work) and the
+       cascade (which does not). The cascade is its own button with its own
+       count in it — a checkbox on the safe button would be a prefill nobody
+       checks, and the two acts are not variations of each other. #}
     <ul class="confirm-remove-notes">
       <li>This program still carries {{ blockers | join(", ") }}.</li>
-      <li>Removing it would leave those records pointing at a program that is
-          not there. Move them to the surviving program first — or use
-          <strong>Merge</strong>, which moves them for you and retires this
-          one.</li>
+      <li>Removing it alone would leave those records pointing at a program
+          that is not there. <strong>Merge</strong> moves them to the surviving
+          program and retires this one — use that if the work should live on.</li>
+      {% if cascade_refusals %}
+        {# One refusal survives the cascade: an answered request is the
+           client's words, and no amount of certainty about a PROGRAM is
+           consent to delete those. services/rfi.py owns the sentence. #}
+        <li>They cannot all be removed with it:
+          <ul>{% for reason in cascade_refusals %}<li>{{ reason }}</li>{% endfor %}</ul>
+        </li>
+      {% else %}
+        {% for note in notes %}<li>{{ note }}</li>{% endfor %}
+      {% endif %}
     </ul>
+
+    {% if file_to and not cascade_refusals %}
+      <dl class="confirm-remove-paths">
+        <div><dt>file</dt><dd><code>{{ file_from }}</code></dd></div>
+        <div><dt>moves to</dt><dd><code>{{ file_to }}</code></dd></div>
+      </dl>
+    {% endif %}
+
     <div class="form-actions">
+      {% if not cascade_refusals %}
+        <button type="button" class="btn-danger"
+                hx-post="{{ action }}" hx-vals='{"cascade": "1"}'
+                hx-target="#programs-panel" hx-swap="outerHTML">Remove program and
+          {{ carried }} record{{ "s" if carried != 1 else "" }}</button>
+      {% endif %}
       <button type="button" class="btn-cancel" data-form-cancel>Close</button>
     </div>
   {% else %}

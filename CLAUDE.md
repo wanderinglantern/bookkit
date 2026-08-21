@@ -90,7 +90,17 @@ DIFFERS is.
 READ `.claude/skills/data-entry-integrity/SKILL.md` BEFORE adding a field, a
 form, a picker or an import mapping. It carries the researched rules (with
 sources) and the insurance-domain facts about limits and sublimits that decide
-what a field must be able to SAY. The load-bearing ones:
+what a field must be able to SAY.
+
+IT APPLIES EVERYWHERE, not to programs (Grant, 2026-08-21). The research was
+done while the Program tab was the thing under the microscope, so every worked
+example below is a layer or a placement — and that is an accident of when it
+was done, not a statement of scope. Projects, needs, tasks, contacts, requests,
+the capture flow, imports and anything built after this are held to the same
+rules. A new surface does not get to be the exception because the examples do
+not mention it.
+
+The load-bearing ones:
 
 - CONSTRAINED INPUT over an open text field wherever the valid set is knowable,
   and a picker must offer ONLY what is storable. `render.theme` shipped as free
