@@ -227,3 +227,87 @@ def test_above_and_below_put_the_slab_on_different_sides_of_the_anchor(
     assert ids.index(below_id) == ids.index(anchor.id) - 1, (
         f"'below' did not put it directly below the anchor: {ids}"
     )
+
+
+def _insert_url(org, placement, line_id):
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}/lines/{line_id}/layers"
+    )
+
+
+def test_the_route_inserts_and_answers_with_the_panel(app_and_org) -> None:
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+    anchor = program.layers_for_line(line_id)[0]
+
+    done = client.post(
+        _insert_url(org, placement, line_id),
+        data={"name": "New Excess", "limit_cents": "10m",
+              "anchor": anchor.id, "position": "above", "kind": "layer"},
+    )
+
+    assert done.status_code == 200
+    assert "New Excess" in done.text
+
+
+def test_a_refusal_comes_back_as_the_panel_not_a_status_code(app_and_org) -> None:
+    """htmx swaps nothing on a 4xx or a 5xx, so a route that refuses with a
+    status leaves a control that looks simply dead."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+
+    refused = client.post(
+        _insert_url(org, placement, line_id),
+        data={"name": "Bad", "limit_cents": "not a number",
+              "anchor": "", "position": "above", "kind": "layer"},
+    )
+
+    assert refused.status_code == 200
+    assert "not a number" in refused.text or "money" in refused.text.lower()
+
+
+def test_an_anchor_from_another_placement_is_refused(app_and_org) -> None:
+    """The anchor arrives in the BODY, and a body id is only checked if
+    somebody checks it."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+
+    refused = client.post(
+        _insert_url(org, placement, line_id),
+        data={"name": "Sneaky", "limit_cents": "1m",
+              "anchor": "not-a-layer-here", "position": "above",
+              "kind": "layer"},
+    )
+
+    assert refused.status_code == 200
+    assert "Sneaky" not in refused.text or "no layer" in refused.text.lower()
+
+
+def test_another_accounts_program_is_a_404(app_and_org) -> None:
+    from bookkit.repo import orgs
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+    other = next(
+        o for o in orgs.list_orgs(conn, kind="client") if o.id != org.id
+    )
+
+    got = client.post(
+        f"/accounts/{other.ref}/program/{placement.id}/lines/{line_id}/layers",
+        data={"name": "x", "limit_cents": "1m", "anchor": "",
+              "position": "above", "kind": "layer"},
+    )
+
+    assert got.status_code == 404

@@ -1185,6 +1185,68 @@ def layer_details_row(
         )
 
 
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/lines/{line_id}/layers",
+    response_class=HTMLResponse,
+)
+async def stack_insert(
+    request: Request, ref: str, placement_id: str, line_id: str
+) -> HTMLResponse:
+    """Put a slab into a line's stack. Position decides the attachment.
+
+    NO ATTACHMENT FIELD IS ACCEPTED, and that is the feature: a typed
+    attachment is how two slabs come to share one. `anchor` names the slab this
+    one goes above or below, and `""` means the bottom of the line.
+
+    The anchor arrives in the BODY, so it is checked against THIS placement's
+    own layers — an id in a body is only checked if somebody checks it, which
+    is the hole `forms.spec.checked_option` exists to close.
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    anchor = str(form.get("anchor", "")).strip() or None
+    position = str(form.get("position", "above"))
+    kind = str(form.get("kind", "layer"))
+    raw_limit = str(form.get("limit_cents", ""))
+
+    known = {row["id"] for row in sync.layer_details(conn, placement_id)}
+    if anchor is not None and anchor not in known:
+        return _programs_panel(
+            request, ref, org,
+            error=f"no layer {anchor!r} on {placement.ref} — reload the tab",
+        )
+    if not name:
+        return _programs_panel(request, ref, org, error="a slab needs a name")
+    try:
+        limit_cents = int(parse_value(_LAYER_CELLS["limit_cents"], raw_limit) or 0)
+    except ValueError as exc:
+        return _programs_panel(request, ref, org, error=str(exc))
+
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_add",
+            summary=(
+                f"inserted {name} on {line_id}"
+                if kind != "buffer"
+                else f"declared a buffer on {line_id}"
+            ),
+            mutate=lambda: sync.insert_layer(
+                conn, placement_id, line_id=line_id, anchor_layer_id=anchor,
+                position=position, name=name, limit_cents=limit_cents,
+                buffer=kind == "buffer",
+            ),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _programs_panel(request, ref, org, error=str(exc))
+    forget_program_reads(request)
+    return _programs_panel(request, ref, org)
+
+
 def _details_refusal(
     request: Request, placement_id: str, layer_id: str, message: str
 ) -> HTMLResponse:
