@@ -3040,6 +3040,57 @@ tr:hover .market .chip-remove {
   opacity: 0.9;
 }
 
+/* The one action in a row of them that takes the thing away. NOT filled
+   --danger: .btn-danger is the CONFIRMED destructive act, and this button
+   only opens a confirm — dressing the two identically would spend the strong
+   signal on the harmless half and leave nothing louder for the real one. So
+   it reads as an ordinary .btn until the pointer is on it. */
+.btn-quiet-danger:hover,
+.btn-quiet-danger:focus-visible {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* The file's before and after, shown before the click — a promise about a
+   path is worth nothing unless the path is on screen. Two rows of label +
+   value, the value monospaced.
+
+   IT WRAPS, and that is a reversal: the first cut let it scroll instead, on
+   the reasoning that a path broken across lines stops being a path. That rule
+   belongs to a TABLE CELL, where wrapping destroys the column's scannability
+   and the value is one of forty. Here the value is the entire point of the
+   step, there are exactly two of them, and a real program root under a real
+   home directory ran off the right edge mid-path with nothing saying so — an
+   overflow the reader has to discover by dragging is the same failure as not
+   printing it (caught in the browser, 2026-08-21). `anywhere` rather than
+   `break-word` so a long unbroken segment breaks too. */
+.confirm-remove-paths {
+  margin: 0 0 0.875rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: var(--hint-size);
+}
+
+.confirm-remove-paths > div {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.confirm-remove-paths dt {
+  color: var(--muted);
+}
+
+.confirm-remove-paths dd {
+  margin: 0;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
 /* --- a carrier the book does not know -----------------------------------
    NOT AN ERROR, AND NOT A WARNING. "this carrier is not a market in the book
    yet" is a neutral fact about work nobody has done — no write was refused,

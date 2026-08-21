@@ -58,6 +58,16 @@
       {% if linked %}
         <a class="btn" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/compare">Compare</a>
       {% endif %}
+      {# LAST, and set apart: it is the one action here that takes the program
+         away. Confirm-first rather than hx-confirm, because it moves a file
+         and the destination has to be visible beforehand — the fragment shows
+         it (_program_remove_confirm.html). Merge sits beside it on purpose:
+         Merge is for two records of the SAME program, this is for one that
+         should not exist. #}
+      <button type="button" class="btn btn-quiet-danger"
+              hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/remove"
+              hx-target="#program-{{ placement.id }} .form-host"
+              hx-swap="innerHTML">Remove</button>
     </div>
     <dl class="program-facts">
       <div class="fact">

@@ -27,7 +27,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ... import sync, towerfields
+from ... import db, sync, towerfields
 from ...forms.entities import apply_placement, apply_submission, placement_form, submission_form
 from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS, PLACEMENT_FIELDS
 from ...forms.spec import Field, checked_option, initial_text, parse_value
@@ -2247,6 +2247,83 @@ async def merge_placement(
     except (MergeError, HTTPException) as exc:
         message = exc.detail if isinstance(exc, HTTPException) else str(exc)
         return _programs_panel(request, ref, org, error=str(message))
+    return _programs_panel(request, ref, org)
+
+
+# --- removing a program that should not exist ----------------------------------
+#
+# NOT merge. Merge folds two records of the same thing together and refuses two
+# file-backed placements on purpose (two sources of truth). This is the other
+# case: a program created by mistake, with its own file, which should never
+# have existed. services/program_remove.py owns the rule; these two routes are
+# the door, confirm-first, because a file moves and a browser confirm() shows
+# no plan — the same objection this file already records against confirm() for
+# revert.
+
+
+@router.get("/accounts/{ref}/program/{placement_id}/remove", response_class=HTMLResponse)
+def program_remove_confirm(
+    request: Request, ref: str, placement_id: str
+) -> HTMLResponse:
+    """The confirm step. Writes NOTHING, and shows the DESTINATION — where the
+    file lands is the part a person can only check beforehand (same reason
+    _scaffold_confirm.html prints its path)."""
+    from ...services import program_remove
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    source = None
+    if placement.program_path:
+        candidate = sync.program_file(conn, placement)
+        source = candidate if candidate.exists() else None
+    return TEMPLATES.TemplateResponse(
+        request, "account/_program_remove_confirm.html",
+        {
+            "header": {"org": org},
+            "placement": placement,
+            "blockers": program_remove.blockers(conn, placement.id),
+            "notes": program_remove.consequences(conn, placement),
+            "file_from": str(source) if source else None,
+            "file_to": (
+                str(program_remove.retired_path(source, now=db.utc_now()))
+                if source
+                else None
+            ),
+            "action": f"/accounts/{ref}/program/{placement_id}/remove",
+            "cancel": f"/accounts/{ref}/program",
+        },
+    )
+
+
+@router.post("/accounts/{ref}/program/{placement_id}/remove", response_class=HTMLResponse)
+def program_remove_save(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """The confirmed removal. Answers with the whole TAB, not the section: the
+    section it would have swapped is the one that just stopped existing."""
+    from ...services import program_remove as removal
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    try:
+        removal.remove(
+            conn, placement, open_batch=_open_batch_web, now=db.utc_now()
+        )
+    except removal.ProgramRemoveRefused as exc:
+        return _programs_panel(request, ref, org, error="; ".join(exc.reasons))
+    except OSError as exc:
+        # The record is already gone — the database commits first, on purpose.
+        # Say exactly that rather than letting a filesystem errno read as "the
+        # removal failed", which would send somebody looking for a record that
+        # is not coming back.
+        return _programs_panel(
+            request, ref, org,
+            error=(
+                f"{placement.ref} was removed, but its file could not be moved "
+                f"aside ({exc}) — the file is still where it was and can be "
+                f"moved by hand"
+            ),
+        )
     return _programs_panel(request, ref, org)
 
 

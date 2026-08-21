@@ -14,6 +14,15 @@ All notable changes to bookkit, newest date first.
   Nothing is guessed — an unrecognised piece is stored as typed so the
   validator can say it is not a US code, and a near-miss is never quietly
   corrected.
+- **Remove a program that should not exist.** Merge folds two records of the
+  same program together and refuses two file-backed placements on purpose;
+  there was no way to say "this one was a mistake". Remove sits beside Merge
+  on the program header, confirm-first, and the confirm shows exactly where
+  the file goes before anything happens: the towerkit file is **moved** to a
+  `.removed/` directory beside it, never deleted. It refuses while any
+  submission, task, request, document, team assignment or project need still
+  points at the program, naming each. Undo brings the record back; the file
+  stays where it was put, and the confirm says so.
 - **Auditable, on a policy.** A yes/no fact recorded per layer: does the
   carrier true the premium up at expiry? Workers' compensation and general
   liability normally do; property does not, and two layers of one program
