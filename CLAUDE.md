@@ -130,6 +130,35 @@ The load-bearing ones:
   surface an expert reads — group it. The layer details row is the worked
   example (`_layer_details.html`).
 
+## THE WEB IS THE PRODUCT (Grant, 2026-08-21)
+
+THE TUI IS RETIRED. Not deleted — retired: it keeps working and the suite keeps
+it green, but it is no longer where features land and no longer the yardstick
+the web is measured against. Design decisions are made FOR THE BROWSER, and
+"more modern surfaces to interact with the data layers" is the direction.
+
+What this changes, concretely:
+
+- A new capability is built on the web. It does not need a TUI equivalent, and
+  the absence of one is not a gap.
+- `web/parity.py`'s TUI half inverts in purpose. It was the guard that turned
+  the suite red when the TUI grew something the web lacked — the web catching
+  up. With the TUI frozen that list stops growing, so it becomes a FINITE
+  checklist to finish and then delete, not a standing invariant. The towerkit
+  halves (TOWERKIT_MODEL_FIELDS, TOWERKIT_EDIT_OPS, SYNC_VERBS) are unaffected:
+  they measure the web against TOWERKIT, which is very much alive.
+- The rules below that are about Textual — the 140-column footer, dead keys,
+  the modal-forms skill, NavigatorScreen as home — are now HISTORICAL. Read
+  them when touching the TUI to keep it working; do not let them shape a web
+  decision.
+- "Tower design stays in towerkit's editor; `o` jumps there" is DEAD as a
+  reason to leave something out of the web: `o` was a bookkit TUI key, and a
+  browser has no jump. The web has to be able to build a tower.
+
+The invariants that were never about the TUI still bind everywhere: one write
+per undo unit, repo/ owns the SQL, towerkit files are the authority, the
+renewal date is the one you counted to, and the data-entry rules.
+
 ## UI conventions (Grant's calls, all 2026-08-12)
 
 - FormModal commit-in-place is THE DEFAULT: every form passes `commit=`;
