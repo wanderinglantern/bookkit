@@ -1,5 +1,4 @@
 """The Work tab — open tasks, information requests, and (per request) their
-import re
 items.
 
 The assertion is deliberately NOT 'the field changed'. A plain outcome check
