@@ -3053,6 +3053,38 @@ tr:hover .market .chip-remove {
    line of prose — the same shape the layer details row uses, for the same
    reason: a value with a word beside it is read; a value floating alone is
    guessed at. */
+/* What towerkit says about a program file, above the tower it describes.
+   ONE SIGNAL PER ROW — a mark and the sentence — not a border plus a fill plus
+   an icon plus the text, which the data-entry research calls combative rather
+   than helpful. Errors take --danger, warnings --warn, and neither gets a
+   filled background: a tower with four warnings would otherwise be a wall of
+   colour, and this strip sits above real work. */
+.program-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0 0 0.5rem;
+  grid-column: 1 / -1;
+}
+
+.diagnostic {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: var(--hint-size);
+}
+
+.diagnostic-error .diagnostic-mark,
+.diagnostic-error .diagnostic-said {
+  color: var(--danger);
+}
+
+.diagnostic-warning .diagnostic-mark,
+.diagnostic-warning .diagnostic-said {
+  color: var(--warn);
+}
+
 .project-about {
   display: flex;
   align-items: baseline;

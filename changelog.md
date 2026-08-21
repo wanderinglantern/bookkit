@@ -5,6 +5,23 @@ All notable changes to bookkit, newest date first.
 ## 2026-08-21
 
 ### Added
+- **The launcher checks before it serves.** `bookctl web` refuses to start when
+  bookkit needs towerkit features the installed towerkit does not have, and
+  prints the command that fixes it. That skew spent an afternoon presenting as
+  "the toggle arrow does not work"; it now says so at the door. It repairs
+  nothing on its own — the fixes are a `git pull` and, only when dependencies
+  moved, `./install.sh`, and neither should happen unasked under a launching
+  app.
+- **The Program tab prints what towerkit says about the file.** Every error and
+  warning, in towerkit's own words, above the tower they describe. Until now a
+  diagnostic reached the browser only when a *write* was refused, so a file that
+  already held a problem — written in towerkit's editor, by the assistant, or by
+  an import — drew a wrong picture and the page said nothing. Two layers at the
+  same attachment now say `OVERLAP` instead of quietly drawing on top of each
+  other.
+- **The Projects tab**, the last of the terminal's account tabs the browser did
+  not have: a client's jobs and the cover each one still needs, editable where
+  it is read, with `need → opportunity` as a row action.
 - **A state list can be pasted the way a policy prints it.** Commas were the
   whole entry syntax, so a workers-compensation schedule copied off a policy
   — bare codes, no punctuation — became one long "state". Commas,

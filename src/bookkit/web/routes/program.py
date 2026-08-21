@@ -185,6 +185,36 @@ def _last_synced(conn: sqlite3.Connection, placement_id: str) -> dict[str, Any] 
     }
 
 
+def _diagnostics(linked: Any) -> list[dict[str, Any]]:
+    """Every error and warning towerkit reports for this file, for display.
+
+    ERRORS FIRST, because an error is a claim the tower is wrong and a warning
+    is a claim it is incomplete — and the reader is looking for the first one.
+    Each carries `ref`, towerkit's own ("layer", id) / ("line", id) pointer, so
+    the strip can say WHICH layer without this module parsing a message.
+
+    Loading is somebody else's failure and is already printed as `load_error`:
+    a file that will not parse has no diagnostics to give, and repeating the
+    same sentence twice under two headings reads as two problems.
+    """
+    from towerkit.validate import validate_program
+
+    if linked.program is None:
+        return []
+    diags = validate_program(linked.program)
+    ordered = list(diags.errors) + list(diags.warnings)
+    return [
+        {
+            "severity": d.severity,
+            "code": d.code,
+            "message": d.message,
+            "kind": d.ref[0] if d.ref else "",
+            "target": d.ref[1] if d.ref and d.ref[1] is not None else "",
+        }
+        for d in ordered
+    ]
+
+
 def _section_html(
     request: Request,
     ref: str,
@@ -224,6 +254,15 @@ def _section_html(
         # to PRINT, not a flag: "no layers yet" is what an unreadable file
         # looked like for as long as the reads swallowed their exceptions.
         load_error=linked.error,
+        # WHAT TOWERKIT SAYS ABOUT THIS FILE, printed rather than kept.
+        # Diagnostics reached the browser ONLY when a write was refused, so a
+        # file that already contained an overlap — written by towerkit's own
+        # editor, by MCP, or by an import — drew a garbled tower and the page
+        # said nothing. Grant hit exactly that: two D&O excess layers at the
+        # same attach, drawn on top of each other, labels overprinting, and he
+        # was reduced to reading the picture to work out why (2026-08-21).
+        # The app knew. `line-overlap`, in towerkit's own words.
+        diagnostics=_diagnostics(linked),
         moved_from=linked.moved_from,
         last_synced=_last_synced(conn, placement.id) if linked.error else None,
         tower=_tower_for(linked),

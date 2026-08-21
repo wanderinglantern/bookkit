@@ -69,6 +69,9 @@
               hx-target="#program-{{ placement.id }} .form-host"
               hx-swap="innerHTML">Remove</button>
     </div>
+    {# Above the facts and above the drawing: a tower that is wrong should say
+       so before it is read, not after somebody has puzzled at the picture. #}
+    {% include "account/_program_diagnostics.html" %}
     <dl class="program-facts">
       <div class="fact">
         <dt>period</dt>

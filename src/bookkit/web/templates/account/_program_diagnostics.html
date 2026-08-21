@@ -1,0 +1,31 @@
+{# What towerkit says about this program file.
+
+   IT REACHED THE BROWSER ONLY ON A REFUSED WRITE until 2026-08-21, so a file
+   that already held a problem — written by towerkit's own editor, by MCP, or
+   by an import — drew a wrong tower and the page said nothing. Grant had two
+   D&O excess layers at the same attachment, drawn on top of each other with
+   their labels overprinting, and had to reason backwards from the picture.
+   towerkit was reporting `line-overlap` the whole time.
+
+   ERRORS FIRST: an error says the tower is WRONG, a warning says it is
+   incomplete, and the reader is hunting the first. Each row prints towerkit's
+   own sentence — this surface composes none of its own, so the words a broker
+   reads here are the words the validator, the CLI and the MCP server use.
+
+   The stable CODE rides along in the title attribute rather than the row: it
+   is what a person quotes when asking about a rule, and what a search finds,
+   but it is not what they are reading for. #}
+{% if diagnostics %}
+  <div class="program-diagnostics" role="status"
+       aria-label="what towerkit reports about this program">
+    {% for item in diagnostics %}
+      <p class="diagnostic diagnostic-{{ item.severity }}" title="{{ item.code }}">
+        <span class="diagnostic-mark" aria-hidden="true">{{ "✗" if item.severity == "error" else "⚠" }}</span>
+        <span class="diagnostic-said">{{ item.message }}</span>
+        {% if item.target %}
+          <span class="detail-label">{{ item.kind }} {{ item.target }}</span>
+        {% endif %}
+      </p>
+    {% endfor %}
+  </div>
+{% endif %}
