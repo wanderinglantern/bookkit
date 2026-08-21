@@ -105,7 +105,12 @@ A buffer is a SLAB, not an absence:
 - it has `attach` and `limit` like any layer;
 - it has NO participants and no premium — nobody is on it;
 - it is excluded from signed-limit and premium totals;
-- it SUPPRESSES `line-gap` across its span;
+- it needs NO gap-suppression rule, and must not have one — a slab with an
+  attachment and a limit sits in the stack and FILLS the band, so there is no
+  gap left to report. (The first cut carried a suppression branch; a surviving
+  mutant proved it dead, and worse than dead: it also hid a real gap above an
+  under-sized buffer, which is the one thing the feature exists to make
+  honest. Corrected 2026-08-21 during implementation.)
 - it draws hatched and labelled, reusing the `unplaced` capacity convention
   already in the palette.
 
@@ -150,7 +155,10 @@ The tests are the invariants, not the happy path:
 2. **An insert never writes an invalid file** — the column recomputes inside one
    mutation.
 3. **One gesture, one undo** — insert restores every attachment it moved.
-4. **A buffer suppresses `line-gap` and is excluded from signed limits.**
+4. **A declared buffer leaves the column contiguous** so no gap is reported,
+   AND **a buffer that does not reach the layer above still reports the gap** —
+   the second half is what stops the feature from hiding the thing it exists to
+   make honest. Plus: a buffer is excluded from signed limits.
 5. **A full tower is buildable from the keyboard alone.** If this fails, B stops
    being polish and becomes a requirement.
 6. **The drawing and the editor never disagree** — both read the same file.
