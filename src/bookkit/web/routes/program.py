@@ -215,6 +215,59 @@ def _diagnostics(linked: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _stacks(request: Request, ref: str, placement: Any) -> list[dict[str, Any]]:
+    """One stack per LINE, bottom-up — the editor's model.
+
+    A layer spanning several lines appears in EACH of their stacks, because it
+    does. `also_on` carries the other lines so the row can say so: a layer that
+    silently moves two other columns is worse than one that warns.
+    """
+    conn = _conn(request)
+    linked = linked_for(request, conn, placement.id)
+    if linked.program is None:
+        return []
+    program = linked.program
+    base = f"/accounts/{ref}/program/{placement.id}"
+    out: list[dict[str, Any]] = []
+    for line in program.lines:
+        slabs = []
+        for slab in program.layers_for_line(line.id):
+            others = [
+                other.label
+                for other in program.lines
+                if other.id != line.id and other.id in slab.applies_to
+            ]
+            slabs.append({
+                "id": slab.id,
+                "name": slab.name,
+                "attach": format_cents_compact(slab.attach * 100),
+                "limit": format_cents_compact(slab.limit * 100),
+                "buffer": slab.buffer,
+                "statutory": slab.statutory,
+                "also_on": others,
+                "carriers": [
+                    {"name": p.carrier, "share": f"{p.share_bps / 100:g}%"}
+                    for p in slab.participants
+                ],
+                "signed": f"{slab.signed_bps / 100:g}%",
+                # Amendment (a): the finished URL, published from the context
+                # rather than assembled in the template — `_stacks` already
+                # has `base` as a local, and a bare `base` in the template
+                # context rendered as an empty string under this Jinja
+                # environment (no StrictUndefined), which made `+ carrier`
+                # post to a URL nothing serves.
+                "carrier_action": f"{base}/layers/{slab.id}/markets/new",
+            })
+        out.append({
+            "line_id": line.id,
+            "label": line.label,
+            "name": line.name,
+            "slabs": list(reversed(slabs)),  # top of tower first, as drawn
+            "insert_action": f"{base}/lines/{line.id}/layers",
+        })
+    return out
+
+
 def _section_html(
     request: Request,
     ref: str,
@@ -287,6 +340,7 @@ def _section_html(
             else {}
         ),
         layers=[_layer_row(request, ref, placement.id, layer) for layer in layers],
+        stacks=_stacks(request, ref, placement),
         refocus=refocus,
         expanded=expanded,
         expanded_row=_expanded_row_html(request, ref, placement.id, expanded),

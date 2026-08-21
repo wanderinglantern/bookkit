@@ -410,3 +410,45 @@ def test_an_unrecognised_kind_is_refused_before_the_write(app_and_org) -> None:
     assert "Sneaky Kind" not in refused.text
     assert "layer" in refused.text.lower() and "buffer" in refused.text.lower()
     assert len(_stack_of(conn, placement, line_id)) == before
+
+
+def test_the_stack_editor_has_no_attachment_input(app_and_org) -> None:
+    """THE DESIGN, asserted. An attachment input is how two slabs come to
+    share one; there is not one to fill in."""
+    client, org = app_and_org
+    page = client.get(f"/accounts/{org.ref}/program").text
+    editor = page[page.index("stack-editor") :]
+
+    assert 'name="attach' not in editor
+    assert 'name="anchor"' in editor
+    assert 'name="position"' in editor
+
+
+def test_add_carrier_sits_on_the_slab_and_add_layer_on_the_stack(
+    app_and_org
+) -> None:
+    """The whole fix for the reported bug: sharing a slab and adding a layer
+    are visibly different acts, in different places."""
+    client, org = app_and_org
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert "+ carrier" in page
+    assert "insert layer" in page or "+ layer" in page
+    assert "insert buffer" in page
+
+
+def test_a_multi_line_layer_says_it_appears_in_other_stacks(
+    app_and_org
+) -> None:
+    """A layer spanning three lines appears in three stacks and an edit in one
+    moves all of them. The row says so rather than hiding it."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    shared = [ly for ly in program.layers if len(ly.applies_to) > 1]
+    assert shared, "fixture drifted — no multi-line layer to warn about"
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert "also on" in page

@@ -3085,6 +3085,46 @@ tr:hover .market .chip-remove {
   color: var(--warn);
 }
 
+/* The stack editor. Top of tower first, matching the drawing, so the two
+   read in the same direction — a list that ran the other way would make the
+   reader flip every comparison. */
+.stack-editor { display: flex; flex-wrap: wrap; gap: 1.25rem; margin: 0 0 1rem; }
+.stack { min-width: 18rem; flex: 1 1 18rem; }
+.stack-line { font-size: var(--hint-size); margin: 0 0 0.35rem; }
+
+.slab {
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  padding: 0.35rem 0.5rem;
+  margin-bottom: 0.25rem;
+  background: var(--paper);
+}
+
+/* Hatched, and the same grey the drawing gives unplaced capacity: a band
+   nobody is on should not read as cover in either place. */
+.slab.is-buffer {
+  background: repeating-linear-gradient(
+    45deg, var(--wash), var(--wash) 5px, var(--stone) 5px, var(--stone) 10px
+  );
+  border-style: dashed;
+}
+
+.slab-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
+.slab-name { font-weight: 700; font-size: 0.9rem; }
+.slab-band { font-size: var(--hint-size); color: var(--muted); }
+
+.slab-carriers {
+  list-style: none;
+  margin: 0.2rem 0 0;
+  padding-left: 0.75rem;
+  font-size: var(--hint-size);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.stack-insert { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; margin-top: 0.4rem; }
+
 .project-about {
   display: flex;
   align-items: baseline;

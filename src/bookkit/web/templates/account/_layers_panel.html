@@ -72,6 +72,10 @@
     {# Above the facts and above the drawing: a tower that is wrong should say
        so before it is read, not after somebody has puzzled at the picture. #}
     {% include "account/_program_diagnostics.html" %}
+    {% if linked %}
+      {# The stack editor is the MODEL; the drawing below is a view of it. #}
+      {% include "account/_stack_editor.html" %}
+    {% endif %}
     <dl class="program-facts">
       <div class="fact">
         <dt>period</dt>
