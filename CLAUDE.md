@@ -161,6 +161,29 @@ renewal date is the one you counted to, and the data-entry rules.
 
 ## UI conventions (Grant's calls, all 2026-08-12)
 
+- A SLAB'S ATTACHMENT COMES FROM ITS POSITION, never from a field (Grant,
+  2026-08-21). The stack editor inserts above/below and recomputes the whole
+  column in ONE mutation, so `write_through` never sees a half-shifted tower.
+  A typed attachment is how two slabs come to share one: a quota share built as
+  two layers at `$5M xs $5M` drew on top of itself with the labels
+  overprinting, and towerkit had been reporting `line-overlap` the whole time
+  while the web said nothing. CARRIERS ARE ADDED ON THE SLAB (`+ carrier`),
+  layers on the stack — sharing and stacking must never look like the same act.
+- A BUFFER IS A SLAB, NOT A GAP. A deliberate uninsured band has an attachment
+  and a limit and carries no carriers and no premium. It needs NO
+  gap-suppression rule and must not have one: a slab with an attachment and a
+  limit fills the band, so there is no gap left to report — and a suppression
+  branch also hid a real gap above an under-sized buffer, which is the one
+  thing the feature exists to make honest (a surviving mutant found it,
+  2026-08-21). A buffer must never render as unplaced capacity in words: "to be
+  placed" says cover is coming to a band somebody chose to leave uninsured.
+- A GAP IS REPORTED, NOT REFUSED. `line-gap` is a WARNING, because an error
+  refuses the write and every later write re-validates the whole file — so a
+  program that acquired a gap could never be edited again, including by the
+  edit that would fill it. That is the `render.theme` wedge in another costume.
+  Removing a mid-stack slab therefore LEAVES the gap and the confirm says so
+  before it happens: closing the tower up would silently move cover the client
+  bought.
 - FormModal commit-in-place is THE DEFAULT: every form passes `commit=`;
   a refused/failed save keeps the form open with input intact. Dismiss
   callbacks hold success effects only.

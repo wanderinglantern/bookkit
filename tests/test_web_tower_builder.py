@@ -798,3 +798,84 @@ def test_a_buffer_is_not_marked_pending(app_and_org) -> None:
     assert "is-pending" not in class_suffix, (
         f"the buffer's outline is still marked pending: {class_suffix!r}"
     )
+
+
+def _stack_editor_markup(page: str) -> str:
+    """Just the stack editor's own markup, bounded at BOTH ends.
+
+    The brief's version sliced to the first `</div>` inside the editor, which
+    closes an INNER element (the outer `stack-editor` div wraps several
+    `<section class="stack">` blocks, each full of its own nested divs) — so
+    every assertion after that slice ran against a handful of characters and
+    proved nothing. `_tower_panel_markup` above bounds a section by its own
+    matching close tag; the stack editor has no single close this test can
+    find reliably (it is one `<div>` wrapping N `<section>`s, however many
+    lines the program has), so this follows the amendment's fallback: bound
+    the END at the next known SIBLING section instead. `_layers_panel.html`
+    always prints `<dl class="program-facts">` immediately after the
+    `{% include "account/_stack_editor.html" %}` block, so the slice from the
+    editor's own class to just before that dl covers the whole editor —
+    every stack, every slab, and the insert form's own last button — without
+    running past it into the rest of the program panel.
+    """
+    start = page.index('class="stack-editor"')
+    end = page.index('class="program-facts"', start)
+    return page[start:end]
+
+
+def test_a_whole_tower_is_buildable_without_a_pointer(app_and_org) -> None:
+    """If this fails, drag stops being polish and becomes a requirement.
+
+    Every control the builder needs is a form control or a button — no
+    drag handles, no click-only affordances — so a keyboard reaches all of it.
+
+    Proven two ways, per the amendment: absence of pointer-only affordances in
+    the markup is necessary but not sufficient, so this also DRIVES an actual
+    build the way a keyboard user's form submits do — POST the insert route
+    for a layer, then for a buffer, and confirm both land.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+    anchor = program.layers_for_line(line_id)[0]
+    before = _stack_of(conn, placement, line_id)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    editor = _stack_editor_markup(page)
+
+    # Prove the slice is not vacuous: it reaches the insert form's own LAST
+    # control, not just its first few characters.
+    assert "insert buffer" in editor
+
+    assert "draggable" not in editor
+    assert "onmousedown" not in editor
+    # Every interactive element is a real, natively-focusable control — a
+    # div or span standing in for one, wired to hx-post/hx-get, is a mouse
+    # trap a keyboard (and a screen reader) cannot reach.
+    for handler in re.findall(r'<(?:div|span)[^>]*hx-(?:post|get)=', editor):
+        raise AssertionError(f"a div/span is doing a control's job: {handler}")
+
+    # Drive it: a keyboard user reaches every one of these through Tab and
+    # Enter/Space, never a drag. Same anchor twice, following the proven
+    # pattern above (test_the_file_is_never_written_with_an_overlap) — each
+    # insert seats fresh on the same existing slab and pushes upward.
+    layer_done = client.post(
+        _insert_url(org, placement, line_id),
+        data={"name": "Keyboard Layer", "limit_cents": "10m",
+              "anchor": anchor.id, "position": "above", "kind": "layer"},
+    )
+    assert layer_done.status_code == 200
+    assert "Keyboard Layer" in layer_done.text
+
+    buffer_done = client.post(
+        _insert_url(org, placement, line_id),
+        data={"name": "Keyboard Buffer", "limit_cents": "5m",
+              "anchor": anchor.id, "position": "above", "kind": "buffer"},
+    )
+    assert buffer_done.status_code == 200
+    assert "Keyboard Buffer" in buffer_done.text
+
+    after = _stack_of(conn, placement, line_id)
+    assert len(after) == len(before) + 2
