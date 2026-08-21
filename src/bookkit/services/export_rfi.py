@@ -10,12 +10,14 @@ Determinism: `today` is a parameter, never the wall clock, matching every
 other composer in this package.
 
 THE INTERNAL RULE APPLIES HERE TOO, both halves of it — see
-`_client_safe`. It did not until 2026-08-19: sheet 1's SCOPE_NOTE says
-"Internal administrative items are not included" and speaks for the whole
-workbook, while this sheet shipped an item categorised `Internal` under a
-heading naming it. A scope note that is false about the document it appears
-in is worse than either half alone: a reader who checks is told the wrong
-thing by the document itself."""
+`_client_safe`. It did not until 2026-08-19: the workbook then opened on a
+scope line promising "Internal administrative items are not included", while
+this sheet shipped an item categorised `Internal` under a heading naming it —
+a document whose own words were false about it. Grant removed the scope line
+on 2026-08-21 (the narration, not the rule), which changes NOTHING here: the
+withholding was never enforced by the sentence, and a client-facing sheet
+that leaks internal items is wrong whether or not any sentence claims
+otherwise."""
 
 from __future__ import annotations
 

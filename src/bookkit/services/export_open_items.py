@@ -1218,7 +1218,6 @@ def write(conn: sqlite3.Connection, org_id: str, out_path: Path, today: date) ->
 
     _add_open_items_sheet(wb, conn, org, org_id, today, theme)
 
-
     _add_rfi_sheet(wb, conn, org_id, today, theme)
     # Sheet 3 — Projects: omitted (not blank) when no live projects.
     project_sections = compose_projects(conn, org_id)
