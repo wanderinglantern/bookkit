@@ -165,3 +165,102 @@ def test_a_task_row_links_to_the_account_it_belongs_to(client):
         org = orgs_repo.find(conn, ref)
         assert org is not None
         assert label.strip() == org.name, f"{ref} rendered as {label!r}"
+
+
+# --- renewals name the POLICY, not the program (Grant, 2026-08-21) ------------
+
+
+def _renewal_rows(page: str) -> list[list[str]]:
+    """The Renews/Over-by/Account/Cover/Program cells of every renewal row."""
+    import re
+
+    body = page[page.index("Overdue renewals") : page.index("Project needs due")]
+    rows = re.findall(r"<tr>(.*?)</tr>", body, re.S)
+    out = []
+    for row in rows:
+        cells = [
+            re.sub(r"<[^>]+>", "", cell).strip()
+            for cell in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+        ]
+        if len(cells) >= 5:
+            out.append(cells)
+    return out
+
+
+def test_cover_never_prints_a_program_name(client):
+    """THE COMPLAINT. The column was `item.lines or placement.program_name`, so
+    an unlinked placement — most of a real book — printed "2025 Casualty
+    Program" under a header promising lines of cover. A name is not cover, and
+    a column that swaps one for the other silently cannot be read."""
+    from bookkit.repo import placements as placements_repo
+
+    conn = client.app.state.conn
+    page = client.get("/today").text
+    names = {
+        p.program_name
+        for p in placements_repo.expiring_between(conn, "0001-01-01", "9999-12-31")
+        if p.program_name
+    }
+    assert names, "fixture drifted — no programs to confuse a cover column with"
+
+    for renews, _over, _account, cover, _program in _renewal_rows(page):
+        assert cover not in names, (
+            f"the row renewing {renews} prints the PROGRAM {cover!r} under Cover"
+        )
+
+
+def test_a_row_with_no_lines_says_so_rather_than_standing_something_in(client):
+    """An unlinked placement genuinely has no lines to print. Saying that is a
+    fact; substituting the program name is a claim the book cannot support."""
+    page = client.get("/today").text
+    covers = {row[3] for row in _renewal_rows(page)}
+
+    assert "\u2014" in covers, (
+        "no row admits it has no lines — the seeded book has unlinked placements"
+    )
+    # The dash is the house spelling of an absence; the WHY rides in the title,
+    # because a column of shouting words about a state that is not wrong reads
+    # as a column of warnings.
+    assert "no program file is linked" in page
+
+
+def test_the_program_is_its_own_column(client):
+    """Demoted, not deleted: the row still needs the context, it just is not
+    the answer to "what cover expires here"."""
+    from bookkit.repo import placements as placements_repo
+
+    conn = client.app.state.conn
+    page = client.get("/today").text
+    names = {
+        p.program_name
+        for p in placements_repo.expiring_between(conn, "0001-01-01", "9999-12-31")
+        if p.program_name
+    }
+    printed = {row[4] for row in _renewal_rows(page)}
+
+    assert printed & names, "the program name vanished from the table entirely"
+
+
+def test_a_program_whose_lines_expire_apart_gets_a_row_each(client):
+    """One row per DATE something runs out. Before this, an Inland Marine layer
+    expiring months early made the whole program read as overdue — cover label
+    and all — so "GL, AL, IM · 70d over" claimed three lines were late when one
+    was."""
+    from bookkit.services import renewals
+    from bookkit.web.routes import today as today_route
+
+    conn = client.app.state.conn
+    items = renewals.upcoming(conn, today_route.date.today(), days=120)
+    by_placement: dict[str, list] = {}
+    for item in items:
+        by_placement.setdefault(item.placement.id, []).append(item)
+    split = [rows for rows in by_placement.values() if len(rows) > 1]
+    assert split, "fixture drifted — no program whose lines expire on two dates"
+
+    page = client.get("/today").text
+    covers = {row[3] for row in _renewal_rows(page)}
+    for rows in split:
+        assert len({r.renewal_on for r in rows}) == len(rows)
+        for row in rows:
+            assert row.cover in covers, f"{row.cover!r} is not on the page"
+            assert row.cover != row.lines or len(rows) == 1

@@ -56,6 +56,19 @@ def _drifting_next_for_org(conn) -> renewals.RenewalItem:
 
 
 async def test_today_counts_down_to_the_date_it_prints(snapshot_db: Path) -> None:
+    """THE INVARIANT ITSELF, not a proxy for it.
+
+    This asserted `placement.period_to not in rows`, which was a fair stand-in
+    while Today showed one row per PLACEMENT: the only way period_to could
+    appear was the bug putting it beside a countdown measured elsewhere.
+
+    It stopped being a stand-in on 2026-08-21, when a placement became one row
+    per date something runs out. period_to is now a legitimate printed date —
+    it is when the lines that run to the program period end actually expire,
+    and that row counts down to it. What must still hold, and what is checked
+    here, is that EVERY row's date is the date its own countdown was measured
+    to. The drifting placement contributes two rows and both satisfy it.
+    """
     app = BookkitApp(snapshot_db)
     async with app.run_test(size=(160, 45)) as pilot:
         await pilot.pause()
@@ -64,8 +77,47 @@ async def test_today_counts_down_to_the_date_it_prints(snapshot_db: Path) -> Non
         await pilot.pause()
         table = app.screen.query_one("#renewals-table", ListTable)
         rows = [_cell(table, r, 0) for r in range(table.row_count)]
-        assert item.renewal_on in rows
-        assert item.placement.period_to not in rows
+        assert item.renewal_on in rows, "the early line end is not on the screen"
+
+        # every printed date, against the countdown printed beside it
+        for row in range(table.row_count):
+            printed = _cell(table, row, 0)
+            counted = _cell(table, row, 1)
+            days = int("".join(c for c in counted if c.isdigit() or c == "-") or 0)
+            if counted.strip().endswith("over"):
+                days = -abs(days)
+            expected = (date.fromisoformat(printed) - TODAY).days
+            assert days == expected, (
+                f"row {row} prints {printed} and counts {counted!r} — "
+                f"a date that is not the date it counted to is the "
+                f"four-surface bug"
+            )
+
+
+async def test_a_program_whose_lines_expire_apart_is_two_rows(
+    snapshot_db: Path,
+) -> None:
+    """Grant's complaint, asserted (2026-08-21): the renewals list showed one
+    row per program carrying the program's WHOLE cover label, so "GL, AL, IM ·
+    70d over" claimed all three were overdue when only the Inland Marine layer
+    was. Each date that something actually runs out is its own row, and each
+    row names what runs out on it."""
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        item = _drifting(app.conn)
+        rows = [
+            i for i in renewals.upcoming(app.conn, TODAY, days=100000)
+            if i.placement.id == item.placement.id
+        ]
+
+        assert len(rows) > 1, "a program with two expiry dates is still one row"
+        assert len({r.renewal_on for r in rows}) == len(rows), (
+            "two rows share a date — same-day lines belong on one row"
+        )
+        assert all(r.cover for r in rows), "a row that does not say what expires"
+        # and no row claims the whole programme's cover
+        assert any(r.cover != r.lines for r in rows)
 
 
 async def test_book_counts_down_to_the_date_it_prints(snapshot_db: Path) -> None:
@@ -292,3 +344,33 @@ def test_bookctl_today_prints_the_date_it_counts_to(
     assert "Delta Marine" in renewals_block
     assert renewal_on in renewals_block
     assert period_to not in renewals_block
+
+
+async def test_two_renewals_of_one_program_do_not_collide_as_row_keys(
+    snapshot_db: Path,
+) -> None:
+    """The crash this reshape caused and the guard against it returning.
+
+    Both the Today pane and the navigator's attention tables keyed their rows
+    by `placement.id`. The moment a placement became several rows, the second
+    one raised Textual's DuplicateKey — and it fired mid-build, so Today came
+    up with an EMPTY renewals pane and an empty stale pane, which reads as a
+    dead screen rather than as an error (2026-08-21). `RenewalItem.key` carries
+    the date; this asserts the screen survives, not just that the key differs.
+    """
+    app = BookkitApp(snapshot_db)
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        item = _drifting(app.conn)
+        siblings = [
+            i for i in renewals.upcoming(app.conn, TODAY, days=100000)
+            if i.placement.id == item.placement.id
+        ]
+        assert len(siblings) > 1, "fixture drifted — nothing to collide"
+        assert len({i.key for i in siblings}) == len(siblings)
+
+        await pilot.press("t")
+        await pilot.pause()
+        # every pane AFTER the renewals table still filled — the real symptom
+        assert app.screen.query_one("#renewals-table", ListTable).row_count > 0
+        assert app.screen.query_one("#stale-table", ListTable).row_count > 0
