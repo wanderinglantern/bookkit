@@ -253,9 +253,38 @@ def test_the_route_inserts_and_answers_with_the_panel(app_and_org) -> None:
     assert "New Excess" in done.text
 
 
-def test_a_refusal_comes_back_as_the_panel_not_a_status_code(app_and_org) -> None:
+def test_a_refused_write_comes_back_as_the_panel_not_a_status_code(
+    app_and_org,
+) -> None:
     """htmx swaps nothing on a 4xx or a 5xx, so a route that refuses with a
-    status leaves a control that looks simply dead."""
+    status leaves a control that looks simply dead.
+
+    The refusal has to come from the WRITE, not from parsing: a sub-dollar
+    limit parses to 150 cents perfectly well and is refused inside the mutation
+    by towerkit's whole-dollar rule. An unparseable limit tests the parser's
+    try/except instead, and passed with the write's own arm deleted (mutation,
+    2026-08-21).
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+
+    refused = client.post(
+        _insert_url(org, placement, line_id),
+        data={"name": "Sub Dollar", "limit_cents": "1.50",
+              "anchor": "", "position": "above", "kind": "layer"},
+    )
+
+    assert refused.status_code == 200
+    assert "Sub Dollar" not in refused.text
+    assert "dollar" in refused.text.lower() or "limit" in refused.text.lower()
+
+
+def test_an_unparseable_limit_is_refused_before_the_write(app_and_org) -> None:
+    """The other half: the parse arm, kept as its own test now that the one
+    above no longer covers it by accident."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)
@@ -269,27 +298,71 @@ def test_a_refusal_comes_back_as_the_panel_not_a_status_code(app_and_org) -> Non
     )
 
     assert refused.status_code == 200
-    assert "not a number" in refused.text or "money" in refused.text.lower()
+    assert "Bad" not in refused.text
+
+
+def _other_placement_layer_id(conn, placement):
+    """A REAL layer id that belongs to some other placement in the book.
+
+    The point of the route's anchor guard is not to reject nonsense — `sync`
+    rejects nonsense by itself. It is to reject a well-formed id that names a
+    layer on somebody ELSE's tower, which is what a body-supplied id lets a
+    caller try.
+
+    DEVIATION FROM THE BRIEF'S VERBATIM HELPER, and why: every seeded program
+    in this book uses the same four layer names (Primary GL/AL/IM, Umbrella),
+    so towerkit's name-derived slugs collide across EVERY placement — the id
+    picked from "some other placement" (e.g. 'primary-im') is, by name alone,
+    ALSO already a member of THIS placement's own `known` set (just on a
+    different line). The brief's `rows[0]["id"]` version returns such a
+    colliding id every time in this fixture, so the guard's `anchor not in
+    known` check trivially passes and the scenario it is meant to test never
+    happens — confirmed by running it and getting sync.insert_layer's OWN
+    "no layer '...' on gl" message instead of the route's "reload the tab"
+    one. A layer with a name no seeded program uses is inserted on the other
+    placement so its id genuinely cannot collide."""
+    from bookkit.repo import placements as placements_repo
+
+    other = next(p for p in placements_repo.all_linked(conn) if p.id != placement.id)
+    other_program = sync.linked_program(conn, other.id).program
+    other_line_id = other_program.lines[0].id
+    diags = sync.insert_layer(
+        conn, other.id, line_id=other_line_id, anchor_layer_id=None,
+        position="above", name="Stolen Anchor Zzyzx", limit_cents=1_000_000_00,
+    )
+    assert diags.ok, [d.message for d in diags.errors]
+    fresh = sync.linked_program(conn, other.id).program
+    stolen = next(ly for ly in fresh.layers if ly.name == "Stolen Anchor Zzyzx")
+    return stolen.id
 
 
 def test_an_anchor_from_another_placement_is_refused(app_and_org) -> None:
     """The anchor arrives in the BODY, and a body id is only checked if
-    somebody checks it."""
+    somebody checks it.
+
+    The refusal must come from the ROUTE, before any write is attempted — so
+    the assertion is on the route's own words. `sync.insert_layer` would also
+    refuse this id, which is exactly why an assertion on "no layer" alone
+    passed with the guard deleted (mutation, 2026-08-21).
+    """
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)
     program = sync.linked_program(conn, placement.id).program
     line_id = program.lines[0].id
+    stolen = _other_placement_layer_id(conn, placement)
+    assert stolen is not None, "fixture drifted — no second linked placement"
 
     refused = client.post(
         _insert_url(org, placement, line_id),
         data={"name": "Sneaky", "limit_cents": "1m",
-              "anchor": "not-a-layer-here", "position": "above",
-              "kind": "layer"},
+              "anchor": stolen, "position": "above", "kind": "layer"},
     )
 
     assert refused.status_code == 200
-    assert "Sneaky" not in refused.text or "no layer" in refused.text.lower()
+    assert "reload the tab" in refused.text, refused.text[:400]
+    assert placement.ref in refused.text
+    assert "Sneaky" not in refused.text
 
 
 def test_another_accounts_program_is_a_404(app_and_org) -> None:
