@@ -1,0 +1,67 @@
+{# The confirm step for removing a program (2026-08-21).
+
+   A step, not an hx-confirm. This one moves a FILE, and towerkit JSON is the
+   sole authority for program structure — the only genuinely unrecoverable
+   thing bookkit can touch — so the destination has to be visible BEFORE
+   anything happens, exactly as _scaffold_confirm.html shows where a file will
+   land. A browser confirm() shows no plan, which is the objection web/parity.py
+   already records against using it for revert.
+
+   The notes come from services.program_remove.consequences, not from sentences
+   composed here, so this and any other confirming surface cannot promise
+   different things about one write. `blockers` is the other list and it is not
+   a warning: while it has anything in it the removal is REFUSED, and the
+   button says so rather than offering a click that comes back as an error.
+
+   It renders into the panel's own .form-host, so Cancel is the delegated
+   [data-form-cancel] listener inline-cell.js already owns. Remove targets
+   #programs-panel: the section this fragment lives in is the one that stops
+   existing, so the whole tab body is the only honest swap. #}
+<div class="confirm-remove" role="alertdialog"
+     aria-label="Remove {{ placement.program_name }}">
+  <p class="confirm-remove-title">
+    Remove <strong>{{ placement.program_name }}</strong>
+    ({{ placement.ref }}) from {{ header.org.name }}?
+  </p>
+
+  {% if blockers %}
+    {# Refused, and said before the click rather than after it. #}
+    <ul class="confirm-remove-notes">
+      <li>This program still carries {{ blockers | join(", ") }}.</li>
+      <li>Removing it would leave those records pointing at a program that is
+          not there. Move them to the surviving program first — or use
+          <strong>Merge</strong>, which moves them for you and retires this
+          one.</li>
+    </ul>
+    <div class="form-actions">
+      <button type="button" class="btn-cancel" data-form-cancel>Close</button>
+    </div>
+  {% else %}
+    <ul class="confirm-remove-notes">
+      {% for note in notes %}<li>{{ note }}</li>{% endfor %}
+    </ul>
+
+    {% if file_to %}
+      {# WHERE THE FILE GOES, in full, before the click. Moved and not deleted
+         is the whole safety of this operation, and a promise about a path is
+         worth nothing unless the path is shown. #}
+      <dl class="confirm-remove-paths">
+        <div>
+          <dt>file</dt>
+          <dd><code>{{ file_from }}</code></dd>
+        </div>
+        <div>
+          <dt>moves to</dt>
+          <dd><code>{{ file_to }}</code></dd>
+        </div>
+      </dl>
+    {% endif %}
+
+    <div class="form-actions">
+      <button type="button" class="btn-danger"
+              hx-post="{{ action }}"
+              hx-target="#programs-panel" hx-swap="outerHTML">Remove program</button>
+      <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+    </div>
+  {% endif %}
+</div>

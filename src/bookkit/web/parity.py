@@ -170,7 +170,13 @@ IMPLEMENTED: dict[str, str] = {
         "TUI's own reasoning: a drop is one field write that takes no other "
         "record with it, so the undo pill puts it straight back and there is "
         "no plan a fragment could show that the button's own hx-confirm "
-        "sentence does not."
+        "sentence does not. A WHOLE PROGRAM is the web being ahead again and "
+        "has no TUI action key at all: GET/POST /accounts/{ref}/program/"
+        "{placement_id}/remove (services/program_remove.py) retires the "
+        "placement and MOVES its towerkit file to `.removed/` beside itself — "
+        "never unlinks it, because that file is the sole authority for program "
+        "structure. It refuses while anything live still points at the "
+        "placement, and Merge remains the answer when the work should survive."
     ),
 }
 

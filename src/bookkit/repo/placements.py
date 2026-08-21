@@ -129,3 +129,40 @@ def update(
 
 def delete(conn: sqlite3.Connection, placement_id: str) -> None:
     base.soft_delete(conn, "placement", placement_id)
+
+
+# What a program CARRIES, per table, alive only. Here and not in the service
+# that reads it because repo/ owns every query — and because these six are the
+# whole set of tables that name a placement, which is a fact about the schema
+# and belongs beside it. A seventh added by a migration and forgotten here is
+# how a removal would start stranding rows on a dead foreign key.
+_DEPENDANTS: tuple[tuple[str, str, str], ...] = (
+    ("submission", "submission", "submissions"),
+    ("task", "task", "tasks"),
+    ("rfi_request", "information request", "information requests"),
+    ("document", "document", "documents"),
+    ("team_assignment", "team assignment", "team assignments"),
+    ("project_need", "project need", "project needs"),
+)
+
+
+def dependants(conn: sqlite3.Connection, placement_id: str) -> list[tuple[str, int]]:
+    """Live rows pointing at this placement, as (plural-aware label, count),
+    in schema order — empty when nothing holds it.
+
+    Counts, not records: the caller is composing a refusal, not a screen. The
+    label is returned WITH the count so no caller has to own the pluralisation
+    of "information request", which is the sort of thing two callers spell two
+    ways.
+    """
+    found: list[tuple[str, int]] = []
+    for table, one, many in _DEPENDANTS:
+        count = int(
+            conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE placement_id = ? AND {base.alive()}",
+                (placement_id,),
+            ).fetchone()[0]
+        )
+        if count:
+            found.append((one if count == 1 else many, count))
+    return found
