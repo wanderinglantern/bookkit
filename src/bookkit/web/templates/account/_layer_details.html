@@ -45,6 +45,14 @@
         <span class="pair"><span class="pair-k">no</span>{{ policy_cell | safe }}</span>
         <span class="pair"><span class="pair-k">effective</span>{{ from_cell | safe }}</span>
         <span class="pair"><span class="pair-k">expiry</span>{{ to_cell | safe }}</span>
+        {# Does the carrier true the premium up at expiry? WC and GL normally
+           do; property does not. It belongs HERE and not under coverage: it
+           is a fact about the policy, like its number and its dates, and it
+           changes no limit, no diagram and no total. Rendered and saved by the
+           derived seam like every tower_cells value below. #}
+        <span class="pair"><span class="pair-k"
+              title="the carrier audits at expiry and trues the premium up against actual payroll or sales"
+              >auditable</span>{{ tower_cells.auditable | safe }}</span>
       </div>
 
       {# D6: the coverage facts towerkit prints on the SOI and the schematic and
