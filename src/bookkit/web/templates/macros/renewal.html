@@ -1,0 +1,41 @@
+{# A renewal row's two right-hand facts, stated once.
+
+   COVER AND PROGRAM ARE DIFFERENT THINGS, and the attention tables used to
+   print `item.lines or item.placement.program_name` in one column headed
+   "Cover" — so an unlinked placement, which is most of a real book, showed
+   "2025 Casualty Program" under a header promising lines of cover. A name is
+   not cover, and a column that silently swaps one for the other cannot be
+   read (Grant, 2026-08-21).
+
+   They are two columns now. `cover` prints what runs out on THIS row's date —
+   one row per date, so "IM" on the row where the Inland Marine layer expires
+   and "GL, AL" on the row three months later — and prints an honest absence
+   when the book has no file to read lines from. `program` carries the context
+   the account link cannot, muted, because it qualifies the row rather than
+   being its subject.
+
+   In macros/ rather than in today.html because Today renders this twice
+   (overdue and upcoming) and the calendar's tooltip asks the same question a
+   third time. The Today account-name bug was ten hand-written copies of one
+   anchor where the tenth differed; two copies is how that starts. #}
+
+{% macro cover(item) -%}
+  {%- if item.cover -%}
+    {{ item.cover }}
+  {%- else -%}
+    {# AN EM DASH, not words. The first cut printed "not recorded" in the
+       uppercase .detail-label, and on a real book — where most placements are
+       unlinked — that is ten shouting cells in a column, which reads as ten
+       warnings about a state that is not wrong (the data-entry rules: reserve
+       error styling for actual errors, never for a neutral empty state). The
+       dash is what every other absence in this app prints, and the title says
+       why for anyone who wonders. The Program column beside it already carries
+       the context. #}
+    <span class="muted"
+          title="no program file is linked, so the book cannot say which lines of cover expire on this date — this counts to the program's own period end">—</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro program(item) -%}
+  <span class="muted">{{ item.placement.program_name or "—" }}</span>
+{%- endmacro %}

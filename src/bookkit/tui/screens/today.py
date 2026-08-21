@@ -53,6 +53,12 @@ def _cover(item: renewals.RenewalItem) -> Text:
     dash, not blank. The pre-fix code said `item.lines or dash()` and that half
     of it was right: an empty last column reads as a rendering fault, while a
     dash says "this row has nothing to put here", and the dash is free."""
+    # THIS ROW'S cover first: one placement can put several rows on this table
+    # now, one per date something runs out, and `lines` is the whole
+    # program's label — printing it on every row would say all three lines
+    # renew on each of the dates (renewals.RenewalItem).
+    if item.cover:
+        return Text(item.cover)
     if item.lines:
         return Text(item.lines)
     label = book._program_label(item.placement.program_name)
@@ -169,7 +175,7 @@ class TodayScreen(Screen):
                 days_text(item.days_remaining),
                 item.org.name,
                 _cover(item),
-                key=f"renewal:{item.placement.id}:{item.org.id}",
+                key=item.key,
             )
         from ...repo import projects as projects_repo
 

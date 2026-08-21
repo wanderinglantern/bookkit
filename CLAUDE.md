@@ -133,6 +133,17 @@ what a field must be able to SAY. The load-bearing ones:
   unmet project needs NEVER fall off. Attention tables show lines of cover
   (RenewalItem.lines, e.g. "GL, AL, EL") — program name alone is not
   enough context.
+- A RENEWAL ROW IS ONE DATE SOMETHING RUNS OUT, not one placement (Grant,
+  2026-08-21). `renewals.upcoming()` returns one `RenewalItem` per date a
+  placement has cover expiring on — lines sharing a date share a row, lines
+  expiring apart get a row each — so an IM layer three months early no longer
+  drags its whole program's cover label under one red countdown. `item.cover`
+  is what expires on THAT row's date and is EMPTY when no file is linked; a
+  surface prints the house em dash there and never the program name, which is
+  what made the column unreadable on a mostly-unlinked book. The program is
+  its own column. `RenewalItem.key` carries the date because a placement is
+  now several rows and both TUI tables keyed theirs by placement id — the
+  second one raised DuplicateKey mid-build and blanked the whole screen.
 - THE RENEWAL DATE IS `RenewalItem.renewal_on`, never `placement.period_to`.
   days_remaining counts to the earliest LINE end, because an IM layer runs
   out months before its program period does. Print the same date you count

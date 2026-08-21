@@ -14,6 +14,14 @@ All notable changes to bookkit, newest date first.
   Nothing is guessed — an unrecognised piece is stored as typed so the
   validator can say it is not a US code, and a near-miss is never quietly
   corrected.
+- **Renewals list the policy, not the program.** A row was one placement,
+  carrying the program's whole cover label beside one countdown — so an
+  Inland Marine layer expiring three months early made "GL, AL, IM · 70d
+  over" claim all three were late. A row is now one date something runs out:
+  lines sharing a date share a row, lines expiring apart get one each, and
+  each says what expires on it. Cover and Program are separate columns, and
+  a placement with no program file linked prints an em dash under Cover
+  instead of its own name — the book cannot know its lines, and says so.
 - **Remove a program that should not exist.** Merge folds two records of the
   same program together and refuses two file-backed placements on purpose;
   there was no way to say "this one was a mistake". Remove sits beside Merge

@@ -1,4 +1,5 @@
 {% import "macros/account.html" as account %}
+{% import "macros/renewal.html" as renewal %}
 {% extends "base.html" %}
 {% block title %}Today — bookkit{% endblock %}
 {% block content %}
@@ -21,14 +22,19 @@
       {% if overdue %}
         <div class="table-scroll">
           <table class="rows rows-fit">
-            <thead><tr><th>Renews</th><th>Over by</th><th>Account</th><th>Cover</th></tr></thead>
+            <thead><tr><th>Renews</th><th>Over by</th><th>Account</th><th>Cover</th><th>Program</th></tr></thead>
             <tbody>
               {% for item in overdue %}
                 <tr>
                   <td class="num">{{ item.renewal_on }}</td>
                   <td class="num overdue-cell">{{ -item.days_remaining }}d over</td>
                   <td class="prose">{{ account.account_link(accounts, item.org.id, "program") }}</td>
-                  <td class="prose">{{ item.lines or item.placement.program_name }}</td>
+                  {# COVER is what runs out on this row's date; PROGRAM is the
+                     context. One column doing both, with the name standing in
+                     for lines it is not, is what made this table unreadable on
+                     an unlinked book — see macros/renewal.html. #}
+                  <td class="prose">{{ renewal.cover(item) }}</td>
+                  <td class="prose">{{ renewal.program(item) }}</td>
                 </tr>
               {% endfor %}
             </tbody>
@@ -47,14 +53,19 @@
       {% if soon %}
         <div class="table-scroll">
           <table class="rows rows-fit">
-            <thead><tr><th>Renews</th><th>Due in</th><th>Account</th><th>Cover</th></tr></thead>
+            <thead><tr><th>Renews</th><th>Due in</th><th>Account</th><th>Cover</th><th>Program</th></tr></thead>
             <tbody>
               {% for item in soon %}
                 <tr>
                   <td class="num">{{ item.renewal_on }}</td>
                   <td class="num">{{ item.days_remaining }}d</td>
                   <td class="prose">{{ account.account_link(accounts, item.org.id, "program") }}</td>
-                  <td class="prose">{{ item.lines or item.placement.program_name }}</td>
+                  {# COVER is what runs out on this row's date; PROGRAM is the
+                     context. One column doing both, with the name standing in
+                     for lines it is not, is what made this table unreadable on
+                     an unlinked book — see macros/renewal.html. #}
+                  <td class="prose">{{ renewal.cover(item) }}</td>
+                  <td class="prose">{{ renewal.program(item) }}</td>
                 </tr>
               {% endfor %}
             </tbody>

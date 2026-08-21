@@ -752,7 +752,10 @@ class NavigatorScreen(Screen):
                 "program", "status", right("premium"),
             )
             for item in self._attention[which]:
-                key = f"placement:{item.placement.id}"
+                # item.key, not the placement id: a placement whose lines
+                # expire on different dates is several rows here, and a key
+                # per placement makes the second one a DuplicateKey.
+                key = item.key
                 self._row_org[key] = item.org.id
                 table.add_row(
                     date_text(item.renewal_on, item.days_remaining),
