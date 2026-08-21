@@ -47,6 +47,11 @@ class StagedImport:
     sha256: str
     records: list[StagedRecord]
     unmapped: list[str]
+    # header → canonical key, and which of those headers were FUZZY matches.
+    # A mapping is a prefill of the user's own column meanings; it has to be
+    # rendered or nobody can see that "Expiration Date" became `expiry`.
+    assigned: dict[str, str] = field(default_factory=dict)
+    fuzzy: tuple[str, ...] = ()
 
     @property
     def errors(self) -> list[Issue]:
@@ -60,6 +65,39 @@ class StagedImport:
     @property
     def ok(self) -> bool:
         return not self.errors
+
+    @property
+    def empty(self) -> bool:
+        """No records at all — a readable file with nothing in it, or a paste
+        that parsed to nothing."""
+        return not self.records
+
+    @property
+    def committable(self) -> bool:
+        """What green MEANS: committing will actually do something.
+
+        `ok` alone said yes to an empty import, so an empty-but-readable
+        spreadsheet rendered a green "OK to commit · 0 record(s)", took a
+        backup and changed nothing. Zero records is not green."""
+        return self.ok and not self.empty
+
+    def first_error(self) -> tuple[StagedRecord, Issue] | None:
+        for record in self.records:
+            for issue in record.issues:
+                if issue.severity is Severity.ERROR:
+                    return record, issue
+        return None
+
+    def first_error_text(self) -> str | None:
+        """`row 4 commission — '0.15' is ambiguous…`. A refusal that names the
+        count and not the field leaves the user hunting; every caller that
+        says "fix the errors first" says WHICH one."""
+        first = self.first_error()
+        if first is None:
+            return None
+        record, issue = first
+        where = f"row {record.source_row}" if record.source_row else record.key
+        return f"{where} {issue.field} — {issue.message}"
 
     def verdict(self) -> str:
         """The go/no-go line, on its own.
@@ -76,14 +114,20 @@ class StagedImport:
             for issue in record.issues
             if issue.severity is Severity.ERROR
         )
-        bits = [
-            "OK to commit" if self.ok else "ERRORS — cannot commit",
-            f"{len(self.records)} record(s)",
-        ]
+        if self.empty:
+            head = "NOTHING TO COMMIT — no records read"
+        elif self.ok:
+            head = "OK to commit"
+        else:
+            head = "ERRORS — cannot commit"
+        bits = [head, f"{len(self.records)} record(s)"]
         if errors:
             bits.append(f"{errors} error(s)")
         if self.unmapped:
             bits.append(f"{len(self.unmapped)} column(s) ignored")
+        first = self.first_error_text()
+        if first is not None:
+            bits.append(f"first: {first}")
         return " · ".join(bits)
 
     def report(self, verbose: bool = False) -> str:
@@ -91,6 +135,7 @@ class StagedImport:
         unmapped headers. With verbose (paste previews), every record shows
         its PARSED FIELDS — what you're about to commit, not just how many."""
         lines = [f"import staging for {self.source}"]
+        lines.extend(self._mapping_lines())
         kinds: dict[str, dict[str, int]] = {}
         for record in self.records:
             kinds.setdefault(record.kind, {}).setdefault(record.action, 0)
@@ -111,6 +156,19 @@ class StagedImport:
                 lines.extend(f"    {issue}" for issue in record.issues)
         if self.unmapped:
             lines.append("  unmapped columns (ignored): " + ", ".join(self.unmapped))
-        status = "OK to commit" if self.ok else "ERRORS — cannot commit"
-        lines.append(f"  {status}")
+        lines.append(f"  {self.verdict()}")
         return "\n".join(lines)
+
+    def _mapping_lines(self) -> list[str]:
+        """Every header→field decision, fuzzy ones flagged.
+
+        The fuzzy matcher runs at threshold 85 and nothing rendered its
+        verdict: "Expiration Date" silently became `expiry` and the user had
+        no way to check a prefill of their own column meanings."""
+        if not self.assigned:
+            return []
+        lines = ["  columns read as:"]
+        for header, key in self.assigned.items():
+            mark = "  (fuzzy match — confirm)" if header in self.fuzzy else ""
+            lines.append(f"    {header!r} → {key}{mark}")
+        return lines

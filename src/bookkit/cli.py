@@ -437,7 +437,10 @@ def _dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
         mapping = map_headers(table.headers, BOOK_FIELDS)
         staged = stage_book(conn, table, mapping)
         print(staged.report())
-        if not staged.ok:
+        # committable, not ok: an empty-but-readable sheet has no errors, and
+        # reporting "OK to commit · 0 record(s)" for it is success styling
+        # over a neutral empty state
+        if not staged.committable:
             return 1
         if not args.dry_run:
             print("commit happens in the TUI import screen; use --dry-run for now")

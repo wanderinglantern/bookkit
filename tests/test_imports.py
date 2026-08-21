@@ -21,13 +21,97 @@ def test_book_fields_have_unique_keys_and_aliases() -> None:
     assert [spec.key for spec in BOOK_FIELDS if spec.required] == ["account"]
 
 
+def _fill_template(path: Path, **cells: object) -> Path:
+    """Fill one data row into a written template's data sheet, the way a user
+    would. Templates ship EMPTY — see the example-row tests below."""
+    from openpyxl import load_workbook
+
+    from bookkit.imports.fieldspec import DATA_SHEET
+
+    wb = load_workbook(path)
+    ws = wb[DATA_SHEET]
+    headers = [cell.value for cell in ws[1]]
+    ws.append([cells.get(str(header)) for header in headers])
+    wb.save(path)
+    return path
+
+
 def test_template_round_trips_with_zero_unmapped(tmp_path: Path) -> None:
-    out = write_template(BOOK_FIELDS, tmp_path / "book.xlsx")
+    out = _fill_template(
+        write_template(BOOK_FIELDS, tmp_path / "book.xlsx"), account="Zephyr Logistics"
+    )
     table = read_table(out)
     mapping = map_headers(table.headers, BOOK_FIELDS)
     assert mapping.unmapped == []
+    assert mapping.fuzzy == ()  # a template must never need the fuzzy matcher
     rows = apply_mapping(table, mapping)
-    assert rows[0]["account"] == "Atomic Industries"
+    assert rows[0]["account"] == "Zephyr Logistics"
+
+
+def test_template_ships_no_data_rows_and_stages_nothing(tmp_path: Path, conn) -> None:
+    """FINDING 1. The worked example used to be appended to the data sheet as
+    a real row: fill in rows underneath it, re-import, and you created an
+    "Atomic Industries" account carrying a BOUND $250,000 placement that came
+    off no document and that nobody typed."""
+    out = write_template(BOOK_FIELDS, tmp_path / "book.xlsx")
+    table = read_table(out)
+    assert table.rows == []
+    staged = stage_book(conn, table, map_headers(table.headers, BOOK_FIELDS))
+    assert staged.records == []
+    assert "Atomic Industries" not in staged.report()
+
+
+def test_template_commits_nothing_from_a_blank_template(db_path: Path) -> None:
+    """The bad outcome end to end: a template committed as-is must not create
+    the example account, its bound placement, or even a backup."""
+    connection = db.connect(db_path)
+    try:
+        out = write_template(BOOK_FIELDS, db_path.parent / "book.xlsx")
+        table = read_table(out)
+        staged = stage_book(connection, table, map_headers(table.headers, BOOK_FIELDS))
+        with pytest.raises(ValueError, match="nothing to commit"):
+            commit_book(connection, staged, db_path)
+        assert orgs_repo.list_orgs(connection, kind="client") == []
+        # refused BEFORE the snapshot: an import that changes nothing must not
+        # leave a backup behind either
+        assert not (db_path.parent / "backups").exists()
+    finally:
+        connection.close()
+
+
+def test_template_example_is_still_visible_on_its_own_sheet(tmp_path: Path) -> None:
+    """Moving the example must not delete it — showing the expected shape is
+    the whole point of a template."""
+    from openpyxl import load_workbook
+
+    from bookkit.imports.fieldspec import DATA_SHEET, EXAMPLE_SHEET
+
+    out = write_template(BOOK_FIELDS, tmp_path / "book.xlsx")
+    wb = load_workbook(out)
+    assert wb.sheetnames == [DATA_SHEET, EXAMPLE_SHEET]
+    example = wb[EXAMPLE_SHEET]
+    assert "EXAMPLE ONLY" in str(example.cell(row=1, column=1).value)
+    values = [cell.value for cell in example[3]]
+    assert "Atomic Industries" in values and "250,000" in values
+
+
+def test_example_sheet_stays_out_of_the_pipeline_when_tabs_are_reordered(
+    tmp_path: Path,
+) -> None:
+    """Tab order decides `worksheets[0]`, and tabs get dragged — so the reader
+    asks for the data sheet BY NAME."""
+    from openpyxl import load_workbook
+
+    from bookkit.imports.fieldspec import EXAMPLE_SHEET
+
+    out = _fill_template(
+        write_template(BOOK_FIELDS, tmp_path / "book.xlsx"), account="Zephyr Logistics"
+    )
+    wb = load_workbook(out)
+    wb.move_sheet(EXAMPLE_SHEET, offset=-1)  # example dragged to the front
+    wb.save(out)
+    rows = read_table(out).rows
+    assert [row.get("account") for row in rows] == ["Zephyr Logistics"]
 
 
 def test_read_table_csv_and_xlsx_agree(tmp_path: Path) -> None:
@@ -538,16 +622,31 @@ def test_cli_template_and_dry_run_import(tmp_path: Path, capsys) -> None:
     dbfile = tmp_path / "book.db"
     template = tmp_path / "book.xlsx"
     assert cli_main(["--db", str(dbfile), "template", "book", str(template)]) == 0
+    _fill_template(template, account="Zephyr Logistics")
     code = cli_main(["--db", str(dbfile), "import", "book", str(template), "--dry-run"])
     out = capsys.readouterr().out
     assert code == 0
     assert "account: 1 create" in out and "OK to commit" in out
 
 
+def test_cli_dry_run_of_an_untouched_template_is_not_success(
+    tmp_path: Path, capsys
+) -> None:
+    """FINDING 8. Zero records is not green, on every surface that reports."""
+    dbfile = tmp_path / "book.db"
+    template = tmp_path / "book.xlsx"
+    cli_main(["--db", str(dbfile), "template", "book", str(template)])
+    code = cli_main(["--db", str(dbfile), "import", "book", str(template), "--dry-run"])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "NOTHING TO COMMIT" in out and "OK to commit" not in out
+
+
 def test_cli_import_without_dry_run_points_at_tui(tmp_path: Path, capsys) -> None:
     dbfile = tmp_path / "book.db"
     template = tmp_path / "book.xlsx"
     cli_main(["--db", str(dbfile), "template", "book", str(template)])
+    _fill_template(template, account="Zephyr Logistics")
     code = cli_main(["--db", str(dbfile), "import", "book", str(template)])
     assert code == 2
     assert "TUI" in capsys.readouterr().out
@@ -574,7 +673,12 @@ async def test_import_screen_book_commit(tmp_path: Path) -> None:
     template = tmp_path / "book.xlsx"
     from bookkit.imports.fieldspec import write_template
 
-    write_template(BOOK_FIELDS, template)
+    _fill_template(
+        write_template(BOOK_FIELDS, template),
+        account="Atomic Industries", program="Property",
+        inception="2026-10-01", expiry="2027-10-01", premium="250,000",
+        commission="15%",
+    )
     app = BookkitApp(dbfile)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.press("t")  # navigator is home; the book importer is on Today
@@ -627,6 +731,352 @@ async def test_account_import_chooser_contact_paste(tmp_path: Path) -> None:
         [contact] = contacts_repo.for_org(app.conn, org.id)
         assert contact.name == "Rosa Silva"
         assert contact.email == "r.silva@atomic.example.com"  # the EDITED text won
+
+
+# --- audit E: the findings, one test each ------------------------------------------
+
+
+def _percent_book(path: Path, commission: object, number_format: str | None) -> Path:
+    """A one-row book with a commission cell written the way Excel writes it."""
+    from openpyxl import Workbook
+
+    from bookkit.imports.fieldspec import DATA_SHEET
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = DATA_SHEET
+    ws.append(
+        ["account", "program", "inception", "expiry", "premium", "commission"]
+    )
+    ws.append(
+        ["Atomic Industries", "Property", "2026-10-01", "2027-10-01", "250,000",
+         commission]
+    )
+    if number_format is not None:
+        ws.cell(row=2, column=6).number_format = number_format
+    wb.save(path)
+    return path
+
+
+def test_percent_formatted_commission_is_refused_not_reinterpreted(
+    conn, tmp_path: Path
+) -> None:
+    """FINDING 2. A percent-formatted 15% cell reaches the reader as the float
+    0.15, and the share parser reads a bare number as a percent — so it landed
+    as 15 bps (0.15%), a silent 100x understatement. It must refuse, naming
+    both readings, and it must NOT auto-correct: 'fix' it upward and a real
+    0.5% fee becomes 50%."""
+    path = _percent_book(tmp_path / "book.xlsx", 0.15, "0%")
+    table = read_table(path)
+    assert table.rows[0]["commission"] == 0.15  # what the file really hands over
+    staged = stage_book(conn, table, map_headers(table.headers, BOOK_FIELDS))
+    placement = next(r for r in staged.records if r.kind == "placement")
+    assert "commission_bps" not in placement.fields  # neither 15 nor 1500
+    assert not staged.ok
+    [issue] = [i for i in placement.issues if i.field == "commission"]
+    assert "0.15%" in issue.message and "15%" in issue.message
+    assert "row 1" in issue.message
+
+
+def test_percent_formatted_commission_never_reaches_the_database(
+    db_path: Path,
+) -> None:
+    """The bad outcome, end to end: 0.15 must not commit as 15 bps."""
+    connection = db.connect(db_path)
+    try:
+        path = _percent_book(db_path.parent / "book.xlsx", 0.15, "0%")
+        table = read_table(path)
+        staged = stage_book(connection, table, map_headers(table.headers, BOOK_FIELDS))
+        with pytest.raises(ValueError, match="commit refused"):
+            commit_book(connection, staged, db_path)
+        assert orgs_repo.list_orgs(connection, kind="client") == []
+    finally:
+        connection.close()
+
+
+def test_unambiguous_commission_cells_still_parse(conn, tmp_path: Path) -> None:
+    """The refusal is scoped to the collision band: '15%', '15' and '15.0' are
+    all 1500 bps and must keep working."""
+    for cell in ("15%", "15", 15, 15.0, "0.15%"):
+        path = _percent_book(tmp_path / f"book-{cell}.xlsx", cell, None)
+        table = read_table(path)
+        staged = stage_book(conn, table, map_headers(table.headers, BOOK_FIELDS))
+        placement = next(r for r in staged.records if r.kind == "placement")
+        expected = 15 if cell == "0.15%" else 1500
+        assert placement.fields["commission_bps"] == expected, cell
+        assert staged.ok, cell
+
+
+def test_reimport_that_corrects_a_renewal_date_actually_moves_it(
+    db_path: Path,
+) -> None:
+    """FINDING 3. Matching is period-OVERLAP based, so a corrected expiry
+    still lands on the existing placement — and the committer dropped
+    period_from/period_to from the update with no Issue anywhere, so
+    "updated" meant nothing changed."""
+    connection = db.connect(db_path)
+    try:
+        commit_book(connection, _staged_book(connection, [dict(_GOOD_ROW)]), db_path)
+        staged = _staged_book(
+            connection, [{**_GOOD_ROW, "expiry": "2027-12-31"}]
+        )
+        placement_record = next(r for r in staged.records if r.kind == "placement")
+        assert placement_record.action == "update"
+        assert any(
+            "2027-12-31" in issue.message for issue in placement_record.issues
+        ), "the preview must say the period moves"
+        commit_book(connection, staged, db_path)
+        org = orgs_repo.find_by_name(connection, "Atomic Industries")
+        [placement] = placements_repo.for_org(connection, org.id)
+        assert placement.period_to == "2027-12-31"
+    finally:
+        connection.close()
+
+
+def test_reimport_keeps_the_period_a_program_file_owns_and_says_so(
+    db_path: Path, tmp_path: Path
+) -> None:
+    """The other half of the decision: towerkit files are the authority for a
+    linked placement's period, so the import keeps its hands off — but says
+    it kept them off, which is the part that was missing."""
+    connection = db.connect(db_path)
+    try:
+        placement = _linked_placement(connection, tmp_path)
+        staged = _staged_book(connection, [{
+            "account": "Atomic Industries", "program": "Property",
+            "inception": "2026-10-01", "expiry": "2027-12-31",
+            "premium": "300,000",
+        }])
+        record = next(r for r in staged.records if r.kind == "placement")
+        assert record.action == "update"
+        assert "period_to" not in record.fields
+        assert any("NOT changed" in issue.message for issue in record.issues)
+        commit_book(connection, staged, db_path)
+        after = placements_repo.get(connection, placement.id)
+        assert after.period_to == "2027-10-01"  # the file still owns it
+        assert after.total_premium == 30_000_000  # everything else did update
+    finally:
+        connection.close()
+
+
+def test_preview_renders_every_header_mapping_including_the_fuzzy_ones(
+    conn,
+) -> None:
+    """FINDING 4. Every fuzzy match at threshold 85 was invisible: nobody
+    could see that 'Expiration Date' had become `expiry`."""
+    headers = ["Insured", "Efective Date", "Wibble"]
+    table = RawTable("book.csv", "ab" * 32, headers, [{"Insured": "Atomic"}])
+    mapping = map_headers(headers, BOOK_FIELDS)
+    assert mapping.fuzzy == ("Efective Date",)  # matched by fuzz over a typo
+    report = stage_book(conn, table, mapping).report()
+    assert "'Insured' → account" in report
+    assert "'Efective Date' → inception" in report
+    assert "fuzzy match" in report
+    assert "Wibble" in report  # unmapped is still reported too
+    # and the exact match is not slandered as a guess
+    insured_line = next(
+        line for line in report.splitlines() if "'Insured'" in line
+    )
+    assert "fuzzy" not in insured_line
+
+
+def test_verdict_names_the_first_offending_field_and_row(conn) -> None:
+    """FINDING 6. '3 error(s)' with no field, row or fix is half a message."""
+    table, mapping = _book_table([
+        {"account": "Atomic Industries"},
+        {"account": "Borealis Foods", "program": "Property",
+         "inception": "2026-10-01", "expiry": "2027-10-01", "commission": "0.15"},
+    ])
+    staged = stage_book(conn, table, mapping)
+    verdict = staged.verdict()
+    assert "ERRORS — cannot commit" in verdict
+    assert "row 2" in verdict and "commission" in verdict
+    assert staged.first_error_text() is not None
+
+
+def test_empty_but_readable_sheet_is_not_green_and_takes_no_backup(
+    db_path: Path,
+) -> None:
+    """FINDING 8. records == [] gave ok is True gave a green 'OK to commit ·
+    0 record(s)': success styling over a neutral empty state. The user
+    committed, a backup was taken, and nothing happened."""
+    connection = db.connect(db_path)
+    try:
+        empty = db_path.parent / "empty.csv"
+        empty.write_text("account,premium\n")
+        table = read_table(empty)
+        staged = stage_book(connection, table, map_headers(table.headers, BOOK_FIELDS))
+        assert staged.ok  # no errors — that was never the question
+        assert staged.empty and not staged.committable
+        assert "NOTHING TO COMMIT" in staged.verdict()
+        assert "OK to commit" not in staged.verdict()
+        with pytest.raises(ValueError, match="nothing to commit"):
+            commit_book(connection, staged, db_path)
+        assert not (db_path.parent / "backups").exists()
+    finally:
+        connection.close()
+
+
+def test_renewal_paste_names_the_premium_it_would_carry_forward(
+    db_path: Path, tmp_path: Path
+) -> None:
+    """FINDING 9a. A layer whose premium the parser missed produced NO staged
+    record at all, so it renewed carrying the EXPIRING premium with nothing
+    on screen."""
+    connection = db.connect(db_path)
+    try:
+        placement = _linked_placement(connection, tmp_path)
+        # limit and carrier restated, premium absent
+        staged = stage_renewal(connection, placement.id, "Primary 10M — Chubb 100%\n")
+        primary = next(r for r in staged.records if r.key.endswith("Primary"))
+        messages = " ".join(issue.message for issue in primary.issues)
+        assert "premium" in messages
+        assert "$250,000" in messages  # the figure it will carry forward
+        assert staged.ok  # visible, not blocking: the layer may truly be flat
+    finally:
+        connection.close()
+
+
+def test_program_paste_says_the_period_came_off_the_placement(conn) -> None:
+    """FINDING 9b. A period is a date off the schedule; borrowing the
+    placement's silently is the prefill nobody checks."""
+    staged, _draft = stage_program(
+        conn, _TOWER, "Atomic Industries", "Property", "2026-10-01", "2027-10-01"
+    )
+    program = next(r for r in staged.records if r.kind == "program")
+    [issue] = [i for i in program.issues if i.field == "period"]
+    assert "2026-10-01" in issue.message and "2027-10-01" in issue.message
+    assert staged.ok
+
+
+def test_contact_paste_says_the_note_is_dated_today(conn) -> None:
+    """FINDING 9c. `occurred_on` was stamped today on a three-week-old pasted
+    thread, with no field to change it and nothing on screen saying so."""
+    from datetime import date
+
+    org = orgs_repo.create(conn, kind="client", name="Atomic Industries")
+    staged = stage_contact_paste(conn, _SIGNATURE, org.id, org.name)
+    note = next(r for r in staged.records if r.kind == "interaction")
+    [issue] = [i for i in note.issues if i.field == "occurred_on"]
+    assert date.today().isoformat() in issue.message
+
+    dated = "Sent: 2026-07-30\n\n" + _SIGNATURE
+    staged = stage_contact_paste(conn, dated, org.id, org.name)
+    note = next(r for r in staged.records if r.kind == "interaction")
+    [issue] = [i for i in note.issues if i.field == "occurred_on"]
+    assert "2026-07-30" in issue.message  # named, never silently adopted
+    assert note.fields["occurred_on"] == date.today().isoformat()
+
+
+async def test_import_screen_preview_shows_parsed_values(tmp_path: Path) -> None:
+    """FINDING 5. The file preview called report() without verbose, so it
+    showed counts by kind and action and NOT ONE parsed field value — you
+    could commit hundreds of accounts having seen none of them. The paste
+    flows always showed values; the file flow now does too."""
+    from bookkit.tui.app import BookkitApp
+
+    dbfile = tmp_path / "tui.db"
+    db.connect(dbfile).close()
+    template = _fill_template(
+        write_template(BOOK_FIELDS, tmp_path / "book.xlsx"),
+        account="Zephyr Logistics", program="Property",
+        inception="2026-10-01", expiry="2027-10-01", premium="250,000",
+    )
+    app = BookkitApp(dbfile)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("i")
+        app.screen.query_one("#import-path").value = str(template)
+        await pilot.press("enter")
+        await pilot.pause()
+        body = str(app.screen.query_one("#import-preview-body").render())
+        assert "Zephyr Logistics" in body
+        assert "total_premium: 25000000" in body
+        assert "period_to: 2027-10-01" in body
+        assert "'account' → account" in body  # the mapping, finding 4
+        verdict = str(app.screen.query_one("#import-verdict").render())
+        assert "OK to commit" in verdict
+
+
+async def test_import_screen_stale_green_verdict_never_outlives_its_staging(
+    tmp_path: Path,
+) -> None:
+    """FINDING 7. The verdict is a persistent Static, not a toast. The sha256
+    guard set `_staged = None` and left the previous run's green "OK to
+    commit" standing, so the visible go/no-go contradicted the real one."""
+    from bookkit.tui.app import BookkitApp
+
+    dbfile = tmp_path / "tui.db"
+    db.connect(dbfile).close()
+    template = _fill_template(
+        write_template(BOOK_FIELDS, tmp_path / "book.xlsx"), account="Zephyr Logistics"
+    )
+    app = BookkitApp(dbfile)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("i")
+        app.screen.query_one("#import-path").value = str(template)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "OK to commit" in str(app.screen.query_one("#import-verdict").render())
+
+        _fill_template(template, account="Borealis Foods")  # edited under us
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        verdict = str(app.screen.query_one("#import-verdict").render())
+        assert app.screen._staged is None
+        assert "OK to commit" not in verdict
+        assert "re-preview" in verdict
+
+        # and a re-stage that cannot even read the file clears it too
+        app.screen.query_one("#import-path").value = str(tmp_path / "nope.xlsx")
+        await pilot.press("enter")
+        await pilot.pause()
+        verdict = str(app.screen.query_one("#import-verdict").render())
+        assert "OK to commit" not in verdict and "cannot read" in verdict
+
+
+async def test_paste_modal_failed_restage_drops_the_previous_parse(
+    tmp_path: Path,
+) -> None:
+    """FINDING 7, the paste half — and worse than a stale line: staging into
+    `self._staged` inside the try meant a failed re-stage left the OLD parse
+    in place under a green verdict, and ctrl+s would have committed it."""
+    from bookkit.imports.staging import StagedImport, StagedRecord
+    from bookkit.tui.app import BookkitApp
+    from bookkit.tui.widgets.paste_import import PasteImportModal
+
+    dbfile = tmp_path / "tui.db"
+    db.connect(dbfile).close()
+    seen: list[str] = []
+
+    def stage(text: str) -> StagedImport:
+        seen.append(text)
+        if len(seen) == 1:
+            return StagedImport(
+                "paste", "", [StagedRecord("contact", "Rosa", {}, source_row=1)], []
+            )
+        raise ValueError("unparseable paste")
+
+    app = BookkitApp(dbfile)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.push_screen(PasteImportModal("paste test", stage, lambda staged: "done"))
+        await pilot.pause()
+        screen = app.screen
+        screen.query_one("#paste-text").text = "first"
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        assert "OK to commit" in str(screen.query_one("#paste-verdict").render())
+
+        screen.query_one("#paste-text").text = "second"
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        verdict = str(screen.query_one("#paste-verdict").render())
+        assert screen._staged is None  # the old parse is gone, not committable
+        assert "OK to commit" not in verdict
+        assert "unparseable paste" in verdict
 
 
 def test_imports_package_contains_no_sql() -> None:

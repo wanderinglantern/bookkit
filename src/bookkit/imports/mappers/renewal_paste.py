@@ -46,9 +46,7 @@ def stage_renewal(
             continue
         claimed.add(existing.id)
         matched += 1
-        diffed = _diff_layer(key_base, existing, pasted, rownum)
-        if diffed is not None:
-            records.append(diffed)
+        records.append(_diff_layer(key_base, existing, pasted, rownum))
     for layer in current.layers:
         if layer.id not in claimed:
             record = StagedRecord(
@@ -92,9 +90,17 @@ def _match_layer(
 
 def _diff_layer(
     key_base: str, existing: Layer, pasted: Layer, rownum: int
-) -> StagedRecord | None:
+) -> StagedRecord:
+    """Always a record, even when nothing changed.
+
+    A layer whose premium the parser missed produced NO record at all, so it
+    renewed carrying the EXPIRING premium with nothing on screen — a prefill
+    of the one figure that comes off the renewal schedule. Every matched layer
+    now says what it will do, and every figure the paste did not supply is
+    named together with the expiring amount it will carry forward."""
     changes: dict[str, object] = {}
     diff_parts: list[str] = []
+    carried: list[str] = []
     for attr, cents_key in (
         ("premium", "premium_cents"),
         ("limit", "limit_cents"),
@@ -102,16 +108,30 @@ def _diff_layer(
     ):
         new = getattr(pasted, attr)
         old = getattr(existing, attr)
-        if new is None or new == old:
+        if new is None:
+            if old:  # a real expiring figure the paste did not restate
+                carried.append(f"{attr} ({format_money(old)})")
+            continue
+        if new == old:
             continue
         changes[cents_key] = dollars_to_cents(new)
         old_text = format_money(old) if old is not None else "—"
         diff_parts.append(f"{attr}: {old_text} → {format_money(new)}")
-    if not changes:
-        return None
     record = StagedRecord(
         "layer", f"{key_base}/{existing.name}",
-        {**changes, "layer_name": existing.name, "diff": "; ".join(diff_parts)},
-        source_row=rownum, action="update",
+        {"layer_name": existing.name}, source_row=rownum,
+        action="update" if changes else "skip",
     )
+    if changes:
+        record.fields.update(changes)
+        record.fields["diff"] = "; ".join(diff_parts)
+    else:
+        record.warn("layer", "nothing changed in the paste — renews unchanged")
+    if carried:
+        record.warn(
+            "layer",
+            "not in the paste: " + ", ".join(carried) + " — the layer renews "
+            "carrying the expiring figure(s); paste them or edit the layer "
+            "after renewing",
+        )
     return record

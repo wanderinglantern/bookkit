@@ -32,10 +32,7 @@ class CommitResult:
 def commit_book(
     conn: sqlite3.Connection, staged: StagedImport, db_path: Path
 ) -> CommitResult:
-    if not staged.ok:
-        raise ValueError(
-            f"staged import has {len(staged.errors)} error(s); commit refused"
-        )
+    _gate(staged)
     result = CommitResult(backup=_snapshot(conn, db_path))
     note = f"import {staged.source} sha256={staged.sha256}"
     org_ids: dict[str, str] = {}  # org_key → id, for records under new accounts
@@ -60,10 +57,7 @@ def commit_contact_paste(
     conn: sqlite3.Connection, staged: StagedImport, org_id: str, db_path: Path
 ) -> CommitResult:
     """Contact (create or update) + the pasted text as a note interaction."""
-    if not staged.ok:
-        raise ValueError(
-            f"staged import has {len(staged.errors)} error(s); commit refused"
-        )
+    _gate(staged)
     result = CommitResult(backup=_snapshot(conn, db_path))
     note = "import pasted capture"
     with db.transaction(conn):
@@ -98,10 +92,7 @@ def commit_team_paste(
     """Pasted colleague signature → team member (create, or update by email)."""
     from ..repo import team
 
-    if not staged.ok:
-        raise ValueError(
-            f"staged import has {len(staged.errors)} error(s); commit refused"
-        )
+    _gate(staged)
     result = CommitResult(backup=_snapshot(conn, db_path))
     with db.transaction(conn):
         for record in staged.records:
@@ -143,8 +134,9 @@ def commit_program(
 
     assert isinstance(draft, DraftProgram)
     diags = Diagnostics()
-    if not staged.ok:
-        diags.error("staged", f"{len(staged.errors)} staging error(s); commit refused")
+    refusal = _refusal(staged)
+    if refusal is not None:
+        diags.error("staged", refusal)
         return None, diags
     placement = placements.get(conn, placement_id)
     if placement.program_path:
@@ -196,8 +188,9 @@ def commit_renewal(
     from .. import sync
 
     diags = Diagnostics()
-    if not staged.ok:
-        diags.error("staged", f"{len(staged.errors)} staging error(s); commit refused")
+    refusal = _refusal(staged)
+    if refusal is not None:
+        diags.error("staged", refusal)
         return None, diags
     _snapshot(conn, db_path)
     new_path = None
@@ -257,6 +250,32 @@ def _cleanup_file(path: Path | None, wrote: bool) -> None:
 
 def _maybe_int(value: object) -> int | None:
     return value if isinstance(value, int) else None
+
+
+def _refusal(staged: StagedImport) -> str | None:
+    """Why this staged import cannot be committed, or None.
+
+    Zero records is a refusal, not a success. An empty-but-readable
+    spreadsheet has no errors, so `ok` said yes: the user committed, a backup
+    was taken, and nothing happened — success styling over a neutral empty
+    state. The refusal names the fix."""
+    if not staged.ok:
+        refused = f"{len(staged.errors)} error(s); commit refused"
+        first = staged.first_error_text()
+        return f"{refused} — first: {first}" if first else refused
+    if staged.empty:
+        return (
+            f"nothing to commit: {staged.source} parsed to 0 records — "
+            "check the sheet has data rows under its header row, and that the "
+            "columns the preview lists as read are the ones you filled in"
+        )
+    return None
+
+
+def _gate(staged: StagedImport) -> None:
+    refusal = _refusal(staged)
+    if refusal is not None:
+        raise ValueError(refusal)
 
 
 def _snapshot(conn: sqlite3.Connection, db_path: Path) -> Path:
@@ -326,9 +345,14 @@ def _apply_placement(
     result: CommitResult,
 ) -> None:
     if record.action == "update" and record.target_id is not None:
+        # period_from/period_to ARE written: matching is period-overlap based,
+        # so a re-import that corrects a renewal date lands here, and dropping
+        # the dates made "updated" mean "changed nothing". Where a program
+        # file owns the period, staging has already removed them from the
+        # record and said so. program_name is never written — the match is
+        # name-equal modulo case, and the curated spelling wins.
         placements.update(
-            conn, record.target_id, note=note,
-            **_fields(record, "program_name", "period_from", "period_to"),
+            conn, record.target_id, note=note, **_fields(record, "program_name"),
         )
     else:
         placement = placements.create(

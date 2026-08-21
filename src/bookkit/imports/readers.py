@@ -7,6 +7,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from ..sync import file_sha256
 
@@ -25,7 +26,10 @@ def read_table(path: Path) -> RawTable:
         return _read_xlsx(path)
     if suffix == ".csv":
         return _read_csv(path)
-    raise ValueError(f"cannot read {path.name!r}: unsupported suffix {suffix!r}")
+    raise ValueError(
+        f"cannot read {path.name!r}: {suffix or 'no'} suffix — "
+        "bookkit imports .xlsx and .csv; export the sheet as one of those"
+    )
 
 
 def _read_csv(path: Path) -> RawTable:
@@ -49,7 +53,7 @@ def _read_xlsx(path: Path) -> RawTable:
 
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
-        ws = wb.worksheets[0]
+        ws = _data_sheet(wb)
         rows_iter = ws.iter_rows(values_only=True)
         header_row = next(rows_iter, None)
         headers = [str(h or "").strip() for h in header_row or ()]
@@ -66,3 +70,20 @@ def _read_xlsx(path: Path) -> RawTable:
         return RawTable(path.name, file_sha256(path), [h for h in headers if h], rows)
     finally:
         wb.close()
+
+
+def _data_sheet(wb: Any) -> Any:
+    """The sheet named `Import` when the workbook has one, else the first.
+
+    Tab order decides `worksheets[0]`, and tabs get dragged. The template
+    ships a data sheet and a separate worked-example sheet; naming the data
+    sheet is what stops a reordered workbook from feeding the EXAMPLE into
+    the pipeline as if a human had typed it.
+    """
+    from .fieldspec import DATA_SHEET
+
+    sheets = wb.worksheets
+    for sheet in sheets:
+        if str(sheet.title).strip().lower() == DATA_SHEET.lower():
+            return sheet
+    return sheets[0]

@@ -44,17 +44,34 @@ BOOK_FIELDS: tuple[FieldSpec, ...] = (
 )
 
 
+# The data sheet the pipeline reads, and the sheet the worked example lives
+# on. Keeping them apart is the whole point: an example that sits in the data
+# sheet IS data.
+DATA_SHEET = "Import"
+EXAMPLE_SHEET = "Example (never imported)"
+EXAMPLE_BANNER = (
+    "EXAMPLE ONLY — this sheet is never imported. "
+    f"Fill in the {DATA_SHEET!r} sheet."
+)
+
+
 def write_template(specs: tuple[FieldSpec, ...], path: Path) -> Path:
     """Blank populate-and-reimport workbook: canonical headers (bold, required
-    filled), one worked example row, frozen header. Same conventions as
-    towerkit's program template."""
+    filled), frozen header, and the worked example on its OWN sheet.
+
+    The example used to be appended to the data sheet as row 2. Nothing marked
+    it and staging had no filter, so filling rows underneath it and
+    re-importing created a real "Atomic Industries" account carrying a real
+    BOUND $250,000 placement — a figure nobody typed, off no document. The
+    example still has to be visible (it is what shows the expected shape), so
+    it moved rather than went away."""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill
 
     wb = Workbook()
     ws = wb.active
     assert ws is not None
-    ws.title = "Import"
+    ws.title = DATA_SHEET
     required_fill = PatternFill("solid", fgColor="F9E6A0")
     for col, spec in enumerate(specs, start=1):
         cell = ws.cell(row=1, column=col, value=spec.key)
@@ -62,7 +79,17 @@ def write_template(specs: tuple[FieldSpec, ...], path: Path) -> Path:
         if spec.required:
             cell.fill = required_fill
         ws.column_dimensions[cell.column_letter].width = max(12, len(spec.key) + 2)
-    ws.append([spec.example for spec in specs])
     ws.freeze_panes = "A2"
+
+    example = wb.create_sheet(EXAMPLE_SHEET)
+    banner = example.cell(row=1, column=1, value=EXAMPLE_BANNER)
+    banner.font = Font(bold=True, color="B03A2E")
+    for col, spec in enumerate(specs, start=1):
+        header = example.cell(row=2, column=col, value=spec.key)
+        header.font = Font(bold=True)
+        example.cell(row=3, column=col, value=spec.example)
+        example.column_dimensions[header.column_letter].width = max(
+            12, len(spec.key) + 2
+        )
     wb.save(path)
     return path

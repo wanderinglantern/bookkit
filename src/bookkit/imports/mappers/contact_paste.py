@@ -79,6 +79,7 @@ def stage_contact_paste(
     records = [contact] if _has_identity(contact) else []
     if not records:
         contact = None  # type: ignore[assignment]
+    today = date.today().isoformat()
     note = StagedRecord(
         "interaction",
         f"{org_name}/note",
@@ -86,11 +87,27 @@ def stage_contact_paste(
             "org_id": org_id,
             "type": "note",
             "subject": "pasted capture",
-            "occurred_on": date.today().isoformat(),
+            "occurred_on": today,
             "body": text,
         },
         source_row=1,
     )
+    # a date off a three-week-old thread is a figure off a document; today is
+    # a guess, and a guess that is never shown is the dangerous kind
+    seen = _dates_in(text, today)
+    if seen:
+        note.warn(
+            "occurred_on",
+            f"dated today ({today}), but the paste mentions {', '.join(seen)} — "
+            "if the thread is older, change the date on the interaction after "
+            "committing",
+        )
+    else:
+        note.warn(
+            "occurred_on",
+            f"no date in the paste — this note is dated today ({today}); "
+            "change it on the interaction if the thread is older",
+        )
     if not records:
         note.warn("contact", "no contact details recognised — keeping the text as a note")
     records.append(note)
@@ -126,3 +143,15 @@ def _name_and_title(
             continue
         contact.fields["title"] = line
         break
+
+
+def _dates_in(text: str, today: str) -> list[str]:
+    """Date-shaped strings in the paste, other than today's. Named, never
+    used: guessing which one is the thread's date would be the same mistake
+    as guessing it is today."""
+    found: list[str] = []
+    for match in _DATEISH_RE.finditer(text):
+        value = match.group()
+        if value != today and value not in found:
+            found.append(value)
+    return found[:3]

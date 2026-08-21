@@ -30,7 +30,8 @@ def stage_program(
         draft = parse_tower(source, insured=org_name, program=program_name)
     else:
         draft = program_from_rows(source, insured=org_name, program=program_name)
-    if draft.period is None:
+    borrowed_period = draft.period is None
+    if borrowed_period:
         draft.period = TkPeriod(
             start=date.fromisoformat(period_from), end=date.fromisoformat(period_to)
         )
@@ -43,6 +44,15 @@ def stage_program(
         },
         source_row=1,
     )
+    if borrowed_period:
+        # a period is a date off the schedule; taking the placement's silently
+        # is exactly the prefill nobody checks
+        program_record.warn(
+            "period",
+            f"the paste names no period — using the placement's "
+            f"{period_from} → {period_to}. If the schedule says otherwise, "
+            "paste the dates or fix the period in the program file after import",
+        )
     for diag in draft.diagnostics.errors:
         program_record.error(diag.code, diag.message)
     for diag in draft.diagnostics.warnings:

@@ -20,6 +20,10 @@ _NORM_RE = re.compile(r"[^a-z0-9]+")
 class Mapping:
     assigned: dict[str, str]  # original header → canonical key
     unmapped: list[str]  # original headers with no home
+    # headers that matched by FUZZ, not by an exact key/alias. A fuzzy match
+    # is a guess at what the user's column means; the preview flags it so the
+    # guess can be checked before hundreds of rows are committed.
+    fuzzy: tuple[str, ...] = ()
 
 
 def _norm(text: str) -> str:
@@ -34,22 +38,27 @@ def map_headers(headers: list[str], specs: tuple[FieldSpec, ...]) -> Mapping:
     assigned: dict[str, str] = {}
     claimed: set[str] = set()
     unmapped: list[str] = []
+    fuzzy: list[str] = []
     for header in headers:
-        key = _match(_norm(header), hints)
+        key, exact = _match(_norm(header), hints)
         if key is None or key in claimed:  # first claim wins, left to right
             unmapped.append(header)
             continue
         assigned[header] = key
         claimed.add(key)
-    return Mapping(assigned, unmapped)
+        if not exact:
+            fuzzy.append(header)
+    return Mapping(assigned, unmapped, tuple(fuzzy))
 
 
-def _match(header: str, hints: dict[str, str]) -> str | None:
+def _match(header: str, hints: dict[str, str]) -> tuple[str | None, bool]:
+    """(canonical key, was-exact). The flag is what lets the preview say which
+    columns were GUESSED at."""
     if not header:
-        return None
+        return None, True
     exact = hints.get(header)
     if exact is not None:
-        return exact
+        return exact, True
     best_key, best_score = None, float(_FUZZ_THRESHOLD)
     for hint, key in hints.items():
         # token_sort (not token_set): every token counts, so a header that
@@ -59,7 +68,7 @@ def _match(header: str, hints: dict[str, str]) -> str | None:
             best_key, best_score = key, score
         elif score == best_score and best_key is not None and key != best_key:
             best_key = None  # tie between different keys → refuse to guess
-    return best_key
+    return best_key, False
 
 
 def apply_mapping(table: RawTable, mapping: Mapping) -> list[dict[str, object]]:

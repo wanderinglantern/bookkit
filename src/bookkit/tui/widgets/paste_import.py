@@ -63,20 +63,28 @@ class PasteImportModal(ModalScreen):
         if not text.strip():
             self.notify("nothing pasted yet", severity="warning")
             return
+        from rich.text import Text
+
+        # drop the previous run BEFORE re-staging. The verdict is a persistent
+        # Static, so a staging failure used to leave the last run's green "OK
+        # to commit" on screen — over a `_staged` that was still the OLD parse,
+        # which ctrl+s would then have committed.
+        self._staged = None
+        self._staged_text = None
+        self._clear_verdict()
         try:
             self._staged = self._stage(text)
         except Exception as exc:  # staging must never crash the app
+            self._set_verdict(f"could not stage that paste — {exc}")
             self.notify(f"could not stage: {exc}", severity="error")
             return
-        from rich.text import Text
-
         self._staged_text = text
         # verbose: show every parsed field — the point of previewing a paste.
         # Text() keeps pasted brackets from being eaten as Rich markup.
         self.query_one("#paste-preview-body", Static).update(
             Text(self._staged.report(verbose=True))
         )
-        self._set_verdict(self._staged.verdict(), ok=self._staged.ok)
+        self._set_verdict(self._staged.verdict(), ok=self._staged.committable)
 
     def _set_verdict(self, text: str, ok: bool = False) -> None:
         from rich.text import Text
@@ -87,6 +95,11 @@ class PasteImportModal(ModalScreen):
         self.query_one("#paste-verdict", Static).update(
             Text(text, style=f"bold {style}")
         )
+
+    def _clear_verdict(self) -> None:
+        from rich.text import Text
+
+        self.query_one("#paste-verdict", Static).update(Text(""))
 
     def action_commit(self) -> None:
         current_text = self.query_one("#paste-text", TextArea).text
@@ -101,12 +114,19 @@ class PasteImportModal(ModalScreen):
             if self._staged is not None:
                 self.notify("review the preview, then ctrl+s again to commit")
             return
-        if not self._staged.ok:
-            self.notify("fix the errors first (see preview)", severity="error")
+        if not self._staged.committable:
+            first = self._staged.first_error_text()
+            self.notify(
+                f"fix this first — {first}"
+                if first
+                else "nothing to commit — the paste parsed to 0 records",
+                severity="error",
+            )
             return
         try:
             message = self._commit(self._staged)
         except Exception as exc:
+            self._set_verdict(f"commit failed — {exc}")
             self.notify(f"commit failed: {exc}", severity="error")
             return
         self.dismiss(None)

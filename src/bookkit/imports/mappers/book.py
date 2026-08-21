@@ -8,13 +8,14 @@ keeps going so one bad cell doesn't hide the rest of the review."""
 from __future__ import annotations
 
 import sqlite3
+from decimal import Decimal, InvalidOperation
 
 from ... import normalize
 from ...dates import parse_human_date
 from ...forms.spec import date_refusal
 from ...models import OrgStatus, PlacementStatus
 from ...money import MoneyParseError, parse_money_cents, parse_share_bps
-from ...repo import orgs
+from ...repo import orgs, placements
 from ..matcher import match_contact, match_contact_by_name, match_org, match_placement
 from ..readers import RawTable
 from ..staging import StagedImport, StagedRecord
@@ -57,7 +58,10 @@ def stage_book(
         placement = _stage_placement(conn, account, org_id, row, rownum)
         if placement is not None:
             records.append(placement)
-    return StagedImport(table.source, table.sha256, records, mapping.unmapped)
+    return StagedImport(
+        table.source, table.sha256, records, mapping.unmapped,
+        dict(mapping.assigned), mapping.fuzzy,
+    )
 
 
 def _stage_account(
@@ -190,18 +194,15 @@ def _stage_placement(
         and period_to <= period_from
     ):
         record.error("expiry", f"expiry {period_to} is not after inception {period_from}")
-    for key, column, parser in (
-        ("premium", "total_premium", parse_money_cents),
-        ("limit", "total_limit", parse_money_cents),
-        ("commission", "commission_bps", parse_share_bps),
-    ):
+    for key, column in (("premium", "total_premium"), ("limit", "total_limit")):
         raw = str(row.get(key) or "").strip()
         if not raw:
             continue
         try:
-            record.fields[column] = parser(raw)
+            record.fields[column] = parse_money_cents(raw)
         except MoneyParseError as exc:
             record.error(key, str(exc))
+    _stage_commission(record, row.get("commission"), rownum)
     status = str(row.get("placement_status") or "").strip().lower()
     if status:
         try:
@@ -220,4 +221,97 @@ def _stage_placement(
         existing = match_placement(conn, org_id, program, period_from, period_to)
         if existing is not None:
             record.action, record.target_id = "update", existing
+            _reconcile_matched(conn, record, existing, program, period_from, period_to)
     return record
+
+
+def _stage_commission(record: StagedRecord, value: object, rownum: int) -> None:
+    """A commission cell that reads as a fraction of one is REFUSED, never
+    reinterpreted.
+
+    Excel stores a percent-formatted 15% as the number 0.15, and the share
+    parser reads every bare number as a percent — so that cell became 15 bps
+    (0.15%) instead of 1500, a silent 100x understatement of the revenue this
+    book is measured by. Auto-correcting it would be the same class of bug in
+    the other direction: it would turn a real 0.5% fee into 50%. So the
+    ambiguity is handed back to the human, with both readings named."""
+    raw = str(value or "").strip()
+    if not raw:
+        return
+    reading = _fraction_of_one(raw)
+    if reading is not None:
+        low, high = reading
+        record.error(
+            "commission",
+            f"row {rownum}: {raw!r} is ambiguous — it reads as {low} on the "
+            f"rule that a bare number is a percent, but Excel stores a "
+            f"percent-formatted {high} cell as exactly {raw}. Re-enter it "
+            f"with a % sign ({high} or {low}); a % sign is never ambiguous.",
+        )
+        return
+    try:
+        record.fields["commission_bps"] = parse_share_bps(raw)
+    except MoneyParseError as exc:
+        record.error("commission", str(exc))
+
+
+def _fraction_of_one(raw: str) -> tuple[str, str] | None:
+    """(low reading, high reading) when the cell is a bare number strictly
+    between 0 and 1 — the band where the two readings collide. A '%' sign
+    anywhere makes it unambiguous, and so does anything >= 1."""
+    if "%" in raw:
+        return None
+    try:
+        value = Decimal(raw)
+    except InvalidOperation:
+        return None
+    # 'nan'/'inf' parse as Decimals and then raise on comparison
+    if not value.is_finite() or not 0 < value < 1:
+        return None
+    return f"{_plain(value)}%", f"{_plain(value * 100)}%"
+
+
+def _plain(value: Decimal) -> str:
+    """No exponent, no trailing zeros: 0.150 → '0.15', 15.00 → '15'."""
+    return format(value.normalize(), "f")
+
+
+def _reconcile_matched(
+    conn: sqlite3.Connection,
+    record: StagedRecord,
+    placement_id: str,
+    program: str,
+    period_from: str,
+    period_to: str,
+) -> None:
+    """What an UPDATE will and will not touch, said out loud at preview time.
+
+    Matching is period-OVERLAP based, so a re-import that corrects a renewal
+    date still lands on the existing placement — and the committer used to
+    drop period_from/period_to/program_name from the update with no Issue and
+    no mention anywhere. "updated" meant the dates did not move. They move
+    now, except where a program file owns them, and either way it is said."""
+    current = placements.get(conn, placement_id)
+    if current.program_name != program:
+        # the same guard as the account name: a match must never rewrite the
+        # curated spelling to the spreadsheet's
+        record.warn(
+            "program", f"matched existing {current.program_name!r}; keeping its name"
+        )
+    if (current.period_from, current.period_to) == (period_from, period_to):
+        return
+    moved = (
+        f"{current.period_from} → {current.period_to} "
+        f"becomes {period_from} → {period_to}"
+    )
+    if current.program_path:
+        record.fields.pop("period_from", None)
+        record.fields.pop("period_to", None)
+        record.warn(
+            "inception",
+            f"period NOT changed ({moved}): {current.ref} has a linked program "
+            "file, and the file owns the period — renew the placement or edit "
+            "the program file to move it",
+        )
+    else:
+        record.warn("inception", f"period moves on this update: {moved}")

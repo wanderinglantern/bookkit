@@ -65,20 +65,32 @@ class ImportScreen(ModalScreen):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         path = Path(event.value).expanduser()
         preview = self.query_one("#import-preview-body", Static)
+        # EVERY re-stage path clears the previous run's verdict first. It is a
+        # persistent Static, not a toast: a failed re-stage used to leave the
+        # last run's green "OK to commit" standing over a `_staged` that had
+        # been set to None, so the visible go/no-go contradicted the real one.
         self._staged = None
+        self._staged_path = None
+        self._clear_verdict()
         try:
             table = read_table(path)
         except (ValueError, OSError) as exc:
-            preview.update(str(exc))
-            self._set_verdict("cannot read that file")
+            message = (
+                f"no file at {path} — check the path; tab completes it"
+                if isinstance(exc, FileNotFoundError)
+                else str(exc)
+            )
+            preview.update(message)
+            self._set_verdict(f"cannot read that file — {message}")
             return
-        from rich.text import Text
-
         mapping = map_headers(table.headers, BOOK_FIELDS)
         self._staged = stage_book(self.app.conn, table, mapping)
         self._staged_path = path
-        preview.update(Text(self._staged.report()))
-        self._set_verdict(self._staged.verdict(), ok=self._staged.ok)
+        # verbose, like the paste previews: counts by kind said nothing about
+        # WHAT was parsed, so hundreds of accounts could be committed without
+        # a single field value ever appearing on screen
+        preview.update(Text(self._staged.report(verbose=True)))
+        self._set_verdict(self._staged.verdict(), ok=self._staged.committable)
 
     def _set_verdict(self, text: str, ok: bool = False) -> None:
         from ... import tui
@@ -88,6 +100,9 @@ class ImportScreen(ModalScreen):
             Text(text, style=f"bold {style}")
         )
 
+    def _clear_verdict(self) -> None:
+        self.query_one("#import-verdict", Static).update(Text(""))
+
     def action_commit(self) -> None:
         from ...imports.commit import commit_book
 
@@ -96,21 +111,33 @@ class ImportScreen(ModalScreen):
             return
         try:
             if read_table(self._staged_path).sha256 != self._staged.sha256:
+                self._staged = None
+                self._set_verdict(
+                    "file changed since the preview — press enter to re-preview"
+                )
                 self.notify(
                     "file changed since the preview — press enter to re-preview",
                     severity="warning",
                 )
-                self._staged = None
                 return
         except (ValueError, OSError) as exc:
+            self._staged = None
+            self._set_verdict(f"cannot re-read that file — {exc}")
             self.notify(f"cannot re-read file: {exc}", severity="error")
             return
-        if not self._staged.ok:
-            self.notify("fix the errors first (see preview)", severity="error")
+        if not self._staged.committable:
+            first = self._staged.first_error_text()
+            self.notify(
+                f"fix this first — {first}"
+                if first
+                else f"nothing to commit: {self._staged.source} parsed to 0 rows",
+                severity="error",
+            )
             return
         try:
             result = commit_book(self.app.conn, self._staged, self.app.db_file())
         except Exception as exc:  # rollback already happened; never crash the TUI
+            self._set_verdict(f"commit failed (rolled back) — {exc}")
             self.notify(f"commit failed (rolled back): {exc}", severity="error")
             return
         created = sum(result.created.values())
