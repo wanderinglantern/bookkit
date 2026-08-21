@@ -625,11 +625,6 @@ def test_adding_a_layer_appends_it_pending(app_and_org):
     conn = client.app.state.conn
     placement, _ = _first_layer(conn, org)
     line = _first_line(conn, placement)
-    top = max(
-        layer["attach_cents"] + layer["limit_cents"]
-        for layer in sync.layer_details(conn, placement.id)
-        if line in layer["applies_to"]
-    )
 
     added = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/layers",
