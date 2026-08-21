@@ -127,10 +127,13 @@ def test_the_add_form_makes_the_account_a_picker_with_a_blank_first_option(clien
     assert 'name="org_id"' in form, "the book-wide add form does not ask for an account"
     select = form[form.index('name="org_id"') :]
     select = select[: select.index("</select>")]
-    assert re.search(r'<option value=""\s*>', select), "no blank option"
-    assert select.index('<option value=""') < (
-        select.index('<option value="0') if '<option value="0' in select else len(select)
+    options = re.findall(r'<option value="([^"]*)"', select)
+    assert options, "the account select has no options"
+    assert options[0] == "", (
+        f"the first option is {options[0]!r}, so the browser pre-selects an "
+        "account nobody chose"
     )
+    assert len(options) > 1, "the picker offers no accounts"
 
 
 def test_a_task_is_captured_from_the_book_wide_list(client):

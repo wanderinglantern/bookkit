@@ -132,6 +132,11 @@ def _context(request: Request, *, overdue_only: bool, ref: str | None) -> dict[s
     tasks = _open_tasks(conn, overdue_only=overdue_only, ref=ref)
     labels = _labels(conn, tasks)
     today = date.today().isoformat()
+    # Read ONCE. The first cut of this called outstanding_request_rows twice —
+    # for the rows and again for their account labels — which is the same
+    # repetition, one query lower down, that the account-link macro exists to
+    # stop in the markup.
+    requests = [dict(r) for r in rfi_repo.outstanding_request_rows(conn)]
     return {
         "section": "items",
         "tasks": [_row(request, t, labels) for t in tasks],
@@ -144,9 +149,9 @@ def _context(request: Request, *, overdue_only: bool, ref: str | None) -> dict[s
         # request, and editing one properly means seeing its request. The row
         # links to the account's Work tab rather than growing a second, thinner
         # editor for the same record.
-        "requests": [dict(r) for r in rfi_repo.outstanding_request_rows(conn)],
+        "requests": requests,
         "request_accounts": orgs_repo.labels_for(
-            conn, {str(r["org_id"]) for r in rfi_repo.outstanding_request_rows(conn)}
+            conn, {str(r["org_id"]) for r in requests if r.get("org_id")}
         ),
         "overdue_only": overdue_only,
         "filter_ref": ref or "",
