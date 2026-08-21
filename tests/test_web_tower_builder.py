@@ -580,3 +580,69 @@ def test_the_remove_confirm_says_a_gap_will_be_left(app_and_org) -> None:
 
     assert "gap" in page.lower()
     assert "buffer" in page.lower(), "the confirm does not offer the other answer"
+
+
+def _tower_panel_markup(page: str) -> str:
+    """Just the drawing's markup, so an assertion about the picture cannot be
+    satisfied by the stack editor's list of the same names.
+
+    Sliced to the tower panel's own `<section class="tower" ...>` ... `</section>`
+    — bounded at BOTH ends. Bounding only the start and taking the rest of the
+    page would still pass on the layers TABLE underneath the drawing
+    (`_layers_panel.html`'s `layer.cells.name`), which also prints every
+    layer's name — a third copy of the same trap the buffer test already
+    dodges on the stack editor above it.
+    """
+    start = page.index('class="tower"')
+    end = page.index("</section>", start)
+    return page[start:end]
+
+
+def test_the_drawing_and_the_editor_never_disagree(app_and_org) -> None:
+    """Both read the same file. A drawing that showed a different stack from
+    the list beside it would make the picture untrustworthy, which is the one
+    thing it is for.
+
+    SCOPED TO THE DRAWING. The stack editor prints every layer name as well, so
+    an assertion against the whole page passes on Task 6's markup alone — the
+    same trap the buffer test below already avoids.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    drawing = _tower_panel_markup(page)
+
+    for layer in program.layers:
+        assert layer.name in drawing, (
+            f"{layer.name} is in the file and not in the drawing"
+        )
+
+
+def test_a_buffer_draws_as_a_buffer(app_and_org) -> None:
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+    anchor = program.layers_for_line(line_id)[-1]
+
+    sync.insert_layer(
+        conn, placement.id, line_id=line_id, anchor_layer_id=anchor.id,
+        position="above", name="Uninsured band", limit_cents=5_000_000_00,
+        buffer=True,
+    )
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    # SCOPED TO THE DRAWING. The stack editor also emits `is-buffer`, so an
+    # unscoped assertion would pass on Task 6's markup alone and prove nothing
+    # about the tower panel (caught in the pre-flight scan, ruling R3).
+    assert 'class="tower-layer' in page
+    drawn = [
+        frag for frag in page.split('class="tower-layer')[1:]
+        if "is-buffer" in frag.split(">")[0]
+    ]
+    assert drawn, "the drawing does not mark the buffer"

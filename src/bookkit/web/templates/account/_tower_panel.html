@@ -37,7 +37,7 @@
            the matching table row (form-host.js). Attributes only — every
            string and rect here still comes off the renderer, so the
            agreement rule (spec D2.1) is untouched. #}
-        <div class="tower-layer{% if layer.pending %} is-pending{% endif %}"
+        <div class="tower-layer{% if layer.pending %} is-pending{% endif %}{% if layer.buffer %} is-buffer{% endif %}"
              data-layer-id="{{ layer.layer_id }}"
              style="left:{{ rect.left }}%;bottom:{{ rect.bottom }}%;width:{{ rect.width }}%;height:{{ rect.height }}%"
              title="{{ layer.name }} — {{ layer.terms }}"></div>
