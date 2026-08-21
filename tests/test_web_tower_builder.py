@@ -707,6 +707,14 @@ def test_a_buffer_reads_uninsured_not_to_be_placed(app_and_org) -> None:
     text) carry the same `data-layer-id`, so a plain substring search would
     find the title attribute's "— buffer" first and prove nothing about
     what is actually rendered on screen.
+
+    CORRECTED, fix round 3: the layer is named "Second Excess", not
+    "Uninsured band" — the earlier name let the positive "Uninsured"
+    assertion below pass off the LAYER'S OWN NAME (which appears in the
+    heading line regardless of the fix) rather than anything
+    unplaced_label actually produced. Caught by re-checking every
+    assertion in this file for the same class of coincidence the
+    is-buffer-class-name and title-attribute mutants already found twice.
     """
     client, org = app_and_org
     conn = client.app.state.conn
@@ -717,11 +725,11 @@ def test_a_buffer_reads_uninsured_not_to_be_placed(app_and_org) -> None:
 
     sync.insert_layer(
         conn, placement.id, line_id=line_id, anchor_layer_id=anchor.id,
-        position="above", name="Uninsured band", limit_cents=5_000_000_00,
+        position="above", name="Second Excess", limit_cents=5_000_000_00,
         buffer=True,
     )
     fresh = sync.linked_program(conn, placement.id).program
-    buf = next(ly for ly in fresh.layers if ly.name == "Uninsured band")
+    buf = next(ly for ly in fresh.layers if ly.name == "Second Excess")
 
     page = client.get(f"/accounts/{org.ref}/program").text
     drawing = _tower_panel_markup(page)
@@ -742,4 +750,51 @@ def test_a_buffer_reads_uninsured_not_to_be_placed(app_and_org) -> None:
     )
     assert not any("To be placed" in line for line in visible_lines), (
         f"the buffer's visible text claims cover is coming: {visible_lines}"
+    )
+
+
+def test_a_buffer_is_not_marked_pending(app_and_org) -> None:
+    """Fix round 3 (Grant, 2026-08-21): towerkit's WebLayer.pending was True
+    for a buffer (is_pending's own predicate — signed_bps == 0 — is true for
+    a buffer too, since it has no participants at all). This was harmless
+    only by coincidence: `.is-buffer`'s own CSS rule already forces the same
+    dashed border `.is-pending` would (app.css), so nothing on screen
+    depended on the flag being wrong. "Harmless by coincidence is how the
+    next bug gets in" — a buffer is not awaiting a decision, it IS the
+    decision, so its outline must never carry `is-pending`.
+
+    SCOPED to the buffer's own outline `.tower-layer` div specifically (not
+    a bare substring search over the whole drawing), because OTHER layers
+    in the fixture may legitimately be pending and would otherwise let a
+    false pass hide behind them.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+    line_id = program.lines[0].id
+    anchor = program.layers_for_line(line_id)[-1]
+
+    sync.insert_layer(
+        conn, placement.id, line_id=line_id, anchor_layer_id=anchor.id,
+        position="above", name="Second Excess", limit_cents=5_000_000_00,
+        buffer=True,
+    )
+    fresh = sync.linked_program(conn, placement.id).program
+    buf = next(ly for ly in fresh.layers if ly.name == "Second Excess")
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    drawing = _tower_panel_markup(page)
+
+    outline_pattern = re.compile(
+        r'<div class="tower-layer([^"]*)"\s+data-layer-id="'
+        + re.escape(buf.id)
+        + r'"[^>]*>',
+    )
+    match = outline_pattern.search(drawing)
+    assert match, "the buffer's own outline is not in the drawing"
+    class_suffix = match.group(1)
+    assert "is-buffer" in class_suffix, "the buffer lost its own class"
+    assert "is-pending" not in class_suffix, (
+        f"the buffer's outline is still marked pending: {class_suffix!r}"
     )
