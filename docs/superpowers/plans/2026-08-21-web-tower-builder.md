@@ -479,6 +479,7 @@ def test_inserting_above_seats_on_the_slab_below(app_and_org) -> None:
     program = sync.linked_program(conn, placement.id).program
     line_id = program.lines[0].id
     bottom = program.layers_for_line(line_id)[0]
+    before_ids = {row[0] for row in _stack_of(conn, placement, line_id)}
 
     diags = sync.insert_layer(
         conn, placement.id, line_id=line_id, anchor_layer_id=bottom.id,
@@ -487,7 +488,13 @@ def test_inserting_above_seats_on_the_slab_below(app_and_org) -> None:
 
     assert diags.ok, [d.message for d in diags.errors]
     stack = _stack_of(conn, placement, line_id)
-    inserted = next(row for row in stack if row[0] not in {bottom.id})
+    # Found by SET DIFFERENCE against the ids that were there before. Picking
+    # "the first row that is not the anchor" would return a pre-existing layer
+    # on any line with more than one slab, and then assert something true about
+    # the wrong row (caught in review of the plan, ruling R5).
+    new_ids = {row[0] for row in stack} - before_ids
+    assert len(new_ids) == 1, new_ids
+    inserted = next(row for row in stack if row[0] in new_ids)
     assert inserted[1] == bottom.top, "the new slab did not seat on the one below"
 
 
@@ -573,6 +580,7 @@ def test_one_insert_is_one_undo_unit(app_and_org) -> None:
     anchor = program.layers_for_line(line_id)[0]
     before = len(_stack_of(conn, placement, line_id))
 
+    from bookkit.services import batches as batches_svc
     from bookkit.services import program_files
 
     program_files.write(
@@ -581,9 +589,7 @@ def test_one_insert_is_one_undo_unit(app_and_org) -> None:
             conn, placement.id, line_id=line_id, anchor_layer_id=anchor.id,
             position="above", name="Once", limit_cents=1_000_000_00,
         ),
-        open_batch=lambda c, **kw: __import__(
-            "bookkit.services.batches", fromlist=["x"]
-        ).open_batch(c, source="web", **kw),
+        open_batch=lambda c, **kw: batches_svc.open_batch(c, source="web", **kw),
     )
 
     batches = batches_repo.recent(conn, "0000", limit=2)
