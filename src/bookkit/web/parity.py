@@ -384,6 +384,16 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "tui": "via o -> towerkit's editor",
         "mcp": "DEFERRED — structure from an assistant is undecided",
     },
+    "create_program": {
+        "web": "the new-program worksheet (GET/POST /program/new) — source "
+        "cards, the label-rail form, first layers with the running "
+        "attachment, and the what-will-be-written rail with live checks "
+        "(design 2B, 2026-08-24)",
+        "tui": "NOT BUILT, and not going to be — the TUI is retired; its "
+        "flow was + placement then t to scaffold",
+        "mcp": "DEFERRED — creating a whole program from an assistant is "
+        "the same undecided call as insert_layer's siblings",
+    },
     "scaffold_program": {
         "web": "scaffold confirm, destination editable (POST .../scaffold)",
         "tui": "t on the placements tab, destination editable",

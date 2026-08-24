@@ -206,7 +206,7 @@ def test_every_sync_program_mutator_is_in_the_verb_ledger():
         for chunk in chunks
         if "_mutate(" in chunk and not chunk.startswith("_")
     }
-    mutators |= {"scaffold_program", "renew"}  # write files without _mutate
+    mutators |= {"scaffold_program", "renew", "create_program"}  # write files without _mutate
 
     assert mutators == set(SYNC_VERBS), (
         f"uncovered: {mutators - set(SYNC_VERBS)}; stale: {set(SYNC_VERBS) - mutators}"

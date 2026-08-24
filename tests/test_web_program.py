@@ -3293,3 +3293,139 @@ def test_dropping_a_line_states_the_consequence_first(app_and_org, tmp_path):
     assert "does not re-rate" in confirm.text
     assert "Keep it" in confirm.text
     assert path.read_bytes() == before, "the consequence GET wrote"
+
+
+# --- the new-program worksheet (design 2B) ------------------------------------
+
+
+def test_the_new_program_worksheet_renders_with_the_source_cards(app_and_org):
+    client, org = app_and_org
+
+    page = client.get(f"/accounts/{org.ref}/program/new")
+
+    assert page.status_code == 200
+    assert "New program for" in page.text
+    assert "Copy last year" in page.text  # the seeded book has a linked program
+    assert "Start empty" in page.text
+    assert "What will be written" in page.text
+    assert "towerkit validates before anything is saved" in page.text
+
+
+def test_stacking_a_layer_keeps_the_typing_and_shows_the_running_attachment(app_and_org):
+    """Each row seats on the last: the attachment is the running total,
+    rendered as text — never an input."""
+    client, org = app_and_org
+
+    page = client.post(
+        f"/accounts/{org.ref}/program/new",
+        data={
+            "source": "empty", "name": "Fresh Casualty",
+            "period_from": "2027-01-01", "period_to": "2028-01-01",
+            "status": "prospective", "lines": "General Liability",
+            "act": "stack", "new_line": "General Liability",
+            "new_name": "Primary GL", "new_limit": "2m",
+        },
+    )
+
+    assert page.status_code == 200
+    assert "Primary GL" in page.text
+    assert "xs $0" in page.text
+    # the next row's running total is the first layer's top
+    assert "xs $2,000,000" in page.text
+    assert 'name="attach' not in page.text, "an attachment became typeable"
+
+
+def test_creating_an_empty_program_writes_a_validated_file_and_links_it(
+    app_and_org, tmp_path
+):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+
+    _configure_roots(conn, tmp_path)
+    before = {p.id for p in placements_repo.for_org(conn, org.id)}
+    created = client.post(
+        f"/accounts/{org.ref}/program/new",
+        data={
+            "source": "empty", "name": "Fresh Casualty",
+            "period_from": "2027-01-01", "period_to": "2028-01-01",
+            "status": "prospective", "lines": "General Liability, Cyber",
+            "stk_line": "General Liability", "stk_name": "Primary GL",
+            "stk_limit": "2m", "act": "create",
+        },
+        follow_redirects=False,
+    )
+
+    assert created.status_code == 303
+    new = [p for p in placements_repo.for_org(conn, org.id) if p.id not in before]
+    assert len(new) == 1
+    placement = new[0]
+    assert placement.program_name == "Fresh Casualty"
+    assert placement.program_path, "the file was not linked"
+    from towerkit.model import load_program
+
+    program = load_program(sync.program_file(conn, placement))
+    assert [line.name for line in program.lines] == ["General Liability", "Cyber"]
+    gl = next(ly for ly in program.layers if ly.name == "Primary GL")
+    assert gl.attach == 0 and gl.limit == 2_000_000
+    # the layerless line arrived with its pending layer — an empty line is a
+    # towerkit ERROR and could never have been written
+    assert any(
+        ly.name == "To be placed" and "cyber" in ly.applies_to[0]
+        for ly in program.layers
+    )
+
+
+def test_copying_last_year_strips_premiums_and_bound_shares(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+
+    _configure_roots(conn, tmp_path)
+    latest = max(
+        (p for p in placements_repo.for_org(conn, org.id) if p.program_path),
+        key=lambda p: p.period_to,
+    )
+    before = {p.id for p in placements_repo.for_org(conn, org.id)}
+    created = client.post(
+        f"/accounts/{org.ref}/program/new",
+        data={
+            "source": "copy", "name": "Renewal Casualty",
+            "period_from": latest.period_to, "period_to": "2099-01-01",
+            "status": "prospective", "lines": "", "act": "create",
+        },
+        follow_redirects=False,
+    )
+
+    assert created.status_code == 303
+    new = [p for p in placements_repo.for_org(conn, org.id) if p.id not in before]
+    assert len(new) == 1
+    from towerkit.model import load_program
+
+    program = load_program(sync.program_file(conn, new[0]))
+    source = load_program(sync.program_file(conn, latest))
+    assert [ly.id for ly in program.layers] == [ly.id for ly in source.layers]
+    assert all(ly.participants == [] for ly in program.layers), "shares came across"
+    assert all(ly.premium is None for ly in program.layers), "premiums came across"
+
+
+def test_a_refused_create_keeps_the_worksheet_and_creates_nothing(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+
+    before = {p.id for p in placements_repo.for_org(conn, org.id)}
+    refused = client.post(
+        f"/accounts/{org.ref}/program/new",
+        data={
+            "source": "empty", "name": "Broken", "period_from": "2027-01-01",
+            "period_to": "2026-01-01",  # ends before it starts
+            "status": "prospective", "lines": "General Liability", "act": "create",
+        },
+    )
+
+    assert refused.status_code == 200
+    assert 'value="Broken"' in refused.text, "the typing was lost"
+    assert {p.id for p in placements_repo.for_org(conn, org.id)} == before, (
+        "a refused create still made a placement"
+    )

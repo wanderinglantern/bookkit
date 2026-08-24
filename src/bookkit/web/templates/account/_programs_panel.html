@@ -20,9 +20,11 @@
        where an account with no linked program could never reach it — the
        exact built-but-not-accessible class (2026-08-19). #}
     <a class="people-add" href="/accounts/{{ header.org.ref }}/export/open-items.xlsx">open items XLSX</a>
-    <button type="button" class="people-add"
-            hx-get="/accounts/{{ header.org.ref }}/program/placements/new"
-            hx-target="#programs-panel .form-host" hx-swap="innerHTML">+ New program</button>
+    {# A LINK to the new-program worksheet (design 2B): source cards, the
+       first-layers stacker and the what-will-be-written rail need a page,
+       not a form host. The bare-record placement form survives at
+       /program/placements/new for the placement-without-a-file case. #}
+    <a class="people-add" href="/accounts/{{ header.org.ref }}/program/new">+ New program</a>
   </div>
   <div class="form-host"></div>
 

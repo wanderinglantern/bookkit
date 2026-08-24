@@ -2789,6 +2789,229 @@ def _scaffold_destination(conn: Any, org: Any, placement: Any) -> Any:
     return Path(roots[0]) / f"{slug}-{year}.json"
 
 
+def _new_program_dest(conn: Any, org: Any, period_from: str) -> Path | None:
+    """Where the new file goes — the same rule `_scaffold_destination` uses
+    (first configured root, `<two-word-slug>-<period year>.json`), minus the
+    placement that does not exist yet."""
+    roots = sync.configured_roots(conn)
+    if not roots:
+        return None
+    slug = "-".join(org.name.lower().split()[:2]).strip(",.")
+    year = (period_from or "")[:4] or "new"
+    return Path(roots[0]) / f"{slug}-{year}.json"
+
+
+@router.get("/accounts/{ref}/program/new", response_class=HTMLResponse)
+@router.post("/accounts/{ref}/program/new", response_class=HTMLResponse)
+async def new_program_page(request: Request, ref: str) -> Any:
+    """Starting a program — one worksheet, then the file (design 2B).
+
+    Replaces the two-step '+ New program' then 'Create a program file': the
+    source cards (copy last year / start empty), the label-rail form, the
+    first-layers table where EACH ROW SEATS ON THE LAST (the attachment is
+    the running total, never typed), and the what-will-be-written rail whose
+    Checks are towerkit's own validation of the composed program — run live
+    on every re-render, before anything exists.
+
+    CLASSIC FORM POSTS, deliberately: every act (stack a layer, remove one,
+    create) re-renders this page with everything typed still in it, so a
+    refusal never costs the typing. towerkit validates before anything is
+    saved; a refusal creates NOTHING — no placement, no file.
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    siblings = [
+        p for p in placements_repo.for_org(conn, org.id) if p.program_path
+    ]
+    latest = max(siblings, key=lambda p: p.period_to, default=None)
+
+    form = await request.form() if request.method == "POST" else {}
+    act = str(form.get("act", ""))
+    getlist = form.getlist if hasattr(form, "getlist") else lambda _k: []
+
+    source_kind = str(form.get("source", "copy" if latest else "empty"))
+    if source_kind == "copy" and latest is None:
+        source_kind = "empty"
+    next_from = latest.period_to if latest else ""
+    name = str(
+        form.get("name", latest.program_name if latest else "")
+    ).strip()
+    period_from = str(form.get("period_from", next_from)).strip()
+    period_to = str(form.get("period_to", "")).strip()
+    if not period_to and period_from:
+        try:
+            from datetime import date as _date
+
+            start = _date.fromisoformat(period_from)
+            period_to = start.replace(year=start.year + 1).isoformat()
+        except ValueError:
+            period_to = ""
+    status = str(form.get("status", "prospective"))
+    lines_text = str(form.get("lines", ""))
+    stacked = [
+        {"line": line, "name": lname, "limit": raw}
+        for line, lname, raw in zip(
+            getlist("stk_line"), getlist("stk_name"), getlist("stk_limit"),
+            strict=False,
+        )
+    ]
+    error: str | None = None
+
+    if act == "stack":
+        new_name = str(form.get("new_name", "")).strip()
+        raw_limit = str(form.get("new_limit", "")).strip()
+        new_line = str(form.get("new_line", "")).strip()
+        try:
+            if not new_name:
+                raise ValueError("a layer needs a name")
+            parse_value(_LAYER_CELLS["limit_cents"], raw_limit)
+            stacked.append({"line": new_line, "name": new_name, "limit": raw_limit})
+        except ValueError as exc:
+            error = str(exc)
+    elif act.startswith("unstack:"):
+        index = int(act.split(":", 1)[1])
+        if 0 <= index < len(stacked):
+            stacked.pop(index)
+
+    line_names = [part.strip() for part in lines_text.split(",") if part.strip()]
+
+    def parsed_layers() -> list[dict[str, Any]]:
+        return [
+            {
+                "line": row["line"],
+                "name": row["name"],
+                "limit_cents": int(parse_value(_LAYER_CELLS["limit_cents"], row["limit"]) or 0),
+            }
+            for row in stacked
+        ]
+
+    source_program = None
+    if source_kind == "copy" and latest is not None:
+        source_program = linked_for(request, conn, latest.id).program
+
+    dest = _new_program_dest(conn, org, period_from)
+    composed = None
+    checks: Any = None
+    if name and period_from and period_to and (
+        source_program is not None or line_names
+    ):
+        try:
+            composed, checks = sync.compose_program(
+                insured=org.name, program_name=name, status=status,
+                period_from=period_from, period_to=period_to,
+                line_names=line_names, layers=parsed_layers(),
+                source=source_program,
+            )
+        except ValueError as exc:
+            error = error or str(exc)
+
+    if act == "create" and error is None:
+        try:
+            # the chip row's own options are the authority, re-checked
+            # server-side — markup constrains a mouse and nothing else
+            checked_option(_PLACEMENT_CELLS["status"], status)
+        except ValueError as exc:
+            error = str(exc)
+    if act == "create" and error is None:
+        if dest is None:
+            error = "no program roots configured — set one with bookctl roots"
+        elif composed is None:
+            error = (
+                "name the program, its period and at least one line of cover first"
+            )
+        else:
+            created, diags = sync.create_program(
+                conn, org.id, dest,
+                program_name=name, status=status,
+                period_from=period_from, period_to=period_to,
+                line_names=line_names, layers=parsed_layers(),
+                source_path=(
+                    sync.program_file(conn, latest)
+                    if source_program is not None and latest is not None
+                    else None
+                ),
+            )
+            if created is not None:
+                from fastapi.responses import RedirectResponse
+
+                forget_program_reads(request)
+                return RedirectResponse(
+                    f"/accounts/{ref}/program", status_code=303
+                )
+            error = "; ".join(d.message for d in diags.errors) or "refused"
+
+    # The running attachment per line — display only, derived the same way
+    # compose_program seats the rows; shown as text, never an input.
+    running: dict[str, int] = {}
+    stack_rows = []
+    for row in stacked:
+        try:
+            cents = int(parse_value(_LAYER_CELLS["limit_cents"], row["limit"]) or 0)
+        except ValueError:
+            cents = 0
+        floor = running.get(row["line"], 0)
+        stack_rows.append({
+            **row,
+            "limit_text": format_cents_compact(cents),
+            "xs": format_cents(floor),
+        })
+        running[row["line"]] = floor + cents
+    next_xs = {line: format_cents(total) for line, total in running.items()}
+
+    context = _context(conn, org, "program", request)
+    context.update({
+        "action": f"/accounts/{ref}/program/new",
+        "error": error,
+        "latest": latest,
+        "latest_file": (
+            Path(latest.program_path).name
+            if latest is not None and latest.program_path
+            else None
+        ),
+        "latest_counts": (
+            f"{len(source_program.layers)} layers · {len(source_program.lines)} lines"
+            if source_program is not None
+            else None
+        ),
+        "source": source_kind,
+        "name": name,
+        "period_from": period_from,
+        "period_to": period_to,
+        "status": status,
+        # the same controlled tuple the status cell offers — a typed status
+        # would silently fall out of every status-filtered view
+        "statuses": [value for _, value in _PLACEMENT_CELLS["status"].options],
+        "lines_text": lines_text,
+        "line_names": line_names,
+        "stack_rows": stack_rows,
+        "next_xs": next_xs,
+        "dest": str(dest) if dest else None,
+        "dest_name": dest.name if dest else None,
+        "facts": (
+            {
+                "insured": composed.insured,
+                "program": composed.program,
+                "period": f"{period_from} → {period_to}",
+                "lines": len(composed.lines),
+                "layers": len(composed.layers),
+                "currency": composed.currency,
+            }
+            if composed is not None
+            else None
+        ),
+        "checks": (
+            {
+                "ok": checks.ok,
+                "errors": [d.message for d in checks.errors],
+                "warnings": [d.message for d in checks.warnings],
+            }
+            if checks is not None
+            else None
+        ),
+    })
+    return TEMPLATES.TemplateResponse(request, "account/new_program.html", context)
+
+
 @router.get(
     "/accounts/{ref}/program/{placement_id}/submissions/new",
     response_class=HTMLResponse,

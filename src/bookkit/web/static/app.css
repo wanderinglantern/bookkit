@@ -4338,3 +4338,256 @@ tr.compare-lapsed td {
 s.compare-gone {
   color: var(--danger);
 }
+
+/* --- the new-program worksheet (design 2B) -------------------------------- */
+
+.new-program {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+
+.np-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.np-title {
+  font-family: var(--serif);
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.np-lede {
+  margin: 0.4rem 0 0;
+  max-width: 40rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.np-sources {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+.np-source {
+  flex: 1 1 15rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.7rem 0.85rem;
+  cursor: pointer;
+  display: block;
+}
+
+.np-source.is-selected {
+  border: 2px solid var(--accent);
+  background: var(--accent-wash);
+}
+
+.np-source-name {
+  font-weight: 700;
+  font-size: var(--body-size);
+}
+
+.np-source-file {
+  display: block;
+  font-size: var(--hint-size);
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+
+.np-source-note {
+  display: block;
+  font-size: 0.75rem;
+  margin-top: 0.35rem;
+}
+
+.np-form {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.np-row {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+}
+
+.np-key {
+  flex: none;
+  width: 5.5rem;
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--label-size);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.np-name {
+  font-family: var(--serif);
+  font-size: 1.1875rem;
+  font-weight: 700;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  width: 100%;
+  max-width: 27rem;
+}
+
+.np-period {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.np-date {
+  font-variant-ligatures: none;
+  font-size: var(--body-size);
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  width: 7.5rem;
+}
+
+.np-chips {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.np-chip {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.np-chip.is-on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
+.np-lines {
+  flex: 1;
+  min-width: 0;
+}
+
+.np-lines input {
+  font: inherit;
+  width: 100%;
+  max-width: 27rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.np-lines .ws-hint {
+  display: block;
+  margin-top: 0.25rem;
+}
+
+.np-stack {
+  margin-top: 1.25rem;
+}
+
+.np-stack-table {
+  max-width: 42rem;
+  margin-top: 0.4rem;
+}
+
+.np-xs {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.np-line-tag {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.np-stack-add input,
+.np-stack-add select {
+  font: inherit;
+  padding: 0.15rem 0.35rem;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  max-width: 11rem;
+}
+
+.np-rail {
+  flex: none;
+  width: 20rem;
+  border-left: 1px solid var(--hairline);
+  background: var(--wash);
+  padding: 0.9rem 1rem;
+}
+
+.np-file {
+  font-variant-ligatures: none;
+  font-size: var(--hint-size);
+  border: 1px solid var(--hairline);
+  background: var(--paper);
+  padding: 0.6rem 0.7rem;
+  margin-top: 0.5rem;
+  border-radius: 3px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.np-file-dir {
+  color: var(--muted);
+}
+
+.np-file-name {
+  font-weight: 700;
+}
+
+.np-facts {
+  color: var(--muted);
+  margin-top: 0.4rem;
+}
+
+.np-checks {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.np-check {
+  margin: 0.4rem 0 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.np-check.is-good { color: var(--good); }
+.np-check.is-warn { color: var(--warn); }
+.np-check.is-danger { color: var(--danger); }
+
+.np-actions {
+  margin-top: 1rem;
+}
+
+@media (max-width: 62.5rem) {
+  .new-program {
+    flex-wrap: wrap;
+  }
+
+  .np-rail {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--hairline);
+  }
+}

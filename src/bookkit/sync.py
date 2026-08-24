@@ -793,6 +793,193 @@ def scaffold_program(
     return dest, diags
 
 
+def compose_program(
+    *,
+    insured: str,
+    program_name: str,
+    status: str,
+    period_from: str,
+    period_to: str,
+    currency: str = "USD",
+    line_names: list[str] | None = None,
+    layers: list[dict[str, Any]] | None = None,
+    source: Program | None = None,
+) -> tuple[Program | None, Diagnostics]:
+    """Build a NEW program in memory — the new-program worksheet's model,
+    validated but never written, so the page's Checks rail shows towerkit's
+    verdict live on every keystroke-shaped re-render (design 2B).
+
+    Two ways in, both ending in the same shape:
+    - `source` (copy last year / another program): structure, lines and terms
+      come across; PREMIUMS AND BOUND SHARES DO NOT — a renewal starts
+      unpriced and unplaced, and carrying either over is how last year's
+      figure gets quoted as this year's.
+    - `line_names` + `layers` (start empty): each layer row names its line
+      and its limit; ATTACHMENT IS THE RUNNING TOTAL, never typed — each one
+      seats on the last, per line. A line with no layers gets the pending
+      'To be placed' layer, because an empty line is a towerkit ERROR.
+
+    Money arrives in cents (bookkit's boundary) and lands as whole dollars.
+    Refusals come back as diagnostics; validation failures return the program
+    anyway so the Checks rail can show what is wrong beside the form.
+    """
+    from datetime import date as _date
+
+    from towerkit.model import Layer, Line
+    from towerkit.model import Period as TkPeriod
+    from towerkit.model import Placement as TkPlacement
+
+    diags = Diagnostics()
+    if not program_name.strip():
+        diags.error("edit", "the program needs a name")
+        return None, diags
+    try:
+        start = _date.fromisoformat(period_from)
+        end = _date.fromisoformat(period_to)
+    except ValueError as exc:
+        diags.error("edit", str(exc))
+        return None, diags
+
+    if source is not None:
+        program = source.model_copy(deep=True)
+        program.insured = insured
+        program.program = program_name.strip()
+        program.placement = (
+            TkPlacement.BOUND if status == "bound" else TkPlacement.PROPOSED
+        )
+        program.period = TkPeriod(start=start, end=end)
+        for layer in program.layers:
+            layer.participants = []
+            layer.premium = None
+            if layer.period is not None:
+                # per-layer periods belonged to LAST year's policies
+                layer.period = None
+        return program, validate_program(program)
+
+    names = [name.strip() for name in (line_names or []) if name.strip()]
+    if not names:
+        diags.error("edit", "state at least one line of cover")
+        return None, diags
+    lines: list[Line] = []
+    taken: set[str] = set()
+    for name in names:
+        slug = slugify(name) or "line"
+        while slug in taken:
+            slug += "-"
+        taken.add(slug)
+        lines.append(Line(id=slug, name=name))
+    by_name = {line.name: line for line in lines}
+
+    built: list[Layer] = []
+    floors: dict[str, int] = {line.id: 0 for line in lines}
+    for row in layers or []:
+        line = by_name.get(str(row.get("line", "")))
+        if line is None:
+            diags.error("edit", f"{row.get('line')!r} is not one of the lines above")
+            return None, diags
+        layer_name = str(row.get("name", "")).strip()
+        if not layer_name:
+            diags.error("edit", "a layer needs a name")
+            return None, diags
+        try:
+            limit = _require_dollars(int(row["limit_cents"]), "limit")
+        except (KeyError, TypeError, ValueError) as exc:
+            diags.error("edit", f"{layer_name}: {exc}")
+            return None, diags
+        slug = slugify(layer_name) or "layer"
+        while slug in taken:
+            slug += "-"
+        taken.add(slug)
+        built.append(
+            Layer(
+                id=slug, name=layer_name, applies_to=[line.id],
+                attach=floors[line.id], limit=limit, participants=[],
+            )
+        )
+        floors[line.id] += limit
+    for line in lines:
+        if floors[line.id] == 0:
+            slug = f"{line.id}-pending"
+            while slug in taken:
+                slug += "-"
+            taken.add(slug)
+            built.append(
+                Layer(
+                    id=slug, name="To be placed", applies_to=[line.id],
+                    attach=0, limit=1_000_000, participants=[],
+                )
+            )
+
+    program = Program(
+        insured=insured,
+        program=program_name.strip(),
+        placement=TkPlacement.BOUND if status == "bound" else TkPlacement.PROPOSED,
+        period=TkPeriod(start=start, end=end),
+        currency=currency,
+        lines=lines,
+        layers=built,
+    )
+    return program, validate_program(program)
+
+
+def create_program(
+    conn: sqlite3.Connection,
+    org_id: str,
+    dest: Path,
+    *,
+    program_name: str,
+    status: str,
+    period_from: str,
+    period_to: str,
+    line_names: list[str] | None = None,
+    layers: list[dict[str, Any]] | None = None,
+    source_path: Path | None = None,
+) -> tuple[Any | None, Diagnostics]:
+    """One worksheet, then the file (design 2B): validate the composed
+    program FIRST, and only then create the placement, dump the file, link
+    and project — a refusal creates NOTHING, which is what lets the form
+    keep the typing.
+
+    Like `scaffold_program`, deliberately not batch-revertible: reverting
+    would un-link rows and orphan a new file sync can re-adopt — its own
+    decision when someone hits it (phase-2 handoff)."""
+    diags = Diagnostics()
+    org = orgs.get(conn, org_id)
+    source = None
+    if source_path is not None:
+        try:
+            source = load_program(source_path)
+        except Exception as exc:  # towerkit's own refusal, printed
+            diags.error("io", f"{source_path}: {exc}")
+            return None, diags
+    program, check = compose_program(
+        insured=org.name,
+        program_name=program_name,
+        status=status,
+        period_from=period_from,
+        period_to=period_to,
+        line_names=line_names,
+        layers=layers,
+        source=source,
+    )
+    if program is None:
+        return None, check
+    if not check.ok:
+        return None, check
+    if dest.exists():
+        diags.error("exists", f"{dest} already exists — refusing to overwrite")
+        return None, diags
+
+    placement = placements.create(
+        conn, org_id, program_name.strip(), period_from, period_to, status=status
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dump_program(program, dest)
+    links.confirm(conn, programpath.store(conn, dest), org.id, org.name, source="scaffold")
+    projected = project(conn, dest, placement_id=placement.id)
+    return placements.get(conn, placement.id), projected
+
+
 # --- transactional program edits (all via write_through) ----------------------
 #
 # bookkit edits the facts that arise from book events — premiums firming up,
