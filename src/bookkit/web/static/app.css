@@ -1639,9 +1639,24 @@ table.rows tr.is-waived td {
    .book-body is the scroll container, and .book-grid's fixed track widths
    (only "account" is 1fr) mean the grid simply grows past the viewport on
    a narrow window instead of squeezing every column unreadable. */
+/* SLACK IS SHARED, NOT DUMPED ON ONE COLUMN. Every track but `ref` flexes, so
+   a window wider than the table's natural size spreads the extra across the
+   whole row. When only `account` was the 1fr track, uncapping .page-body handed
+   it every one of the 800 spare pixels at 1920 and opened a canyon between the
+   client's name and its owner — the same amount of dead paper as before, moved
+   inside the table. The px halves of each minmax are the old fixed widths and
+   are what the min-width below is still made of. */
 .book-grid {
   display: grid;
-  grid-template-columns: 104px minmax(160px, 1fr) 90px 96px 126px 104px 104px 116px;
+  grid-template-columns:
+    104px
+    minmax(160px, 2fr)
+    minmax(90px, 0.8fr)
+    minmax(96px, 0.8fr)
+    minmax(126px, 1fr)
+    minmax(104px, 0.8fr)
+    minmax(104px, 1fr)
+    minmax(116px, 1fr);
   align-items: center;
   min-width: 62.5rem;
 }
@@ -1667,9 +1682,14 @@ table.rows tr.is-waived td {
   padding-right: 0.5rem;
 }
 
+/* THE HEADER AND THE CELL SHARE THIS NUMBER or the column label stops sitting
+   over its own figures. The gutter is wider than the left-aligned columns' own
+   because a right-aligned track ends where the next one begins: at the old
+   0.625rem `premium` and `last touch` touched, which read as one field once the
+   grid started filling the window. */
 .book-table-head span.right {
   text-align: right;
-  padding-right: 0.625rem;
+  padding-right: 1.25rem;
 }
 
 .book-row {
@@ -1716,9 +1736,10 @@ table.rows tr.is-waived td {
   color: var(--muted);
 }
 
+/* pinned to .book-table-head span.right above — see the comment there */
 .book-cell.right {
   text-align: right;
-  padding-right: 0.625rem;
+  padding-right: 1.25rem;
 }
 
 .book-cell.is-good {
@@ -2384,9 +2405,10 @@ table.rows tr.is-waived td {
 
 /* --- the Towers page (phase 4) ---------------------------------------------- */
 
+/* The calendar's frame. Fluid for the same reason as .page-body: a year of
+   renewal months is a working grid, and the months it could not fit went below
+   the fold while the right third of the window stayed blank. */
 .towers-body {
-  max-width: 1100px;
-  margin: 0 auto;
   padding: 0 1.5rem 3rem;
 }
 
@@ -4153,6 +4175,23 @@ button.term-label {
   margin-top: 0.6rem;
 }
 
+/* The new-line-of-coverage box on the add-layer form, revealed only when the
+   picker beside it asks for one.
+   PROGRESSIVE ON PURPOSE: the hiding lives inside @supports, so a browser
+   without :has() shows both controls always — which still works, because the
+   SERVER decides whether the name is required (a hidden required input would
+   block submit with nothing on screen to fix). */
+@supports selector(:has(*)) {
+  .program-form .field-new_line_name {
+    display: none;
+  }
+
+  .program-form:has(select[name="line"] option[value="__new__"]:checked)
+    .field-new_line_name {
+    display: flex;
+  }
+}
+
 /* The seats a premium override is about to state. A table, because the
    reader is checking three columns against each other — and the row they
    typed is marked, so the two they did NOT type read as consequences. */
@@ -4731,9 +4770,18 @@ s.compare-gone {
   background: var(--paper);
 }
 
+/* A WORKING SURFACE FILLS THE WINDOW (Grant, 2026-08-24). The system pass gave
+   every page one frame and capped it at 68.75rem, which is a READING measure —
+   right for prose, wrong for the five screens that use this class, all of which
+   are working tables. On a 1920px window that cap left 820px of dead paper and
+   wrapped the columns that carry sentences ("Travelers — no response, 27d out")
+   onto two lines while the space to print them sat empty beside the table.
+
+   The measure survives where it belongs and only there: `.search-page` (a
+   result list is prose) and `.capture-page` (a single form). Those two carry
+   their own cap and their own comment saying why. */
 .page-body {
   padding: 0 1.4rem 2rem;
-  max-width: 68.75rem;
 }
 
 .page-stats {
