@@ -2864,6 +2864,10 @@ async def new_program_page(request: Request, ref: str) -> Any:
         try:
             if not new_name:
                 raise ValueError("a layer needs a name")
+            if not new_line:
+                raise ValueError(
+                    "pick the line this layer covers — state the lines above first"
+                )
             parse_value(_LAYER_CELLS["limit_cents"], raw_limit)
             stacked.append({"line": new_line, "name": new_name, "limit": raw_limit})
         except ValueError as exc:

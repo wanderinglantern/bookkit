@@ -68,10 +68,12 @@
           <span class="stat-sub">across {{ band.open_layers }} layer{{ "s" if band.open_layers != 1 }}</span>
         </div>
       {% endif %}
-      {% if line_chips is not none %}
+      {% if line_chips is not none and not load_error %}
         {# Lines of cover belong to the PROGRAM, so they live in its band —
            rename in place (the id follows the name, cascading), remove
-           behind a blast-naming confirm, add in row. #}
+           behind a blast-naming confirm, add in row. Withheld while the
+           file will not open: every control here writes to it, and offering
+           a doomed act beside "nothing below is editable" reads as a lie. #}
         <div class="stat stat-lines">
           <span class="stat-label">lines of cover</span>
           <span class="stat-value stat-chips">

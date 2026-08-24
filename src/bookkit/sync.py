@@ -1145,6 +1145,11 @@ def insert_layer(
         limit = _require_dollars(limit_cents, "limit")
         stack = program.layers_for_line(line_id)
         layer = edit_add_layer(program, [line_id])
+        # THE ID FOLLOWS THE NAME, same as add_layer: edit.add_layer minted
+        # one from its own auto-name, and the worksheet prints the id beside
+        # the title now — a slab named "1st Excess" wearing id "layer" reads
+        # as somebody else's (found driving the worksheet, 2026-08-24).
+        layer.id = unique_id(program, slugify(name), exclude=layer.id)
         layer.name = name
         layer.limit = limit
         layer.buffer = buffer
@@ -2442,7 +2447,7 @@ def share_preview(
     return {
         "ok": diags.ok,
         "errors": [d.message for d in diags.errors],
-        "warnings": [d.message for d in diags.warnings],
+        "warnings": _new_warnings(conn, placement_id, diags),
         "carrier": carrier,
         "share_was_pct": current["share_bps"] / 100,
         "share_pct": share_bps / 100,
@@ -2493,7 +2498,7 @@ def rescope_preview(
     return {
         "ok": diags.ok,
         "errors": [d.message for d in diags.errors],
-        "warnings": [d.message for d in diags.warnings],
+        "warnings": _new_warnings(conn, placement_id, diags),
         "keeps": [labels.get(lid, lid) for lid in line_ids],
         "premium_cents": (
             dollars_to_cents(before.premium) if before.premium is not None else None
@@ -2519,6 +2524,22 @@ def rescope_preview(
             for lid in dropped
         ],
     }
+
+
+def _new_warnings(
+    conn: sqlite3.Connection, placement_id: str, diags: Diagnostics
+) -> list[str]:
+    """Only the warnings a previewed change INTRODUCES. A program can carry
+    standing warnings (no retention recorded, an old gap); repeating them in
+    a consequence block claims the edit caused them, which is the preview
+    lying by association."""
+    current = linked_program(conn, placement_id).program
+    standing = (
+        {d.message for d in validate_program(current).warnings}
+        if current is not None
+        else set()
+    )
+    return [d.message for d in diags.warnings if d.message not in standing]
 
 
 def _find_layer(program: Program, layer_id: str) -> TkModelLayer:

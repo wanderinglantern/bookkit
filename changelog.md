@@ -2,6 +2,62 @@
 
 All notable changes to bookkit, newest date first.
 
+## 2026-08-24
+
+### Added
+- **The Program tab is one worksheet now.** The stack editor, the layers table
+  and the details row became one grammar: a grouped, collapsible **structure
+  index** on the left, one layer's **worksheet** on the right, and the rail
+  (towerkit's diagnostics, the drawing with the selected layer outlined)
+  beside it. Selection and collapse state live in the URL, so a refresh — and
+  every save — lands back on the same layer. Clicking a drawn block selects
+  its layer.
+- **Attachment is never typed.** The worksheet states it as a sentence ("Sits
+  on 2nd Excess → attaches at $102,000,000, tops out at $202,000,000") and
+  changes it with *move up / move down* (a whole-column reseat in one
+  mutation), *insert above / below*, and **split by line** — two slabs in the
+  same band, the premium division typed and totalled, the new slab unplaced
+  until something is bound on it.
+- **Participation is a table with the money derived.** Carrier and share per
+  seat, the carrier's slice of the limit and premium computed once in sync,
+  and **open capacity as a first-class row** — the shortfall in percent and
+  dollars, with *place it* focusing the always-present bind row.
+- **A share edit previews before it saves.** The one deliberate exception to
+  blur-commits: typing a share shows the change, the resulting signed figure,
+  the dollars still open and where it writes — Save commits, Discard leaves
+  the file untouched. A preview towerkit would refuse shows the refusal and
+  offers no Save.
+- **Dropping a line off a spanning slab states the consequence first.** What
+  that line would be left with, in dollars, whether anything remains above
+  it, and that premium is *not* re-rated — Drop / Keep it / Split instead. A
+  dry run of the same call the commit makes (`sync.preview`), so the two can
+  never disagree.
+- **Towers is a queue.** The validator decides the order — errors, then
+  unplaced dollars, then the renewal date (counted to the earliest line end,
+  never `period_to`) — each card states the one fact that would make you open
+  it, in towerkit's own words, and opening it lands on the layer that fact is
+  about. Filters with counts: needs work, open capacity, renewing, all.
+- **Compare reads like a renewal report.** Four delta stats, a plain-English
+  paragraph derived from the same delta the table shows, and a layer-level
+  table — new rows tinted, lapsed struck, carrier moves in-line.
+- **Starting a program is one worksheet, then the file.** Copy last year
+  (structure, lines and terms come across; premiums and bound shares do not)
+  or start empty (each layer seats on the last; the attachment is the running
+  total). The rail shows the file that will be written and towerkit's checks,
+  live, before anything exists — a refusal creates nothing and keeps the
+  typing.
+
+### Changed
+- Lines of cover moved to the program band; retentions and sublimits to the
+  index's foot, where the tower keeps them. The band gained premium and
+  open-capacity stats summed from the same per-layer derivations the
+  worksheet reads.
+- Inserted layers take their id from their name, the same rule `add_layer`
+  follows — a slab named "1st Excess" no longer ships as id `layer`.
+- The empty and broken program states keep all four facts distinct and now
+  say what to do in each; the band withholds its line controls while the
+  file will not open.
+
 ## 2026-08-21
 
 ### Added
