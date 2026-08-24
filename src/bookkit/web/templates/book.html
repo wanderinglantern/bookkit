@@ -1,50 +1,74 @@
 {% extends "base.html" %}
+{% import "macros/page.html" as page %}
 {% block title %}The book — bookkit{% endblock %}
 {% block content %}
   {% include "partials/topbar.html" %}
 
-  <div class="book-header">
-    <h1 class="book-title">The book</h1>
-    <span class="book-subtitle">{{ count }} account{{ "s" if count != 1 else "" }} · {{ total_premium }} bound premium</span>
-    <span class="book-header-spacer"></span>
-    {# The filter and the XLSX export stay unrendered (D4: unbuilt is
-       unrendered). New account is LIVE as of gap 5: the org form
-       (suggestions wired) lands in the host below; POST /book/accounts
-       creates through the same apply_org + services.orgs.find_duplicate
-       path the TUI uses and redirects to the new account. #}
-    <button type="button" class="btn-pill btn-pill-primary"
+  {# The system pass applied (design 4D): the ink band with the count in its
+     standing line, a stat strip giving the book's figures their weight, the
+     filter chips the header was missing, and a state edge on the row that
+     needs work. The grid itself is the existing .book-grid — already right. #}
+  {% call page.band("The book", count ~ " account" ~ ("s" if count != 1 else "")) %}
+    <button type="button" class="band-btn"
             hx-get="/book/accounts/new"
             hx-target="#book-form-host" hx-swap="innerHTML">New account</button>
-  </div>
+  {% endcall %}
 
-  <div id="book-form-host" class="form-host page-form-host"></div>
+  <div class="page-body">
+    <div id="book-form-host" class="form-host page-form-host"></div>
 
-  <div class="book-body">
-    <div class="book-table-head book-grid">
-      <span>ref</span>
-      <span>account</span>
-      <span>owner</span>
-      <span>status</span>
-      <span>next renewal</span>
-      <span class="right">due in</span>
-      <span class="right">premium</span>
-      <span>last touch</span>
+    {% call page.stats() %}
+      {{ page.stat("bound premium", total_premium) }}
+      {{ page.stat("clients", counts["clients"], sub=(prospects ~ " prospect" ~ ("s" if prospects != 1 else "")) if prospects else "") }}
+      {{ page.stat("renewing 90d", counts["renewing"]) }}
+      {{ page.stat("overdue", counts["overdue"], tone="danger" if counts["overdue"] else "") }}
+    {% endcall %}
+
+    <div class="filter-chips">
+      <a class="filter-chip{% if show == 'all' %} is-selected{% endif %}" href="/book?show=all">All <span class="mono">{{ counts["all"] }}</span></a>
+      <a class="filter-chip{% if show == 'clients' %} is-selected{% endif %}" href="/book?show=clients">Clients <span class="mono">{{ counts["clients"] }}</span></a>
+      <a class="filter-chip{% if show == 'renewing' %} is-selected{% endif %}" href="/book?show=renewing">Renewing 90d <span class="mono">{{ counts["renewing"] }}</span></a>
+      <a class="filter-chip{% if show == 'overdue' %} is-selected{% endif %}" href="/book?show=overdue">Overdue <span class="mono">{{ counts["overdue"] }}</span></a>
+      <span class="filter-chips-note">the view is a URL — keep it, share it, back-button it</span>
     </div>
-    {% for row in rows %}
-      <a href="/accounts/{{ row.ref }}" class="book-row book-grid">
-        <span class="book-cell mono muted">{{ row.ref }}</span>
-        <span class="book-cell">{{ row.name }}</span>
-        <span class="book-cell muted">{{ row.owner }}</span>
-        <span class="book-cell {{ row.status_class }}">{{ row.status }}</span>
-        <span class="book-cell mono {{ row.renewal_class }}">{{ row.renewal_text }}</span>
-        <span class="book-cell mono right {{ row.due_class }}">{{ row.due_text }}</span>
-        <span class="book-cell mono right">{{ row.premium }}</span>
-        <span class="book-cell mono muted">{{ row.last_touch }}</span>
-      </a>
-    {% else %}
-      {# Addable-list empty state per the visual-direction spec's copy
-         rules — "New account" is the add action for this list. #}
-      <div class="book-empty"><p>empty — add the first row</p></div>
-    {% endfor %}
+
+    <div class="book-body">
+      <div class="book-table-head book-grid">
+        <span>ref</span>
+        <span>account</span>
+        <span>owner</span>
+        <span>status</span>
+        <span>next renewal</span>
+        <span class="right">due in</span>
+        <span class="right">premium</span>
+        <span>last touch</span>
+      </div>
+      {% for row in rows %}
+        <a href="/accounts/{{ row.ref }}" class="book-row book-grid{% if row.edge %} {{ row.edge }}{% endif %}">
+          <span class="book-cell mono muted">{{ row.ref }}</span>
+          <span class="book-cell">{{ row.name }}</span>
+          <span class="book-cell muted">{{ row.owner }}</span>
+          <span class="book-cell {{ row.status_class }}">{{ row.status }}</span>
+          <span class="book-cell mono {{ row.renewal_class }}">{{ row.renewal_text }}</span>
+          <span class="book-cell mono right {{ row.due_class }}">{{ row.due_text }}</span>
+          <span class="book-cell mono right">{{ row.premium }}</span>
+          <span class="book-cell mono muted">{{ row.last_touch }}</span>
+        </a>
+      {% else %}
+        {# P7: which KIND of empty — addable on the whole book, filtered-out
+           behind a chip, each in one sentence with its one action. #}
+        {% if show == "all" %}
+          <div class="empty-state">No accounts yet.
+            <button type="button" class="row-action-btn"
+                    hx-get="/book/accounts/new"
+                    hx-target="#book-form-host" hx-swap="innerHTML">Add the first one</button>
+          </div>
+        {% else %}
+          <div class="empty-state">No accounts match this filter.
+            <a class="row-action-btn" href="/book">Clear the filter</a>
+          </div>
+        {% endif %}
+      {% endfor %}
+    </div>
   </div>
 {% endblock %}

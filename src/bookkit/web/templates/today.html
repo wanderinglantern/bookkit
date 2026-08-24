@@ -1,284 +1,241 @@
 {% import "macros/account.html" as account %}
 {% import "macros/renewal.html" as renewal %}
+{% import "macros/page.html" as page %}
 {% extends "base.html" %}
 {% block title %}Today — bookkit{% endblock %}
 {% block content %}
   {% set section = "today" %}
   {% include "partials/topbar.html" %}
 
-  <div class="book-header">
-    <h1 class="book-title">Today</h1>
-    <span class="book-subtitle mono">{{ today }}</span>
-  </div>
+  {# TEN LISTS BECOME ONE MORNING (design 4C, the system pass's biggest
+     change): the ink band names the day, the stat strip carries its
+     figures, "Needs you today" merges everything overdue and past SLA into
+     one worst-first list, "Renewals coming" keeps the window, and the five
+     context lists demote to counts in the rail with their tables one click
+     below — context, not the morning's work, no longer competing for the
+     same weight. Overdue renewals still NEVER fall off. #}
+  {% call page.band(today_said, standing) %}
+    <a class="band-btn" href="/capture">+ Log</a>
+    <a class="band-btn band-btn-ghost" href="/exports">Exports</a>
+  {% endcall %}
 
-  <div class="towers-body">
-    {# OVERDUE FIRST AND NEVER OFF THE LIST — the attention rule the whole
-       terminal app is built around, now the web's front door too. #}
-    <section class="today-section">
-      <div class="people-head">
-        <h2 class="people-label">Overdue renewals</h2>
-        <span class="people-count{% if overdue %} count-danger{% endif %}">{{ overdue | length }}</span>
-      </div>
-      {% if overdue %}
-        <div class="table-scroll">
-          <table class="rows rows-fit">
-            <thead><tr><th>Renews</th><th>Over by</th><th>Account</th><th>Cover</th><th>Program</th></tr></thead>
-            <tbody>
-              {% for item in overdue %}
-                <tr>
-                  <td class="num">{{ item.renewal_on }}</td>
-                  <td class="num overdue-cell">{{ -item.days_remaining }}d over</td>
-                  <td class="prose">{{ account.account_link(accounts, item.org.id, "program") }}</td>
-                  {# COVER is what runs out on this row's date; PROGRAM is the
-                     context. One column doing both, with the name standing in
-                     for lines it is not, is what made this table unreadable on
-                     an unlinked book — see macros/renewal.html. #}
-                  <td class="prose">{{ renewal.cover(item) }}</td>
-                  <td class="prose">{{ renewal.program(item) }}</td>
-                </tr>
+  <div class="page-body">
+    {% call page.stats() %}
+      {{ page.stat("overdue", overdue | length, tone="danger" if overdue else "") }}
+      {{ page.stat("renewing 120d", soon | length) }}
+      {{ page.stat("open items", open_count, sub=(open_overdue ~ " overdue") if open_overdue else "") }}
+      {{ page.stat("requests open", chases | length) }}
+      {{ page.stat("past SLA", late | length, tone="warn" if late else "") }}
+    {% endcall %}
+
+    <div class="today-columns">
+      <div class="today-main">
+        {% include "partials/_today_needs.html" %}
+
+        {% call page.sect2("Renewals coming", soon | length, hint="≤ 120 days — overdue never falls off the list above") %}{% endcall %}
+        {% if soon %}
+          <div class="table-scroll">
+            <table class="rows rows-fit">
+              <thead><tr><th>Renews</th><th>Due in</th><th>Account</th><th>Cover</th><th>Program</th></tr></thead>
+              <tbody>
+                {% for item in soon %}
+                  <tr>
+                    <td class="num">{{ item.renewal_on }}</td>
+                    <td class="num">{{ item.days_remaining }}d</td>
+                    <td class="prose">{{ account.account_link(accounts, item.org.id, "program") }}</td>
+                    {# COVER is what runs out on this row's date; PROGRAM is
+                       the context — see macros/renewal.html. #}
+                    <td class="prose">{{ renewal.cover(item) }}</td>
+                    <td class="prose">{{ renewal.program(item) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="empty-state">No renewals in the window.</div>
+        {% endif %}
+
+        {# The demoted lists — context one click away, each behind its own
+           disclosure with the count visible while closed (the same rule the
+           structure index's groups follow). #}
+        <details class="aside-section">
+          <summary><span class="disc" aria-hidden="true"></span><span class="sum-title">Requests to chase</span><span class="sum-count">{{ chases | length }}</span></summary>
+          <div id="requests"></div>
+          {% if chases %}
+            <div class="table-scroll">
+              <table class="rows rows-fit">
+                <thead><tr><th>Due</th><th>Request</th><th>Open</th><th>Account</th></tr></thead>
+                <tbody>
+                  {% for chase in chases %}
+                    <tr>
+                      <td class="num">{{ chase.earliest_due or "—" }}</td>
+                      <td class="prose">{{ chase.request.title }}</td>
+                      <td class="num">{{ chase.open_count }}/{{ chase.total_count }}</td>
+                      <td class="prose">{{ chase.org_name }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">Nothing outstanding — every request is answered.</div>
+          {% endif %}
+        </details>
+
+        <details class="aside-section">
+          <summary><span class="disc" aria-hidden="true"></span><span class="sum-title">Quotes expiring</span><span class="sum-count">{{ (quotes | length) + (undated_quotes | length) }}</span></summary>
+          <div id="quotes"></div>
+          {% if quotes or undated_quotes %}
+            <div class="table-scroll">
+              <table class="rows rows-fit">
+                <thead><tr><th>Expires</th><th>Market</th><th>About</th><th>Account</th></tr></thead>
+                <tbody>
+                  {% for quote in quotes %}
+                    <tr>
+                      <td class="num{% if quote.is_expired %} overdue-cell{% endif %}">{{ quote.expiry_word }}</td>
+                      <td class="prose">{{ quote.market_name }}</td>
+                      <td class="prose">{{ quote.about }}</td>
+                      <td class="prose">{{ account.account_link(accounts, quote.org_id, "pipeline") }}</td>
+                    </tr>
+                  {% endfor %}
+                  {% for quote in undated_quotes %}
+                    <tr>
+                      <td class="num">no expiry</td>
+                      <td class="prose">{{ quote.market_name }}</td>
+                      <td class="prose">{{ quote.about }}</td>
+                      <td class="prose">{{ account.account_link(accounts, quote.org_id, "pipeline") }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">No quotes waiting on a clock.</div>
+          {% endif %}
+        </details>
+
+        <details class="aside-section">
+          <summary><span class="disc" aria-hidden="true"></span><span class="sum-title">Project needs due</span><span class="sum-count">{{ needs | length }}</span></summary>
+          <div id="needs"></div>
+          {% if needs %}
+            <div class="table-scroll">
+              <table class="rows rows-fit">
+                <thead><tr><th>Needed by</th><th>Line</th><th>Project</th><th>Account</th></tr></thead>
+                <tbody>
+                  {% for need in needs %}
+                    <tr>
+                      <td class="num">{{ need.needed_by }}</td>
+                      <td class="prose">{{ need.line }}</td>
+                      <td class="prose">{{ need.project_name if need.project_name is defined else need.name }}</td>
+                      <td class="prose">
+                        {% if accounts.get(need.org_id) %}{{ account.account_link(accounts, need.org_id, "relationship") }}
+                        {% else %}{{ need.org_name }}{% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">No needs in the window.</div>
+          {% endif %}
+        </details>
+
+        <details class="aside-section">
+          <summary><span class="disc" aria-hidden="true"></span><span class="sum-title">Onboarding incomplete</span><span class="sum-count">{{ onboarding | length }}</span></summary>
+          <div id="onboarding"></div>
+          {% if onboarding %}
+            <ul class="confirm-remove-notes">
+              {% for org, note in onboarding %}
+                <li>{{ account.account_link(accounts, org.id, "relationship") }} — {{ note }}</li>
               {% endfor %}
-            </tbody>
-          </table>
+            </ul>
+          {% else %}
+            <div class="empty-state">Every recent client is fully onboarded.</div>
+          {% endif %}
+        </details>
+
+        <details class="aside-section">
+          <summary><span class="disc" aria-hidden="true"></span><span class="sum-title">Going stale</span><span class="sum-count">{{ stale | length }}</span><span class="sum-hint">days since last touch × premium</span></summary>
+          <div id="stale"></div>
+          {% if stale %}
+            <div class="table-scroll">
+              <table class="rows rows-fit">
+                <thead><tr><th>Account</th><th>Last touch</th><th>Stale</th><th>Premium</th></tr></thead>
+                <tbody>
+                  {# `stale_row`, not `account` — the loop variable would
+                     shadow the imported macro namespace. #}
+                  {% for stale_row in stale %}
+                    <tr>
+                      <td class="prose">{{ account.account_link(accounts, stale_row.org.id, "relationship") }}</td>
+                      <td class="num">{{ stale_row.last_interaction_on or "never" }}</td>
+                      <td class="num">{{ stale_row.days_stale }}d</td>
+                      <td class="num">{{ money(stale_row.premium) if stale_row.premium else "—" }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">Nothing going stale.</div>
+          {% endif %}
+        </details>
+
+        <details class="aside-section">
+          <summary><span class="disc" aria-hidden="true"></span><span class="sum-title">Changes, last 14 days</span><span class="sum-count">{{ changes | length }}</span></summary>
+          <div id="changes"></div>
+          {# Revert kept exactly as it was — the one write this list owns. #}
+          {% if changes %}
+            <div class="table-scroll">
+              <table class="rows rows-fit">
+                <thead><tr><th>When</th><th>Account</th><th>Change</th><th>Via</th><th></th></tr></thead>
+                <tbody>
+                  {% for batch in changes %}
+                    <tr>
+                      <td class="num">{{ batch.created_at[:16] | replace("T", " ") }}</td>
+                      <td class="prose">{{ account.account_link(accounts, batch.org_id, "relationship") }}</td>
+                      <td class="prose">{{ batch.summary }}</td>
+                      <td class="mono">{{ batch.source }}</td>
+                      <td>
+                        {% if batch.reverted_at %}
+                          <span class="detail-label">reverted</span>
+                        {% elif accounts.get(batch.org_id) %}
+                          <button type="button" class="row-action-btn"
+                                  hx-post="/accounts/{{ accounts[batch.org_id].ref }}/changes/{{ batch.ref }}/revert?tab=relationship"
+                                  hx-confirm="Put back: {{ batch.summary }}? This cannot be undone."
+                                  hx-swap="none">Revert</button>
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">Nothing changed in the last two weeks.</div>
+          {% endif %}
+        </details>
+      </div>
+
+      <aside class="today-aside">
+        <div class="rail-caps">Also worth a look</div>
+        <div class="aside-counts">
+          <span class="aside-count"><span class="mono-count">{{ chases | length }}</span><a href="#requests">requests to chase</a></span>
+          <span class="aside-count"><span class="mono-count">{{ (quotes | length) + (undated_quotes | length) }}</span><a href="#quotes">quotes expiring</a></span>
+          <span class="aside-count"><span class="mono-count">{{ needs | length }}</span><a href="#needs">project needs due</a></span>
+          <span class="aside-count"><span class="mono-count">{{ onboarding | length }}</span><a href="#onboarding">onboarding incomplete</a></span>
+          <span class="aside-count"><span class="mono-count">{{ stale | length }}</span><a href="#stale">accounts going stale</a></span>
+          <span class="aside-count"><span class="mono-count">{{ changes | length }}</span><a href="#changes">changes, last 14 days</a></span>
         </div>
-      {% else %}
-        <div class="panel-empty"><p>nothing overdue — that's good</p></div>
-      {% endif %}
-    </section>
-
-    <section class="today-section">
-      <div class="people-head">
-        <h2 class="people-label">Renewals ≤ 120d</h2>
-        <span class="people-count">{{ soon | length }}</span>
-      </div>
-      {% if soon %}
-        <div class="table-scroll">
-          <table class="rows rows-fit">
-            <thead><tr><th>Renews</th><th>Due in</th><th>Account</th><th>Cover</th><th>Program</th></tr></thead>
-            <tbody>
-              {% for item in soon %}
-                <tr>
-                  <td class="num">{{ item.renewal_on }}</td>
-                  <td class="num">{{ item.days_remaining }}d</td>
-                  <td class="prose">{{ account.account_link(accounts, item.org.id, "program") }}</td>
-                  {# COVER is what runs out on this row's date; PROGRAM is the
-                     context. One column doing both, with the name standing in
-                     for lines it is not, is what made this table unreadable on
-                     an unlinked book — see macros/renewal.html. #}
-                  <td class="prose">{{ renewal.cover(item) }}</td>
-                  <td class="prose">{{ renewal.program(item) }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+        <div class="aside-block">
+        <div class="rail-caps">Exports</div>
+        <p class="rail-hint">the scattered download links, in one place</p>
+        <div class="aside-counts">
+          <span class="aside-count"><a class="row-action-btn" href="/exports">Open the exports drawer →</a></span>
         </div>
-      {% else %}
-        <div class="panel-empty"><p>no renewals in the window</p></div>
-      {% endif %}
-    </section>
-
-    {% include "partials/_today_tasks.html" %}
-
-    <section class="today-section">
-      <div class="people-head">
-        <h2 class="people-label">Project needs due</h2>
-        <span class="people-count">{{ needs | length }}</span>
-      </div>
-      {% if needs %}
-        <div class="table-scroll">
-          <table class="rows rows-fit">
-            <thead><tr><th>Needed by</th><th>Line</th><th>Project</th><th>Account</th></tr></thead>
-            <tbody>
-              {% for need in needs %}
-                <tr>
-                  <td class="num">{{ need.needed_by }}</td>
-                  <td class="prose">{{ need.line }}</td>
-                  <td class="prose">{{ need.project_name if need.project_name is defined else need.name }}</td>
-                  <td class="prose">
-                    {% if accounts.get(need.org_id) %}{{ account.account_link(accounts, need.org_id, "relationship") }}
-                    {% else %}{{ need.org_name }}{% endif %}
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
         </div>
-      {% else %}
-        <div class="panel-empty"><p>no needs in the window</p></div>
-      {% endif %}
-    </section>
-
-    <section class="today-section">
-      <div class="people-head">
-        <h2 class="people-label">Submissions past SLA</h2>
-        <span class="people-count{% if late %} count-danger{% endif %}">{{ late | length }}</span>
-      </div>
-      {% if late %}
-        <div class="table-scroll">
-          <table class="rows rows-fit">
-            <thead><tr><th>Market</th><th>Chase</th><th>Account</th><th>Sent</th><th>Out</th></tr></thead>
-            <tbody>
-              {% for sub in late %}
-                <tr>
-                  <td class="prose">{{ sub.market.name }}</td>
-                  <td class="prose">{{ sub.underwriter.name if sub.underwriter else "—" }}</td>
-                  <td class="prose">{{ account.account_link(accounts, sub.account.id, "pipeline") }}</td>
-                  <td class="num">{{ sub.submission.sent_on }}</td>
-                  <td class="num overdue-cell">{{ sub.days_out }}d</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="panel-empty"><p>nothing past SLA</p></div>
-      {% endif %}
-    </section>
-
-    <section class="today-section">
-      <div class="people-head">
-        <h2 class="people-label">Quotes expiring</h2>
-        <span class="people-count">{{ quotes | length }}</span>
-        {% if undated_quotes %}<span class="detail-label">+{{ undated_quotes | length }} no expiry</span>{% endif %}
-      </div>
-      {% if quotes or undated_quotes %}
-        <div class="table-scroll">
-          <table class="rows rows-fit">
-            <thead><tr><th>Expires</th><th>Market</th><th>About</th><th>Account</th></tr></thead>
-            <tbody>
-              {% for quote in quotes %}
-                <tr{% if quote.is_expired %} class="compare-lapsed"{% endif %}>
-                  <td class="num{% if quote.is_expired %} overdue-cell{% endif %}">{{ quote.expiry_word }}</td>
-                  <td class="prose">{{ quote.market_name }}</td>
-                  <td class="prose">{{ quote.about }}</td>
-                  <td class="prose">{{ account.account_link(accounts, quote.org_id, "pipeline") }}</td>
-                </tr>
-              {% endfor %}
-              {% for quote in undated_quotes %}
-                <tr>
-                  <td class="num">no expiry</td>
-                  <td class="prose">{{ quote.market_name }}</td>
-                  <td class="prose">{{ quote.about }}</td>
-                  <td class="prose">{{ account.account_link(accounts, quote.org_id, "pipeline") }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="panel-empty"><p>no quotes waiting on a clock</p></div>
-      {% endif %}
-    </section>
-
-    <section class="today-section">
-      <div class="people-head">
-        <h2 class="people-label">Onboarding incomplete</h2>
-        <span class="people-count">{{ onboarding | length }}</span>
-      </div>
-      {% if onboarding %}
-        <ul class="confirm-remove-notes">
-          {% for org, note in onboarding %}
-            <li>{{ account.account_link(accounts, org.id, "relationship") }} — {{ note }}</li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <div class="panel-empty"><p>every recent client is fully onboarded</p></div>
-      {% endif %}
-    </section>
-
-    <section class="today-section">
-      <div class="people-head">
-        <h2 class="people-label">Requests to chase</h2>
-        <span class="people-count">{{ chases | length }}</span>
-      </div>
-      {% if chases %}
-        <div class="table-scroll">
-          <table class="rows rows-fit">
-            <thead><tr><th>Due</th><th>Request</th><th>Open</th><th>Account</th></tr></thead>
-            <tbody>
-              {% for chase in chases %}
-                <tr>
-                  <td class="num">{{ chase.earliest_due or "—" }}</td>
-                  <td class="prose">{{ chase.request.title }}</td>
-                  <td class="num">{{ chase.open_count }}/{{ chase.total_count }}</td>
-                  <td class="prose">{{ chase.org_name }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="panel-empty"><p>no outstanding requests</p></div>
-      {% endif %}
-    </section>
-
-    <section class="today-section">
-      <div class="people-head">
-        <h2 class="people-label">Going stale</h2>
-        <span class="people-count">{{ stale | length }}</span>
-        <span class="detail-label">days since last touch × premium</span>
-      </div>
-      {% if stale %}
-        <div class="table-scroll">
-          <table class="rows rows-fit">
-            <thead><tr><th>Account</th><th>Last touch</th><th>Stale</th><th>Premium</th></tr></thead>
-            <tbody>
-              {# `stale_row`, not `account`: the loop variable used to be
-                 `account`, which now shadows the imported macro namespace and
-                 would make every link in this table a call on a stale row. #}
-              {% for stale_row in stale %}
-                <tr>
-                  <td class="prose">{{ account.account_link(accounts, stale_row.org.id, "relationship") }}</td>
-                  <td class="num">{{ stale_row.last_interaction_on or "never" }}</td>
-                  <td class="num">{{ stale_row.days_stale }}d</td>
-                  <td class="num">{{ money(stale_row.premium) if stale_row.premium else "—" }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="panel-empty"><p>nothing going stale</p></div>
-      {% endif %}
-    </section>
-
-    {# The Navigator's cross-account changes list, folded in: Revert reuses
-       the account route (204 + HX-Redirect), landing on the account with
-       the outcome toast — where the consequences are visible. #}
-    <section class="today-section">
-      <div class="people-head">
-        <h2 class="people-label">Recent changes</h2>
-        <span class="people-count">{{ changes | length }}</span>
-        <span class="detail-label">last 14 days, every surface</span>
-      </div>
-      {% if changes %}
-        <div class="table-scroll">
-          <table class="rows rows-fit">
-            <thead><tr><th>When</th><th>Account</th><th>Change</th><th>Via</th><th></th></tr></thead>
-            <tbody>
-              {% for batch in changes %}
-                <tr>
-                  <td class="num">{{ batch.created_at[:16] | replace("T", " ") }}</td>
-                  <td class="prose">{{ account.account_link(accounts, batch.org_id, "relationship") }}</td>
-                  <td class="prose">{{ batch.summary }}</td>
-                  <td class="mono">{{ batch.source }}</td>
-                  <td>
-                    {% if batch.reverted_at %}
-                      <span class="detail-label">reverted</span>
-                    {% elif accounts.get(batch.org_id) %}
-                      <button type="button" class="row-action-btn"
-                              hx-post="/accounts/{{ accounts[batch.org_id].ref }}/changes/{{ batch.ref }}/revert?tab=relationship"
-                              hx-confirm="Put back: {{ batch.summary }}? This cannot be undone."
-                              hx-swap="none">Revert</button>
-                    {% endif %}
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="panel-empty"><p>nothing here — that's good</p></div>
-      {% endif %}
-    </section>
+      </aside>
+    </div>
   </div>
 {% endblock %}

@@ -1,29 +1,28 @@
 {% extends "base.html" %}
+{% import "macros/page.html" as page %}
 {% block title %}Towers — bookkit{% endblock %}
 {% block content %}
   {% set section = "towers" %}
   {% include "partials/topbar.html" %}
 
-  {# The queue, not a gallery (design 2D): a card states the one fact that
-     would make you open it, and opening it lands on the layer that fact is
-     about. The filter chips carry counts; the muted note states the
-     ordering rule so the order never reads as arbitrary. #}
-  <div class="book-header">
-    <h1 class="book-title">Towers</h1>
-    <span class="book-subtitle">{{ total }} linked program{{ "s" if total != 1 else "" }} across the book</span>
-  </div>
+  {# The queue, not a gallery (design 2D), wearing the system pass's page
+     frame (P1): a card states the one fact that would make you open it, and
+     opening it lands on the layer that fact is about. The filter chips
+     carry counts; the muted note states the ordering rule so the order
+     never reads as arbitrary. #}
+  {% call page.band("Towers", total ~ " linked program" ~ ("s" if total != 1 else "") ~ " across the book") %}{% endcall %}
 
-  <div class="towers-body">
-    <div class="towers-filters">
-      <a class="towers-filter{% if show == 'needs-work' %} is-selected{% endif %}"
+  <div class="page-body">
+    <div class="filter-chips">
+      <a class="filter-chip{% if show == 'needs-work' %} is-selected{% endif %}"
          href="/towers?show=needs-work">Needs work <span class="mono">{{ counts["needs-work"] }}</span></a>
-      <a class="towers-filter{% if show == 'open' %} is-selected{% endif %}"
+      <a class="filter-chip{% if show == 'open' %} is-selected{% endif %}"
          href="/towers?show=open">Open capacity <span class="mono">{{ counts["open"] }}</span></a>
-      <a class="towers-filter{% if show == 'renewing' %} is-selected{% endif %}"
+      <a class="filter-chip{% if show == 'renewing' %} is-selected{% endif %}"
          href="/towers?show=renewing">Renewing {{ window_days }}d <span class="mono">{{ counts["renewing"] }}</span></a>
-      <a class="towers-filter{% if show == 'all' %} is-selected{% endif %}"
+      <a class="filter-chip{% if show == 'all' %} is-selected{% endif %}"
          href="/towers?show=all">All <span class="mono">{{ counts["all"] }}</span></a>
-      <span class="towers-order-note">the validator decides this order — errors, then unplaced capacity, then renewal date</span>
+      <span class="filter-chips-note">the validator decides this order — errors, then unplaced capacity, then renewal date</span>
     </div>
 
     {% if entries %}
@@ -56,13 +55,14 @@
         {% endfor %}
       </div>
     {% else %}
-      <div class="panel-empty">
-        {% if show == "all" %}
-          <p>no linked programs yet — scaffold one from an account's Program tab</p>
-        {% else %}
-          <p>nothing here — every program passes this filter clean</p>
-        {% endif %}
-      </div>
+      {% if show == "all" %}
+        <div class="empty-state">No linked programs yet — scaffold one from an account's Program tab.</div>
+      {% else %}
+        {# good empty — every program passes this filter clean #}
+        <div class="empty-state">Nothing here. Every program passes this filter clean.
+          <a class="row-action-btn" href="/towers?show=all">See all</a>
+        </div>
+      {% endif %}
     {% endif %}
   </div>
 {% endblock %}

@@ -27,15 +27,22 @@ def test_the_root_redirects_to_today(client):
 
 
 def test_every_attention_section_renders_and_overdue_leads(client):
+    """The system pass (design 4C): ten equal lists became one morning —
+    Needs you today first (overdue renewals never fall off it), then the
+    renewal window, then the demoted context sections, each still present
+    with its count visible while closed."""
     page = client.get("/today").text
 
     order = [
-        "Overdue renewals", "Renewals ≤ 120d", "Tasks due", "Project needs due",
-        "Submissions past SLA", "Quotes expiring", "Onboarding incomplete",
-        "Requests to chase", "Going stale", "Recent changes",
+        "Needs you today", "Renewals coming", "Quotes expiring",
+        "Project needs due", "Onboarding incomplete", "Going stale",
+        "Changes, last 14 days",
     ]
     positions = [page.index(section) for section in order]
-    assert positions == sorted(positions), "the attention order drifted"
+    assert positions == sorted(positions), "the morning's order drifted"
+    assert "Also worth a look" in page
+    # the demoted lists are disclosures with the count visible while closed
+    assert page.count("<details") >= 5
 
 
 def test_overdue_renewals_actually_list_with_their_counted_date(client):
@@ -54,10 +61,15 @@ def test_overdue_renewals_actually_list_with_their_counted_date(client):
     assert overdue, "the seeded book shows nothing overdue — test proves nothing"
 
     page = client.get("/today").text
+    needs = page[page.index("Needs you today") : page.index("Renewals coming")]
 
     for item in overdue:
-        assert item.renewal_on in page
-        assert f"{-item.days_remaining}d over" in page
+        # the date the countdown counts to, printed beside it — the standing
+        # renewal-date rule, now in the merged morning list
+        assert item.renewal_on in needs
+        assert "Renewal ran out" in needs
+        # the countdown, in the state vocabulary's own spelling
+        assert f"overdue · {-item.days_remaining}d" in needs
         assert f"/accounts/{item.org.ref}/program" in page
 
 
@@ -143,38 +155,31 @@ def test_every_section_names_the_account_rather_than_its_ref(client):
 
 
 def test_a_task_row_links_to_the_account_it_belongs_to(client):
-    """The bug's own section, pinned by content: the tasks table must carry a
-    real account name and a link that lands on that account's Work tab."""
-    import re
+    from datetime import date
 
-    conn = client.app.state.conn
     from bookkit.repo import orgs as orgs_repo
     from bookkit.repo import tasks as tasks_repo
 
+    conn = client.app.state.conn
+    due = tasks_repo.open_tasks(conn, due_by=date.today().isoformat())
+    linked = next((t for t in due if t.org_id), None)
+    assert linked is not None, "the seeded book has no due task with an account"
+    org = orgs_repo.get(conn, linked.org_id)
+
     page = client.get("/today").text
-    section = page[page.index("Tasks due") :]
-    section = section[: section.index("</section>")]
+    section = page[page.index("Needs you today") : page.index("Renewals coming")]
 
-    due = [t for t in tasks_repo.open_tasks(conn) if t.org_id]
-    if not due:
-        pytest.skip("the seeded book has no account-scoped open task")
-
-    linked = re.findall(r'<a href="/accounts/(ACC-\d+)/work"[^>]*>([^<]+)</a>', section)
-    assert linked, "the tasks table has no account links"
-    for ref, label in linked:
-        org = orgs_repo.find(conn, ref)
-        assert org is not None
-        assert label.strip() == org.name, f"{ref} rendered as {label!r}"
-
-
-# --- renewals name the POLICY, not the program (Grant, 2026-08-21) ------------
+    assert f"/accounts/{org.ref}/work" in section, (
+        "the task's account is named but not linked"
+    )
+    assert linked.title in section
 
 
 def _renewal_rows(page: str) -> list[list[str]]:
     """The Renews/Over-by/Account/Cover/Program cells of every renewal row."""
     import re
 
-    body = page[page.index("Overdue renewals") : page.index("Project needs due")]
+    body = page[page.index("Renewals coming") : page.index("Quotes expiring")]
     rows = re.findall(r"<tr>(.*?)</tr>", body, re.S)
     out = []
     for row in rows:
@@ -264,3 +269,81 @@ def test_a_program_whose_lines_expire_apart_gets_a_row_each(client):
         for row in rows:
             assert row.cover in covers, f"{row.cover!r} is not on the page"
             assert row.cover != row.lines or len(rows) == 1
+
+
+def test_done_from_needs_you_swaps_the_section_and_keeps_the_morning(client):
+    """A task leaves the merged list without a page reload — done answers
+    the Needs-you SECTION, one element."""
+    from datetime import date
+
+    from bookkit.repo import tasks as tasks_repo
+
+    conn = client.app.state.conn
+    due = tasks_repo.open_tasks(conn, due_by=date.today().isoformat())
+    task = next(t for t in due if t.org_id)
+
+    done = client.post(f"/today/tasks/{task.id}/done")
+
+    assert done.status_code == 200
+    assert done.text.lstrip().startswith("<section")
+    assert 'id="today-needs"' in done.text
+    assert task.title not in done.text, "the completed task is still listed"
+
+
+def test_the_exports_drawer_gathers_the_existing_download_routes(client):
+    """The scattered download anchors, in one place (design 4C) — every link
+    is a route that already exists; the drawer mints nothing."""
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import placements as placements_repo
+
+    conn = client.app.state.conn
+    page = client.get("/exports")
+
+    assert page.status_code == 200
+    linked = [
+        p for o in orgs_repo.list_orgs(conn, kind="client")
+        for p in placements_repo.for_org(conn, o.id) if p.program_path
+    ]
+    assert linked, "the seeded book has no linked program — test proves nothing"
+    for placement in linked:
+        assert f"/program/{placement.id}/export/tower.svg" in page.text
+    assert "/export/open-items.xlsx" in page.text
+
+
+def test_past_sla_reaches_needs_you_with_the_deadline_it_counts_to(client):
+    """The review found the SLA loop had zero web coverage (S11) and that the
+    first cut printed sent_on under a Due header (S1): the row must carry
+    the DEADLINE (sent + SLA), the overdue tone, and the underwriter to
+    chase when one is named."""
+    from datetime import timedelta
+
+    from conftest import FROZEN_TODAY
+
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import placements as placements_repo
+    from bookkit.repo import submissions as submissions_repo
+    from bookkit.services.sla import DEFAULT_SLA_DAYS
+
+    conn = client.app.state.conn
+    org = next(
+        o for o in orgs_repo.list_orgs(conn, kind="client")
+        if placements_repo.for_org(conn, o.id)
+    )
+    market = orgs_repo.list_orgs(conn, kind="market")[0]
+    placement = placements_repo.for_org(conn, org.id)[0]
+    # the suite runs under the frozen clock — the route's today() is
+    # 2026-08-14, and a test on the real date builds a submission the
+    # frozen cutoff cannot see
+    sent = FROZEN_TODAY - timedelta(days=DEFAULT_SLA_DAYS + 5)
+    submissions_repo.create(
+        conn, market.id, sent.isoformat(), placement_id=placement.id
+    )
+    deadline = (sent + timedelta(days=DEFAULT_SLA_DAYS)).isoformat()
+    expected_over = 5
+
+    page = client.get("/today").text
+    needs = page[page.index("Needs you today") : page.index("Renewals coming")]
+
+    assert deadline in needs, "the row does not print the deadline it counts to"
+    assert f"past SLA · {expected_over}d" in needs
+    assert "state-overdue" in needs

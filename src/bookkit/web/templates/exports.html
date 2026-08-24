@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% import "macros/page.html" as page %}
+{% import "macros/account.html" as account %}
+{% block title %}Exports — bookkit{% endblock %}
+{% block content %}
+  {% include "partials/topbar.html" %}
+
+  {# The exports drawer (design 4C/4E step 7): every artifact the app can
+     hand over, per account — the open-items workbook, and each linked
+     program's tower and schematic. Plain anchors; the routes are the same
+     ones the Work and Program tabs serve. #}
+  {% call page.band("Exports", count ~ " account" ~ ("s" if count != 1 else "")) %}{% endcall %}
+
+  <div class="page-body">
+    {% call page.sect2("By account", count, hint="each artifact downloads from the same route its own tab serves") %}{% endcall %}
+    {% if rows %}
+      <div class="table-scroll">
+        <table class="rows rows-fit">
+          <thead><tr><th>Account</th><th>Open items</th><th>Programs</th></tr></thead>
+          <tbody>
+            {% for row in rows %}
+              <tr>
+                <td class="prose">{{ account.account_link(accounts, row.org_id, "program") }}</td>
+                <td class="prose">
+                  <a class="row-action-btn" href="/accounts/{{ row.ref }}/export/open-items.xlsx">Open items XLSX</a>
+                </td>
+                <td class="prose">
+                  {% for program in row.programs %}
+                    <span class="export-program">{{ program.name }} <span class="mono muted">{{ program.ref }}</span> —
+                      <a class="row-action-btn" href="/accounts/{{ row.ref }}/program/{{ program.id }}/export/tower.svg">SVG</a>
+                      <a class="row-action-btn" href="/accounts/{{ row.ref }}/program/{{ program.id }}/export/tower.pdf">PDF</a>
+                      <a class="row-action-btn" href="/accounts/{{ row.ref }}/program/{{ program.id }}/export/schematic.xlsx">Schematic</a></span>{% if not loop.last %}<br>{% endif %}
+                  {% else %}
+                    <span class="muted">no linked program</span>
+                  {% endfor %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">No accounts yet — there is nothing to export.</div>
+    {% endif %}
+  </div>
+{% endblock %}

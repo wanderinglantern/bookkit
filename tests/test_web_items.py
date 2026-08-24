@@ -97,10 +97,20 @@ def test_the_account_column_names_the_account(client):
 
 def test_the_overdue_filter_is_a_url_and_narrows_the_list(client):
     everything = client.get("/items").text
-    overdue = client.get("/items?overdue=1").text
+    overdue = client.get("/items?overdue=1").text  # the old spelling still lands
+    explicit = client.get("/items?show=overdue").text
 
+    # the old spelling lands on the SAME view as the chip's own URL — the
+    # selected chip is specifically Overdue, not just any chip (review S12)
+    import re
+
+    assert re.search(r'is-selected"\s+href="/items\?show=overdue', overdue), (
+        "overdue=1 no longer lands on the overdue view"
+    )
+    assert _cell_actions(overdue) == _cell_actions(explicit)
     assert len(_cell_actions(overdue)) <= len(_cell_actions(everything))
-    assert "Clear" in overdue, "a filtered view offers no way back"
+    # the way back is the Everything chip
+    assert 'href="/items"' in overdue, "a filtered view offers no way back"
 
 
 def test_the_account_filter_narrows_to_that_account(client):
@@ -225,7 +235,10 @@ def test_completing_a_task_keeps_the_account_filter(client):
     done = client.post(f"/items/tasks/{task.id}/done?account={org.ref}")
 
     assert done.status_code == 200
-    assert f'value="{org.ref}" selected' in done.text, "the account filter was lost"
+    # the write answers the SECTION (never the body — the system pass's
+    # finding), and the view survives in the section's own writer URLs
+    assert done.text.lstrip().startswith("<section"), "done reloads the page"
+    assert f"account={org.ref}" in done.text, "the account filter was lost"
     for stray in others:
         assert f"/items/tasks/{stray.id}/done" not in done.text, (
             "another account's tasks came back on a filtered view"
@@ -243,7 +256,8 @@ def test_dropping_a_task_keeps_the_account_filter(client):
 
     dropped = client.post(f"/items/tasks/{task.id}/drop?account={org.ref}")
 
-    assert f'value="{org.ref}" selected' in dropped.text
+    assert dropped.text.lstrip().startswith("<section")
+    assert f"account={org.ref}" in dropped.text
 
 
 def test_a_write_keeps_the_overdue_filter_too(client):
@@ -254,7 +268,11 @@ def test_a_write_keeps_the_overdue_filter_too(client):
 
     done = client.post(f"/items/tasks/{task.id}/done?overdue=1")
 
-    assert "checkbox" in done.text and "checked" in done.text
+    # overdue=1 is the old spelling; the section's own URLs carry the view
+    assert done.text.lstrip().startswith("<section")
+    assert "show=overdue" in done.text or "match this filter" in done.text, (
+        "the overdue view was lost by the write"
+    )
 
 
 def test_the_buttons_carry_the_filter_they_were_rendered_under(client):

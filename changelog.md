@@ -5,6 +5,29 @@ All notable changes to bookkit, newest date first.
 ## 2026-08-24
 
 ### Added
+- **Every screen opens the same way now.** The system pass (design turn 4):
+  an ink band carrying the screen's name in serif and its one-line standing,
+  section headers whose counts are serif figures sized to matter, the stat
+  strip on Book and Today, filter chips with real counts everywhere a list
+  can narrow, five state badges that always carry a word, four empty-state
+  voices, hover-held row actions, and one new structural accent
+  (`WEB_SLATE`) spent on group headers — never on a state, never clickable.
+- **Today is one morning, not ten lists.** *Needs you today* merges overdue
+  renewals, overdue items and past-SLA submissions into one worst-first
+  list — each row printing the date its countdown counts to — then
+  *Renewals coming*; the five context lists demote to counts in the rail
+  with their tables one disclosure away. done/drop live on the merged list;
+  the change list's Revert is untouched.
+- **Open items unifies tasks and requests under filter chips**
+  (Everything · Overdue · This week · No date · Requests), each with its
+  count; done and drop swap the section instead of reloading the page, and
+  the view survives every write.
+- **The book gained its figures and its filters**: bound premium, clients,
+  renewing-90d and overdue as headline stats, chips to narrow by them, and
+  the overdue edge on the rows that need work.
+- **The exports drawer** (`/exports`): the scattered download links in one
+  place — every artifact per account, from the same routes their own tabs
+  serve.
 - **The Program tab is one worksheet now.** The stack editor, the layers table
   and the details row became one grammar: a grouped, collapsible **structure
   index** on the left, one layer's **worksheet** on the right, and the rail
@@ -57,6 +80,13 @@ All notable changes to bookkit, newest date first.
 - The empty and broken program states keep all four facts distinct and now
   say what to do in each; the band withholds its line controls while the
   file will not open.
+
+### Fixed
+- Past-SLA rows on Today count to the deadline they print (sent + the SLA,
+  now one named constant), wear the overdue tone, and name the underwriter
+  to chase; the requests-to-chase list returned as a disclosure the rail's
+  count actually opens. Row actions stay visible on touch screens, where
+  hover cannot reveal them.
 
 ## 2026-08-21
 

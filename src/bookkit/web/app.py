@@ -233,6 +233,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
         calendar,
         capture,
         changes,
+        exports,
         items,
         markets,
         orgs,
@@ -259,6 +260,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
     app.include_router(today.router)
     app.include_router(calendar.router)
     app.include_router(towers.router)
+    app.include_router(exports.router)
 
     # relationship's GET /accounts/{ref}/relationship must be registered
     # before account's generic GET /accounts/{ref}/{tab}: both patterns

@@ -1,0 +1,119 @@
+{% import "macros/account.html" as account %}
+{# The working list alone — done and drop swap THIS, never the body (the
+   system pass fixed the one row action that reloaded the page). One section,
+   the chips decide what it holds: a task view, or the request queue.
+
+   Row actions hold at opacity 0 until the row is live (.row-tools, P5); the
+   destructive one keeps its full accessible name. The overdue edge is the
+   attention table's stripe (P4). #}
+<section class="today-section" id="items-panel">
+  {# The chips ride INSIDE the swapped section: their counts caption this
+     list, and a count that survives the write it should reflect is a stale
+     number wearing authority (review S2). #}
+  <div class="filter-chips">
+    <a class="filter-chip{% if show == 'all' %} is-selected{% endif %}"
+       href="/items{{ '?account=' ~ filter_ref if filter_ref }}">Everything <span class="mono">{{ counts["all"] }}</span></a>
+    <a class="filter-chip{% if show == 'overdue' %} is-selected{% endif %}"
+       href="/items?show=overdue{{ '&account=' ~ filter_ref if filter_ref }}">Overdue <span class="mono">{{ counts["overdue"] }}</span></a>
+    <a class="filter-chip{% if show == 'week' %} is-selected{% endif %}"
+       href="/items?show=week{{ '&account=' ~ filter_ref if filter_ref }}">This week <span class="mono">{{ counts["week"] }}</span></a>
+    <a class="filter-chip{% if show == 'undated' %} is-selected{% endif %}"
+       href="/items?show=undated{{ '&account=' ~ filter_ref if filter_ref }}">No date <span class="mono">{{ counts["undated"] }}</span></a>
+    <a class="filter-chip{% if show == 'requests' %} is-selected{% endif %}"
+       href="/items?show=requests{{ '&account=' ~ filter_ref if filter_ref }}">Requests <span class="mono">{{ counts["requests"] }}</span></a>
+    <form class="filter-bar" method="get" action="/items">
+      {% if show != "all" %}<input type="hidden" name="show" value="{{ show }}">{% endif %}
+      <label class="filter-field">
+        <span class="filter-label">Account</span>
+        <select name="account">
+          <option value="">every account</option>
+          {% for org in all_accounts %}
+            <option value="{{ org.ref }}"{% if filter_ref == org.ref %} selected{% endif %}>{{ org.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit" class="row-action-btn">apply</button>
+    </form>
+    <span class="filter-chips-note">the view is a URL — keep it, share it, back-button it</span>
+  </div>
+  {% if show == "requests" %}
+    {% if requests %}
+      <div class="table-scroll">
+        <table class="rows rows-fit">
+          <thead><tr><th>Ref</th><th>Account</th><th>Market</th><th>Open</th><th>Due</th></tr></thead>
+          <tbody>
+            {% for req in requests %}
+              <tr>
+                <td class="mono">{{ req.ref }}</td>
+                <td class="prose">{{ account.account_link(request_accounts, req.org_id, "work") }}</td>
+                <td class="prose">{{ req.market_name or "—" }}</td>
+                <td class="num">{{ req.open_count }} of {{ req.total_count }}</td>
+                <td class="num">{{ req.earliest_due or req.due_on or "—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">Nothing outstanding — every request is answered.</div>
+    {% endif %}
+  {% elif tasks %}
+    <div class="table-scroll">
+      <table class="rows rows-fit">
+        <thead>
+          <tr>
+            <th>Due</th><th>Task</th><th>Account</th><th>Category</th>
+            <th>Assignee</th><th>Notes</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for task in tasks %}
+            <tr{% if task.overdue %} class="edge-danger"{% endif %}>
+              {% if task.editable %}
+                {{ task.cells.due_on | safe }}
+                {{ task.cells.title | safe }}
+                <td class="prose">{{ account.account_link(accounts, task.org_id, "work") }}</td>
+                {{ task.cells.category | safe }}
+                {{ task.cells.assignee | safe }}
+                {{ task.cells.description | safe }}
+              {% else %}
+                {# No account, so no route to post a cell to. Said plainly:
+                   a cell that silently refuses to open reads as broken. #}
+                <td class="num">{{ task.due_on or "—" }}</td>
+                <td class="prose">{{ task.title }}</td>
+                <td class="prose"><span class="detail-label">no account — not editable here</span></td>
+                <td class="prose">{{ task.category or "—" }}</td>
+                <td class="prose">—</td>
+                <td class="prose">—</td>
+              {% endif %}
+              {# done and drop are DIFFERENT FACTS: done stamps completed_at,
+                 drop does not, because a task filed in error was never
+                 finished work. Both swap this section, keeping the view. #}
+              <td class="row-actions-cell row-tools">
+                <button type="button" class="row-action-btn"
+                        aria-label="Done — {{ task.title }}"
+                        hx-post="{{ task.done_url }}"
+                        hx-target="#items-panel" hx-swap="outerHTML">done</button>
+                <button type="button" class="row-action-btn is-danger"
+                        aria-label="Drop {{ task.title }} — it leaves the list without counting as done"
+                        title="Drop “{{ task.title }}” — it leaves the list without counting as done"
+                        hx-post="{{ task.drop_url }}"
+                        hx-confirm="Drop {{ task.title }}? It leaves the list without counting as done."
+                        hx-target="#items-panel" hx-swap="outerHTML">drop</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    {# P7: which KIND of empty. #}
+    {% if show != "all" or filter_ref %}
+      <div class="empty-state">No open items match this filter.
+        <a class="row-action-btn" href="/items">Clear the filter</a>
+      </div>
+    {% else %}
+      <div class="empty-state">Nothing open — the book is clear.</div>
+    {% endif %}
+  {% endif %}
+</section>

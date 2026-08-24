@@ -155,3 +155,36 @@ def test_book_nav_item_is_also_a_real_link_from_the_account_page(app_and_conn):
     org = orgs.list_orgs(conn, kind="client", status="active")[0]
     html = client.get(f"/accounts/{org.ref}/relationship").text
     assert '<a href="/book" class="topbar-nav-item is-current-section">Book</a>' in html
+
+
+def test_the_filter_chips_narrow_and_carry_real_counts(app_and_conn):
+    """The system pass gave the header the chips it was missing (design 4D):
+    the view is a URL, the counts come from the data, and the overdue chip
+    lists only the overdue."""
+    import re
+
+    client, _ = app_and_conn
+    everything = client.get("/book?show=all").text
+    overdue = client.get("/book?show=overdue").text
+
+    counts = {
+        m.group(1): int(m.group(2))
+        for m in re.finditer(
+            r'href="/book\?show=([a-z]+)">[A-Za-z 0-9]+ <span class="mono">(\d+)</span>',
+            everything,
+        )
+    }
+    assert counts["all"] == everything.count('class="book-row')
+    assert counts["overdue"] == overdue.count('class="book-row')
+    assert overdue.count('class="book-row') <= everything.count('class="book-row')
+    # every overdue row wears the attention edge (P4)
+    assert overdue.count("edge-danger") >= counts["overdue"]
+
+
+def test_the_book_opens_with_the_band_and_the_stat_strip(app_and_conn):
+    client, _ = app_and_conn
+    page = client.get("/book").text
+
+    assert 'class="page-band"' in page
+    assert "bound premium" in page
+    assert 'class="band-stats' in page
