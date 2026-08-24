@@ -329,4 +329,4 @@ def test_the_labels_reach_the_page(app_and_org):
 
     assert 'aria-label="named limit name"' in fragments["the named-limit add form"]
     assert 'aria-label="retention type"' in fragments["the retention form"]
-    assert 'aria-label="line of cover"' in fragments["the line add form"]
+    assert 'aria-label="line of coverage"' in fragments["the line add form"]

@@ -632,9 +632,15 @@ def test_the_layer_chip_says_a_carrier_is_not_in_the_book(client):
     """Said where the carrier is. A fact only visible on another page is a
     fact nobody sees."""
     conn = client.app.state.conn
-    org, placement, _layer = _bind_a_new_carrier(client, conn)
+    org, placement, layer = _bind_a_new_carrier(client, conn)
+    # SELECT the seeded layer rather than trusting the default. The rail groups
+    # by line of coverage since 2026-08-24, so the page opens on the top of the
+    # FIRST line — and this helper seats its carrier on whichever line the
+    # fixture's first layer covers. What is under test is the chip, not which
+    # layer a fresh page happens to show.
+    where = f"/accounts/{org.ref}/program?layer={layer['id']}"
 
-    page = client.get(f"/accounts/{org.ref}/program").text
+    page = client.get(where).text
 
     # The badge reads "NEW"; the sentence lives in the accessible name, where
     # it is available without being repeated at the reader once per seat.
@@ -642,7 +648,7 @@ def test_the_layer_chip_says_a_carrier_is_not_in_the_book(client):
     assert "market-unlinked" in page
 
     client.post("/markets/unlinked/create", data={"carrier": "Brand New Re"})
-    after = client.get(f"/accounts/{org.ref}/program").text
+    after = client.get(where).text
 
     assert "Brand New Re" in after
     assert 'aria-label="Brand New Re is not a market in the book' not in after, (

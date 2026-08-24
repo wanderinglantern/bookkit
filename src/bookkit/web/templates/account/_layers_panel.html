@@ -75,7 +75,7 @@
            file will not open: every control here writes to it, and offering
            a doomed act beside "nothing below is editable" reads as a lie. #}
         <div class="stat stat-lines">
-          <span class="stat-label">lines of cover</span>
+          <span class="stat-label">lines of coverage</span>
           <span class="stat-value stat-chips">
             {% for chip in line_chips %}{{ chip | safe }}{% endfor %}
             {% with lines_base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/lines" %}

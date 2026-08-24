@@ -416,7 +416,14 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
     },
     # --- phase 3: structure (D1) — routes land later in the same branch ---
     "add_line": {
-        "web": "the lines strip: + line, in row (POST .../lines)",
+        "web": "the lines strip: + line, in row (POST .../lines); and the "
+        "structure rail's `+ line of coverage`, which opens the add-layer form "
+        "with its picker already asking for one — a line of coverage cannot "
+        "exist without a layer (towerkit's line-empty is an ERROR), so the two "
+        "go in as ONE mutation and a refused layer leaves no stranded line "
+        "(2026-08-24). On a program still carrying its scaffold the same write "
+        "FILLS the placeholder instead of adding beside it, which is what the "
+        "picker's option label says before it is chosen.",
         "tui": "via o -> towerkit's editor (the terminal's structure surface)",
         "mcp": "DEFERRED — structure from an assistant is undecided",
     },

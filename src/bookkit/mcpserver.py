@@ -127,7 +127,7 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
     async def renewals_due(days: int = 120) -> list[dict[str, Any]]:
         """Placements needing renewal attention within `days` (default 120),
         soonest first, plus anything already overdue and not yet renewed.
-        Each entry names its lines of cover — a program name alone is never
+        Each entry names its lines of coverage — a program name alone is never
         enough context to act on. Use this to answer "what's coming up" or
         "what's overdue" instead of guessing from program names."""
         return _renewals_due(ro, days=days)
@@ -151,7 +151,7 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
 
     @server.tool()
     async def program_summary(ref: str) -> dict[str, Any]:
-        """Posture on ONE program: account, period, status, lines of cover,
+        """Posture on ONE program: account, period, status, lines of coverage,
         premium, plus counts of its open tasks and outstanding submissions.
         Deliberately slim — it does NOT dump the full program structure or
         market shares. `ref` matches the placement ref or the exact program
@@ -610,7 +610,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         end_on: str | None = None,
     ) -> dict[str, Any]:
         """Create a project (construction job, site build-out) on a client.
-        Dates accept any human form. Add its lines of cover with need_add."""
+        Dates accept any human form. Add its lines of coverage with need_add."""
         return _project_create(rw, client, name, site=site,
                                start_on=start_on, end_on=end_on)
 

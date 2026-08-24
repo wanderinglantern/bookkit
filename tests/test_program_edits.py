@@ -1205,3 +1205,122 @@ def test_split_layer_refuses_statutory(linked) -> None:
     assert not diags.ok
     assert "statutory" in diags.errors[0].message
     assert path.read_text() == before
+
+
+# --- a line of coverage arrives with its layer ---------------------------------
+
+
+def _scaffolded(conn, tmp_path):
+    """A placement whose file is exactly what `sync.scaffold_program` writes:
+    one placeholder line carrying one pending layer."""
+    from bookkit.repo import placements as placements_repo
+
+    client = orgs.create(conn, kind="client", name="Scaffold Co", status="active")
+    placement = placements_repo.create(
+        conn, org_id=client.id, program_name="2026 Program",
+        period_from="2026-01-01", period_to="2027-01-01", status="quoted",
+    )
+    dest, diags = sync.scaffold_program(
+        conn, placement.id, tmp_path / "s" / "scaffold.json"
+    )
+    assert dest is not None, [d.message for d in diags.errors]
+    return client, placements_repo.get(conn, placement.id), dest
+
+
+class TestAddLineWithALayer:
+    def test_the_line_and_the_layer_go_in_together(self, linked) -> None:
+        conn, _, placement, _ = linked
+        assert sync.add_line(
+            conn, placement.id, "Employers Liability",
+            layer_name="EL Primary", limit_cents=1_000_000_00,
+        ).ok
+        line_id = next(
+            lid for lid, name in sync.program_lines(conn, placement.id)
+            if name == "Employers Liability"
+        )
+        layers = [
+            row for row in sync.layer_details(conn, placement.id)
+            if row["applies_to"] == [line_id]
+        ]
+        assert [(row["name"], row["limit_cents"]) for row in layers] == [
+            ("EL Primary", 1_000_000_00)
+        ]
+
+    def test_without_a_layer_named_it_is_still_the_pending_shape(self, linked) -> None:
+        """The old behaviour, unchanged: towerkit makes an empty line an
+        ERROR, so a line has always arrived with a layer."""
+        conn, _, placement, _ = linked
+        assert sync.add_line(conn, placement.id, "Crime").ok
+        line_id = next(
+            lid for lid, name in sync.program_lines(conn, placement.id)
+            if name == "Crime"
+        )
+        layers = [
+            row for row in sync.layer_details(conn, placement.id)
+            if row["applies_to"] == [line_id]
+        ]
+        assert [row["name"] for row in layers] == ["To be placed"]
+
+    def test_a_refused_layer_leaves_no_line_behind(self, linked) -> None:
+        """One mutation, so the refusal never reaches the dump. Two
+        sequential writes would strand the line."""
+        conn, _, placement, _ = linked
+        before = dict(sync.program_lines(conn, placement.id))
+
+        refused = sync.add_line(
+            conn, placement.id, "Employers Liability",
+            layer_name="EL Primary", limit_cents=0,  # towerkit refuses it
+        )
+
+        assert not refused.ok
+        assert dict(sync.program_lines(conn, placement.id)) == before
+
+    def test_a_duplicate_line_name_is_refused(self, linked) -> None:
+        conn, _, placement, _ = linked
+        existing = sync.program_lines(conn, placement.id)[0][1]
+        assert not sync.add_line(conn, placement.id, existing).ok
+
+
+class TestTheScaffoldIsFilled:
+    def test_an_untouched_placeholder_is_renamed_not_duplicated(
+        self, conn, tmp_path
+    ) -> None:
+        """Otherwise every scaffolded program carries a dead 'Coverage TBD'
+        column forever — the state Grant's screenshot was in."""
+        _, placement, _ = _scaffolded(conn, tmp_path)
+
+        assert sync.add_line(
+            conn, placement.id, "Employers Liability",
+            layer_name="EL Primary", limit_cents=1_000_000_00,
+        ).ok
+
+        lines = sync.program_lines(conn, placement.id)
+        assert [name for _, name in lines] == ["Employers Liability"]
+        layers = sync.layer_details(conn, placement.id)
+        assert [row["name"] for row in layers] == ["EL Primary"]
+
+    def test_a_touched_placeholder_is_left_alone(self, conn, tmp_path) -> None:
+        """The predicate is deliberately narrow: the failure mode of a loose
+        one is renaming a line somebody meant to keep."""
+        _, placement, _ = _scaffolded(conn, tmp_path)
+        layer = sync.layer_details(conn, placement.id)[0]
+        assert sync.add_participant(
+            conn, placement.id, layer["id"], "Travelers", 10_000
+        ).ok
+
+        assert sync.add_line(
+            conn, placement.id, "Employers Liability", layer_name="EL Primary",
+            limit_cents=1_000_000_00,
+        ).ok
+
+        assert sorted(name for _, name in sync.program_lines(conn, placement.id)) == [
+            "Coverage TBD", "Employers Liability"
+        ]
+
+    def test_the_predicate_reads_the_program_not_the_name(self, conn, tmp_path) -> None:
+        from towerkit.model import load_program
+
+        _, placement, dest = _scaffolded(conn, tmp_path)
+        assert sync.is_untouched_scaffold(load_program(dest))
+        assert sync.add_line(conn, placement.id, "Cyber").ok
+        assert not sync.is_untouched_scaffold(load_program(dest))

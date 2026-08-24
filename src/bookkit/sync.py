@@ -865,7 +865,7 @@ def compose_program(
 
     names = [name.strip() for name in (line_names or []) if name.strip()]
     if not names:
-        diags.error("edit", "state at least one line of cover")
+        diags.error("edit", "state at least one line of coverage")
         return None, diags
     lines: list[Line] = []
     taken: set[str] = set()
@@ -1385,19 +1385,80 @@ def _find_line(program: Program, line_id: str) -> None:
         raise ValueError(f"line {line_id!r} is not in this program (re-sync?)")
 
 
-def add_line(conn: sqlite3.Connection, placement_id: str, name: str) -> Diagnostics:
-    """A new line of cover, ARRIVING WITH a pending 'To be placed' layer —
-    towerkit's validator makes an empty line an ERROR (line-empty), so a bare
-    line could never be written through. Same shape scaffold_program uses;
-    build the real layers here or in towerkit. (D1, phase 3, 2026-08-19.)"""
+# The shape `scaffold_program` writes: one placeholder line carrying one
+# placeholder layer. Named here because `add_line` has to RECOGNISE it, and a
+# second spelling of "what a scaffold looks like" is how the two drift.
+SCAFFOLD_LINE_ID = "tbd"
+SCAFFOLD_LAYER_ID = "tbd-primary"
+
+
+def is_untouched_scaffold(program: Program) -> bool:
+    """Is this program still exactly what `scaffold_program` wrote?
+
+    Exactly one line, the placeholder; exactly one layer, its pending one,
+    with nobody on it. Anything else — a second line, a renamed layer, a
+    market bound, a statutory flag — means the broker has started work, and
+    the placeholder stops being a placeholder.
+
+    The predicate is deliberately narrow. It gates a write that RENAMES what
+    is already there instead of adding beside it, and the failure mode of a
+    loose definition is renaming a line somebody meant to keep."""
+    if len(program.lines) != 1 or len(program.layers) != 1:
+        return False
+    line, layer = program.lines[0], program.layers[0]
+    return (
+        line.id == SCAFFOLD_LINE_ID
+        and layer.id == SCAFFOLD_LAYER_ID
+        and not layer.participants
+        and not layer.statutory
+        and not layer.buffer
+    )
+
+
+def add_line(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    name: str,
+    layer_name: str | None = None,
+    limit_cents: int | None = None,
+    premium_cents: int | None = None,
+) -> Diagnostics:
+    """A new line of coverage, ARRIVING WITH a layer — towerkit's validator
+    makes an empty line an ERROR (line-empty), so a bare line could never be
+    written through. Without a layer named, it is the pending 'To be placed'
+    shape `scaffold_program` uses. (D1, phase 3, 2026-08-19.)
+
+    ONE MUTATION, ONE FILE WRITE, ONE UNDO UNIT, which is the whole reason
+    the layer rides along here rather than in a second call: if the layer is
+    refused — a limit towerkit will not take, a name that collides — the
+    mutation never reaches the dump and NO line is left behind. Two
+    sequential `sync` calls would leave a stranded line on exactly the
+    refusals this feature exists to survive (2026-08-24).
+
+    A STILL-UNTOUCHED SCAFFOLD IS FILLED, NOT DUPLICATED. `scaffold_program`
+    writes a placeholder line and a placeholder layer for the broker to name;
+    adding beside them leaves every scaffolded program carrying a dead
+    "Coverage TBD" column forever, which is the state Grant's screenshot was
+    in. So while `is_untouched_scaffold` holds, this renames the line (the id
+    cascades through every appliesTo, so the layer follows) and fills the
+    layer rather than adding a second full-height slab over the first. The
+    surface says which of the two it is about to do BEFORE the save."""
 
     def mutate(program: Program) -> None:
         if any(line.name == name for line in program.lines):
             raise ValueError(f"this program already has a line named {name!r}")
-        line = edit_add_line(program, name)
-        layer = edit_add_layer(program, [line.id])
-        layer.name = "To be placed"
-        layer.attach = 0
+        if is_untouched_scaffold(program):
+            edit_rename_line(program, program.lines[0].id, name)
+            layer = program.layers[0]
+        else:
+            line = edit_add_line(program, name)
+            layer = edit_add_layer(program, [line.id])
+            layer.attach = 0
+        layer.name = layer_name or "To be placed"
+        if limit_cents is not None:
+            layer.limit = _require_dollars(limit_cents, "limit")
+        if premium_cents is not None:
+            layer.premium = _require_dollars(premium_cents, "premium")
 
     return _mutate(conn, placement_id, mutate)
 
@@ -2421,7 +2482,7 @@ def line_labels(program_path: str | None, conn: sqlite3.Connection | None = None
     `conn` is optional ONLY because this is called from renderers that hold a
     path and nothing else; pass it wherever you have it, or a program_path
     stored relative to a root cannot be resolved and every attention row
-    silently loses its lines of cover. The attention tables are the one place
+    silently loses its lines of coverage. The attention tables are the one place
     where an empty label is genuinely survivable — a row that says "PLC-0006"
     with no lines is still a row, and the panel that owns the file says why."""
     program = _program_at(program_path, conn)
@@ -2451,7 +2512,7 @@ def _program_at(
 def line_ends(
     program_path: str | None, conn: sqlite3.Connection | None = None
 ) -> list[tuple[str, date]]:
-    """(label, end date) per line of cover, soonest first — the date each
+    """(label, end date) per line of coverage, soonest first — the date each
     LINE actually needs renewing, which is not always the program period end:
     policies are issued per layer, and a line's cover runs out when the first
     layer that applies to it expires. Lines with no layers (TBD, unplaced)

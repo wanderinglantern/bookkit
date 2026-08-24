@@ -18,7 +18,7 @@ one write here that creates a record somewhere else.
 WHAT IS AND IS NOT A CELL, per .claude/skills/data-entry-integrity:
 
 * `line` is free text with completion, not a picker. The constrained-input
-  rule wants a picker wherever the valid set is KNOWABLE, and lines of cover
+  rule wants a picker wherever the valid set is KNOWABLE, and lines of coverage
   are not — a broker will name cover this book has never carried, and a picker
   that refuses a real line is worse than no picker. `forms.inline.need_fields`
   wires the book's own lines as suggestions instead.

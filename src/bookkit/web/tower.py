@@ -7,7 +7,7 @@ into CSS percentages and stops.
 THE TWO AXES ARE NOT IN THE SAME UNITS, and assuming they were is how the
 first version of this drew a tower with blocks at `left: 237.5%`. `y` is a
 fraction of the chart height, `[0, 1]`. `x` is in COLUMN units and spans
-`[0, TowerLayout.width]` — one column per line of cover, so a four-line
+`[0, TowerLayout.width]` — one column per line of coverage, so a four-line
 program is nearly four units wide. The export knows this and sets its x-limit
 to `tower.width` (render/mpl_program.py); the panel divides by it. Read the
 layout's contract before touching this, not this module's summary of it.

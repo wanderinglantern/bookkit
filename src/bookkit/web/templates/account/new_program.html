@@ -73,7 +73,7 @@
             <span class="np-lines">
               <input type="text" name="lines" value="{{ lines_text }}"
                      placeholder="General Liability, Auto Liability, Cyber">
-              <span class="ws-hint">comma-separated — each becomes a line of cover; a line with no layers arrives with a pending one</span>
+              <span class="ws-hint">comma-separated — each becomes a line of coverage; a line with no layers arrives with a pending one</span>
             </span>
           </label>
         {% else %}
@@ -124,7 +124,7 @@
                 </td>
                 <td>
                   <label class="inline-field"><span class="pair-k">line</span>
-                    <select name="new_line" aria-label="line of cover">
+                    <select name="new_line" aria-label="line of coverage">
                       <option value=""></option>
                       {% for lname in line_names %}
                         <option value="{{ lname }}"{% if lname == typed_row.line %} selected{% endif %}>{{ lname }}</option>

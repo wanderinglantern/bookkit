@@ -219,7 +219,7 @@ the TEAM_ROLES pattern — and NOT a hand-written list, so a status added to the
 model appears here without a second edit."""
 
 NEED_FIELDS: tuple[Field, ...] = (
-    Field("line", "line of cover", required=True),
+    Field("line", "line of coverage", required=True),
     Field("needed_by", "needed by", "date", required=True),
     Field("limit_cents", "limit", "money"),
     Field("premium_indication_cents", "premium indication", "money"),
@@ -230,7 +230,7 @@ NEED_FIELDS: tuple[Field, ...] = (
 
 `line` stays FREE TEXT with completion rather than becoming a picker, and that
 is a deliberate reading of the constrained-input rule: the valid set has to be
-knowable for a picker to be right, and lines of cover are not — a broker will
+knowable for a picker to be right, and lines of coverage are not — a broker will
 name cover this book has never carried. A picker there would refuse a real
 answer, which the research says is worse than no picker. `need_fields()` below
 wires the suggestions.

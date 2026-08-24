@@ -4181,6 +4181,38 @@ button.term-label {
    without :has() shows both controls always — which still works, because the
    SERVER decides whether the name is required (a hidden required input would
    block submit with nothing on screen to fix). */
+/* The add-layer / add-line form. It had NO layout at all until 2026-08-24 —
+   label and input ran together and five fields wrapped mid-pair, so a
+   premium box could sit on a row that started with somebody else's label.
+   One field per row, labels on a common right edge: a form that reads as a
+   form, which is the least this one owed the broker filling it in. */
+.program-form .field {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin-bottom: 0.4rem;
+}
+
+.program-form .field-label {
+  min-width: 8.5rem;
+  text-align: right;
+  color: var(--muted);
+  font-size: var(--hint-size);
+}
+
+.program-form .field input,
+.program-form .field select {
+  flex: 1;
+  min-width: 0;
+}
+
+.program-form-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+  margin-left: 8.95rem;
+}
+
 @supports selector(:has(*)) {
   .program-form .field-new_line_name {
     display: none;

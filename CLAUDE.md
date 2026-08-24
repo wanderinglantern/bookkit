@@ -251,8 +251,16 @@ renewal date is the one you counted to, and the data-entry rules.
   right (a/e/d/r/l act on rows; row actions REQUIRE table.has_focus).
   Today survives on `t`. Shared flows live in widgets/entity_actions.py —
   new screens call those, never fork form wiring.
+- THE TERM IS "LINE OF COVERAGE" (Grant, 2026-08-24), everywhere a person
+  reads one. It used to be "line of cover" in eight places and "coverage"
+  in Grant's own words, which is the drift this rule exists to stop. A LINE
+  OF COVERAGE HOLDS LAYERS, and any surface that shows both says which is
+  which: the structure rail groups by line of coverage, and the add-layer
+  form can make one (its `applies to` picker carries a `new line of
+  coverage…` sentinel). towerkit's own diagnostics still say "line" — that
+  is towerkit speaking, and quoting it verbatim is right.
 - Attention windows are 120 DAYS (bucket-aligned). Overdue renewals and
-  unmet project needs NEVER fall off. Attention tables show lines of cover
+  unmet project needs NEVER fall off. Attention tables show lines of coverage
   (RenewalItem.lines, e.g. "GL, AL, EL") — program name alone is not
   enough context.
 - A RENEWAL ROW IS ONE DATE SOMETHING RUNS OUT, not one placement (Grant,
