@@ -25,7 +25,10 @@
     <p class="form-error" role="alert">{{ error }}</p>
   {% endif %}
   {% for f in fields %}
-    <label class="field">
+    {# The key rides on the class so a field can be styled without the
+       template learning what it is for — the new-line box is revealed by CSS
+       only when the picker beside it asks for one. #}
+    <label class="field field-{{ f.key }}">
       <span class="field-label">{{ f.label }}</span>
       {% if f.kind == "select" %}
         <select name="{{ f.key }}" {% if f.required %}required{% endif %}>

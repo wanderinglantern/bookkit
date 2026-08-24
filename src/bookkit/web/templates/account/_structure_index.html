@@ -50,10 +50,20 @@
   {% endfor %}
 
   <div class="index-foot">
+    {# Both levels, side by side, because the rail is where the structure is
+       read: a line of coverage HOLDS layers, and until 2026-08-24 only the
+       inner one could be made from here — so a broker with a new line of
+       coverage to record typed its name into the layer form (Grant).
+       `+ layer` still means a layer across the lines you pick; the new-line
+       control is the same form with its picker already asking for one. #}
     <button type="button" class="index-add"
             hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/new"
             hx-target="#program-{{ placement.id }} .form-host"
             hx-swap="innerHTML">+ layer</button>
+    <button type="button" class="index-add"
+            hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/lines/new-layer"
+            hx-target="#program-{{ placement.id }} .form-host"
+            hx-swap="innerHTML">+ line of coverage</button>
   </div>
 
   {# Retentions and sublimits live at the index's foot, where the tower keeps

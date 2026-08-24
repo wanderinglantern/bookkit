@@ -206,6 +206,21 @@ renewal date is the one you counted to, and the data-entry rules.
 
 ## UI conventions (Grant's calls, all 2026-08-12)
 
+- A WORKING SURFACE FILLS THE WINDOW; A READING SURFACE KEEPS ITS MEASURE
+  (Grant, 2026-08-24). The system pass gave every page one frame and capped it
+  at 68.75rem, which is a reading measure — right for prose, wrong for the five
+  screens wearing `.page-body`, all of them working tables. On a 1920px window
+  that left 820px of blank paper and wrapped the columns carrying sentences onto
+  two lines while the room to print them sat empty beside the table. Today shows
+  20 rows where 13 fit. The measure survives ONLY where it belongs and each
+  carries its own comment saying why: `.search-page` (a result list is prose),
+  `.capture-page` (one form), `.page-form-host` (a form column reads as a form).
+  UNCAPPING IS HALF THE CHANGE — the other half is where the slack lands. When
+  only `account` was `.book-grid`'s 1fr track it took every one of the spare
+  pixels and opened a canyon between the client's name and its owner: the same
+  dead space, moved inside the table. Every track flexes, and a right-aligned
+  column needs a wider gutter than a left-aligned one because it ends where the
+  next begins (`premium` and `last touch` were touching).
 - A SLAB'S ATTACHMENT COMES FROM ITS POSITION, never from a field (Grant,
   2026-08-21). The stack editor inserts above/below and recomputes the whole
   column in ONE mutation, so `write_through` never sees a half-shifted tower.
@@ -236,8 +251,16 @@ renewal date is the one you counted to, and the data-entry rules.
   right (a/e/d/r/l act on rows; row actions REQUIRE table.has_focus).
   Today survives on `t`. Shared flows live in widgets/entity_actions.py —
   new screens call those, never fork form wiring.
+- THE TERM IS "LINE OF COVERAGE" (Grant, 2026-08-24), everywhere a person
+  reads one. It used to be "line of cover" in eight places and "coverage"
+  in Grant's own words, which is the drift this rule exists to stop. A LINE
+  OF COVERAGE HOLDS LAYERS, and any surface that shows both says which is
+  which: the structure rail groups by line of coverage, and the add-layer
+  form can make one (its `applies to` picker carries a `new line of
+  coverage…` sentinel). towerkit's own diagnostics still say "line" — that
+  is towerkit speaking, and quoting it verbatim is right.
 - Attention windows are 120 DAYS (bucket-aligned). Overdue renewals and
-  unmet project needs NEVER fall off. Attention tables show lines of cover
+  unmet project needs NEVER fall off. Attention tables show lines of coverage
   (RenewalItem.lines, e.g. "GL, AL, EL") — program name alone is not
   enough context.
 - A RENEWAL ROW IS ONE DATE SOMETHING RUNS OUT, not one placement (Grant,

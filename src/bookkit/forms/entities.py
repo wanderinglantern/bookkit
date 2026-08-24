@@ -604,7 +604,7 @@ def assignment_form(
 
     `existing` turns this into the edit form. Note what it still does NOT
     offer: the client and the placement. One colleague can hold several
-    assignments on one account — a row per line of cover — so an edit has to
+    assignments on one account — a row per line of coverage — so an edit has to
     stay on the row it opened, and moving someone between clients is
     unassign + assign, kept deliberately separate."""
     line_sugg = tuple(vocab.lines(conn)) if conn else ()
@@ -725,7 +725,7 @@ def need_form(
     return FormSpec(
         "edit insurance need" if existing else "new insurance need",
         [
-            Field("line", "line of cover", required=True,
+            Field("line", "line of coverage", required=True,
                   placeholder="Builder's Risk", suggestions=line_sugg),
             Field("needed_by", "insurance needed by", "date", required=True),
             Field("limit_cents", "limit", "money"),

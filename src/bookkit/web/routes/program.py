@@ -251,12 +251,26 @@ def _index_groups(
     off the rows' `*_cents` values, already converted at the source, so this
     function does no money conversion of its own.
 
-    Grouping: a line belongs to `line.group` (a LINE fact, read off the parsed
-    program — never duplicated on a layer row); lines without one share a
-    single 'Cover' group rather than each becoming a one-line group of
-    themselves. A layer sits in the group of the FIRST line it covers, once —
-    a spanning slab announces its span on the row instead of appearing three
-    times. Rows are top-of-tower first, matching the drawing.
+    GROUPED BY LINE OF COVERAGE, which is the structure the data actually
+    has: a line of coverage holds layers (Grant, 2026-08-24). It used to
+    group by `line.group` — towerkit's BUCKET label (project / location /
+    entity) — and almost no program sets one, so every layer in the tower
+    fell into a single pile headed "COVER · GL AL IM". The rail showed a flat
+    list where the file holds two levels, and a broker with nowhere to put a
+    new line of coverage typed one into the layer form instead.
+
+    The bucket is not lost, it is demoted: on a program whose lines DO carry
+    groups, the group name rides on the line's own header, where it says
+    something, instead of swallowing every line into one heap.
+
+    A layer sits under the FIRST line it covers, ONCE — a spanning slab
+    announces its span on the row rather than appearing three times, so the
+    group counts still sum to the tower's own count. Lines are in the
+    program's own order, which is COLUMN order in the drawing and never
+    alphabetical. A line with no layers still gets its group, with a count of
+    zero: towerkit reports `line-empty` as an error, and a rail that hid the
+    line would hide the thing the diagnostics are pointing at. Rows are
+    top-of-tower first, matching the drawing.
 
     Collapse state is a QUERY PARAM, not JS state (see `_view_state`); the
     group count stays visible while collapsed, which is the point of
@@ -271,15 +285,7 @@ def _index_groups(
         return None
     lines = linked.program.lines
     base = f"/accounts/{ref}/program/{placement.id}"
-    group_of = {line.id: (line.group or "") for line in lines}
-
-    ordered: list[tuple[str, list[Any]]] = []
-    for line in lines:
-        key = line.group or ""
-        if ordered and ordered[-1][0] == key:
-            ordered[-1][1].append(line)
-        else:
-            ordered.append((key, [line]))
+    known = {line.id for line in lines}
 
     def url(layer: str | None, closed_set: frozenset[str]) -> str:
         # closed rides EXPLICITLY even when empty: under per-key recovery an
@@ -291,22 +297,24 @@ def _index_groups(
 
     groups: list[dict[str, Any]] = []
     seen_slugs: set[str] = set()
-    for key, group_lines in ordered:
-        line_ids = {line.id for line in group_lines}
-        slug = f"{placement.id}.{slugify(key) if key else 'cover'}"
-        while slug in seen_slugs:  # two ungrouped runs must collapse apart
+    for line in lines:
+        slug = f"{placement.id}.{slugify(line.id)}"
+        while slug in seen_slugs:  # ids are unique; belt and braces
             slug += "-"
         seen_slugs.add(slug)
         rows = sorted(
-            (row for row in layers if group_of.get(row["applies_to"][0], "") == key
-             and row["applies_to"][0] in line_ids),
+            (row for row in layers if row["applies_to"][0] == line.id),
             key=lambda row: (-row["attach_cents"], -row["limit_cents"]),
         )
         is_closed = slug in closed
         groups.append({
             "slug": slug,
-            "name": key or "Cover",
-            "label": " ".join(line.label for line in group_lines),
+            "name": line.name,
+            # The bucket, where it says something. A line with no group shows
+            # its column label instead — the letters the drawing prints in
+            # that column's header, which is how a reader ties the rail to
+            # the picture.
+            "label": line.group or line.label,
             "count": len(rows),
             "closed": is_closed,
             "toggle_url": url(selected, closed ^ {slug}),
@@ -343,7 +351,7 @@ def _index_groups(
     # (review C7).
     orphans = [
         row for row in layers
-        if row["applies_to"] and row["applies_to"][0] not in group_of
+        if row["applies_to"] and row["applies_to"][0] not in known
     ]
     if orphans:
         slug = f"{placement.id}.unknown-line"
@@ -842,7 +850,7 @@ async def placement_cell_save(
 # success answers with the whole panel — the cell's own action URL is stale
 # the moment the write lands.
 
-_LINE_NAME_FIELD = Field("name", "line of cover", required=True)
+_LINE_NAME_FIELD = Field("name", "line of coverage", required=True)
 
 
 def _line_name(conn: sqlite3.Connection, placement_id: str, line_id: str) -> str:
@@ -2243,7 +2251,10 @@ async def layer_cell_save(
 
 
 def _layer_add_fields(
-    conn: sqlite3.Connection, placement_id: str
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layers: list[dict[str, Any]] | None = None,
+    for_new_line: bool = False,
 ) -> tuple[Field, ...]:
     """A new layer's facts. `name` and `limit` are required by sync.add_layer;
     premium is optional because a layer is routinely placed before it is
@@ -2267,17 +2278,89 @@ def _layer_add_fields(
     line — on a multi-line program the web wrote different data than the TUI
     for the same intent, invisibly. Empty options means the program has no
     lines; the caller refuses before rendering a form that cannot succeed.
+
+    A LINE OF COVERAGE CAN BE MADE FROM HERE (Grant, 2026-08-24). The picker
+    used to offer only lines that already existed, so a broker starting a
+    program — one placeholder line, nothing else — had nowhere to say
+    "Employers Liability is its own line of coverage" and typed it into the
+    LAYER name instead, aimed at the placeholder. The sentinel is the answer,
+    and the write behind it is one mutation (`sync.add_line` with a layer
+    spec), so a refused layer leaves no stranded line.
+
+    A STATUTORY LINE IS LABELLED, because it is the dead end that produced
+    this whole change: statutory cover owns its whole column, so towerkit
+    refuses any other layer on it. The option still exists — the refusal is
+    towerkit's to give — but a reader can see where not to aim before they
+    aim there.
     """
     lines = sync.program_lines(conn, placement_id)
-    options = tuple((name, line_id) for line_id, name in lines)
+    statutory = {
+        lid
+        for row in (layers or [])
+        if row["statutory"]
+        for lid in row["applies_to"]
+    }
+    options = tuple(
+        (f"{name} — statutory, whole column" if line_id in statutory else name, line_id)
+        for line_id, name in lines
+    )
     if len(lines) > 1:
         options = (("all lines", "__all__"), *options)
+    # The label states the CONSEQUENCE on a program still carrying its
+    # scaffold: filling the placeholder is what the broker means there, and a
+    # second column beside an unfilled one is never what they meant.
+    fill = _scaffold_placeholder_name(conn, placement_id)
+    options = (
+        (f"fill {fill} — a new line of coverage…" if fill else "new line of coverage…",
+         NEW_LINE),
+        *options,
+    )
+    picker = Field("line", "applies to", "select", options, required=True)
+    new_line = Field(
+        "new_line_name", "line of coverage", placeholder="Employers Liability"
+    )
+    if for_new_line:
+        # THE LEVELS IN THE ORDER THEY NEST when that is what is being made:
+        # the line of coverage, then the first layer inside it. The picker
+        # stays, last, as the way back out to an existing line — arriving
+        # here does not lock the decision in.
+        return (
+            new_line,
+            replace(_LAYER_CELLS["name"], label="first layer"),
+            _LAYER_CELLS["limit_cents"],
+            _LAYER_CELLS["premium_cents"],
+            picker,
+        )
     return (
         _LAYER_CELLS["name"],
-        Field("line", "applies to", "select", options, required=True),
+        picker,
+        new_line,
         _LAYER_CELLS["limit_cents"],
         _LAYER_CELLS["premium_cents"],
     )
+
+
+# The picker value that means "not one of these — a new one". A sentinel, not
+# a storable id, so every reader of `values["line"]` has to branch on it;
+# checked server-side like any other option, because markup constrains a
+# mouse and nothing else.
+NEW_LINE = "__new__"
+
+
+def _scaffold_placeholder_name(
+    conn: sqlite3.Connection, placement_id: str
+) -> str | None:
+    """The name of the placeholder line, when this program is still exactly
+    what `scaffold_program` wrote — otherwise None.
+
+    The predicate is `sync.is_untouched_scaffold`, never a second reading of
+    it here: the surface's job is to SAY what the write will do, and if the
+    two disagreed the form would promise one thing and the file would get
+    another."""
+    program = sync.linked_program(conn, placement_id).program
+    if program is None or not sync.is_untouched_scaffold(program):
+        return None
+    return str(program.lines[0].name)
 
 
 def _parsed(fields: tuple[Field, ...], raw: dict[str, str]) -> dict[str, Any]:
@@ -2404,32 +2487,59 @@ async def layer_add(request: Request, ref: str, placement_id: str) -> HTMLRespon
             request, ref, org, placement_id,
             "the program has no lines — build them in towerkit first",
         )
-    fields = _layer_add_fields(conn, placement_id)
+    fields = _layer_add_fields(
+        conn, placement_id, layers_for(request, conn, placement_id),
+        # A refusal re-renders the form the broker is LOOKING AT, in the order
+        # they opened it — reshuffling the fields under a message is its own
+        # small betrayal of commit-in-place.
+        for_new_line=raw.get("line") == NEW_LINE,
+    )
     try:
         values = _parsed(fields, raw)
+        if values["line"] == NEW_LINE and not values["new_line_name"]:
+            raise ValueError("name the line of coverage")
     except ValueError as exc:
         return _refused_form(request, fields, action, "new layer", str(exc), raw)
 
-    line_ids = (
-        [line_id for line_id, _ in all_lines]
-        if values["line"] == "__all__"
-        else [values["line"]]
-    )
+    if values["line"] == NEW_LINE:
+        # ONE MUTATION: the line and its layer go in together, so a refused
+        # layer leaves no stranded line behind (sync.add_line carries the
+        # reasoning). On a program still carrying its scaffold this FILLS the
+        # placeholder instead of adding beside it — which the picker's own
+        # option label said it would before the broker chose it.
+        write = lambda: sync.add_line(  # noqa: E731
+            conn, placement_id, values["new_line_name"],
+            layer_name=values["name"],
+            limit_cents=values["limit_cents"],
+            premium_cents=values["premium_cents"],
+        )
+        summary = (
+            f"added {values['new_line_name']} with layer {values['name']}"
+        )
+    else:
+        line_ids = (
+            [line_id for line_id, _ in all_lines]
+            if values["line"] == "__all__"
+            else [values["line"]]
+        )
+        write = lambda: sync.add_layer(  # noqa: E731
+            conn, placement_id, values["name"], line_ids,
+            attach_cents=None,  # position decides — see _layer_add_fields
+            limit_cents=values["limit_cents"],
+            premium_cents=values["premium_cents"],
+        )
+        summary = f"added layer {values['name']}"
     try:
         program_files.write(
             conn, placement,
             tool="program_layer_add",
-            summary=f"added layer {values['name']}",
-            mutate=lambda: sync.add_layer(
-                conn, placement_id, values["name"], line_ids,
-                attach_cents=None,  # position decides — see _layer_add_fields
-                limit_cents=values["limit_cents"],
-                premium_cents=values["premium_cents"],
-            ),
+            summary=summary,
+            mutate=write,
             open_batch=_open_batch_web,
         )
     except Exception as exc:
         return _refused_form(request, fields, action, "new layer", str(exc), raw)
+    forget_program_reads(request)
     return _panel(request, ref, org, placement_id)
 
 
@@ -3014,8 +3124,48 @@ def layer_add_form(request: Request, ref: str, placement_id: str) -> HTMLRespons
             "the program has no lines — build them in towerkit first",
         )
     return _mini_form(
-        request, _layer_add_fields(conn, placement_id),
+        request,
+        _layer_add_fields(conn, placement_id, layers_for(request, conn, placement_id)),
         f"/accounts/{ref}/program/{placement_id}/layers", "new layer",
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/lines/new-layer",
+    response_class=HTMLResponse,
+)
+def line_of_coverage_form(
+    request: Request, ref: str, placement_id: str
+) -> HTMLResponse:
+    """The SAME form, opened with its picker already asking for a new line of
+    coverage — one form, one write, one refusal path.
+
+    Not a second form: a line of coverage cannot exist without a layer
+    (towerkit reports `line-empty` as an error), so "add a line" and "add its
+    first layer" are one act whichever control starts it. A separate form
+    would be a second spelling of that act, and the two would drift over
+    which fields a first layer takes.
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    if not placement.program_path:
+        return _panel_refusal(
+            request, ref, org, placement_id,
+            f"{placement.ref} has no program file linked — scaffold one first",
+        )
+    fields = _layer_add_fields(
+        conn, placement_id, layers_for(request, conn, placement_id),
+        for_new_line=True,
+    )
+    return TEMPLATES.TemplateResponse(
+        request, "account/_program_form.html",
+        {
+            "fields": fields,
+            "action": f"/accounts/{ref}/program/{placement_id}/layers",
+            "title": "new line of coverage",
+            "values": {"line": NEW_LINE},
+        },
     )
 
 
@@ -3204,7 +3354,7 @@ async def new_program_page(request: Request, ref: str) -> Any:
             error = "no program roots configured — set one with bookctl roots"
         elif composed is None:
             error = (
-                "name the program, its period and at least one line of cover first"
+                "name the program, its period and at least one line of coverage first"
             )
         else:
             created, diags = sync.create_program(
@@ -4192,7 +4342,7 @@ def _parse_term(kind: str, values: dict[str, Any]) -> tuple[int, list[str]]:
     if amount in (None, ""):
         raise ValueError("amount is required")
     if not values["line"]:
-        raise ValueError("pick at least one line of cover")
+        raise ValueError("pick at least one line of coverage")
     if kind == "sublimits" and not values["name"].strip():
         raise ValueError("the sublimit needs a name")
     return int(amount), values["line"]

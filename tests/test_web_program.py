@@ -3862,3 +3862,189 @@ def test_the_stated_premium_reaches_the_projection(app_and_org):
         (placement.id, layer["id"], carrier),
     ).fetchone()
     assert row["premium"] == 52_000_000
+
+
+# --- lines of coverage hold layers --------------------------------------------
+#
+# Grant scaffolded a program, made its one placeholder layer a statutory
+# Workers Compensation, and then had nowhere to say "Employers Liability is
+# its own line of coverage" — so he typed that into the LAYER name and aimed
+# it at the placeholder column, which towerkit refused, correctly. Three
+# faults: the hierarchy was never named, the rail grouped by towerkit's
+# unused bucket instead of by line, and a line could not be made from the
+# form you were in (2026-08-24).
+
+
+def _rail_groups(html: str) -> list[str]:
+    import re
+
+    return re.findall(r'class="index-group-name mono">([^<]*)', html)
+
+
+def test_the_rail_groups_by_line_of_coverage_in_column_order(app_and_org):
+    """One group per line, in the program's own order — which is COLUMN order
+    in the drawing, never alphabetical."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    lines = sync.program_lines(conn, placement.id)
+
+    page = client.get(f"/accounts/{org.ref}/program?layer=").text
+
+    assert [g.split(" · ")[0] for g in _rail_groups(page)] == [
+        name for _, name in lines
+    ]
+
+
+def test_a_spanning_layer_is_listed_once(app_and_org):
+    """Repeating it under every line it covers would make the group counts
+    add to more than the tower holds."""
+    import re
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    spanning = next(
+        (
+            row for row in sync.layer_details(conn, placement.id)
+            if len(row["applies_to"]) > 1
+        ),
+        None,
+    )
+    assert spanning, "the fixture has no spanning layer to test with"
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    rows = re.findall(r'class="index-name">([^<]*)', page)
+    assert rows.count(spanning["name"]) == 1
+    assert f"spans {len(spanning['applies_to'])} lines" in page
+
+
+def test_the_rail_counts_sum_to_the_tower(app_and_org):
+    import re
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    counts = [int(n) for n in re.findall(r'class="index-count mono">(\d+)<', page)]
+    # the first is the total on the head; the rest are the groups
+    assert counts[0] == sum(counts[1:]) == len(sync.layer_details(conn, placement.id))
+
+
+def test_the_layer_form_offers_a_new_line_of_coverage(app_and_org):
+    """The dead end, closed: the picker used to offer only lines that already
+    existed."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+
+    form = client.get(f"/accounts/{org.ref}/program/{placement.id}/layers/new").text
+
+    assert 'value="__new__"' in form
+    assert "new line of coverage" in form
+
+
+def test_the_rail_can_open_that_form_directly(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    form = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/lines/new-layer"
+    ).text
+
+    assert "+ line of coverage" in page
+    assert 'value="__new__" selected' in form
+
+
+def test_a_new_line_and_its_layer_land_together(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    before = len(sync.program_lines(conn, placement.id))
+
+    saved = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={
+            "name": "EL Primary", "line": "__new__",
+            "new_line_name": "Employers Liability",
+            "limit_cents": "1,000,000", "premium_cents": "",
+        },
+    )
+
+    assert saved.status_code == 200
+    lines = dict(sync.program_lines(conn, placement.id))
+    assert len(lines) == before + 1
+    new_id = next(lid for lid, name in lines.items() if name == "Employers Liability")
+    layers = [
+        row for row in sync.layer_details(conn, placement.id)
+        if row["applies_to"] == [new_id]
+    ]
+    assert [row["name"] for row in layers] == ["EL Primary"]
+
+
+def test_a_refused_layer_leaves_no_line_behind(app_and_org):
+    """THE assertion that matters. The line and its layer are one mutation, so
+    a refusal never reaches the dump — two sequential writes would strand a
+    line on exactly the refusals this path has to survive."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    before = dict(sync.program_lines(conn, placement.id))
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={
+            "name": "EL Primary", "line": "__new__",
+            "new_line_name": "Employers Liability",
+            # towerkit refuses a non-positive limit; the line must not survive it
+            "limit_cents": "0", "premium_cents": "",
+        },
+    )
+
+    assert refused.status_code == 200
+    assert dict(sync.program_lines(conn, placement.id)) == before
+
+
+def test_a_new_line_with_no_name_is_refused(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    before = dict(sync.program_lines(conn, placement.id))
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={
+            "name": "EL Primary", "line": "__new__", "new_line_name": "",
+            "limit_cents": "1,000,000", "premium_cents": "",
+        },
+    )
+
+    assert "name the line of coverage" in refused.text
+    assert dict(sync.program_lines(conn, placement.id)) == before
+
+
+def test_a_statutory_line_is_labelled_in_the_picker(app_and_org):
+    """Statutory cover owns its whole column, so towerkit refuses any other
+    layer on it — the exact refusal that started this. The picker says so
+    before the broker aims there; towerkit still gives the refusal."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    marked = client.post(
+        f"{_layer_base(org, placement, layer['id'])}/statutory",
+        data={"statutory": "true"},
+    )
+    assert marked.status_code == 200
+    assert next(
+        row for row in sync.layer_details(conn, placement.id)
+        if row["id"] == layer["id"]
+    )["statutory"], "the fixture layer did not take the flag"
+
+    form = client.get(f"/accounts/{org.ref}/program/{placement.id}/layers/new").text
+
+    assert "statutory, whole column" in form
