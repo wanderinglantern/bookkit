@@ -62,6 +62,24 @@
   assignments are live and `cascade=True` removes them all in one
   revertible batch. Renames go through edit_field behind a duplicate
   guard, because two members sharing a name makes every lookup ambiguous.
+- A MARKET CAN STATE ITS OWN PREMIUM, and STATING ONE STATES THEM ALL
+  (Grant, 2026-08-24). `Participant.premium` is the figure a market charges
+  where it differs from its share — a differential, tax and fees on one paper,
+  a non-concurrent quote. towerkit's `edit.set_participant_premium` owns the
+  rule: the seat typed, every other seat frozen at what it was already
+  showing, and `Layer.premium` set to their SUM, in one act. The field is
+  denied to the generic setter and `layer.premium` is guarded while any seat
+  states one, because typing over a sum makes one of the two figures a lie.
+  `Layer.premium_for(participant)` is the ONE definition of what a carrier is
+  paid; a surface that multiplies the layer premium by the share cannot see a
+  stated figure.
+  THE INVARIANT IS NOT SELF-MAINTAINING. That verb holds it only while it is
+  the thing writing: binding a market, unbinding one and splitting a layer all
+  change the participant list and leave the sum stale — a layer claiming
+  $1,960,000 whose one remaining market is paid $520,000, carried into the
+  account premium (found 2026-08-24 by the surface sweep, on main). Whatever
+  fixes it belongs in the WRITE PATH beside `heal_follows`, never re-summed at
+  each mutation site.
 - Backups before bulk writes: importers snapshot the DB (db.backup) into
   backups/ before the first row changes. Migrations are additive-only so
   far; call out anything destructive before writing it.
@@ -419,6 +437,28 @@ renewal date is the one you counted to, and the data-entry rules.
   is actually used, end to end, before believing it. Batching the shared
   `entity_actions.push_form` looked right and went green — while 33 call
   sites built `FormModal` directly and bypassed it entirely (2026-08-15).
+- DONE MEANS MERGED AND PUSHED, ACROSS INSTANCES (Grant, 2026-08-24: "ensure
+  all completed work across instances is merged and pushed"). Other sessions
+  leave finished commits on branches and in `.claude/worktrees/`. Before
+  declaring a milestone done, sweep BOTH repos: every local branch, every
+  remote branch and every worktree, with `git rev-list --count main..<ref>` —
+  anything ahead of main is either finished work nobody merged or in-flight
+  work to name. Two commits were found that way, one of them another
+  instance's.
+- CHECK THE BRANCH IMMEDIATELY BEFORE COMMITTING. `git branch --show-current`,
+  in the same call as the commit. A shared checkout moves under you: twice on
+  2026-08-24 a commit meant for a feature branch landed on `main`, once after
+  `git checkout -b` had already succeeded. The fix when it happens is
+  `git branch -f <feature> <sha>` then `git branch -f main origin/main` —
+  never a force-push of a rewritten `main`.
+- CANVAS WITH PARALLEL AGENTS, THEN VERIFY EVERY FINDING YOURSELF (Grant,
+  2026-08-24: "dispatch multiple agents to canvas and report findings"). One
+  agent per question, each told to cite file:line, give a concrete failing
+  scenario and reproduce it against the running app. Then re-check each
+  finding before it reaches Grant: of one sweep's eight, three were real
+  defects, one was a decision he had already made, and the rest were design
+  costs worth naming but not fixing. An unverified finding costs him more
+  than a missing one.
 - Handoffs go in `./handoffs/YYYYMMDD-Feature.md`, written so a fresh
   Claude can resume cold: goal, state, next step with file:line, decisions
   and what was rejected, what was tried that failed, gotchas, open

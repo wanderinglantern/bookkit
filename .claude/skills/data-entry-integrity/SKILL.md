@@ -70,9 +70,18 @@ distinguishes them — "To be placed (Employers Liability)" — where the name
 alone repeats, and to leave distinct names alone. Qualifying every option
 makes the common case noisier for a problem it does not have.
 
+**Rank it by what the WRITE does, not by how it reads.** On the "same policy
+as" picker the collision was only confusing: the write is addressed by id, so
+nothing was ever linked wrongly. On the Pipeline tab's bind offer the same
+collision binds a market to the WRONG LINE OF COVERAGE — the id is correct for
+whichever option is clicked, so a mis-click is a real participation on the
+wrong column, in a revertible batch nobody knows to revert.
+
 `test_no_select_offers_the_same_label_twice` (tests/test_form_selects.py)
 holds this over the Program tab, on a shape built to MAKE a name repeat — a
-scan over a book where no name repeats proves nothing.
+scan over a book where no name repeats proves nothing. It does NOT reach the
+Pipeline tab's offer, which renders only after a submission response: a gate
+is only as good as where it looks, and widening it is part of closing this.
 
 ### 3. Validation timing: on blur, cleared on keystroke
 

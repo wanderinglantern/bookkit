@@ -66,6 +66,47 @@ ARITHMETIC, not the field name: `* share`, `// BPS_SCALE`, `sum(`, the
 division you just replaced. A stated value is invisible to a surface that
 keeps multiplying.
 
+## What the first real sweep found — add these to the walk
+
+Three agents ran these three questions over bookkit and towerkit on
+2026-08-24, the day the questions were written. Every one of the following is
+a check that would have caught a CONFIRMED defect, and none of them is
+obvious from the questions alone. Walk them.
+
+**An invariant maintained by ONE verb is broken by every other writer.**
+`set_participant_premium` establishes "the layer's premium IS the sum of its
+markets" — and holds it only while it is the thing doing the writing. Binding
+a market, unbinding one and splitting a layer all mutate the participant list
+and left the sum stale: a layer claiming $1,960,000 whose only remaining
+market is paid $520,000, carried into the account's premium. When a change
+introduces "X is always derived from Y", find every writer of **Y**, not of X.
+The fix is a heal step in the write path (bookkit's `heal_follows` is the
+precedent), never a re-sum copied to each mutation site.
+
+**A fill must be distinguishable from the PAPER, not only from its label.**
+A palette was checked so every carrier colour labels at 4.5:1 and neighbours
+step in lightness — and two of its fills sit at 1.23:1 against white, drawn
+with a white border in the client-facing workbook. Contrast against the
+GROUND is a separate question from contrast against the text.
+
+**Two identical options can cause a wrong WRITE, not just confusion.** A
+picker whose labels collide was fixed on one surface; the same collision on
+another surface binds a market to the wrong line of coverage — the id is
+correct for whichever option is clicked, so the mis-click is a real,
+revertible-but-unnoticed write. Rank a duplicate label by what the write
+DOES, not by how it reads.
+
+**A gate is only as good as where it looks.** The test written to hold
+"no select offers the same label twice" scans one page. The same defect on
+another tab is invisible to it. When a finding becomes a gate, ask which
+surfaces the gate can actually reach, and say so in the test.
+
+**A consequence must reach every surface.** towerkit returns advisories
+naming the two numbers a caller did not send; bookkit's wrapper discarded
+them, so the web previewed them and MCP said nothing — while the MCP tool's
+own docstring promised them. CLAUDE.md's rule applies: a change that lands on
+the web and not on MCP has shipped to two thirds of its users.
+
 ## Then: test or note?
 
 For every finding, decide which it is, and prefer the first:
