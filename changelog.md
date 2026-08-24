@@ -81,6 +81,13 @@ All notable changes to bookkit, newest date first.
   say what to do in each; the band withholds its line controls while the
   file will not open.
 
+### Fixed
+- Past-SLA rows on Today count to the deadline they print (sent + the SLA,
+  now one named constant), wear the overdue tone, and name the underwriter
+  to chase; the requests-to-chase list returned as a disclosure the rail's
+  count actually opens. Row actions stay visible on touch screens, where
+  hover cannot reveal them.
+
 ## 2026-08-21
 
 ### Added
