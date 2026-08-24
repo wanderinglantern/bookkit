@@ -3875,10 +3875,28 @@ def test_the_stated_premium_reaches_the_projection(app_and_org):
 # form you were in (2026-08-24).
 
 
+def _rail(html: str) -> str:
+    """The rail alone. Asserting against the whole page passes with the rail's
+    own control deleted, because the band above carries the same URLs."""
+    return html.split('class="structure-index"', 1)[1].split("</nav>", 1)[0]
+
+
 def _rail_groups(html: str) -> list[str]:
+    """The line of coverage each group is headed by. The name is the chip's
+    inline cell now — the rail renders the same `_line_chip.html` the band
+    does, so renaming and removing a line are possible where it is read —
+    and a group with no line (the 'unknown line' pile) still prints static
+    text."""
     import re
 
-    return re.findall(r'class="index-group-name mono">([^<]*)', html)
+    rail = _rail(html)
+    named = [
+        chunk.strip()
+        for chunk in re.findall(
+            r'line-name.*?<span class="is-editable">(.*?)</span>', rail, re.S
+        )
+    ]
+    return named or re.findall(r'class="index-group-name mono">([^<]*)', rail)
 
 
 def test_the_rail_groups_by_line_of_coverage_in_column_order(app_and_org):
@@ -3891,9 +3909,7 @@ def test_the_rail_groups_by_line_of_coverage_in_column_order(app_and_org):
 
     page = client.get(f"/accounts/{org.ref}/program?layer=").text
 
-    assert [g.split(" · ")[0] for g in _rail_groups(page)] == [
-        name for _, name in lines
-    ]
+    assert _rail_groups(page) == [name for _, name in lines]
 
 
 def test_a_spanning_layer_is_listed_once(app_and_org):
@@ -4113,9 +4129,8 @@ def test_the_rail_can_reorder_lines_of_coverage(app_and_org):
     # In the RAIL, not merely somewhere on the page: the chips in the band
     # above have always carried this URL, so asserting the URL alone would
     # pass with the rail's own control deleted.
-    rail = page.split('class="structure-index"', 1)[1].split("</nav>", 1)[0]
-    assert "index-group-move" in rail, "the rail offers no move control"
-    assert f"/lines/{line_id}/move" in rail
+    rail = _rail(page)
+    assert f"/lines/{line_id}/move" in rail, "the rail offers no move control"
 
     moved = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/lines/{line_id}/move",
@@ -4188,3 +4203,39 @@ def test_a_program_with_lines_and_no_layers_still_says_what_is_wrong(app_and_org
         "sublimits are still on the file"
     )
     assert "Add the first layer" in section
+
+
+def test_the_rail_can_rename_relabel_and_remove_a_line(app_and_org):
+    """THE AFFORDANCES MOVED HOUSE WITH THE STRUCTURE (surface sweep,
+    2026-08-24). The rail is where a broker works the tower, and it carried
+    only the two move arrows: rename, column label and remove stayed on the
+    chips in the band above, exactly the shape of the bug Grant reported about
+    reordering. The routes existed the whole time.
+
+    Asserted inside the RAIL, because the band above carries the same URLs and
+    a page-wide scan would pass with every one of these deleted.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    line_id, name = sync.program_lines(conn, placement.id)[0]
+
+    rail = _rail(client.get(f"/accounts/{org.ref}/program").text)
+
+    assert f"/lines/{line_id}/cell/name/edit" in rail, "the rail cannot rename a line"
+    assert f"/field/line/{line_id}:_/abbr/edit" in rail, (
+        "the rail cannot set the column label"
+    )
+    assert f"/lines/{line_id}/remove" in rail, "the rail cannot remove a line"
+
+    # and the removal actually works from here, confirm and all
+    confirm = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/lines/{line_id}/remove"
+    )
+    assert confirm.status_code == 200
+    assert f"remove {name}?" in confirm.text
+    removed = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/lines/{line_id}/remove"
+    )
+    assert removed.status_code == 200
+    assert line_id not in [lid for lid, _ in sync.program_lines(conn, placement.id)]

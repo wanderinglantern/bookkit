@@ -328,11 +328,25 @@ def _index_groups(
             "move_base": f"{base}/lines/{line.id}/move",
             "first": index == 0,
             "last": index == len(lines) - 1,
+            # THE LINE'S OWN CONTROLS, the same chip the band above renders —
+            # not a second copy of them. The rail is where the structure is
+            # worked now, and it could reorder a line but not rename it,
+            # relabel it or remove it: the affordances stayed at the old home,
+            # which is the shape of the bug Grant reported about reordering
+            # (2026-08-24). One partial, one set of routes, two doors.
+            "chip": _line_chip_html(
+                request, ref, placement.id, line.id, line.name,
+                first=index == 0, last=index == len(lines) - 1,
+            ),
             # The bucket, where it says something. A line with no group shows
             # its column label instead — the letters the drawing prints in
             # that column's header, which is how a reader ties the rail to
             # the picture.
             "label": line.group or line.label,
+            # The bucket ALONE, for the rail: the chip prints the column label
+            # in its own cell, so repeating it in the header would be the same
+            # word twice — while a real bucket says something neither says.
+            "bucket": line.group or None,
             "count": len(rows),
             "closed": is_closed,
             "toggle_url": url(selected, closed ^ {slug}),
@@ -378,6 +392,9 @@ def _index_groups(
             "name": "Unknown line",
             "label": " ".join(sorted({row["applies_to"][0] for row in orphans})),
             "count": len(orphans),
+            # No chip either: there is no line to rename, relabel or remove.
+            "chip": None,
+            "bucket": None,
             # No move controls: this group is not a line, it is the layers
             # whose line the file does not declare. There is nothing to
             # reorder and towerkit has no id to move.
@@ -882,6 +899,20 @@ def _line_name(conn: sqlite3.Connection, placement_id: str, line_id: str) -> str
     raise HTTPException(status_code=404, detail=f"no line {line_id!r} on this program")
 
 
+def _line_ends(
+    conn: sqlite3.Connection, placement_id: str, line_id: str
+) -> tuple[bool, bool]:
+    """(is first, is last) in COLUMN order — what decides which of a chip's
+    two arrows is dead. The single-chip routes compute it too, or a chip
+    swapped back in place would come back with both arrows live at an end the
+    strip beside it draws as disabled."""
+    ids = [lid for lid, _ in sync.program_lines(conn, placement_id)]
+    if line_id not in ids:
+        return False, False
+    index = ids.index(line_id)
+    return index == 0, index == len(ids) - 1
+
+
 def _lines_base(ref: str, placement_id: str) -> str:
     return f"/accounts/{ref}/program/{placement_id}/lines"
 
@@ -891,8 +922,22 @@ def _line_cell_action(ref: str, placement_id: str, line_id: str) -> str:
 
 
 def _line_chip_html(
-    request: Request, ref: str, placement_id: str, line_id: str, name: str
+    request: Request,
+    ref: str,
+    placement_id: str,
+    line_id: str,
+    name: str,
+    *,
+    first: bool = False,
+    last: bool = False,
 ) -> str:
+    """One line of coverage's controls, wherever a line is worked — the band's
+    strip and the structure rail both render this.
+
+    `first`/`last` disable the arrow that would do nothing. towerkit treats a
+    move off either end as a no-op, so the guard is about the reader, not the
+    write: a live-looking control that changes nothing reads as a broken app.
+    """
     cell = render_cell_display(
         request, _LINE_NAME_FIELD, name,
         _line_cell_action(ref, placement_id, line_id),
@@ -903,6 +948,8 @@ def _line_chip_html(
     return template.render(
         base=f"{_lines_base(ref, placement_id)}/{line_id}",
         name=name,
+        first=first,
+        last=last,
         name_cell=cell,
         # D6, through the derived seam. The NAME is a bespoke cell because
         # renaming a line cascades its id through every appliesTo — bookkit's
@@ -926,9 +973,13 @@ def _line_chips(request: Request, ref: str, placement: Any) -> list[str] | None:
     # test_layer_details_is_read_once_per_page, once it was pointed at the
     # function that actually does the I/O).
     program = linked_for(request, conn, placement.id).program
+    lines = sync.program_lines_of(program)
     return [
-        _line_chip_html(request, ref, placement.id, lid, name)
-        for lid, name in sync.program_lines_of(program)
+        _line_chip_html(
+            request, ref, placement.id, lid, name,
+            first=index == 0, last=index == len(lines) - 1,
+        )
+        for index, (lid, name) in enumerate(lines)
     ]
 
 
@@ -1016,7 +1067,12 @@ def line_chip(
     conn = _conn(request)
     _owned(conn, org, "placement", placement_id, placements_repo.get)
     name = _line_name(conn, placement_id, line_id)
-    return HTMLResponse(_line_chip_html(request, ref, placement_id, line_id, name))
+    first, last = _line_ends(conn, placement_id, line_id)
+    return HTMLResponse(
+        _line_chip_html(
+            request, ref, placement_id, line_id, name, first=first, last=last
+        )
+    )
 
 
 @router.get(
@@ -1088,8 +1144,12 @@ async def line_cell_save(
     if not typed:
         return editor("the line needs a name")
     if typed == current:
+        first, last = _line_ends(conn, placement_id, line_id)
         return HTMLResponse(
-            _line_chip_html(request, ref, placement_id, line_id, current)
+            _line_chip_html(
+                request, ref, placement_id, line_id, current,
+                first=first, last=last,
+            )
         )
     try:
         program_files.write(

@@ -4194,15 +4194,79 @@ button.term-label {
   min-width: 0;
 }
 
-.index-group-move {
-  display: flex;
-  align-items: center;
-  gap: 0.1rem;
-  padding-right: 0.25rem;
-  background: var(--wash-2);
+/* THE LINE'S OWN CONTROLS LIVE IN THE HEADER BAR, not beside it. The rail
+   renders `_line_chip.html` — the same partial the band above uses — so
+   rename, column label, reorder and remove are all here, where the structure
+   is worked (2026-08-24). The bar's wash moves onto the ROW so the chip reads
+   as part of the header rather than an object dropped on top of it, and the
+   chip drops its own border until it is hovered or focused. */
+.index-group-row {
+  background: var(--slate-wash);
+  margin-top: 0.35rem;
 }
 
-.index-group-move .chip-arrow[disabled] {
+.index-head + .index-group-row {
+  margin-top: 0;
+}
+
+.index-group-row .index-group,
+.index-group-row .index-group-count {
+  background: none;
+  margin-top: 0;
+}
+
+.index-group-row .index-group {
+  flex: 0 0 auto;
+  width: auto;
+  padding-right: 0.2rem;
+}
+
+.index-group-row .index-group-name {
+  flex: 1;
+}
+
+.index-group-count {
+  display: flex;
+  align-items: center;
+  padding: 0.3rem 0.85rem 0.3rem 0.35rem;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.index-group-bucket {
+  align-self: center;
+  font-size: var(--hint-size);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.index-group-row .line-chip {
+  flex: 1;
+  min-width: 0;
+  border-color: transparent;
+  background: none;
+}
+
+.index-group-row .line-chip:hover,
+.index-group-row .line-chip:focus-within {
+  border-color: var(--border);
+  background: var(--paper);
+}
+
+/* The line's NAME wears the header's own type, not a table cell's: it is the
+   same word the group used to print as static text. */
+.index-group-row .line-name {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--label-size);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--slate);
+}
+
+.chip-arrow[disabled] {
   opacity: 0.25;
   cursor: default;
 }
