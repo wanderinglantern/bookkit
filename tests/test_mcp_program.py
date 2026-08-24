@@ -56,8 +56,14 @@ def test_program_layers_shows_who_is_on_each_layer(linked):
     assert [p["carrier"] for p in layers["primary-gl"]["participants"]] == ["Zurich"]
     assert layers["primary-cy"]["participants"] == []   # 'To be placed', not absent
     assert layers["1st-excess"]["participants"] == [
-        {"carrier": "Chubb", "share_pct": 60.0, "premium_cents": 180_000_00},
-        {"carrier": "AXA XL", "share_pct": 40.0, "premium_cents": 120_000_00},
+        {
+            "carrier": "Chubb", "share_pct": 60.0,
+            "limit_cents": 6_000_000_00, "premium_cents": 180_000_00,
+        },
+        {
+            "carrier": "AXA XL", "share_pct": 40.0,
+            "limit_cents": 4_000_000_00, "premium_cents": 120_000_00,
+        },
     ]
 
 

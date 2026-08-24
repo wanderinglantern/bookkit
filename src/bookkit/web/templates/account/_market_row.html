@@ -1,0 +1,38 @@
+{# One market's seat as a participation-table row: two inline-editable cells
+   (carrier, share — the cell macro's grammar, so tab-hop, blur-commit and
+   Escape all behave exactly as they do in every other cell), then the two
+   DERIVED dollar columns. Limit and premium here are the carrier's slice,
+   computed once in sync.layer_details — displayed exact, never compact,
+   because these are the figures a broker checks a split against, and they
+   are not editors so no round-trip can lose anything.
+
+   `take off` fetches the in-place confirm over this row (closest tr) and
+   writes nothing — the write happens on the confirm's own POST. #}
+<tr class="market-row" data-market-row>
+  {{ carrier_cell | safe }}
+  {# The share is the ONE input that previews before it saves (the
+     deliberate blur-commit exception, recorded in the hand-off): a change
+     posts the preview, Save commits through the ordinary cell route. #}
+  <td class="num">
+    <input class="share-input mono" type="text" name="share_pct"
+           value="{{ share }}"
+           aria-label="{{ seat.carrier }} share"
+           hx-post="{{ base }}/share-preview"
+           hx-trigger="change, keyup[key=='Enter'] changed"
+           hx-target="{{ host }}" hx-swap="innerHTML"> <span class="ws-hint">%</span>
+  </td>
+  <td class="num mono">{{ limit }}</td>
+  <td class="num mono derived">{{ premium if premium is not none else "—" }}</td>
+  <td class="row-tail">
+    {% if unlinked %}
+      <a class="market-unlinked" href="/markets#unlinked-panel"
+         aria-label="{{ seat.carrier }} is not a market in the book — resolve it on the Markets page"
+         title="{{ seat.carrier }} is not a market in the book, so it is missing from exposure and hit rate. Resolve it on the Markets page."><span aria-hidden="true">new</span></a>
+    {% endif %}
+    <button type="button" class="row-action-btn take-off"
+            aria-label="Take {{ seat.carrier }} off {{ layer_name }}"
+            title="Take {{ seat.carrier }} off {{ layer_name }} — the layer stays"
+            hx-get="{{ base }}/remove"
+            hx-target="closest tr" hx-swap="outerHTML">take off</button>
+  </td>
+</tr>

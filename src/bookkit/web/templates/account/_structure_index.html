@@ -1,0 +1,80 @@
+{# The structure index — one list of everything the tower holds, grouped by
+   line group and collapsible (design 3A, 2026-08-24). Replaces the per-line
+   stack editor: position is still the structure, and the index is where a
+   41-layer program stays a list of six groups instead of forty-one rows.
+
+   Every control here is a GET whose response re-renders the whole section,
+   retargeted (`worksheet_select`) — selection and collapse state live in
+   the URL, never in JS, because htmx replaces this pane on every write.
+
+   The group COUNT stays visible while collapsed; that is the point of
+   collapsing. A buffer row wears the same hatch the tower drawing uses. A
+   spanning slab announces its span here AND in the worksheet title — the
+   reader never learns it after an edit. #}
+<nav class="structure-index" aria-label="Structure">
+  <div class="index-head">
+    <span class="index-label">Structure</span>
+    <span class="index-count mono">{{ index.total }}</span>
+    {% if index.groups | length > 1 %}
+      {% if index.all_closed %}
+        <button type="button" class="index-collapse" hx-get="{{ index.expand_all_url }}">expand all</button>
+      {% else %}
+        <button type="button" class="index-collapse" hx-get="{{ index.collapse_all_url }}">collapse all</button>
+      {% endif %}
+    {% endif %}
+  </div>
+
+  {% for group in index.groups %}
+    <button type="button" class="index-group" hx-get="{{ group.toggle_url }}"
+            aria-expanded="{{ 'false' if group.closed else 'true' }}"
+            title="{{ 'expand' if group.closed else 'collapse' }} {{ group.name }}">
+      <span class="index-glyph mono" aria-hidden="true">{{ "▸" if group.closed else "▾" }}</span>
+      <span class="index-group-name mono">{{ group.name }} · {{ group.label }}</span>
+      <span class="index-count mono">{{ group.count }}</span>
+    </button>
+    {% if not group.closed %}
+      {% for row in group.rows %}
+        <button type="button"
+                class="index-row{% if row.selected %} is-selected{% endif %}{% if row.buffer %} is-buffer{% endif %}"
+                hx-get="{{ row.url }}"
+                {% if row.selected %}aria-current="true"{% endif %}>
+          <span class="index-name">{{ "buffer" if row.buffer else row.name }}</span>
+          <span class="index-limit mono">{{ row.limit }}</span>
+          {% if row.signed is not none %}
+            <span class="index-signed mono {{ 'is-placed' if row.placed else 'is-open' }}">{{ row.signed }}%</span>
+          {% endif %}
+          {% if row.spans %}<span class="index-spans">spans {{ row.spans }} lines</span>{% endif %}
+        </button>
+      {% endfor %}
+    {% endif %}
+  {% endfor %}
+
+  <div class="index-foot">
+    <button type="button" class="index-add"
+            hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/new"
+            hx-target="#program-{{ placement.id }} .form-host"
+            hx-swap="innerHTML">+ layer</button>
+  </div>
+
+  {# Retentions and sublimits live at the index's foot, where the tower keeps
+     them — what the insured retains BELOW the cover the index lists. The
+     chips and their add/edit flows are unchanged; only their home moved out
+     of the section header (design 2A). #}
+  {% if term_chips is not none %}
+    <div class="index-terms">
+      <span class="index-label">Retained below</span>
+      <div class="index-term-chips">
+        {% for chip in term_chips.retentions %}{{ chip | safe }}{% endfor %}
+        {% with base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/retentions", singular = "retention" %}
+          {% include "account/_term_add_button.html" %}
+        {% endwith %}
+      </div>
+      <div class="index-term-chips">
+        {% for chip in term_chips.sublimits %}{{ chip | safe }}{% endfor %}
+        {% with base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/sublimits", singular = "sublimit" %}
+          {% include "account/_term_add_button.html" %}
+        {% endwith %}
+      </div>
+    </div>
+  {% endif %}
+</nav>

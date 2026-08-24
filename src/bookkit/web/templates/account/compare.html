@@ -1,47 +1,85 @@
 {% extends "account/page.html" %}
 {% block panel %}
-  {# The Compare screen (spec D8 slice 5): towerkit's compare_programs as the
-     DELTA TABLE the design asks for — no side-by-side tower graphic, per the
-     spec's own "recommend against". Every figure below is towerkit's:
-     bookkit converts dollars to its display formatter and adds nothing. #}
+  {# Compare (design 2C): expiring against proposed, SAID IN WORDS FIRST —
+     the delta stats, then a plain-English paragraph, then towerkit's delta
+     read layer by layer. No tower graphic, per the spec's own recommend
+     against: two towers on a compressed scale invite measurement they
+     cannot support. Every figure came off compare_programs; the paragraph's
+     every sentence derives from the same delta the table shows. #}
   <div class="people-head">
-    <h2 class="people-label">Compare — {{ proposed.program_name }}</h2>
-    <span class="people-count mono">{{ expiring.ref }} → {{ proposed.ref }}</span>
-    <span class="program-period mono">{{ expiring.period_from }} → {{ proposed.period_to }}</span>
+    <h2 class="people-label">{{ expiring.period_from[:4] }} → {{ proposed.period_to[:4] }} — {{ proposed.program_name }}</h2>
+    <span class="people-count mono">{{ expiring.ref }} → {{ proposed.ref }} · {{ pair_note }}</span>
     <span class="people-head-spacer"></span>
+    <a class="row-action-btn" href="{{ action }}?pick=1">pair with another…</a>
     <a class="row-action-btn" href="/accounts/{{ header.org.ref }}/program">back to the program tab</a>
   </div>
 
-  <div class="lines-strip">
-    <span class="detail-label">total limit</span>
-    <span class="mono">{{ limit_old }} → {{ limit_new }}</span>
-    <span class="detail-label">total premium</span>
-    <span class="mono">{{ premium_old }} → {{ premium_new }}
-      {%- if premium_delta_pct is not none %} ({{ "%+.1f" | format(premium_delta_pct) }}%){% endif %}</span>
+  <div class="band-stats compare-stats">
+    <div class="stat">
+      <span class="stat-label">total limit</span>
+      <span class="stat-value stat-figure">{{ limit_old }} <span class="fact-arrow">→</span> {{ limit_new }}</span>
+      {% if limit_delta %}
+        <span class="stat-sub {{ 'is-good' if limit_dir == 'up' else 'is-danger' }}">{{ limit_delta }}</span>
+      {% endif %}
+    </div>
+    <div class="stat">
+      <span class="stat-label">premium</span>
+      <span class="stat-value stat-figure">{{ premium_old }} <span class="fact-arrow">→</span> {{ premium_new }}</span>
+      {% if premium_delta_pct is not none and premium_delta_pct != 0 %}
+        {# cost framing: an increase reads danger, a reduction good #}
+        <span class="stat-sub {{ 'is-danger' if premium_delta_pct > 0 else 'is-good' }}">{{ "%+.1f" | format(premium_delta_pct) }}%</span>
+      {% endif %}
+    </div>
+    <div class="stat">
+      <span class="stat-label">layers</span>
+      <span class="stat-value stat-figure">{{ layers_old }} <span class="fact-arrow">→</span> {{ layers_new }}</span>
+      <span class="stat-sub">{{ layers_note }}</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">carriers</span>
+      <span class="stat-value stat-figure">{{ carriers_old }} <span class="fact-arrow">→</span> {{ carriers_new }}</span>
+      <span class="stat-sub">{{ carriers_note }}</span>
+    </div>
   </div>
+
+  <p class="compare-summary">{{ summary }}</p>
 
   {% if rows %}
     <div class="table-scroll">
       <table class="rows rows-fit">
         <thead>
-          <tr><th>Market</th><th>Layer</th><th>Status</th>
-              <th>Share</th><th>Line</th><th>Premium</th></tr>
+          <tr><th>Layer</th><th class="num">Expiring</th><th class="num">Proposed</th>
+              <th class="num">Δ premium</th><th>Markets</th></tr>
         </thead>
         <tbody>
           {% for row in rows %}
-            <tr class="compare-{{ row.status | lower }}">
-              <td class="prose">{{ row.carrier }}</td>
-              <td class="prose">{{ row.layer_name }}</td>
-              <td><span class="compare-badge compare-badge-{{ row.status | lower }}">{{ row.status }}</span></td>
-              <td class="num">{{ row.share }}</td>
-              <td class="num">{{ row.line }}</td>
-              <td class="num">{{ row.premium }}</td>
+            <tr class="{% if row.status %}compare-{{ row.status }}{% endif %}">
+              <td class="prose">
+                {% if row.status %}<span class="compare-badge compare-badge-{{ row.status }}">{{ row.status }}</span> {% endif %}{{ row.name }}
+              </td>
+              <td class="num mono">
+                {%- if row.expiring %}{{ row.expiring }}{% if row.expiring_signed %} · <span class="is-warn">{{ row.expiring_signed }}</span>{% endif %}{% else %}—{% endif -%}
+              </td>
+              <td class="num mono">
+                {%- if row.proposed %}{{ row.proposed }}{% if row.proposed_signed %} · <span class="is-warn">{{ row.proposed_signed }}</span>{% endif %}{% else %}—{% endif -%}
+              </td>
+              <td class="num mono {{ 'is-danger' if row.premium_dir == 'up' else 'is-good' if row.premium_dir == 'down' else '' }}">{{ row.premium_delta }}</td>
+              <td class="prose">
+                {% if row.lapsed_markets %}
+                  <span class="compare-gone-list">{{ row.lapsed_markets }}</span>
+                {% else %}
+                  {% for market in row.markets -%}
+                    <span class="{{ 'compare-added' if market.added }}">{{ market.name }}</span>{% if not loop.last %} · {% endif %}
+                  {%- endfor %}
+                  {%- for name in row.gone %} <s class="compare-gone">{{ name }}</s>{% endfor %}
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   {% else %}
-    <div class="panel-empty"><p>the two programs share no seats to compare</p></div>
+    <div class="panel-empty"><p>the two programs share no layers to compare</p></div>
   {% endif %}
 {% endblock %}

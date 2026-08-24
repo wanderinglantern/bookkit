@@ -3,10 +3,12 @@
    towerkit's own addressing, and every write re-renders the panel so an
    index is never stale (the market-seat rule). #}
 <span class="term-chip">
-  <span class="term-label" tabindex="0"
-        hx-get="{{ base }}/{{ term.index }}/edit"
-        hx-trigger="click, keyup[key=='Enter']"
-        hx-target="closest .term-chip" hx-swap="outerHTML">{{ label }}</span>
+  {# A real BUTTON, not a tabindexed span: Enter and Space come free, focus
+     styling comes free, and a span wired to hx-get is a control a screen
+     reader cannot name (the workbench keyboard sweep bans the shape). #}
+  <button type="button" class="term-label"
+          hx-get="{{ base }}/{{ term.index }}/edit"
+          hx-target="closest .term-chip" hx-swap="outerHTML">{{ label }}</button>
   {# "remove" was the visible word on every chip — twelve identical controls
      on one strip, and twelve identical accessible names in a screen reader,
      none of which said what they removed. A × with the term in its label

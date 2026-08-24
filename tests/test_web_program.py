@@ -325,7 +325,8 @@ def test_a_placement_with_no_file_says_so_rather_than_looking_empty(app_and_org)
 
     page = client.get(f"/accounts/{org.ref}/program").text
 
-    assert "no program file linked" in page
+    assert "This placement has no program file." in page
+    assert "Create a program file" in page
 
 
 # --- money reads as money -----------------------------------------------------
@@ -353,7 +354,7 @@ def test_layer_money_is_formatted_not_raw_cents(app_and_org):
     )
 
     cell = _cell_text(
-        client.get(f"/accounts/{org.ref}/program").text,
+        _worksheet_page(client, org, placement, priced["id"]),
         placement, priced["id"], "limit_cents",
     )
 
@@ -386,21 +387,22 @@ def test_a_primary_layer_attaching_at_zero_says_zero(app_and_org):
     a fact about the tower — rendering it as a dash tells the reader the
     attachment is unknown when it is known and is zero.
 
-    Compact display (D5) renders it "$0" — a figure, not a dash."""
+    The worksheet redesign (2026-08-24) replaced the attachment FIELD with
+    the position sentence, so the fact moves there: a ground layer says it
+    sits on the ground, with the $0 stated — never an em dash, never a
+    figure invented for display."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)[0]
     primaries = [
         layer for layer in sync.layer_details(conn, placement.id)
-        if layer["attach_cents"] == 0
+        if layer["attach_cents"] == 0 and not layer["statutory"]
     ]
     assert primaries, "the seeded book has no ground-up layer — test proves nothing"
 
-    page = client.get(f"/accounts/{org.ref}/program").text
-    cell = _cell_text(page, placement, primaries[0]["id"], "attach_cents")
+    page = _worksheet_page(client, org, placement, primaries[0]["id"])
 
-    assert cell == "$0", f"a $0 attachment rendered as {cell!r}"
-    assert "—" not in cell, "the attachment cell reads as unrecorded"
+    assert "the ground ($0)" in page, "a $0 attachment is not stated as the ground"
 
 
 # --- phase 2: the write seam --------------------------------------------------
@@ -472,7 +474,9 @@ def _cell_text(page: str, placement, layer_id: str, key: str) -> str:
     import re
 
     action = f"/accounts/[^/]+/program/{placement.id}/layers/{layer_id}/cell/{key}"
-    match = re.search(rf'data-cell-action="{action}".*?>(.*?)</td>', page, re.S)
+    match = re.search(
+        rf'data-cell-action="{action}".*?>(.*?)</(?:td|span)>', page, re.S
+    )
     assert match, f"no {key} cell rendered for layer {layer_id}"
     return re.sub(r"<[^>]+>", "", match.group(1)).strip()
 
@@ -811,7 +815,7 @@ def test_market_remove_asks_first_and_the_get_writes_nothing(app_and_org):
     path = Path(placement.program_path)
     before = path.read_bytes()
 
-    page = client.get(f"/accounts/{org.ref}/program").text
+    page = _worksheet_page(client, org, placement, layer["id"])
     base = _market_cell(org, placement, layer["id"], index, "carrier").rsplit(
         "/cell", 1
     )[0]
@@ -1247,34 +1251,41 @@ def test_merging_two_file_backed_placements_refuses_with_the_panel_intact(
     assert placements_repo.get(conn, linked_one.id).deleted_at is None
 
 
-def test_every_drawn_layer_lands_on_its_row(app_and_org):
-    """The tower is a SURFACE now (F11): a drawn block carries its layer id
-    and the table row carries the matching anchor, so a click scrolls and
-    flashes the row. Attributes only — every string and rect still comes off
-    the renderer, so the agreement rule is untouched."""
+def test_every_drawn_layer_lands_on_its_worksheet(app_and_org):
+    """The tower is a SURFACE (F11): a drawn block carries its layer id and a
+    select URL, so a click opens that layer's worksheet. Attributes only —
+    every string and rect still comes off the renderer, so the agreement
+    rule is untouched."""
     import re
 
     client, org = app_and_org
+    conn = client.app.state.conn
 
     page = client.get(f"/accounts/{org.ref}/program").text
 
     drawn = set(re.findall(r'data-layer-id="([^"]+)"', page))
-    rows = set(re.findall(r'data-layer-row="([^"]+)"', page))
     assert drawn, "the tower carries no hit targets"
-    missing = drawn - rows
-    assert not missing, f"drawn layers with no row to land on: {missing}"
+    for placement in _linked(conn, org):
+        for layer in sync.layer_details(conn, placement.id):
+            drawn.discard(layer["id"])
+            assert f"layer={layer['id']}" in page, (
+                f"no way to select {layer['id']} from the page"
+            )
+    assert not drawn, f"drawn layers no placement owns: {drawn}"
 
 
-def test_the_tower_click_handler_and_motion_guard_exist(app_and_org):
+def test_the_tower_click_handler_exists_and_selects(app_and_org):
+    """Clicking a drawn block selects that layer's worksheet — the drawing is
+    a surface, and the handler rides the section's own data-select-base so
+    the JS composes no URL of its own."""
     client, org = app_and_org
 
     js = client.get("/static/form-host.js").text
     css = client.get("/static/app.css").text
 
     assert "data-layer-id" in js, "no click handler for the tower"
-    assert "data-layer-row" in js
-    assert "row-flash" in css
-    assert "prefers-reduced-motion" in css, "the flash animation has no motion guard"
+    assert "data-select-base" in js, "the click no longer selects the layer"
+    assert "prefers-reduced-motion" in css, "animations have no motion guard"
 
 
 def _layer_base(org, placement, layer_id):
@@ -1287,7 +1298,7 @@ def test_the_details_row_offers_applies_to_chips(app_and_org, tmp_path):
     placement = _two_line_placement(client, org, tmp_path)
     layer = sync.layer_details(conn, placement.id)[0]
 
-    row = client.get(_details_url(org, placement, layer["id"])).text
+    row = _worksheet_page(client, org, placement, layer["id"])
 
     for _line_id, name in sync.program_lines(conn, placement.id):
         assert name in row, f"line {name} not offered"
@@ -1366,7 +1377,7 @@ def test_statutory_asks_first_then_replaces_the_limit_with_the_word(
     path = Path(placement.program_path)
     before = path.read_bytes()
 
-    row = client.get(_details_url(org, placement, layer["id"])).text
+    row = _worksheet_page(client, org, placement, layer["id"])
     assert f'hx-get="{_layer_base(org, placement, layer["id"])}/statutory"' in row
 
     confirm = client.get(f"{_layer_base(org, placement, layer['id'])}/statutory")
@@ -1469,7 +1480,7 @@ def test_follows_underlying_toggles_from_the_details_row(app_and_org, tmp_path):
         if ly["name"] == "GL Excess"
     )
 
-    row = client.get(_details_url(org, placement, layer_id)).text
+    row = _worksheet_page(client, org, placement, layer_id)
     assert f'hx-post="{_layer_base(org, placement, layer_id)}/follows"' in row
 
     toggled = client.post(
@@ -1668,7 +1679,7 @@ def test_layer_remove_asks_first_naming_the_seats(app_and_org):
     path = Path(placement.program_path)
     before = path.read_bytes()
 
-    details = client.get(_details_url(org, placement, layer["id"])).text
+    details = _worksheet_page(client, org, placement, layer["id"])
     assert f'hx-get="{_layer_remove_url(org, placement, layer["id"])}"' in details
 
     confirm = client.get(_layer_remove_url(org, placement, layer["id"]))
@@ -1810,8 +1821,14 @@ def test_the_status_editor_is_a_select_of_the_real_statuses(app_and_org):
         assert status in editor
 
 
-def _details_url(org, placement, layer_id):
-    return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/details"
+def _worksheet_page(client, org, placement, layer_id) -> str:
+    """The section with this layer's worksheet selected — the redesign's
+    replacement for the details-row GET: selection is a section render."""
+    got = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet?layer={layer_id}"
+    )
+    assert got.status_code == 200
+    return got.text
 
 
 def test_layer_details_row_carries_the_three_hidden_fields(app_and_org):
@@ -1821,14 +1838,15 @@ def test_layer_details_row_carries_the_three_hidden_fields(app_and_org):
     client, org = app_and_org
     placement, layer = _first_layer(client.app.state.conn, org)
 
-    row = client.get(_details_url(org, placement, layer["id"])).text
+    row = _worksheet_page(client, org, placement, layer["id"])
 
     for key in ("policy_number", "period_from", "period_to"):
         assert f'data-field="{key}"' in row, f"{key} still unreachable"
-    assert row.lstrip().startswith("<tr"), "the details fragment is not a row"
 
 
 def test_every_layer_row_offers_its_details(app_and_org):
+    """Every layer in the file is one click away: the index row's select GET
+    opens its worksheet — the redesign's replacement for the chevron."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)[0]
@@ -1836,7 +1854,7 @@ def test_every_layer_row_offers_its_details(app_and_org):
     page = client.get(f"/accounts/{org.ref}/program").text
 
     for layer in sync.layer_details(conn, placement.id):
-        assert f'hx-get="{_details_url(org, placement, layer["id"])}"' in page
+        assert f"layer={layer['id']}" in page, f"{layer['id']} unreachable"
 
 
 def test_a_detail_cell_saves_as_a_span_not_a_td(app_and_org):
@@ -1864,29 +1882,40 @@ def _markets_base(org, placement, layer_id):
     return f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/markets"
 
 
-def test_market_add_opens_in_the_row_not_a_form_host(app_and_org):
+def test_market_add_row_is_always_the_tables_last_row(app_and_org):
+    """Binding a market is a first-class act (design 1C): the add row is the
+    participation table's permanent last row — visible labels, the carrier
+    completing from the book's market names, the bind button posting the
+    row's own inputs."""
     client, org = app_and_org
     placement, layer = _first_layer(client.app.state.conn, org)
 
-    page = client.get(f"/accounts/{org.ref}/program").text
+    page = _worksheet_page(client, org, placement, layer["id"])
 
     base = _markets_base(org, placement, layer["id"])
-    assert f'hx-get="{base}/new"' in page
-    assert 'hx-target="closest .market-add"' in page, "+ market still posts elsewhere"
-
-    form = client.get(f"{base}/new").text
-    assert 'class="market-add"' in form
-    assert "<datalist" in form, "the carrier input offers no completion"
+    assert 'class="market-add-row"' in page
+    assert f'hx-post="{base}"' in page
+    assert "<datalist" in page, "the carrier input offers no completion"
+    assert 'hx-include="closest tr"' in page
 
 
-def test_market_add_cancel_restores_the_button(app_and_org):
+def test_market_add_refusal_keeps_the_typing_in_the_row(app_and_org):
+    """Commit in place: a refused bind re-renders the add row with the
+    message and everything typed still in it — never a fragment somewhere
+    else on the page."""
     client, org = app_and_org
     placement, layer = _first_layer(client.app.state.conn, org)
 
-    button = client.get(f"{_markets_base(org, placement, layer['id'])}/button")
+    refused = client.post(
+        _markets_base(org, placement, layer["id"]),
+        data={"carrier": "Chubb", "share_pct": "not a share"},
+    )
 
-    assert button.status_code == 200
-    assert "+ market" in button.text
+    assert refused.status_code == 200
+    assert refused.text.lstrip().startswith("<tr"), "the refusal left the row"
+    assert 'value="not a share"' in refused.text
+    assert 'value="Chubb"' in refused.text
+    assert "cell-error-msg" in refused.text
 
 
 def test_a_refused_market_add_keeps_the_typed_carrier_in_place(app_and_org):
@@ -2040,8 +2069,9 @@ def test_a_placement_with_no_file_says_so_rather_than_an_errno(app_and_org):
 def test_a_market_can_be_reached_for_editing_from_the_page(app_and_org):
     """market_cell_save existed and nothing rendered a way to it: the share
     test passed by POSTing the URL directly, which is not evidence a broker
-    can correct a share. Markets ride the CELL contract now (F1): the way in
-    is a data-cell-action on the chip itself, same as a layer cell."""
+    can correct a share. The carrier rides the CELL contract; the share is
+    the worksheet's PREVIEW INPUT (the deliberate blur-commit exception) —
+    both must be reachable from the rendered page."""
     import re
 
     client, org = app_and_org
@@ -2050,8 +2080,11 @@ def test_a_market_can_be_reached_for_editing_from_the_page(app_and_org):
     page = client.get(f"/accounts/{org.ref}/program").text
 
     assert re.search(
-        r'data-cell-action="[^"]*markets/\d+/cell/share_pct"', page
-    ), "no way in from the page"
+        r'data-cell-action="[^"]*markets/\d+/cell/carrier"', page
+    ), "no way in to the carrier from the page"
+    assert re.search(
+        r'hx-post="[^"]*markets/\d+/share-preview"', page
+    ), "no way in to the share from the page"
     assert re.search(r'data-cell-action="[^"]*markets/\d+/cell/carrier"', page)
 
 
@@ -2095,8 +2128,9 @@ def test_a_saved_layer_cell_cannot_destroy_its_own_table(app_and_org):
 
     assert saved.status_code == 200
     _assert_panel_swap(saved, placement.id)
-    # and the rows are all still there — the thing the browser lost
-    assert saved.text.count("data-layer-row") == len(sync.layer_details(conn, placement.id))
+    # and every layer is still reachable — the thing the browser lost
+    for row in sync.layer_details(conn, placement.id):
+        assert f"layer={row['id']}" in saved.text
 
 
 def test_a_write_keeps_the_tower_it_just_changed(app_and_org):
@@ -2116,12 +2150,12 @@ def test_a_write_keeps_the_tower_it_just_changed(app_and_org):
     assert 'class="tower"' in saved.text, "the write dropped the tower drawing"
 
 
-def test_a_structure_write_keeps_its_own_details_row_open(app_and_org, tmp_path):
+def test_a_structure_write_keeps_its_own_worksheet_selected(app_and_org, tmp_path):
     """Statutory, follows-underlying and applies-to are all edited FROM the
-    details row, and all three answer with the whole panel because all three
-    move columns in the table above. The row is inserted client-side, so the
-    panel used to replace it away — closing the row you are working in, on
-    every click you make in it."""
+    worksheet, and all answer with the whole section because they move the
+    index and the tower too. The section must come back with the SAME layer
+    selected — a write that throws the broker to the first layer costs them
+    their place on every click."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _two_line_placement(client, org, tmp_path)
@@ -2139,8 +2173,10 @@ def test_a_structure_write_keeps_its_own_details_row_open(app_and_org, tmp_path)
         f"{_layer_base(org, placement, layer_id)}/follows", data={"follows": "true"}
     )
 
-    assert 'class="layer-details"' in toggled.text, "the write closed its own row"
-    assert "follows-toggle is-on" in toggled.text, "the row does not show the new state"
+    assert f'data-layer-row="{layer_id}"' in toggled.text, (
+        "the write did not keep its own worksheet selected"
+    )
+    assert "follows-toggle is-on" in toggled.text, "the pane does not show the new state"
     _assert_panel_swap(toggled, placement.id)
 
 
@@ -2356,7 +2392,7 @@ def test_a_placement_with_no_file_draws_no_tower(app_and_org):
     page = client.get(f"/accounts/{org.ref}/program").text
     after = page.split("Unlinked", 1)[1]
 
-    assert "no program file linked" in after
+    assert "This placement has no program file." in after
 
 
 def test_the_not_to_scale_caveat_is_printed(app_and_org):
@@ -2647,9 +2683,7 @@ def test_every_placed_field_actually_renders_on_the_page(app_and_org):
     assert sync.add_named_limit(
         conn, placement.id, layer["id"], "Products", 2_000_000_00
     ).ok
-    page = client.get(f"/accounts/{org.ref}/program").text
-    row = client.get(_details_url(org, placement, layer["id"])).text
-    everywhere = page + row
+    everywhere = _worksheet_page(client, org, placement, layer["id"])
 
     missing = [
         key for key in _PLACED
@@ -2863,7 +2897,7 @@ def test_a_named_limit_is_added_edited_and_removed_from_the_row(app_and_org):
 
     added = client.post(base, data={"name": "Products & Completed Ops", "amount": "2m"})
     assert added.status_code == 200
-    assert added.text.lstrip().startswith("<tr"), "the add did not answer with the row"
+    _assert_panel_swap(added, placement.id)
     limits = sync.named_limits_of(conn, placement.id, layer["id"])
     assert [(nl["name"], nl["amount_cents"]) for nl in limits] == [
         ("Products & Completed Ops", 2_000_000_00)
@@ -3086,25 +3120,22 @@ def test_a_theme_that_is_gone_refuses_the_download_instead_of_quietly_substituti
 # --- the chevron never looks dead (Grant, 2026-08-21) --------------------------
 
 
-def test_a_refused_details_row_comes_back_as_a_row_that_says_why(app_and_org):
-    """htmx swaps NOTHING on a 4xx or a 5xx, so a details route that refuses
-    leaves the chevron looking simply broken — no modal, no message, no change,
-    which is exactly what Grant reported ("the little toggle arrow on left side
-    is non functional", network tab said 500).
-
-    Same rule as the navigator's silent row actions: a refusal says something.
-    """
+def test_selecting_an_unknown_layer_answers_with_the_section(app_and_org):
+    """htmx swaps NOTHING on a 4xx or a 5xx, so a selection that refused with
+    a status code would leave the index looking simply dead. An id this
+    program does not hold (a stale URL, another placement's layer) falls back
+    to the first layer — the section still renders, retargeted."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement, _layer = _first_layer(conn, org)
 
-    got = client.get(_details_url(org, placement, "no-such-layer"))
+    got = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet?layer=no-such-layer"
+    )
 
     assert got.status_code == 200, "a bare 4xx swaps nothing and reads as dead"
-    assert got.text.lstrip().startswith("<tr"), (
-        "not a <tr> — the parser foster-parents it out before htmx sees it"
-    )
-    assert "no-such-layer" in got.text
+    _assert_panel_swap(got, placement.id)
+    assert 'class="worksheet"' in got.text, "no worksheet rendered at all"
 
 
 def test_an_exception_in_the_details_row_is_shown_not_swallowed(
@@ -3122,23 +3153,491 @@ def test_an_exception_in_the_details_row_is_shown_not_swallowed(
     def boom(*_args, **_kwargs):
         raise RuntimeError("the file moved under it")
 
-    monkeypatch.setattr(program_route.sync, "policy_partners", boom)
+    monkeypatch.setattr(program_route.sync, "policy_partners_of", boom)
 
-    got = client.get(_details_url(org, placement, layer["id"]))
+    got = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet?layer={layer['id']}"
+    )
 
     assert got.status_code == 200
-    assert got.text.lstrip().startswith("<tr")
     assert "the file moved under it" in got.text
     assert "RuntimeError" in got.text
 
 
-def test_the_refusal_row_can_be_closed_like_any_details_row(app_and_org):
-    """It replaces a row the user opened, so it has to be closable — otherwise
-    the only way out of an error is a page reload."""
+def test_a_worksheet_that_cannot_build_still_shows_the_index(app_and_org, monkeypatch):
+    """A pane that fails to build must not take the section with it — the
+    index and the band still render, so the broker can select another layer
+    instead of reloading the page."""
+    from bookkit.web.routes import program as program_route
+
     client, org = app_and_org
     conn = client.app.state.conn
-    placement, _layer = _first_layer(conn, org)
+    placement, layer = _first_layer(conn, org)
 
-    got = client.get(_details_url(org, placement, "no-such-layer"))
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("worksheet build failed")
 
-    assert "data-row-close" in got.text
+    monkeypatch.setattr(program_route.sync, "policy_partners_of", boom)
+
+    got = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet?layer={layer['id']}"
+    )
+
+    assert got.status_code == 200
+    assert 'class="structure-index"' in got.text or "index-row" in got.text, (
+        "the index went down with the worksheet"
+    )
+
+
+# --- the write preview and the rescope consequence (design 1C/3B) -------------
+
+
+def test_a_share_edit_previews_before_it_saves(app_and_org):
+    """The one deliberate exception to blur-commits: a share typed in the
+    worksheet projects the write — signed figure, dollars still open, where
+    it writes — and NOTHING lands until Save."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+    base = _market_cell(org, placement, layer["id"], index, "carrier").rsplit(
+        "/cell", 1
+    )[0]
+
+    preview = client.post(f"{base}/share-preview", data={"share_pct": "80"})
+
+    assert preview.status_code == 200
+    assert "Signed becomes" in preview.text
+    assert "one revertible batch" in preview.text
+    assert path.read_bytes() == before, "the preview wrote"
+    # Save commits through the PREVIEW route (commit=1): its refusal is
+    # preview-shaped, which is what the host holds — never a bare <td>
+    # editor with no retarget (review C1).
+    assert f'hx-post="{base}/share-preview"' in preview.text
+    assert '"share_pct": "80"' in preview.text
+    assert '"commit": "1"' in preview.text
+
+    saved = client.post(
+        f"{base}/share-preview", data={"share_pct": "80", "commit": "1"}
+    )
+    assert saved.status_code == 200
+    _assert_panel_swap(saved, placement.id)
+    assert path.read_bytes() != before, "Save did not commit"
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["id"] == layer["id"]
+    )
+    assert any(p["share_pct"] == 80.0 for p in fresh["participants"])
+
+
+def test_a_save_refused_between_preview_and_commit_answers_preview_shaped(
+    app_and_org,
+):
+    """The between-preview-and-save conflict: the file moves under the
+    preview, Save refuses — and the refusal is the PREVIEW block again (the
+    shape the host holds), 200, message in the page, no retarget to a cell
+    fragment (review C1)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+    path = Path(placement.program_path)
+    base = _market_cell(org, placement, layer["id"], index, "carrier").rsplit(
+        "/cell", 1
+    )[0]
+
+    preview = client.post(f"{base}/share-preview", data={"share_pct": "80"})
+    assert "Signed becomes" in preview.text
+
+    # tab B edits the file: the sha guard must refuse tab A's Save
+    path.write_text(path.read_text().replace("{", "{ ", 1))
+
+    refused = client.post(
+        f"{base}/share-preview", data={"share_pct": "80", "commit": "1"}
+    )
+
+    assert refused.status_code == 200
+    assert refused.text.lstrip().startswith("<div"), (
+        "the refusal is not preview-shaped"
+    )
+    assert "cell-error-msg" in refused.text
+    assert '"commit": "1"' not in refused.text, "a refused Save offers Save again"
+
+
+def test_an_oversigned_share_preview_refuses_with_no_save(app_and_org):
+    """Previewing an edit the commit would refuse, then refusing it on Save,
+    would be the preview lying about the write — so the refusal shows
+    towerkit's words and offers only Discard. The seat is made genuinely
+    oversignable first: the review found the old guard's refusal branch
+    never executed (C23)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+    # make the seat genuinely oversignable: shrink it, seat a second market
+    assert sync.update_participant(
+        conn, placement.id, str(layer["id"]), seat["carrier"], share_bps=9_000
+    ).ok
+    assert sync.add_participant(
+        conn, placement.id, str(layer["id"]), "Second Seat Co", 1_000
+    ).ok
+    base = _market_cell(org, placement, layer["id"], index, "carrier").rsplit(
+        "/cell", 1
+    )[0]
+
+    preview = client.post(f"{base}/share-preview", data={"share_pct": "95"})
+
+    assert preview.status_code == 200
+    assert "Signed becomes" not in preview.text, (
+        "an over-sign previewed as OK — the refusal branch is not reachable"
+    )
+    assert "cell-error-msg" in preview.text
+    assert "over-signed" in preview.text, "not towerkit's own sentence"
+    assert '"commit": "1"' not in preview.text, (
+        "a refused preview still offers Save"
+    )
+
+
+def test_the_worksheet_share_is_a_preview_input_not_a_cell(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+
+    page = _worksheet_page(client, org, placement, layer["id"])
+
+    assert 'class="share-input' in page
+    assert "share-preview" in page
+    # and NOT also a blur-commit cell — the one recorded exception must not
+    # quietly reverse (review C30): no share cell action inside the
+    # participation table
+    table = page[page.index("ws-participation") : page.index("ws-covers")]
+    assert 'data-cell-action' not in table or 'cell/share_pct"' not in table
+
+
+def test_dropping_a_line_states_the_consequence_first(app_and_org, tmp_path):
+    """Design 3B: turning a line off a spanning slab renders the consequence
+    — what the line keeps, in dollars, that premium is not re-rated — and
+    writes NOTHING until Drop."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    # A slab across both lines, seated where both top out together.
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "Bridge", "line": "gl", "attach_cents": "2,000,000",
+              "limit_cents": "3,000,000", "premium_cents": ""},
+    )
+    assert added.status_code == 200
+    assert any(
+        ly["name"] == "Bridge" for ly in sync.layer_details(conn, placement.id)
+    )
+    shared = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "Wide Excess", "line": "__all__", "attach_cents": "5,000,000",
+              "limit_cents": "10,000,000", "premium_cents": "1,000,000"},
+    )
+    assert shared.status_code == 200
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "Wide Excess"
+    )
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    # The worksheet's ON pills fetch the confirm, never post directly.
+    page = _worksheet_page(client, org, placement, layer_id)
+    confirm_url = (
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/layers/{layer_id}/applies-to/confirm"
+    )
+    assert f'hx-get="{confirm_url}?line=' in page
+
+    confirm = client.get(f"{confirm_url}?line=cy")
+
+    assert confirm.status_code == 200
+    assert "would be left with" in confirm.text
+    assert "does not re-rate" in confirm.text
+    assert "Keep it" in confirm.text
+    assert path.read_bytes() == before, "the consequence GET wrote"
+
+
+# --- the new-program worksheet (design 2B) ------------------------------------
+
+
+def test_the_new_program_worksheet_renders_with_the_source_cards(app_and_org):
+    client, org = app_and_org
+
+    page = client.get(f"/accounts/{org.ref}/program/new")
+
+    assert page.status_code == 200
+    assert "New program for" in page.text
+    assert "Copy last year" in page.text  # the seeded book has a linked program
+    assert "Start empty" in page.text
+    assert "What will be written" in page.text
+    assert "towerkit validates before anything is saved" in page.text
+
+
+def test_stacking_a_layer_keeps_the_typing_and_shows_the_running_attachment(app_and_org):
+    """Each row seats on the last: the attachment is the running total,
+    rendered as text — never an input."""
+    client, org = app_and_org
+
+    page = client.post(
+        f"/accounts/{org.ref}/program/new",
+        data={
+            "source": "empty", "name": "Fresh Casualty",
+            "period_from": "2027-01-01", "period_to": "2028-01-01",
+            "status": "prospective", "lines": "General Liability",
+            "act": "stack", "new_line": "General Liability",
+            "new_name": "Primary GL", "new_limit": "2m",
+        },
+    )
+
+    assert page.status_code == 200
+    assert "Primary GL" in page.text
+    assert "xs $0" in page.text
+    # the next row's running total is the first layer's top
+    assert "xs $2,000,000" in page.text
+    assert 'name="attach' not in page.text, "an attachment became typeable"
+
+
+def test_creating_an_empty_program_writes_a_validated_file_and_links_it(
+    app_and_org, tmp_path
+):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+
+    _configure_roots(conn, tmp_path)
+    before = {p.id for p in placements_repo.for_org(conn, org.id)}
+    created = client.post(
+        f"/accounts/{org.ref}/program/new",
+        data={
+            "source": "empty", "name": "Fresh Casualty",
+            "period_from": "2027-01-01", "period_to": "2028-01-01",
+            "status": "prospective", "lines": "General Liability, Cyber",
+            "stk_line": "General Liability", "stk_name": "Primary GL",
+            "stk_limit": "2m", "act": "create",
+        },
+        follow_redirects=False,
+    )
+
+    assert created.status_code == 303
+    new = [p for p in placements_repo.for_org(conn, org.id) if p.id not in before]
+    assert len(new) == 1
+    placement = new[0]
+    assert placement.program_name == "Fresh Casualty"
+    assert placement.program_path, "the file was not linked"
+    from towerkit.model import load_program
+
+    program = load_program(sync.program_file(conn, placement))
+    assert [line.name for line in program.lines] == ["General Liability", "Cyber"]
+    gl = next(ly for ly in program.layers if ly.name == "Primary GL")
+    assert gl.attach == 0 and gl.limit == 2_000_000
+    # the layerless line arrived with its pending layer — an empty line is a
+    # towerkit ERROR and could never have been written
+    assert any(
+        ly.name == "To be placed" and "cyber" in ly.applies_to[0]
+        for ly in program.layers
+    )
+
+
+def test_copying_last_year_strips_premiums_and_bound_shares(app_and_org, tmp_path):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+
+    _configure_roots(conn, tmp_path)
+    latest = max(
+        (p for p in placements_repo.for_org(conn, org.id) if p.program_path),
+        key=lambda p: p.period_to,
+    )
+    before = {p.id for p in placements_repo.for_org(conn, org.id)}
+    created = client.post(
+        f"/accounts/{org.ref}/program/new",
+        data={
+            "source": "copy", "name": "Renewal Casualty",
+            "period_from": latest.period_to, "period_to": "2099-01-01",
+            "status": "prospective", "lines": "", "act": "create",
+        },
+        follow_redirects=False,
+    )
+
+    assert created.status_code == 303
+    new = [p for p in placements_repo.for_org(conn, org.id) if p.id not in before]
+    assert len(new) == 1
+    from towerkit.model import load_program
+
+    program = load_program(sync.program_file(conn, new[0]))
+    source = load_program(sync.program_file(conn, latest))
+    assert [ly.id for ly in program.layers] == [ly.id for ly in source.layers]
+    assert all(ly.participants == [] for ly in program.layers), "shares came across"
+    assert all(ly.premium is None for ly in program.layers), "premiums came across"
+
+
+def test_a_refused_create_keeps_the_worksheet_and_creates_nothing(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+
+    before = {p.id for p in placements_repo.for_org(conn, org.id)}
+    refused = client.post(
+        f"/accounts/{org.ref}/program/new",
+        data={
+            "source": "empty", "name": "Broken", "period_from": "2027-01-01",
+            "period_to": "2026-01-01",  # ends before it starts
+            "status": "prospective", "lines": "General Liability", "act": "create",
+        },
+    )
+
+    assert refused.status_code == 200
+    assert 'value="Broken"' in refused.text, "the typing was lost"
+    assert {p.id for p in placements_repo.for_org(conn, org.id)} == before, (
+        "a refused create still made a placement"
+    )
+
+
+def test_move_up_and_the_top_edge_refusal_through_the_web(app_and_org, tmp_path):
+    """The two new primary controls, driven end to end — the review found no
+    web coverage for either direction or edge (C25)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "GL Excess", "line": "gl", "attach_cents": "2,000,000",
+              "limit_cents": "3,000,000", "premium_cents": ""},
+    )
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "GL Excess"
+    )
+
+    # move the PRIMARY up — it swaps with the excess and the whole column
+    # reseats; the excess lands on the ground
+    moved = client.post(
+        f"{_layer_base(org, placement, 'primary-gl')}/move",
+        data={"direction": "up"},
+    )
+    assert moved.status_code == 200
+    _assert_panel_swap(moved, placement.id)
+    rows = {ly["id"]: ly for ly in sync.layer_details(conn, placement.id)}
+    assert rows[layer_id]["attach_cents"] == 0, "the swapped-down slab did not reseat"
+    assert rows["primary-gl"]["attach_cents"] == 3_000_000_00
+
+    # primary is now the top of gl — another up must refuse, in the page
+    refused = client.post(
+        f"{_layer_base(org, placement, 'primary-gl')}/move",
+        data={"direction": "up"},
+    )
+    assert refused.status_code == 200
+    _assert_panel_swap(refused, placement.id)
+    assert "top" in refused.text and "cell-error-msg" in refused.text, (
+        "the off-the-end refusal says nothing"
+    )
+
+
+def test_split_premium_mismatch_refuses_through_the_web_and_keeps_typing(
+    app_and_org, tmp_path
+):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "Wide", "line": "__all__", "attach_cents": "5,000,000",
+              "limit_cents": "10,000,000", "premium_cents": "1,000,000"},
+    )
+    assert added.status_code == 200
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "Wide"
+    )
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        f"{_layer_base(org, placement, layer_id)}/split",
+        data={"move_line": "cy", "new_name": "Cyber Wide",
+              "kept_premium": "900,000", "moved_premium": "200,000"},
+    )
+
+    assert refused.status_code == 200
+    assert "must total" in refused.text
+    assert 'value="Cyber Wide"' in refused.text, "the refusal lost the typing"
+    assert 'value="900,000"' in refused.text
+    assert path.read_bytes() == before
+
+
+def test_a_cell_save_recovers_selection_from_the_browser_url(app_and_org):
+    """The HX-Current-URL seam (review C27): a cell save passes no selected=,
+    so the browser URL is the ONLY thing keeping the broker on their layer.
+    Deleting the fallback must fail a test, not just real browsers."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    rows = sync.layer_details(conn, placement.id)
+    assert len(rows) > 1, "need a second layer to prove selection held"
+    chosen = rows[-1]
+
+    saved = client.post(
+        _cell(org, placement, chosen, "name"),
+        data={"name": "Held Selection"},
+        headers={
+            "HX-Current-URL": (
+                f"http://127.0.0.1/accounts/{org.ref}/program"
+                f"?layer={chosen['id']}"
+            )
+        },
+    )
+
+    assert saved.status_code == 200
+    assert f'data-layer-row="{chosen["id"]}"' in saved.text, (
+        "the save threw the broker off their layer"
+    )
+
+
+def test_collapse_state_survives_selection_and_writes(app_and_org):
+    """Collapse lives in the URL and every select link carries it EXPLICITLY,
+    empty included — and a link carrying only ?layer= recovers it from the
+    browser URL instead of wiping it (review C2/C28)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    layer = sync.layer_details(conn, placement.id)[0]
+    page = client.get(f"/accounts/{org.ref}/program").text
+    import re
+
+    slug = re.search(r'closed=([^"&]+)"', page)
+    assert slug, "no collapse toggle carries a closed param"
+    closed = slug.group(1)
+
+    collapsed = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet"
+        f"?layer={layer['id']}&closed={closed}"
+    )
+    assert "▸" in collapsed.text, "the group did not collapse"
+
+    # a select carrying only ?layer= (the tower click, a preview Discard)
+    # recovers closed from the browser URL
+    reselected = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet?layer={layer['id']}",
+        headers={
+            "HX-Current-URL": (
+                f"http://127.0.0.1/accounts/{org.ref}/program"
+                f"?layer={layer['id']}&closed={closed}"
+            )
+        },
+    )
+    assert "▸" in reselected.text, "a layer-only select wiped the collapse state"
+    # and an EXPLICIT empty closed= still expands everything
+    expanded = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet"
+        f"?layer={layer['id']}&closed=",
+        headers={
+            "HX-Current-URL": (
+                f"http://127.0.0.1/accounts/{org.ref}/program"
+                f"?layer={layer['id']}&closed={closed}"
+            )
+        },
+    )
+    assert "▸" not in expanded.text, "expand-all no longer expands"

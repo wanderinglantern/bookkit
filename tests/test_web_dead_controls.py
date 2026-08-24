@@ -147,7 +147,7 @@ def test_every_editable_layer_field_is_reachable(client_and_org):
     html = client.get(f"/accounts/{org.ref}/program").text
     for layer in layers:
         html += client.get(
-            f"/accounts/{org.ref}/program/{placement.id}/layers/{layer['id']}/details"
+            f"/accounts/{org.ref}/program/{placement.id}/worksheet?layer={layer['id']}"
         ).text
 
     rendered = set(re.findall(r'data-field="([^"]+)"', html))

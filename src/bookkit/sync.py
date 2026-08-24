@@ -793,6 +793,198 @@ def scaffold_program(
     return dest, diags
 
 
+def compose_program(
+    *,
+    insured: str,
+    program_name: str,
+    status: str,
+    period_from: str,
+    period_to: str,
+    currency: str = "USD",
+    line_names: list[str] | None = None,
+    layers: list[dict[str, Any]] | None = None,
+    source: Program | None = None,
+) -> tuple[Program | None, Diagnostics]:
+    """Build a NEW program in memory — the new-program worksheet's model,
+    validated but never written, so the page's Checks rail shows towerkit's
+    verdict live on every keystroke-shaped re-render (design 2B).
+
+    Two ways in, both ending in the same shape:
+    - `source` (copy last year / another program): structure, lines and terms
+      come across; PREMIUMS AND BOUND SHARES DO NOT — a renewal starts
+      unpriced and unplaced, and carrying either over is how last year's
+      figure gets quoted as this year's.
+    - `line_names` + `layers` (start empty): each layer row names its line
+      and its limit; ATTACHMENT IS THE RUNNING TOTAL, never typed — each one
+      seats on the last, per line. A line with no layers gets the pending
+      'To be placed' layer, because an empty line is a towerkit ERROR.
+
+    Money arrives in cents (bookkit's boundary) and lands as whole dollars.
+    Refusals come back as diagnostics; validation failures return the program
+    anyway so the Checks rail can show what is wrong beside the form.
+    """
+    from datetime import date as _date
+
+    from towerkit.model import Layer, Line
+    from towerkit.model import Period as TkPeriod
+    from towerkit.model import Placement as TkPlacement
+
+    diags = Diagnostics()
+    if not program_name.strip():
+        diags.error("edit", "the program needs a name")
+        return None, diags
+    try:
+        start = _date.fromisoformat(period_from)
+        end = _date.fromisoformat(period_to)
+    except ValueError as exc:
+        diags.error("edit", str(exc))
+        return None, diags
+
+    if source is not None:
+        program = source.model_copy(deep=True)
+        program.insured = insured
+        program.program = program_name.strip()
+        program.placement = (
+            TkPlacement.BOUND if status == "bound" else TkPlacement.PROPOSED
+        )
+        program.period = TkPeriod(start=start, end=end)
+        for layer in program.layers:
+            layer.participants = []
+            layer.premium = None
+            # The policy number, its dates and any premium wording belong to
+            # LAST year's paper — a renewal starts unpriced, unplaced and
+            # unissued, and a pre-filled figure off a document is the thing
+            # nobody checks (review C6/C19).
+            layer.policy_number = None
+            layer.premium_detail = None
+            if layer.period is not None:
+                layer.period = None
+        return program, validate_program(program)
+
+    names = [name.strip() for name in (line_names or []) if name.strip()]
+    if not names:
+        diags.error("edit", "state at least one line of cover")
+        return None, diags
+    lines: list[Line] = []
+    taken: set[str] = set()
+    for name in names:
+        slug = slugify(name) or "line"
+        while slug in taken:
+            slug += "-"
+        taken.add(slug)
+        lines.append(Line(id=slug, name=name))
+    by_name = {line.name: line for line in lines}
+
+    built: list[Layer] = []
+    floors: dict[str, int] = {line.id: 0 for line in lines}
+    for row in layers or []:
+        line = by_name.get(str(row.get("line", "")))
+        if line is None:
+            diags.error("edit", f"{row.get('line')!r} is not one of the lines above")
+            return None, diags
+        layer_name = str(row.get("name", "")).strip()
+        if not layer_name:
+            diags.error("edit", "a layer needs a name")
+            return None, diags
+        try:
+            limit = _require_dollars(int(row["limit_cents"]), "limit")
+        except (KeyError, TypeError, ValueError) as exc:
+            diags.error("edit", f"{layer_name}: {exc}")
+            return None, diags
+        slug = slugify(layer_name) or "layer"
+        while slug in taken:
+            slug += "-"
+        taken.add(slug)
+        built.append(
+            Layer(
+                id=slug, name=layer_name, applies_to=[line.id],
+                attach=floors[line.id], limit=limit, participants=[],
+            )
+        )
+        floors[line.id] += limit
+    for line in lines:
+        if floors[line.id] == 0:
+            slug = f"{line.id}-pending"
+            while slug in taken:
+                slug += "-"
+            taken.add(slug)
+            built.append(
+                Layer(
+                    id=slug, name="To be placed", applies_to=[line.id],
+                    attach=0, limit=1_000_000, participants=[],
+                )
+            )
+
+    program = Program(
+        insured=insured,
+        program=program_name.strip(),
+        placement=TkPlacement.BOUND if status == "bound" else TkPlacement.PROPOSED,
+        period=TkPeriod(start=start, end=end),
+        currency=currency,
+        lines=lines,
+        layers=built,
+    )
+    return program, validate_program(program)
+
+
+def create_program(
+    conn: sqlite3.Connection,
+    org_id: str,
+    dest: Path,
+    *,
+    program_name: str,
+    status: str,
+    period_from: str,
+    period_to: str,
+    line_names: list[str] | None = None,
+    layers: list[dict[str, Any]] | None = None,
+    source_path: Path | None = None,
+) -> tuple[Any | None, Diagnostics]:
+    """One worksheet, then the file (design 2B): validate the composed
+    program FIRST, and only then create the placement, dump the file, link
+    and project — a refusal creates NOTHING, which is what lets the form
+    keep the typing.
+
+    Like `scaffold_program`, deliberately not batch-revertible: reverting
+    would un-link rows and orphan a new file sync can re-adopt — its own
+    decision when someone hits it (phase-2 handoff)."""
+    diags = Diagnostics()
+    org = orgs.get(conn, org_id)
+    source = None
+    if source_path is not None:
+        try:
+            source = load_program(source_path)
+        except Exception as exc:  # towerkit's own refusal, printed
+            diags.error("io", f"{source_path}: {exc}")
+            return None, diags
+    program, check = compose_program(
+        insured=org.name,
+        program_name=program_name,
+        status=status,
+        period_from=period_from,
+        period_to=period_to,
+        line_names=line_names,
+        layers=layers,
+        source=source,
+    )
+    if program is None:
+        return None, check
+    if not check.ok:
+        return None, check
+    if dest.exists():
+        diags.error("exists", f"{dest} already exists — refusing to overwrite")
+        return None, diags
+
+    placement = placements.create(
+        conn, org_id, program_name.strip(), period_from, period_to, status=status
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dump_program(program, dest)
+    links.confirm(conn, programpath.store(conn, dest), org.id, org.name, source="scaffold")
+    projected = project(conn, dest, placement_id=placement.id)
+    return placements.get(conn, placement.id), projected
+
+
 # --- transactional program edits (all via write_through) ----------------------
 #
 # bookkit edits the facts that arise from book events — premiums firming up,
@@ -958,6 +1150,11 @@ def insert_layer(
         limit = _require_dollars(limit_cents, "limit")
         stack = program.layers_for_line(line_id)
         layer = edit_add_layer(program, [line_id])
+        # THE ID FOLLOWS THE NAME, same as add_layer: edit.add_layer minted
+        # one from its own auto-name, and the worksheet prints the id beside
+        # the title now — a slab named "1st Excess" wearing id "layer" reads
+        # as somebody else's (found driving the worksheet, 2026-08-24).
+        layer.id = unique_id(program, slugify(name), exclude=layer.id)
         layer.name = name
         layer.limit = limit
         layer.buffer = buffer
@@ -1001,19 +1198,169 @@ def insert_layer(
         # implementer, 2026-08-21, running R7 against the seeded GL/AL
         # umbrella: `gl: OVERLAP Umbrella→Test Excess at $27,000,000 vs
         # $2,000,000` — reported back rather than silently patched.)
-        floor = 0
-        for slab in order:
-            if len(slab.applies_to) > 1:
-                slab.follows_underlying = True
-            slab.attach = floor
-            # In THIS column every slab seats on the floor — whether its
-            # attachment is a real figure or a threshold seed `heal_follows`
-            # will overwrite — so the next one tops out a limit higher.
-            # Contiguous by construction. (`floor += slab.limit`, never
-            # `slab.attach + slab.limit`: a follows slab's attach here is that
-            # seed, not yet the healed truth, so reading it back would carry a
-            # wrong number into the next slab's floor.)
-            floor += slab.limit
+        #
+        # The loop itself lives in `_reseat_column` — one home, shared with
+        # `move_layer`, so the seed rule cannot drift between the two.
+        _reseat_column(order)
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def _reseat_column(order: list[TkModelLayer]) -> None:
+    """Reseat one line's column bottom-up: every slab sits on the floor the one
+    beneath it left. The follows-underlying seed rule is `insert_layer`'s (see
+    the comment block there): a multi-line slab gets `follows_underlying` and a
+    THRESHOLD SEED, never a pinned figure — `heal_follows` re-derives it per
+    column before every write. `floor += slab.limit`, never `attach + limit`,
+    because a follows slab's attach here is that seed."""
+    floor = 0
+    for slab in order:
+        if len(slab.applies_to) > 1:
+            slab.follows_underlying = True
+        slab.attach = floor
+        floor += slab.limit
+
+
+def move_layer(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    *,
+    direction: str,
+    line_id: str | None = None,
+) -> Diagnostics:
+    """Move a slab one step up or down ITS OWN COLUMN — the worksheet's
+    'move up / move down', the counterpart of `insert_layer`'s position rule:
+    attachment is never typed, so re-ordering is the only way a slab changes
+    where it sits.
+
+    `line_id` names the column the move happens in (a multi-line slab is drawn
+    in several); it defaults to the slab's first line. The whole column is
+    reseated inside the ONE mutation, exactly as `insert_layer` does, because
+    a half-shifted tower never validates. A move off the end is REFUSED, not
+    ignored: write_through dumps on success, so a no-op 'move' would still
+    rewrite the file and log an event for nothing.
+    """
+    if direction not in ("up", "down"):
+        raise ValueError(f"direction is 'up' or 'down', not {direction!r}")
+
+    def mutate(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        column = line_id or layer.applies_to[0]
+        _find_line(program, column)
+        order = list(program.layers_for_line(column))
+        index = next((i for i, ly in enumerate(order) if ly.id == layer_id), None)
+        if index is None:
+            raise ValueError(f"{layer.name} is not on {column}")
+        swap = index + 1 if direction == "up" else index - 1
+        if swap < 0 or swap >= len(order):
+            edge = "bottom" if direction == "down" else "top"
+            raise ValueError(f"{layer.name} is already at the {edge} of {column}")
+        order[index], order[swap] = order[swap], order[index]
+        _reseat_column(order)
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def split_layer(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    *,
+    move_line_ids: list[str],
+    new_name: str,
+    kept_premium_cents: int | None = None,
+    moved_premium_cents: int | None = None,
+) -> Diagnostics:
+    """Split a multi-line slab BY LINE: two slabs in the same band — the
+    original minus `move_line_ids`, and a new one carrying them. Same
+    attachment, same limit; nothing about the tower's height changes. An add
+    plus a rescope IN ONE MUTATION, because each write re-validates the whole
+    file and the halfway state (two slabs both claiming the moved lines) is an
+    overlap towerkit refuses.
+
+    The new slab arrives UNPLACED — no participants — so it draws hatched
+    until something is bound on it. Premium is NOT re-rated: when the original
+    carries one, the caller states how it divides and the two figures must
+    total it exactly; towerkit has no apportioning rule and this refuses to
+    invent one. Sublimits scoped to a moved line stay with the line — they
+    address lines, not layers, so they travel by construction.
+    """
+    from towerkit.edit import set_applies_to as edit_set_applies_to
+    from towerkit.money import format_money
+
+    def mutate(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        if layer.statutory:
+            raise ValueError(
+                f"{layer.name} is statutory — statutory cover is one benefit "
+                f"scheme, not a band that splits; rescope it instead"
+            )
+        if not new_name.strip():
+            raise ValueError("the new slab needs a name")
+        moving = list(dict.fromkeys(move_line_ids))
+        if not moving:
+            raise ValueError("pick at least one line to move onto the new slab")
+        unknown = [lid for lid in moving if lid not in layer.applies_to]
+        if unknown:
+            covered = ", ".join(layer.applies_to)
+            raise ValueError(
+                f"{', '.join(unknown)} is not on {layer.name} — it covers {covered}"
+            )
+        keeping = [lid for lid in layer.applies_to if lid not in moving]
+        if not keeping:
+            raise ValueError(
+                f"that would move every line off {layer.name} — rename it instead"
+            )
+        if layer.premium is None:
+            if kept_premium_cents is not None or moved_premium_cents is not None:
+                raise ValueError(
+                    f"{layer.name} has no premium to split — leave both figures empty"
+                )
+            kept = moved = None
+        else:
+            if kept_premium_cents is None or moved_premium_cents is None:
+                raise ValueError(
+                    f"state how the premium divides — the two figures must total "
+                    f"{format_money(layer.premium)}"
+                )
+            kept = _require_dollars(kept_premium_cents, "premium kept")
+            moved = _require_dollars(moved_premium_cents, "premium moved")
+            if kept + moved != layer.premium:
+                raise ValueError(
+                    f"the two premiums must total {format_money(layer.premium)} — "
+                    f"they total {format_money(kept + moved)}"
+                )
+
+        split = edit_add_layer(program, moving)
+        split.id = unique_id(program, slugify(new_name), exclude=split.id)
+        split.name = new_name.strip()
+        split.limit = layer.limit
+        split.participants = []
+        split.premium = moved
+        # SAME BAND: the new slab takes the original's attachment. A figure,
+        # not a seed, when it lands on one line; the follows rule when it
+        # spans several (heal_follows re-derives per column, and the original's
+        # healed attach is exactly the shared band's floor).
+        split.attach = layer.attach
+        # A buffer split by line is still a buffer on both sides — dropping
+        # the flag would turn a chosen uninsured band into "To be placed",
+        # the one reading a buffer must never produce (review C4).
+        split.buffer = layer.buffer
+        if layer.buffer:
+            split.premium = None
+        split.follows_underlying = len(moving) > 1 and layer.follows_underlying
+        # File order is wherever edit.add_layer appended it — repositioning the
+        # list is a structural mutation tests/test_conventions.py reserves for
+        # towerkit.edit, and nothing reads file order anyway: every surface
+        # sorts a column by attachment, and the pair share one.
+
+        try:
+            edit_set_applies_to(program, layer.id, keeping)
+        except KeyError as exc:  # pragma: no cover - keeping ⊆ applies_to
+            raise ValueError(str(exc).strip("\"'")) from exc
+        if layer.premium is not None:
+            layer.premium = kept
 
     return _mutate(conn, placement_id, mutate)
 
@@ -1353,9 +1700,15 @@ def policy_partners(
     minted and no screen should ever print it. Empty when the layer is not
     linked.
     """
+    return policy_partners_of(linked_program(conn, placement_id).program, layer_id)
+
+
+def policy_partners_of(
+    program: Program | None, layer_id: str
+) -> list[tuple[str, str]]:
+    """`policy_partners` without the I/O — see `layer_named_limits`."""
     from towerkit import edit
 
-    program = linked_program(conn, placement_id).program
     if program is None:
         return []
     layer = next((ly for ly in program.layers if ly.id == layer_id), None)
@@ -1687,10 +2040,18 @@ def named_limits_of(
     """A layer's coordinate limits as the panel reads them: cents, because
     every money value bookkit HANDS a surface is cents (CLAUDE.md) and the
     file's whole dollars are towerkit's side of the boundary."""
-    linked = linked_program(conn, placement_id)
-    if linked.program is None:
+    return layer_named_limits(linked_program(conn, placement_id).program, layer_id)
+
+
+def layer_named_limits(
+    program: Program | None, layer_id: str
+) -> list[dict[str, Any]]:
+    """`named_limits_of` without the I/O — for callers already holding the
+    one parsed program (the web memoises a LinkedProgram per placement per
+    render, and a second open here would silently undo that)."""
+    if program is None:
         return []
-    for layer in linked.program.layers:
+    for layer in program.layers:
         if layer.id == layer_id:
             return [
                 {
@@ -1834,6 +2195,12 @@ def layer_details_of(program: Program | None) -> list[dict[str, Any]]:
         return []
     out: list[dict[str, Any]] = []
     for layer in program.layers:
+        # Open capacity is DERIVED here, once, beside the signed figure it is
+        # the complement of — limit × the unsigned share, floor-divided the
+        # same way a participant's slice is, so the two columns always total
+        # the limit's own arithmetic. Clamped at zero: an oversigned layer is
+        # a validator ERROR, not negative capacity to place.
+        open_bps = max(0, 10_000 - layer.signed_bps)
         out.append(
             {
                 "id": layer.id,
@@ -1841,6 +2208,11 @@ def layer_details_of(program: Program | None) -> list[dict[str, Any]]:
                 "policy_number": layer.policy_number,
                 "attach_cents": dollars_to_cents(layer.attach),
                 "limit_cents": dollars_to_cents(layer.limit),
+                "top_cents": dollars_to_cents(layer.top),
+                "open_pct": open_bps / 100,
+                "open_limit_cents": dollars_to_cents(
+                    premium_share(layer.limit, open_bps)
+                ),
                 "premium_cents": (
                     dollars_to_cents(layer.premium) if layer.premium is not None else None
                 ),
@@ -1862,6 +2234,12 @@ def layer_details_of(program: Program | None) -> list[dict[str, Any]]:
                     {
                         "carrier": part.carrier,
                         "share_pct": part.share_bps / 100,
+                        # The carrier's slice of the LIMIT, same floor-divide
+                        # as its premium slice — the worksheet's derived $
+                        # column, computed here so no surface multiplies money.
+                        "limit_cents": dollars_to_cents(
+                            premium_share(layer.limit, part.share_bps)
+                        ),
                         "premium_cents": (
                             dollars_to_cents(premium_share(layer.premium, part.share_bps))
                             if layer.premium is not None
@@ -1961,7 +2339,14 @@ def line_ends(
     layer that applies to it expires. Lines with no layers (TBD, unplaced)
     are omitted — there is no policy to expire. Empty when unlinked or
     unreadable (never raises: home must render)."""
-    program = _program_at(program_path, conn)
+    return line_ends_of(_program_at(program_path, conn))
+
+
+def line_ends_of(program: Program | None) -> list[tuple[str, date]]:
+    """`line_ends` without the I/O — for callers already holding the parsed
+    program (the Towers queue orders by the date cover actually runs out,
+    which is the earliest LINE end, never period_to — the standing renewal
+    rule)."""
     if program is None:
         return []
     out: list[tuple[str, date]] = []
@@ -2006,6 +2391,186 @@ def _mutate(
         return diags
 
 
+def preview(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    mutation: Callable[[Program], None],
+) -> tuple[Program | None, Diagnostics]:
+    """Dry-run of `write_through`: the SAME guards, the same heal, the same
+    validation — and NOTHING written. Returns the mutated in-memory program
+    beside the diagnostics the real write would produce, so a surface can
+    state a consequence ('Crime would be left with $10,000,000 and nothing
+    above it') before the broker commits it.
+
+    The sha guard runs here too, deliberately: a preview taken against a stale
+    file and a commit refused against the fresh one would describe two
+    different towers. The program comes back None when the mutation itself was
+    refused — there is no projection to describe, only the refusal.
+    """
+    diags = Diagnostics()
+    placement = placements.get(conn, placement_id)
+    try:
+        path = program_file(conn, placement)
+    except ProgramFileMissing as missing:
+        diags.error("no-file" if not placement.program_path else "io", str(missing))
+        return None, diags
+    try:
+        _refuse_stale(placement, path)
+        program = load_program(path)
+        mutation(program)
+    except ValueError as exc:
+        diags.error("edit", str(exc))
+        return None, diags
+    except WriteConflict as exc:
+        diags.error("conflict", str(exc))
+        return None, diags
+    heal_follows(program)
+    return program, validate_program(program)
+
+
+def share_preview(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    carrier: str,
+    share_bps: int,
+) -> dict[str, Any]:
+    """What a share edit WOULD do — the worksheet's write preview, derived
+    here so no surface multiplies money. Projects through `preview` (same
+    guards, same validation as the commit) and reports the would-be signed
+    figure and the dollars still open, or the refusal in towerkit's words.
+
+    This backs the one deliberate exception to blur-commits: a share typed in
+    the worksheet previews before it saves (recorded beside the rule in
+    web/static/inline-cell.js). Nothing here writes.
+    """
+    current: dict[str, Any] = {}
+
+    def mutation(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        seat = next((p for p in layer.participants if p.carrier == carrier), None)
+        if seat is None:
+            seated = ", ".join(p.carrier for p in layer.participants) or "nobody"
+            raise ValueError(f"{carrier} is not on {layer.name} — {seated} is")
+        current["share_bps"] = seat.share_bps
+        seat.share_bps = share_bps
+
+    program, diags = preview(conn, placement_id, mutation)
+    if program is None:
+        return {"ok": False, "errors": [d.message for d in diags.errors]}
+    layer = _find_layer(program, layer_id)
+    open_bps = max(0, 10_000 - layer.signed_bps)
+    return {
+        "ok": diags.ok,
+        "errors": [d.message for d in diags.errors],
+        "warnings": _new_warnings(conn, placement_id, diags),
+        "carrier": carrier,
+        "share_was_pct": current["share_bps"] / 100,
+        "share_pct": share_bps / 100,
+        "signed_pct": layer.signed_bps / 100,
+        "open_limit_cents": dollars_to_cents(premium_share(layer.limit, open_bps)),
+    }
+
+
+def rescope_preview(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    line_ids: list[str],
+) -> dict[str, Any]:
+    """What dropping lines off a slab WOULD leave behind — the consequence a
+    broker reads before a rescope commits (design 3B: 'Crime would be left
+    with $10,000,000 of cover and nothing above it'). A dry run of the SAME
+    `set_applies_to` call the commit makes, so the two cannot disagree.
+
+    Per dropped line: the cover that remains on it (the top of what still
+    stacks there) and whether this slab was the top of that column. Premium
+    is reported unchanged, because towerkit does not re-rate and this
+    refuses to guess. Nothing here writes.
+    """
+    from towerkit.edit import set_applies_to as edit_set_applies_to
+
+    linked = linked_program(conn, placement_id)
+    before: TkModelLayer | None = None
+    if linked.program is not None:
+        try:
+            before = _find_layer(linked.program, layer_id)
+        except ValueError:
+            before = None
+    dropped = (
+        [lid for lid in before.applies_to if lid not in line_ids] if before else []
+    )
+
+    def mutation(program: Program) -> None:
+        try:
+            edit_set_applies_to(program, layer_id, list(line_ids))
+        except KeyError as exc:
+            raise ValueError(str(exc).strip("\"'")) from exc
+
+    program, diags = preview(conn, placement_id, mutation)
+    if program is None or before is None:
+        return {"ok": False, "errors": [d.message for d in diags.errors]}
+    labels = {line.id: line.label for line in program.lines}
+
+    def contiguous_top(line_id: str) -> tuple[int, bool]:
+        """Cover reachable FROM THE GROUND on this line after the drop —
+        'left with $N' must never count across the gap the drop creates
+        (review C20). Returns (top_dollars, gapped)."""
+        cover = 0
+        gapped = False
+        for ly in program.layers_for_line(line_id):
+            if ly.attach <= cover:
+                cover = max(cover, ly.top)
+            else:
+                gapped = True
+                break
+        return cover, gapped
+
+    reach = {lid: contiguous_top(lid) for lid in dropped}
+    return {
+        "ok": diags.ok,
+        "errors": [d.message for d in diags.errors],
+        "warnings": _new_warnings(conn, placement_id, diags),
+        "keeps": [labels.get(lid, lid) for lid in line_ids],
+        "premium_cents": (
+            dollars_to_cents(before.premium) if before.premium is not None else None
+        ),
+        "dropped": [
+            {
+                "line_id": lid,
+                "label": labels.get(lid, lid),
+                "left_with_cents": dollars_to_cents(reach[lid][0]),
+                # cover remains ABOVE a hole — the sentence must say so
+                "gapped": reach[lid][1],
+                # True when this slab was the top of that column — dropping
+                # it leaves nothing above what remains.
+                "was_top": before.top
+                >= max(
+                    (ly.top for ly in program.layers_for_line(lid)),
+                    default=0,
+                ),
+            }
+            for lid in dropped
+        ],
+    }
+
+
+def _new_warnings(
+    conn: sqlite3.Connection, placement_id: str, diags: Diagnostics
+) -> list[str]:
+    """Only the warnings a previewed change INTRODUCES. A program can carry
+    standing warnings (no retention recorded, an old gap); repeating them in
+    a consequence block claims the edit caused them, which is the preview
+    lying by association."""
+    current = linked_program(conn, placement_id).program
+    standing = (
+        {d.message for d in validate_program(current).warnings}
+        if current is not None
+        else set()
+    )
+    return [d.message for d in diags.warnings if d.message not in standing]
+
+
 def _find_layer(program: Program, layer_id: str) -> TkModelLayer:
     for layer in program.layers:
         if layer.id == layer_id:
@@ -2027,24 +2592,9 @@ class WriteConflict(Exception):
     """The file changed on disk since projection — probably towerkit's TUI."""
 
 
-def write_through(
-    conn: sqlite3.Connection,
-    placement_id: str,
-    mutation: Callable[[Program], None],
-) -> Diagnostics:
-    """Edit the towerkit file through towerkit: load → mutate → validate →
-    canonical write → re-project. Validation failure writes nothing; a changed
-    on-disk hash refuses the write outright."""
-    diags = Diagnostics()
-    placement = placements.get(conn, placement_id)
-    try:
-        path = program_file(conn, placement)
-    except ProgramFileMissing as missing:
-        # Which of the two it is matters to the reader: "no file linked" is an
-        # invitation to scaffold one, "the file moved" is an invitation to run
-        # relink. programpath's message already distinguishes them.
-        diags.error("no-file" if not placement.program_path else "io", str(missing))
-        return diags
+def _refuse_stale(placement: Placement, path: Path) -> None:
+    """The sha guard, shared by `write_through` and `preview` so the dry-run
+    and the commit can never disagree about which file they describe."""
     if not placement.source_sha256:
         # A NULL sha USED TO SHORT-CIRCUIT THE WHOLE GUARD, which inverted it:
         # a mismatched sha means "bookkit saw this file once and it has moved
@@ -2063,6 +2613,27 @@ def write_through(
         raise WriteConflict(
             f"{path} changed on disk since last projection — re-sync and retry"
         )
+
+
+def write_through(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    mutation: Callable[[Program], None],
+) -> Diagnostics:
+    """Edit the towerkit file through towerkit: load → mutate → validate →
+    canonical write → re-project. Validation failure writes nothing; a changed
+    on-disk hash refuses the write outright."""
+    diags = Diagnostics()
+    placement = placements.get(conn, placement_id)
+    try:
+        path = program_file(conn, placement)
+    except ProgramFileMissing as missing:
+        # Which of the two it is matters to the reader: "no file linked" is an
+        # invitation to scaffold one, "the file moved" is an invitation to run
+        # relink. programpath's message already distinguishes them.
+        diags.error("no-file" if not placement.program_path else "io", str(missing))
+        return diags
+    _refuse_stale(placement, path)
 
     program = load_program(path)
     mutation(program)

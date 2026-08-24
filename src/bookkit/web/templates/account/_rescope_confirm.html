@@ -1,0 +1,45 @@
+{# The rescope consequence (design 3B): turning a line off a spanning slab is
+   stated before it is done, in the same pane, with the picture of what that
+   line would be left with. A dry run of the SAME call the commit makes —
+   the figures come off sync.rescope_preview's projected program, and every
+   would-be diagnostic is towerkit's own sentence.
+
+   Premium is NOT re-rated, and the block says so rather than adjusting a
+   figure nobody asked it to. Only the [Drop] POST writes. #}
+<div class="ws-consequence" role="alertdialog"
+     aria-label="Drop {{ line }} from {{ layer.name }}">
+  {% if preview.dropped %}
+    {% for item in preview.dropped %}
+      <p class="ws-consequence-head"><span class="ws-consequence-mark" aria-hidden="true">⚠</span>
+        {{ item.label }} would be left with {{ item.left_with }} of cover
+        {%- if item.gapped %}, with more stranded above a gap
+        {%- elif item.was_top %} and nothing above it{% endif %}.</p>
+    {% endfor %}
+  {% endif %}
+  <p class="ws-consequence-body">This slab keeps <strong>{{ preview.keeps | join(" · ") }}</strong>.
+    {% if premium %}Premium stays at {{ premium }} — towerkit does not re-rate; correct it yourself if the market has.{% endif %}</p>
+  {% for warning in preview.warnings %}
+    <p class="ws-preview-warning">⚠ {{ warning }}</p>
+  {% endfor %}
+  {% if preview.errors %}
+    {% for error in preview.errors %}
+      <p class="cell-error-msg" role="alert">{{ error }}</p>
+    {% endfor %}
+    <p class="ws-hint">towerkit would refuse this write — nothing to drop.</p>
+    <div class="ws-preview-actions">
+      <button type="button" class="btn" data-form-cancel>Keep it</button>
+    </div>
+  {% else %}
+    <div class="ws-preview-actions">
+      {# intent=drop: a stale confirm (another window already dropped it)
+         refuses instead of toggling the line back ON (review C26) #}
+      <button type="button" class="btn ws-drop-btn"
+              hx-post="{{ applies_action }}"
+              hx-vals='{"line": "{{ line }}", "intent": "drop"}'>Drop {{ line | upper }}</button>
+      <button type="button" class="btn" data-form-cancel>Keep it</button>
+      <button type="button" class="btn"
+              hx-get="{{ split_url }}"
+              hx-target="closest .form-host" hx-swap="innerHTML">Split instead →</button>
+    </div>
+  {% endif %}
+</div>

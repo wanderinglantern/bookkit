@@ -1,0 +1,55 @@
+{# Split by line: two slabs in the same band — the original minus the moved
+   lines, and a new one carrying them. Nothing about the tower's height
+   changes, and the form says so instead of asking for figures it already
+   knows.
+
+   The premium inputs arrive EMPTY, deliberately: towerkit does not re-rate
+   and has no apportioning rule, so the division is a decision the broker
+   states — the two figures must total the original exactly and the refusal
+   names the total. A layer with no premium shows no premium inputs at all.
+
+   The new slab arrives UNPLACED (no carriers) and draws hatched until
+   something is bound on it. Sublimits scoped to a moved line stay with the
+   line — they travel by construction. #}
+<form class="entity-form split-form" hx-post="{{ action }}"
+      hx-target="closest .form-host" hx-swap="innerHTML">
+  <p class="form-title">split {{ layer.name }} by line</p>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <div class="field">
+    <span class="field-label">lines that move to the new slab</span>
+    <div class="split-lines">
+      {% for line in lines %}
+        <label class="inline-field split-line"><input type="checkbox" name="move_line"
+               value="{{ line.id }}"
+               {% if line.id in typed.get('move_line', '').split(',') %}checked{% endif %}>
+          {{ line.name }}</label>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="field">
+    <label>new slab's name
+      <input type="text" name="new_name" required placeholder="Crime 2nd Excess"
+             value="{{ typed.get('new_name', '') }}" autofocus>
+    </label>
+  </div>
+  {% if premium %}
+    <div class="field split-premium">
+      <span class="field-label">premium — split it</span>
+      <label class="inline-field">stays
+        <input type="text" name="kept_premium" required
+               value="{{ typed.get('kept_premium', '') }}">
+      </label>
+      <span class="split-slash">/</span>
+      <label class="inline-field">moves
+        <input type="text" name="moved_premium" required
+               value="{{ typed.get('moved_premium', '') }}">
+      </label>
+      <span class="form-hint">must total {{ premium }} — towerkit does not re-rate</span>
+    </div>
+  {% endif %}
+  <p class="form-hint">same band, same attachment — the new slab is unplaced until something is bound on it</p>
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">split</button>
+    <button type="button" class="btn btn-cancel" data-form-cancel>cancel</button>
+  </div>
+</form>

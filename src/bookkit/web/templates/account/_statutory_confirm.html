@@ -1,21 +1,17 @@
 {# Marking a layer statutory REPLACES its dollar limit with the word (the
    model forces limit == 0 — WC Part A carries benefits, not a figure). The
    limit being given up is named, because it is the one thing this write
-   destroys and retyping it is the only way back. GET rendered this; only
-   [mark statutory] writes. #}
-<tr class="layer-details statutory-confirm">
-  <td class="row-expand"></td>
-  <td colspan="6" class="prose" role="alertdialog" aria-label="Mark {{ layer.name }} statutory">
-    {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
-    mark {{ layer.name }} statutory? its {{ limit_word }} limit becomes the word —
-    leaving statutory later will ask for a new figure
-    <form class="market-add-form" hx-post="{{ base }}/statutory"
-          hx-target="closest tr" hx-swap="outerHTML">
-      <input type="hidden" name="statutory" value="true">
-      <button type="submit" class="row-action-btn row-action-danger">mark statutory</button>
-    </form>
-    <button type="button" class="row-action-btn"
-            hx-get="{{ details_url }}"
-            hx-target="closest tr" hx-swap="outerHTML">keep the limit</button>
-  </td>
-</tr>
+   destroys and retyping it is the only way back. GET rendered this into the
+   worksheet's form host; only [mark statutory] writes. Cancel is
+   data-form-cancel (delegated) — it clears the host and costs nothing. #}
+<div class="confirm-remove" role="alertdialog" aria-label="Mark {{ layer.name }} statutory">
+  {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+  <p>mark {{ layer.name }} statutory? its {{ limit_word }} limit becomes the word —
+  leaving statutory later will ask for a new figure</p>
+  <form class="market-add-form" hx-post="{{ base }}/statutory"
+        hx-target="closest .form-host" hx-swap="innerHTML">
+    <input type="hidden" name="statutory" value="true">
+    <button type="submit" class="row-action-btn row-action-danger">mark statutory</button>
+    <button type="button" class="row-action-btn" data-form-cancel>keep the limit</button>
+  </form>
+</div>

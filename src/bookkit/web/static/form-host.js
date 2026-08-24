@@ -47,28 +47,49 @@
     }
   });
 
-  // The tower is a surface (phase 3): a drawn block carries its layer id,
-  // and clicking it lands on the table row that edits it — scroll + flash.
-  // Hit targets only; the drawing's strings and geometry stay the
-  // renderer's.
+  // The tower is a surface: a drawn block carries its layer id, and clicking
+  // it SELECTS that layer's worksheet (the section's data-select-base names
+  // the worksheet GET; the response retargets the whole section, same as an
+  // index click). Hit targets only; the drawing's strings and geometry stay
+  // the renderer's. Convenience duplicate of the index rows, which remain
+  // the keyboard path.
   document.body.addEventListener("click", function (evt) {
     var block = evt.target.closest && evt.target.closest("[data-layer-id]");
     if (!block) return;
     var id = block.getAttribute("data-layer-id");
-    var section = block.closest("section.program") || document;
-    var row = section.querySelector('[data-layer-row="' + id + '"]');
+    var section = block.closest("section.program");
+    if (!section || !section.hasAttribute("data-select-base")) return;
+    var base = section.getAttribute("data-select-base");
+    var joiner = base.indexOf("?") === -1 ? "?" : "&";
+    if (window.htmx) {
+      window.htmx.ajax("GET", base + joiner + "layer=" + encodeURIComponent(id), {
+        target: "#" + section.id,
+        swap: "outerHTML",
+      });
+    }
+  });
+
+  // The participation table's add row has no <form> (a form is not a legal
+  // child of tbody), so Enter in either input submits via the bind button.
+  document.body.addEventListener("keydown", function (evt) {
+    if (evt.key !== "Enter") return;
+    var row = evt.target.closest && evt.target.closest(".market-add-row");
     if (!row) return;
-    row.scrollIntoView({ block: "center", behavior: "smooth" });
-    row.classList.remove("row-flash");
-    void row.offsetWidth; // restart the animation on a second click
-    row.classList.add("row-flash");
-    row.addEventListener(
-      "animationend",
-      function () {
-        row.classList.remove("row-flash");
-      },
-      { once: true }
-    );
+    var bind = row.querySelector(".bind-btn");
+    if (bind) {
+      evt.preventDefault();
+      bind.click();
+    }
+  });
+
+  // "place it" on the open-capacity row focuses the add row's first input —
+  // the shortfall is a target, not a dead figure.
+  document.body.addEventListener("click", function (evt) {
+    var btn = evt.target.closest && evt.target.closest("[data-place-focus]");
+    if (!btn) return;
+    var table = btn.closest("table");
+    var input = table && table.querySelector(".market-add-row input");
+    if (input) input.focus();
   });
 
   document.body.addEventListener("click", function (evt) {

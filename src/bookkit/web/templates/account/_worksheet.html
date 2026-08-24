@@ -1,0 +1,242 @@
+{# One layer's worksheet — the whole pane, nothing behind a chevron (design
+   1C, carried through 2A/3A, 2026-08-24). The index on the left picks the
+   layer; this pane is everything about it.
+
+   THE POSITION SENTENCE REPLACES THE ATTACHMENT FIELD. Attachment is never
+   typed: it is stated ("Sits on 2nd Excess → attaches at $102,000,000") and
+   changed only with the move/insert controls. A statutory layer and a
+   buffer each get their own true sentence instead of a $0 in costume.
+
+   Cells keep the house grammar (blur commits, Escape discards); structure
+   writes answer the whole section, retargeted; a structural refusal renders
+   at the top of this pane in `worksheet_error`, file untouched. #}
+<div class="worksheet" data-layer-row="{{ ws.id }}">
+  {% if ws.error %}<p class="cell-error-msg" role="alert">{{ ws.error }}</p>{% endif %}
+
+  <div class="ws-title">
+    <h3 class="ws-name">{{ ws.name_cell | safe }}</h3>
+    <span class="ws-id mono">{{ ws.id }}</span>
+    {% if ws.buffer %}<span class="ws-flag" title="a deliberate uninsured band">buffer</span>{% endif %}
+    {% if ws.statutory %}<span class="ws-flag">statutory</span>{% endif %}
+    {% if ws.spans %}<span class="ws-spans">spans {{ ws.spans }} lines</span>{% endif %}
+  </div>
+
+  <p class="ws-position">
+    {% if ws.statutory %}
+      Statutory cover — benefits, not a dollar limit; towerkit draws it off-scale.
+      Covers <strong>{{ ws.covers_label }}</strong>.
+    {% else %}
+      Sits on <strong>{{ ws.below_name if ws.below_name else "the ground ($0)" }}</strong>
+      → attaches at <span class="mono ws-figure">{{ ws.attach }}</span>,
+      tops out at <span class="mono ws-figure">{{ ws.top }}</span>.
+      Covers <strong>{{ ws.covers_label }}</strong>.
+      {% if ws.buffer %}A deliberate uninsured band — no carriers, no premium.{% endif %}
+    {% endif %}
+    {% if not ws.statutory %}<span class="ws-position-hint">Move it and the attachment follows — there is nothing here to type.</span>{% endif %}
+  </p>
+
+  <div class="ws-controls">
+    <button type="button" class="btn" hx-post="{{ ws.base }}/move"
+            hx-vals='{"direction": "up"}'>move up</button>
+    <button type="button" class="btn" hx-post="{{ ws.base }}/move"
+            hx-vals='{"direction": "down"}'>move down</button>
+    <button type="button" class="btn"
+            hx-get="{{ ws.base }}/insert?position=above"
+            hx-target="#program-{{ placement.id }} .ws-host"
+            hx-swap="innerHTML">insert above</button>
+    <button type="button" class="btn"
+            hx-get="{{ ws.base }}/insert?position=below"
+            hx-target="#program-{{ placement.id }} .ws-host"
+            hx-swap="innerHTML">insert below</button>
+    {% if ws.spans %}
+      <button type="button" class="btn"
+              hx-get="{{ ws.base }}/split"
+              hx-target="#program-{{ placement.id }} .ws-host"
+              hx-swap="innerHTML">split by line…</button>
+    {% endif %}
+  </div>
+
+  <div class="ws-host form-host" id="ws-host-{{ placement.id }}"></div>
+
+  {% if not ws.statutory %}
+    <div class="ws-stats">
+      <div class="stat">
+        <span class="stat-label">limit</span>
+        <span class="stat-value">{{ ws.limit_cell | safe }}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">premium</span>
+        <span class="stat-value">{{ ws.premium_cell | safe }}</span>
+      </div>
+      {% if not ws.buffer %}
+        <div class="stat">
+          <span class="stat-label">signed</span>
+          <span class="stat-value stat-figure {{ 'is-placed' if ws.placed else 'is-open' }}">{{ ws.signed }}%</span>
+          {% if not ws.placed and ws.open_limit_exact %}
+            <span class="stat-sub">{{ ws.open_limit_exact }} still open</span>
+          {% endif %}
+        </div>
+        <div class="stat">
+          <span class="stat-label">open</span>
+          <span class="stat-value stat-figure {{ 'is-placed' if ws.placed else 'is-open' }}">{{ ws.open_limit if ws.open_limit else "$0" }}</span>
+        </div>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {# A statutory layer HAS seats (WC Part A carries a carrier) — hiding the
+     table made them invisible and unbindable (review C15). Only a buffer,
+     which may carry none by rule, goes without. #}
+  {% if not ws.buffer %}
+    <div class="ws-participation">
+      <div class="ws-block-head">
+        <span class="detail-label">participation</span>
+        <span class="ws-hint">type a percent; the dollars are calculated, never the other way round</span>
+      </div>
+      <div class="table-scroll">
+      <table class="rows rows-fit participation">
+        <thead>
+          <tr><th>Carrier</th><th class="num">Share</th><th class="num">Limit</th>
+              <th class="num">Premium</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for row in ws.market_rows %}{{ row | safe }}{% endfor %}
+          {% if ws.open_row %}
+            <tr class="open-capacity">
+              <td class="prose">open capacity <span class="ws-hint">— nothing is bound here</span></td>
+              <td class="num mono">{{ ws.open_pct }}%</td>
+              <td class="num mono">{{ ws.open_limit_exact }}</td>
+              <td></td>
+              <td class="row-tail"><button type="button" class="row-action-btn place-it"
+                      data-place-focus>place it</button></td>
+            </tr>
+          {% endif %}
+          {% with base = ws.markets_base, fields = ws.add_fields %}
+            {% include "account/_market_add.html" %}
+          {% endwith %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="ws-covers">
+    <div class="ws-block-head">
+      <span class="detail-label">covers · {{ ws.lines | selectattr("on") | list | length }} of {{ ws.lines | length }} lines</span>
+      {% if ws.spans %}
+        <span class="ws-hint">turning one off rescopes this slab; turning one on widens it</span>
+      {% endif %}
+    </div>
+    <div class="ws-line-pills">
+      {% for line in ws.lines %}
+        {% if line.on and ws.spans %}
+          {# Turning a line OFF a spanning slab does not fire immediately —
+             the consequence renders first (design 3B), a dry run of the
+             same call. Turning one ON stays one click; widening is the
+             reversible direction. #}
+          <button type="button"
+                  class="line-pill is-on"
+                  title="stop covering {{ line.name }} — states the consequence first"
+                  hx-get="{{ ws.base }}/applies-to/confirm?line={{ line.id }}"
+                  hx-target="#ws-host-{{ placement.id }}"
+                  hx-swap="innerHTML">{{ line.name }}</button>
+        {% else %}
+          <button type="button"
+                  class="line-pill{% if line.on %} is-on{% endif %}"
+                  title="{{ 'stop covering' if line.on else 'also cover' }} {{ line.name }}"
+                  hx-post="{{ ws.base }}/applies-to" hx-vals='{"line": "{{ line.id }}"}'>{{ line.name }}</button>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="ws-facts">
+    <div class="ws-fact-block">
+      <span class="detail-label">policy</span>
+      <div class="detail-inline">
+        <span class="pair"><span class="pair-k">no</span>{{ ws.policy_cell | safe }}</span>
+        <span class="pair"><span class="pair-k">effective</span>{{ ws.from_cell | safe }}</span>
+        <span class="pair"><span class="pair-k">expiry</span>{{ ws.to_cell | safe }}</span>
+        <span class="pair"><span class="pair-k"
+              title="the carrier audits at expiry and trues the premium up against actual payroll or sales"
+              >auditable</span>{{ ws.tower_cells.auditable | safe }}</span>
+        {% if ws.policy_link_options %}
+          <label class="pair"
+                 title="two layers of one issued policy — WC Part A and Part B are the standard case">
+            <span class="pair-k">same policy as</span>
+            <select class="policy-link" name="policy_group"
+                    aria-label="same policy as"
+                    hx-post="{{ ws.policy_link_action }}"
+                    hx-trigger="change">
+              <option value="">not linked</option>
+              {% for value, name in ws.policy_link_options %}
+                <option value="{{ value }}"
+                        {% if ws.policy_linked_to and value == ws.policy_linked_to[0][0] %}selected{% endif %}>{{ name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="ws-fact-block">
+      <span class="detail-label">coverage</span>
+      <div class="detail-stack">
+        <span class="pair-k">limits</span>{{ ws.tower_cells.limitsDetail | safe }}
+        <span class="pair-k">retention</span>{{ ws.tower_cells.retentionDetail | safe }}
+        <span class="pair-k" title="the word a ZERO premium prints">premium</span>{{ ws.tower_cells.premiumDetail | safe }}
+        <span class="pair-k" title="statutory jurisdictions — towerkit refuses these on a dollar-limited layer">states</span>{{ ws.tower_cells.states | safe }}
+        <span class="pair-k">notes</span>{{ ws.tower_cells.notes | safe }}
+      </div>
+    </div>
+
+    <div class="ws-fact-block">
+      <span class="detail-label">named limits</span>
+      <div class="detail-inline">
+        {% for nl in ws.named_limits %}
+          <span class="named-limit">{{ nl.name_cell | safe }}{{ nl.amount_cell | safe }}<button
+                  type="button" class="chip-remove" aria-label="Remove this named limit"
+                  title="Remove this named limit"
+                  hx-post="{{ ws.base }}/named-limits/{{ nl.index }}/remove">&times;</button></span>
+        {% endfor %}
+        <form class="market-add-form" hx-post="{{ ws.base }}/named-limits"
+              hx-target="this" hx-swap="none">
+          <label class="inline-field"><span class="pair-k">name</span><input
+                 type="text" name="name" aria-label="named limit name" required></label>
+          <label class="inline-field"><span class="pair-k">amount</span><input
+                 type="text" name="amount" aria-label="named limit amount"
+                 placeholder="1.5m &middot; 250k" required></label>
+          <button type="submit" class="row-action-btn">add limit</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="ws-fact-block">
+      <span class="detail-label">structure</span>
+      <div class="detail-inline">
+        {% if ws.statutory %}
+          <form class="market-add-form" hx-post="{{ ws.base }}/statutory">
+            <input type="hidden" name="statutory" value="false">
+            <label class="inline-field"><span class="pair-k">dollar limit</span><input
+                   type="text" name="limit" aria-label="dollar limit to restore"
+                   title="the per-occurrence dollar limit that replaces statutory cover"
+                   placeholder="1.5m &middot; 250k" required></label>
+            <button type="submit" class="row-action-btn">leave statutory</button>
+          </form>
+        {% else %}
+          <button type="button" class="row-action-btn"
+                  hx-get="{{ ws.base }}/statutory"
+                  hx-target="#program-{{ placement.id }} .ws-host"
+                  hx-swap="innerHTML">mark statutory</button>
+        {% endif %}
+        <button type="button" class="row-action-btn follows-toggle{% if ws.follows %} is-on{% endif %}"
+                title="{{ 'the attachment is derived from the layers below' if ws.follows else 'derive the attachment from the layers below' }}"
+                hx-post="{{ ws.base }}/follows" hx-vals='{"follows": "{{ 'false' if ws.follows else 'true' }}"}'>follows underlying</button>
+        <button type="button" class="row-action-btn row-action-danger"
+                hx-get="{{ ws.remove_url }}"
+                hx-target="#program-{{ placement.id }} .ws-host"
+                hx-swap="innerHTML">remove layer</button>
+      </div>
+    </div>
+  </div>
+</div>

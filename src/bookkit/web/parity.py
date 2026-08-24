@@ -319,6 +319,26 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "mcp": "DEFERRED — no tool; whether the assistant may remove a layer "
         "is an mcpparity decision nobody has made",
     },
+    "move_layer": {
+        "web": "the worksheet's move up / move down controls (POST "
+        ".../layers/{layer_id}/move) — insert_layer's counterpart: attachment "
+        "is never typed, so re-ordering is the only way a slab moves "
+        "(program-worksheet redesign, 2026-08-24)",
+        "tui": "NOT BUILT, and not going to be — the TUI is retired; see "
+        "insert_layer",
+        "mcp": "DEFERRED — structure from an assistant is undecided, same "
+        "call as insert_layer",
+    },
+    "split_layer": {
+        "web": "the worksheet's split-by-line flow (POST "
+        ".../layers/{layer_id}/split) — two slabs in the same band, the "
+        "premium division stated and totalled, the new slab unplaced "
+        "(program-worksheet redesign, 2026-08-24)",
+        "tui": "NOT BUILT, and not going to be — the TUI is retired; see "
+        "insert_layer",
+        "mcp": "DEFERRED — structure from an assistant is undecided, same "
+        "call as insert_layer",
+    },
     "add_participant": {
         "web": "+ market, in the row (POST .../markets)",
         "tui": "offered when a submission binds (_offer_bind_to_layer) — no "
@@ -363,6 +383,16 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "ever (POST .../layers/{layer_id}/applies-to)",
         "tui": "via o -> towerkit's editor",
         "mcp": "DEFERRED — structure from an assistant is undecided",
+    },
+    "create_program": {
+        "web": "the new-program worksheet (GET/POST /program/new) — source "
+        "cards, the label-rail form, first layers with the running "
+        "attachment, and the what-will-be-written rail with live checks "
+        "(design 2B, 2026-08-24)",
+        "tui": "NOT BUILT, and not going to be — the TUI is retired; its "
+        "flow was + placement then t to scaffold",
+        "mcp": "DEFERRED — creating a whole program from an assistant is "
+        "the same undecided call as insert_layer's siblings",
     },
     "scaffold_program": {
         "web": "scaffold confirm, destination editable (POST .../scaffold)",
@@ -518,7 +548,9 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
     "Layer.period": "details row: policy effective / policy expiry cells",
     "Layer.follows_underlying": "details row: one-click toggle",
     "Layer.applies_to": "details row: applies-to chips",
-    "Layer.attach": "layer cell (attach_cents)",
+    "Layer.attach": "the worksheet's position sentence, changed by "
+    "move/insert/split — never typed on the web (design 2026-08-24); "
+    "sync.update_layer(attach_cents=) remains for MCP",
     "Layer.limit": "layer cell (limit_cents)",
     "Layer.statutory": "details row: mark/leave statutory, confirm-first",
     "Layer.premium": "layer cell (premium_cents)",

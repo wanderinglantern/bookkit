@@ -1,45 +1,43 @@
-{# The in-row market add: swapped over the collapsed "+ market" control
-   (closest .market-add, outerHTML) so binding a market happens where the
-   markets are read, not in a form host above the tower.
+{# The participation table's add row — ALWAYS the last row of the table, per
+   the worksheet design (2026-08-24): binding a market is a first-class act,
+   not a control hidden behind a "+ market" button.
 
-   COMMIT IN PLACE: a refusal re-renders this same fragment with the error
-   and everything typed still in it. Cancel re-fetches the collapsed button
-   from {base}/button — a fragment, not a panel. Success returns the button
-   plus the whole layers panel out of band, because a bind changes the
-   layer's signed percentage and possibly its neighbours (heal_follows).
+   No <form> element: a form is not a legal child of <tbody>, and the HTML
+   parser would foster-parent it out of the fragment before htmx saw it (the
+   same mechanism as the one-element rule). The bind button carries the POST
+   and hx-include="closest tr" gathers the two inputs; Enter in either input
+   submits via the same button (form-host.js).
 
-   The carrier input completes from existing market names (Field.suggestions
-   → datalist), the same vocabulary rule the TUI's forms follow.
+   COMMIT IN PLACE: a refusal re-renders this same row with the error and
+   everything typed still in it. Success answers the whole section,
+   retargeted, because a bind changes the layer's signed figure, the open
+   row, the index and the tower.
 
-   THE LABEL IS VISIBLE. Both boxes used their own label as the placeholder,
-   which means the row said what it wanted only until somebody started
-   answering it — and a placeholder is not an accessible name either. The
-   label rides in front of the input on the same baseline (.inline-field) and
-   the input sits INSIDE it, so the association needs no id: this fragment is
-   rendered once per layer and a for=/id= pair would mint duplicates down the
-   page. `placeholder` is now only ever a FORMAT example, never the label
-   again. #}
-<span class="market-add">
-  <form class="market-add-form" hx-post="{{ base }}"
-        hx-target="closest .market-add" hx-swap="outerHTML">
-    {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
-    {% for f in fields %}
+   THE LABEL IS VISIBLE — placeholder is only ever a format example. The
+   carrier completes from existing market names (Field.suggestions →
+   datalist), the same vocabulary rule everywhere else. #}
+<tr class="market-add-row">
+  {% for f in fields %}
+    <td class="{{ 'num' if not loop.first }}">
       <label class="inline-field"><span class="pair-k">{{ f.label }}</span><input
              type="text" name="{{ f.key }}" aria-label="{{ f.label }}"
              {% if f.placeholder %}placeholder="{{ f.placeholder }}"{% endif %}
              value="{{ values.get(f.key, '') if values else '' }}"
              {% if f.suggestions %}list="ma-{{ f.key }}"{% endif %}
-             {% if f.required %}required{% endif %}
-             {% if loop.first %}autofocus{% endif %}></label>
+             {% if f.required %}required{% endif %}></label>
       {% if f.suggestions %}
         <datalist id="ma-{{ f.key }}">
           {% for s in f.suggestions %}<option value="{{ s }}"></option>{% endfor %}
         </datalist>
       {% endif %}
-    {% endfor %}
-    <button type="submit" class="row-action-btn">bind</button>
-    <button type="button" class="row-action-btn"
-            hx-get="{{ base }}/button"
-            hx-target="closest .market-add" hx-swap="outerHTML">cancel</button>
-  </form>
-</span>
+    </td>
+  {% endfor %}
+  <td colspan="2" class="prose">
+    {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+  </td>
+  <td class="row-tail">
+    <button type="button" class="row-action-btn bind-btn"
+            hx-post="{{ base }}" hx-include="closest tr"
+            hx-target="closest tr" hx-swap="outerHTML">bind</button>
+  </td>
+</tr>

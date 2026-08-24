@@ -62,8 +62,9 @@ def _field_url(org, placement, name, layer_id):
 
 
 def _details(client, org, placement, layer_id) -> str:
+    """The layer's worksheet — the redesign's home for the policy facts."""
     return client.get(
-        f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/details"
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet?layer={layer_id}"
     ).text
 
 
@@ -167,13 +168,14 @@ class TestTheAuditableCell:
         row = _details(client, org, placement, layer_id)
 
         assert 'data-field="layer.auditable"' in row
-        # policy_number and the dates are UNQUALIFIED (they come from
-        # forms.inline.LAYER_FIELDS and its own cell route); the derived-seam
-        # cells are qualified by kind. Both spellings sit in the same <tr>.
-        policy = row.index('data-field="policy_number"')
-        expiry = row.index('data-field="period_to"')
-        auditable = row.index('data-field="layer.auditable"')
-        coverage = row.index('data-field="layer.limitsDetail"')
+        # Scoped to the worksheet pane: the program band above it renders the
+        # PLACEMENT's own period cells under the same field keys, so an
+        # unscoped index() would measure the wrong control.
+        pane = row[row.index('class="worksheet"') :]
+        policy = pane.index('data-field="policy_number"')
+        expiry = pane.index('data-field="period_to"')
+        auditable = pane.index('data-field="layer.auditable"')
+        coverage = pane.index('data-field="layer.limitsDetail"')
         assert policy < expiry < auditable < coverage
 
     def test_the_editor_is_a_picker_with_a_blank_option(self, app_and_org) -> None:

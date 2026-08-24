@@ -37,7 +37,11 @@
            the matching table row (form-host.js). Attributes only — every
            string and rect here still comes off the renderer, so the
            agreement rule (spec D2.1) is untouched. #}
-        <div class="tower-layer{% if layer.pending %} is-pending{% endif %}{% if layer.buffer %} is-buffer{% endif %}"
+        {# is-selected outlines the worksheet's layer in the rail drawing —
+           an attribute only; geometry and strings still come off the
+           renderer untouched. Pages without a selection (Towers) simply
+           never set `selected`. #}
+        <div class="tower-layer{% if layer.pending %} is-pending{% endif %}{% if layer.buffer %} is-buffer{% endif %}{% if selected is defined and selected == layer.layer_id %} is-selected{% endif %}"
              data-layer-id="{{ layer.layer_id }}"
              style="left:{{ rect.left }}%;bottom:{{ rect.bottom }}%;width:{{ rect.width }}%;height:{{ rect.height }}%"
              title="{{ layer.name }} — {{ layer.terms }}"></div>

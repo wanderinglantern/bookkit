@@ -1,0 +1,187 @@
+{% extends "account/page.html" %}
+{% block panel %}
+  {# Starting a program — one worksheet, then the file (design 2B). Classic
+     form posts: every act re-renders this page with everything typed still
+     in it. The rail's Checks are towerkit's own validation of the composed
+     program, live before anything exists; a refusal creates NOTHING. #}
+  <form method="post" action="{{ action }}" class="new-program">
+    {# The form's FIRST submit button is what Enter fires (HTML implicit
+       submission). This visually-hidden one makes Enter a harmless
+       re-render that keeps every typed value — without it, Enter in the
+       first-layers row fired the source 'apply' and dropped the row
+       (review C17). Hidden by size, never visibility:hidden. #}
+    <button type="submit" name="act" value="refresh" class="np-default-submit"
+            tabindex="-1" aria-hidden="true"></button>
+    <div class="np-main">
+      <h3 class="np-title">New program for {{ header.org.name }}</h3>
+      <p class="np-lede">Two ways in. Either copy a structure that already works and
+        correct it, or state the lines and stack the first layers here. Both end
+        in one validated towerkit file.</p>
+      {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+
+      <div class="np-sources">
+        {% if latest %}
+          <label class="np-source{% if source == 'copy' %} is-selected{% endif %}">
+            <input type="radio" name="source" value="copy"
+                   {% if source == 'copy' %}checked{% endif %}>
+            <span class="np-source-name">Copy last year</span>
+            <span class="np-source-file mono">{{ latest_file }}{% if latest_counts %} · {{ latest_counts }}{% endif %}</span>
+            <span class="np-source-note">Structure, lines and terms come across.
+              Premiums and bound shares do not.</span>
+          </label>
+        {% endif %}
+        <label class="np-source{% if source == 'empty' %} is-selected{% endif %}">
+          <input type="radio" name="source" value="empty"
+                 {% if source == 'empty' %}checked{% endif %}>
+          <span class="np-source-name">Start empty</span>
+          <span class="np-source-note">State the lines, stack the first layers.
+            Everything else is added as it is known.</span>
+        </label>
+      </div>
+      <p class="ws-hint">changing the source re-reads the form —
+        <button type="submit" class="row-action-btn" name="act" value="switch">apply</button></p>
+
+      <div class="np-form">
+        <label class="np-row">
+          <span class="np-key">program</span>
+          <input class="np-name" type="text" name="name" required value="{{ name }}">
+        </label>
+        <div class="np-row">
+          <span class="np-key">period</span>
+          <span class="np-period">
+            <input class="mono np-date" type="text" name="period_from" required
+                   aria-label="period from" placeholder="2027-01-01" value="{{ period_from }}">
+            <span class="fact-arrow">→</span>
+            <input class="mono np-date" type="text" name="period_to" required
+                   aria-label="period to" placeholder="2028-01-01" value="{{ period_to }}">
+            {% if latest %}<span class="ws-hint">adjacent to the expiring program</span>{% endif %}
+          </span>
+        </div>
+        <div class="np-row">
+          <span class="np-key">status</span>
+          <span class="np-chips">
+            {% for option in statuses %}
+              <label class="np-chip{% if option == status %} is-on{% endif %}">
+                <input type="radio" name="status" value="{{ option }}"
+                       {% if option == status %}checked{% endif %}>{{ option }}</label>
+            {% endfor %}
+          </span>
+        </div>
+        {% if source == 'empty' %}
+          <label class="np-row">
+            <span class="np-key">lines</span>
+            <span class="np-lines">
+              <input type="text" name="lines" value="{{ lines_text }}"
+                     placeholder="General Liability, Auto Liability, Cyber">
+              <span class="ws-hint">comma-separated — each becomes a line of cover; a line with no layers arrives with a pending one</span>
+            </span>
+          </label>
+        {% else %}
+          <input type="hidden" name="lines" value="{{ lines_text }}">
+        {% endif %}
+      </div>
+
+      {% if source == 'empty' %}
+        <div class="np-stack">
+          <div class="ws-block-head">
+            <span class="detail-label">first layers</span>
+            <span class="ws-hint">each one seats on the last — the attachment is the running total, never typed</span>
+          </div>
+          <table class="rows rows-fit np-stack-table">
+            <tbody>
+              {% for row in stack_rows %}
+                <tr>
+                  <td class="prose">{{ row.name }}
+                    <input type="hidden" name="stk_line" value="{{ row.line }}">
+                    <input type="hidden" name="stk_name" value="{{ row.name }}">
+                    <input type="hidden" name="stk_limit" value="{{ row.limit }}">
+                  </td>
+                  <td class="num mono">{{ row.limit_text }}</td>
+                  <td class="mono np-xs">xs {{ row.xs }}</td>
+                  <td class="prose np-line-tag">{{ row.line }}</td>
+                  <td class="row-tail"><button type="submit" class="row-action-btn"
+                          name="act" value="unstack:{{ loop.index0 }}"
+                          aria-label="remove {{ row.name }}">×</button></td>
+                </tr>
+              {% endfor %}
+              <tr class="np-stack-add">
+                <td><label class="inline-field"><span class="pair-k">layer</span>
+                  <input type="text" name="new_name" placeholder="Umbrella"
+                         value="{{ typed_row.name }}"></label></td>
+                <td class="num"><label class="inline-field"><span class="pair-k">limit</span>
+                  <input class="mono" type="text" name="new_limit" placeholder="25m"
+                         value="{{ typed_row.limit }}"></label></td>
+                <td class="mono np-xs">
+                  {# the attachment PER LINE — one figure pinned to the first
+                     line lies the moment another line is picked #}
+                  {%- if line_names | length == 1 and next_xs.get(line_names[0]) -%}
+                    xs {{ next_xs[line_names[0]] }}
+                  {%- elif line_names -%}
+                    {%- for lname in line_names -%}
+                      {{ lname }} xs {{ next_xs[lname] }}{% if not loop.last %} · {% endif %}
+                    {%- endfor -%}
+                  {%- endif -%}
+                </td>
+                <td>
+                  <label class="inline-field"><span class="pair-k">line</span>
+                    <select name="new_line" aria-label="line of cover">
+                      <option value=""></option>
+                      {% for lname in line_names %}
+                        <option value="{{ lname }}"{% if lname == typed_row.line %} selected{% endif %}>{{ lname }}</option>
+                      {% endfor %}
+                    </select></label>
+                </td>
+                <td class="row-tail"><button type="submit" class="btn btn-primary"
+                        name="act" value="stack">stack it</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    </div>
+
+    <aside class="np-rail">
+      <span class="rail-caps">What will be written</span>
+      {% if dest %}
+        <div class="np-file mono">
+          <div class="np-file-dir">{{ dest.rsplit("/", 1)[0] }}/</div>
+          <div class="np-file-name">{{ dest_name }}</div>
+          {% if facts %}
+            <div class="np-facts">insured&nbsp;&nbsp;{{ facts.insured }}<br>
+              program&nbsp;&nbsp;{{ facts.program }}<br>
+              period&nbsp;&nbsp;&nbsp;{{ facts.period }}<br>
+              lines&nbsp;&nbsp;&nbsp;&nbsp;{{ facts.lines }}<br>
+              layers&nbsp;&nbsp;&nbsp;{{ facts.layers }}<br>
+              currency&nbsp;{{ facts.currency }}</div>
+          {% endif %}
+        </div>
+      {% else %}
+        <p class="cell-error-msg">no program roots configured — set one with
+          <span class="mono">bookctl roots</span></p>
+      {% endif %}
+      <p class="ws-hint">towerkit validates before anything is saved. A refusal
+        names the field and stays on this page with everything typed still here.</p>
+      <div class="np-checks">
+        <span class="rail-caps">Checks</span>
+        {% if checks %}
+          {% if checks.ok and not checks.warnings %}
+            <p class="np-check is-good">✓ towerkit accepts this file</p>
+          {% endif %}
+          {% for message in checks.errors %}
+            <p class="np-check is-danger">✗ {{ message }}</p>
+          {% endfor %}
+          {% for message in checks.warnings %}
+            <p class="np-check is-warn">⚠ {{ message }}</p>
+          {% endfor %}
+        {% else %}
+          <p class="np-check">name the program, its period and its lines to see
+            towerkit's verdict here</p>
+        {% endif %}
+      </div>
+      <div class="form-actions np-actions">
+        <button type="submit" class="btn btn-primary" name="act" value="create">Create program</button>
+        <a class="btn btn-cancel" href="/accounts/{{ header.org.ref }}/program">Cancel</a>
+      </div>
+    </aside>
+  </form>
+{% endblock %}
