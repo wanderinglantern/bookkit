@@ -226,14 +226,23 @@ def test_layer_details_carries_the_carrier_panel(linked) -> None:
 
     panels = {d["id"]: d["participants"] for d in sync.layer_details(conn, placement.id)}
     assert panels["primary-gl"] == [
-        {"carrier": "Zurich", "share_pct": 100.0, "premium_cents": 900_000_00},
+        {
+            "carrier": "Zurich", "share_pct": 100.0,
+            "limit_cents": 2_000_000_00, "premium_cents": 900_000_00,
+        },
     ]
     # a layer with no panel is 'To be placed' — an EMPTY list, never absent,
     # because absent and unplaced are different facts to a reader
     assert panels["primary-cy"] == []
     assert panels["1st-excess"] == [
-        {"carrier": "Chubb", "share_pct": 60.0, "premium_cents": 180_000_00},
-        {"carrier": "AXA XL", "share_pct": 40.0, "premium_cents": 120_000_00},
+        {
+            "carrier": "Chubb", "share_pct": 60.0,
+            "limit_cents": 6_000_000_00, "premium_cents": 180_000_00,
+        },
+        {
+            "carrier": "AXA XL", "share_pct": 40.0,
+            "limit_cents": 4_000_000_00, "premium_cents": 120_000_00,
+        },
     ]
     # the shares add up to the signed figure already on the layer — same units
     # in the same dict, which is the whole reason share is a percentage here
@@ -255,7 +264,10 @@ def test_layer_details_premium_share_is_none_when_the_layer_has_none(linked) -> 
     )
     assert detail["premium_cents"] is None
     assert detail["participants"] == [
-        {"carrier": "Berkley", "share_pct": 100.0, "premium_cents": None},
+        {
+            "carrier": "Berkley", "share_pct": 100.0,
+            "limit_cents": 5_000_000_00, "premium_cents": None,
+        },
     ]
 
 
@@ -907,3 +919,149 @@ def test_program_terms_reads_what_the_editors_need(linked) -> None:
     sublimit = terms["sublimits"][-1]
     assert sublimit["name"] == "Flood"
     assert sublimit["amount_cents"] == 1_000_000_00
+
+
+# --- the worksheet's structural verbs (program-worksheet redesign, 2026-08-24)
+
+
+def test_move_layer_swaps_neighbours_and_reseats_the_column(linked) -> None:
+    """Position is the attachment, so a move is a swap plus a reseat — one
+    mutation, the same rule as insert_layer, or the half-shifted tower is
+    refused by the validator before it ever reaches disk."""
+    conn, _, placement, path = linked
+    assert sync.add_layer(
+        conn, placement.id, "1st Excess", ["gl"],
+        attach_cents=None, limit_cents=10_000_000_00,
+    ).ok
+    assert sync.add_layer(
+        conn, placement.id, "2nd Excess", ["gl"],
+        attach_cents=None, limit_cents=5_000_000_00,
+    ).ok
+
+    diags = sync.move_layer(conn, placement.id, "2nd-excess", direction="down")
+    assert diags.ok, [d.message for d in diags.errors]
+
+    program = load_program(path)
+    by_id = {ly.id: ly for ly in program.layers}
+    # The swap: 2nd Excess now sits where 1st Excess did, and the column is
+    # contiguous — every attachment recomputed, not just the moved slab's.
+    assert by_id["2nd-excess"].attach == 2_000_000
+    assert by_id["1st-excess"].attach == 7_000_000
+    assert by_id["1st-excess"].attach == by_id["2nd-excess"].attach + by_id["2nd-excess"].limit
+
+
+def test_move_layer_off_the_end_is_refused_not_ignored(linked) -> None:
+    """write_through dumps on success, so a tolerated no-op move would rewrite
+    the file and log an event for nothing. A refusal says something."""
+    conn, _, placement, path = linked
+    before = path.read_text()
+    diags = sync.move_layer(conn, placement.id, "primary-gl", direction="down")
+    assert not diags.ok
+    assert "bottom" in diags.errors[0].message
+    assert path.read_text() == before
+
+
+def test_split_layer_makes_two_slabs_in_the_same_band(linked) -> None:
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+    assert sync.set_applies_to(conn, placement.id, layer_id, ["gl", "cy"]).ok
+    assert sync.update_layer(
+        conn, placement.id, layer_id, premium_cents=3_000_000_00
+    ).ok
+
+    diags = sync.split_layer(
+        conn, placement.id, layer_id,
+        move_line_ids=["cy"], new_name="Cyber 2nd Excess",
+        kept_premium_cents=2_400_000_00, moved_premium_cents=600_000_00,
+    )
+    assert diags.ok, [d.message for d in diags.errors]
+
+    program = load_program(path)
+    original = next(ly for ly in program.layers if ly.id == layer_id)
+    split = next(ly for ly in program.layers if ly.name == "Cyber 2nd Excess")
+    # Same band: attachment and limit unchanged on both sides of the split.
+    assert split.attach == original.attach and split.limit == original.limit
+    assert original.applies_to == ["gl"] and split.applies_to == ["cy"]
+    # The new slab arrives unplaced and the premium division totals exactly.
+    assert split.participants == []
+    assert original.premium == 2_400_000 and split.premium == 600_000
+
+
+def test_split_layer_premiums_must_total_the_original(linked) -> None:
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+    assert sync.set_applies_to(conn, placement.id, layer_id, ["gl", "cy"]).ok
+    assert sync.update_layer(
+        conn, placement.id, layer_id, premium_cents=3_000_000_00
+    ).ok
+    before = path.read_text()
+
+    diags = sync.split_layer(
+        conn, placement.id, layer_id,
+        move_line_ids=["cy"], new_name="Cyber 2nd Excess",
+        kept_premium_cents=2_400_000_00, moved_premium_cents=500_000_00,
+    )
+    assert not diags.ok
+    assert "must total" in diags.errors[0].message
+    assert "$3,000,000" in diags.errors[0].message
+    assert path.read_text() == before
+
+
+def test_split_layer_refuses_to_move_every_line(linked) -> None:
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+    assert sync.set_applies_to(conn, placement.id, layer_id, ["gl", "cy"]).ok
+    before = path.read_text()
+
+    diags = sync.split_layer(
+        conn, placement.id, layer_id,
+        move_line_ids=["gl", "cy"], new_name="Everything",
+    )
+    assert not diags.ok
+    assert "rename it instead" in diags.errors[0].message
+    assert path.read_text() == before
+
+
+def test_preview_projects_without_writing(linked) -> None:
+    """The dry-run behind the worksheet's consequence blocks: same guards,
+    same heal, same validation — and the file bytes untouched."""
+    conn, _, placement, path = linked
+    before = path.read_text()
+
+    def mutation(program) -> None:
+        layer = next(ly for ly in program.layers if ly.id == "primary-gl")
+        layer.limit = 4_000_000
+
+    program, diags = sync.preview(conn, placement.id, mutation)
+    assert program is not None
+    assert diags.ok, [d.message for d in diags.errors]
+    projected = next(ly for ly in program.layers if ly.id == "primary-gl")
+    assert projected.limit == 4_000_000
+    assert path.read_text() == before  # projected, never saved
+
+
+def test_preview_surfaces_a_refusal_the_same_way_the_write_would(linked) -> None:
+    conn, _, placement, path = linked
+
+    def mutation(program) -> None:
+        raise ValueError("no")
+
+    program, diags = sync.preview(conn, placement.id, mutation)
+    assert program is None
+    assert not diags.ok and diags.errors[0].message == "no"
+
+
+def test_layer_details_derives_open_capacity_and_the_dollar_columns(linked) -> None:
+    """The worksheet's derived $ columns and the open-capacity row are computed
+    ONCE, here, beside the signed figure they complement — no surface
+    multiplies money (program-worksheet redesign, 2026-08-24)."""
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)  # Chubb at 50% of $10M
+
+    row = next(d for d in sync.layer_details(conn, placement.id) if d["id"] == layer_id)
+    assert row["top_cents"] == row["attach_cents"] + row["limit_cents"]
+    assert row["open_pct"] == 50.0
+    assert row["open_limit_cents"] == 5_000_000_00
+    seat = row["participants"][0]
+    assert seat["carrier"] == "Chubb"
+    assert seat["limit_cents"] == 5_000_000_00

@@ -319,6 +319,26 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "mcp": "DEFERRED — no tool; whether the assistant may remove a layer "
         "is an mcpparity decision nobody has made",
     },
+    "move_layer": {
+        "web": "the worksheet's move up / move down controls (POST "
+        ".../layers/{layer_id}/move) — insert_layer's counterpart: attachment "
+        "is never typed, so re-ordering is the only way a slab moves "
+        "(program-worksheet redesign, 2026-08-24)",
+        "tui": "NOT BUILT, and not going to be — the TUI is retired; see "
+        "insert_layer",
+        "mcp": "DEFERRED — structure from an assistant is undecided, same "
+        "call as insert_layer",
+    },
+    "split_layer": {
+        "web": "the worksheet's split-by-line flow (POST "
+        ".../layers/{layer_id}/split) — two slabs in the same band, the "
+        "premium division stated and totalled, the new slab unplaced "
+        "(program-worksheet redesign, 2026-08-24)",
+        "tui": "NOT BUILT, and not going to be — the TUI is retired; see "
+        "insert_layer",
+        "mcp": "DEFERRED — structure from an assistant is undecided, same "
+        "call as insert_layer",
+    },
     "add_participant": {
         "web": "+ market, in the row (POST .../markets)",
         "tui": "offered when a submission binds (_offer_bind_to_layer) — no "
