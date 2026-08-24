@@ -96,18 +96,33 @@ def _needs_you(
             "task_id": task.id,
             "sort": (0 if overdue_task else 1, -days_over),
         })
+    from datetime import timedelta
+
+    from ...services.sla import DEFAULT_SLA_DAYS
+
     for sub in late:
+        # THE DATE PRINTED IS THE DEADLINE — sent_on + the SLA — because a
+        # 'Due' column holding the send date reads as if a response was due
+        # the day it went out (review S1). Past SLA IS overdue: the state
+        # wording keeps the fact's own name, the tone and edge follow the
+        # house days<0 rule. The person to chase rides in the sentence
+        # (review S10 — the old table's Chase column).
+        deadline = date.fromisoformat(sub.submission.sent_on) + timedelta(
+            days=DEFAULT_SLA_DAYS
+        )
+        over = (today - deadline).days
+        chase = f", chase {sub.underwriter.name}" if sub.underwriter else ""
         rows.append({
             "kind": "sla",
-            "what": f"{sub.market.name} — no response, {sub.days_out}d out",
-            "due": sub.submission.sent_on,
+            "what": f"{sub.market.name} — no response, {sub.days_out}d out{chase}",
+            "due": deadline.isoformat(),
             "org_id": sub.account.id,
-            "state_class": "state-soon",
-            "state": "past SLA",
+            "state_class": "state-overdue",
+            "state": f"past SLA · {over}d",
             "where": "Pipeline",
             "link": None,
             "task_id": None,
-            "sort": (1, -sub.days_out),
+            "sort": (0, -over),
         })
     rows.sort(key=lambda row: row["sort"])
     return rows

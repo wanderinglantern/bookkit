@@ -7,6 +7,35 @@
    destructive one keeps its full accessible name. The overdue edge is the
    attention table's stripe (P4). #}
 <section class="today-section" id="items-panel">
+  {# The chips ride INSIDE the swapped section: their counts caption this
+     list, and a count that survives the write it should reflect is a stale
+     number wearing authority (review S2). #}
+  <div class="filter-chips">
+    <a class="filter-chip{% if show == 'all' %} is-selected{% endif %}"
+       href="/items{{ '?account=' ~ filter_ref if filter_ref }}">Everything <span class="mono">{{ counts["all"] }}</span></a>
+    <a class="filter-chip{% if show == 'overdue' %} is-selected{% endif %}"
+       href="/items?show=overdue{{ '&account=' ~ filter_ref if filter_ref }}">Overdue <span class="mono">{{ counts["overdue"] }}</span></a>
+    <a class="filter-chip{% if show == 'week' %} is-selected{% endif %}"
+       href="/items?show=week{{ '&account=' ~ filter_ref if filter_ref }}">This week <span class="mono">{{ counts["week"] }}</span></a>
+    <a class="filter-chip{% if show == 'undated' %} is-selected{% endif %}"
+       href="/items?show=undated{{ '&account=' ~ filter_ref if filter_ref }}">No date <span class="mono">{{ counts["undated"] }}</span></a>
+    <a class="filter-chip{% if show == 'requests' %} is-selected{% endif %}"
+       href="/items?show=requests{{ '&account=' ~ filter_ref if filter_ref }}">Requests <span class="mono">{{ counts["requests"] }}</span></a>
+    <form class="filter-bar" method="get" action="/items">
+      {% if show != "all" %}<input type="hidden" name="show" value="{{ show }}">{% endif %}
+      <label class="filter-field">
+        <span class="filter-label">Account</span>
+        <select name="account">
+          <option value="">every account</option>
+          {% for org in all_accounts %}
+            <option value="{{ org.ref }}"{% if filter_ref == org.ref %} selected{% endif %}>{{ org.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit" class="row-action-btn">apply</button>
+    </form>
+    <span class="filter-chips-note">the view is a URL — keep it, share it, back-button it</span>
+  </div>
   {% if show == "requests" %}
     {% if requests %}
       <div class="table-scroll">

@@ -31,8 +31,11 @@ class OverdueSubmission:
         return self.underwriter.name if self.underwriter else None
 
 
+DEFAULT_SLA_DAYS = 10
+
+
 def past_sla(
-    conn: sqlite3.Connection, today: date | None = None, sla_days: int = 10
+    conn: sqlite3.Connection, today: date | None = None, sla_days: int = DEFAULT_SLA_DAYS
 ) -> list[OverdueSubmission]:
     today = today or date.today()
     cutoff = (today - timedelta(days=sla_days)).isoformat()

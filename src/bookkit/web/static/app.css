@@ -4826,6 +4826,12 @@ tr:focus-within .row-tools .row-action-btn,
   .row-tools .row-action-btn { transition: none; }
 }
 
+/* No hover, no reveal — on touch the actions are simply visible (review
+   S4): an invisible-but-tappable drop button is worse than three words. */
+@media (hover: none) {
+  .row-tools .row-action-btn { opacity: 1; }
+}
+
 /* --- P6: one state vocabulary ----------------------------------------------
    Five states, one rendering each, always a WORD as well as a colour. */
 .state-overdue { font-size: 0.75rem; font-weight: 700; padding: 0.1rem 0.55rem; background: var(--danger-wash); color: var(--danger); border-radius: 3px; white-space: nowrap; }
@@ -4858,6 +4864,42 @@ details.aside-section > summary {
 }
 
 details.aside-section > summary::-webkit-details-marker { display: none; }
+
+/* the affordance is a GLYPH, not a style difference (review S8) — the mono
+   face carries ▸/▾, which Noto Sans lacks */
+.disc {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--hint-size);
+  color: var(--muted);
+  margin-right: 0.35rem;
+}
+
+.disc::before { content: "▸"; }
+
+details[open] > summary .disc::before { content: "▾"; }
+
+/* the summary's own header — phrasing content only: a div/h2 inside
+   <summary> is invalid and double-announces in a screen reader (review S5) */
+.sum-title {
+  font-family: var(--serif);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.sum-count {
+  font-family: var(--serif);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--muted);
+  margin-left: 0.5rem;
+}
+
+.sum-hint {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  margin-left: 0.75rem;
+}
 
 details.aside-section > summary .sect-head {
   margin-top: 0;

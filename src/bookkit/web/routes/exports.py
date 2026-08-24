@@ -33,19 +33,24 @@ def exports_page(request: Request) -> HTMLResponse:
 
     conn = _conn(request)
     clients = sorted(orgs_repo.list_orgs(conn, kind="client"), key=lambda o: o.name)
+    # AN ACCOUNT IS NAMED, NOT REFERENCED: the name and ref come TOGETHER
+    # from labels_for and render through macros/account.html — never a
+    # hand-written anchor (the Today ten-copies lesson; review S3).
+    accounts = orgs_repo.labels_for(conn, {org.id for org in clients})
     rows: list[dict[str, Any]] = []
     for org in clients:
         linked = [
             p for p in placements_repo.for_org(conn, org.id) if p.program_path
         ]
         rows.append({
+            "org_id": org.id,
             "ref": org.ref,
-            "name": org.name,
             "programs": [
                 {"id": p.id, "name": p.program_name, "ref": p.ref}
                 for p in linked
             ],
         })
     return TEMPLATES.TemplateResponse(
-        request, "exports.html", {"rows": rows, "count": len(rows)}
+        request, "exports.html",
+        {"rows": rows, "count": len(rows), "accounts": accounts},
     )

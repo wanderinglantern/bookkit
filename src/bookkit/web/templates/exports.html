@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "macros/page.html" as page %}
+{% import "macros/account.html" as account %}
 {% block title %}Exports — bookkit{% endblock %}
 {% block content %}
   {% include "partials/topbar.html" %}
@@ -19,7 +20,7 @@
           <tbody>
             {% for row in rows %}
               <tr>
-                <td class="prose"><a href="/accounts/{{ row.ref }}/program">{{ row.name }}</a> <span class="mono muted">{{ row.ref }}</span></td>
+                <td class="prose">{{ account.account_link(accounts, row.org_id, "program") }}</td>
                 <td class="prose">
                   <a class="row-action-btn" href="/accounts/{{ row.ref }}/export/open-items.xlsx">Open items XLSX</a>
                 </td>

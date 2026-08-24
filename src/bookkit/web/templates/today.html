@@ -56,11 +56,36 @@
           <div class="empty-state">No renewals in the window.</div>
         {% endif %}
 
-        {# The five demoted lists — context one click away, each behind its
-           own disclosure with the count visible while closed (the same rule
-           the structure index's groups follow). #}
-        <details class="aside-section" id="quotes">
-          <summary>{% call page.sect2("Quotes expiring", (quotes | length) + (undated_quotes | length)) %}{% endcall %}</summary>
+        {# The demoted lists — context one click away, each behind its own
+           disclosure with the count visible while closed (the same rule the
+           structure index's groups follow). #}
+        <details class="aside-section">
+          <summary><span class="disc" aria-hidden="true"></span><span class="sum-title">Requests to chase</span><span class="sum-count">{{ chases | length }}</span></summary>
+          <div id="requests"></div>
+          {% if chases %}
+            <div class="table-scroll">
+              <table class="rows rows-fit">
+                <thead><tr><th>Due</th><th>Request</th><th>Open</th><th>Account</th></tr></thead>
+                <tbody>
+                  {% for chase in chases %}
+                    <tr>
+                      <td class="num">{{ chase.earliest_due or "—" }}</td>
+                      <td class="prose">{{ chase.request.title }}</td>
+                      <td class="num">{{ chase.open_count }}/{{ chase.total_count }}</td>
+                      <td class="prose">{{ chase.org_name }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">Nothing outstanding — every request is answered.</div>
+          {% endif %}
+        </details>
+
+        <details class="aside-section">
+          <summary><span class="disc" aria-hidden="true"></span><span class="sum-title">Quotes expiring</span><span class="sum-count">{{ (quotes | length) + (undated_quotes | length) }}</span></summary>
+          <div id="quotes"></div>
           {% if quotes or undated_quotes %}
             <div class="table-scroll">
               <table class="rows rows-fit">
@@ -90,8 +115,9 @@
           {% endif %}
         </details>
 
-        <details class="aside-section" id="needs">
-          <summary>{% call page.sect2("Project needs due", needs | length) %}{% endcall %}</summary>
+        <details class="aside-section">
+          <summary><span class="disc" aria-hidden="true"></span><span class="sum-title">Project needs due</span><span class="sum-count">{{ needs | length }}</span></summary>
+          <div id="needs"></div>
           {% if needs %}
             <div class="table-scroll">
               <table class="rows rows-fit">
@@ -116,8 +142,9 @@
           {% endif %}
         </details>
 
-        <details class="aside-section" id="onboarding">
-          <summary>{% call page.sect2("Onboarding incomplete", onboarding | length) %}{% endcall %}</summary>
+        <details class="aside-section">
+          <summary><span class="disc" aria-hidden="true"></span><span class="sum-title">Onboarding incomplete</span><span class="sum-count">{{ onboarding | length }}</span></summary>
+          <div id="onboarding"></div>
           {% if onboarding %}
             <ul class="confirm-remove-notes">
               {% for org, note in onboarding %}
@@ -129,8 +156,9 @@
           {% endif %}
         </details>
 
-        <details class="aside-section" id="stale">
-          <summary>{% call page.sect2("Going stale", stale | length, hint="days since last touch × premium") %}{% endcall %}</summary>
+        <details class="aside-section">
+          <summary><span class="disc" aria-hidden="true"></span><span class="sum-title">Going stale</span><span class="sum-count">{{ stale | length }}</span><span class="sum-hint">days since last touch × premium</span></summary>
+          <div id="stale"></div>
           {% if stale %}
             <div class="table-scroll">
               <table class="rows rows-fit">
@@ -154,8 +182,9 @@
           {% endif %}
         </details>
 
-        <details class="aside-section" id="changes">
-          <summary>{% call page.sect2("Changes, last 14 days", changes | length) %}{% endcall %}</summary>
+        <details class="aside-section">
+          <summary><span class="disc" aria-hidden="true"></span><span class="sum-title">Changes, last 14 days</span><span class="sum-count">{{ changes | length }}</span></summary>
+          <div id="changes"></div>
           {# Revert kept exactly as it was — the one write this list owns. #}
           {% if changes %}
             <div class="table-scroll">
@@ -192,6 +221,7 @@
       <aside class="today-aside">
         <div class="rail-caps">Also worth a look</div>
         <div class="aside-counts">
+          <span class="aside-count"><span class="mono-count">{{ chases | length }}</span><a href="#requests">requests to chase</a></span>
           <span class="aside-count"><span class="mono-count">{{ (quotes | length) + (undated_quotes | length) }}</span><a href="#quotes">quotes expiring</a></span>
           <span class="aside-count"><span class="mono-count">{{ needs | length }}</span><a href="#needs">project needs due</a></span>
           <span class="aside-count"><span class="mono-count">{{ onboarding | length }}</span><a href="#onboarding">onboarding incomplete</a></span>

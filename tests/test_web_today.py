@@ -308,3 +308,42 @@ def test_the_exports_drawer_gathers_the_existing_download_routes(client):
     for placement in linked:
         assert f"/program/{placement.id}/export/tower.svg" in page.text
     assert "/export/open-items.xlsx" in page.text
+
+
+def test_past_sla_reaches_needs_you_with_the_deadline_it_counts_to(client):
+    """The review found the SLA loop had zero web coverage (S11) and that the
+    first cut printed sent_on under a Due header (S1): the row must carry
+    the DEADLINE (sent + SLA), the overdue tone, and the underwriter to
+    chase when one is named."""
+    from datetime import timedelta
+
+    from conftest import FROZEN_TODAY
+
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import placements as placements_repo
+    from bookkit.repo import submissions as submissions_repo
+    from bookkit.services.sla import DEFAULT_SLA_DAYS
+
+    conn = client.app.state.conn
+    org = next(
+        o for o in orgs_repo.list_orgs(conn, kind="client")
+        if placements_repo.for_org(conn, o.id)
+    )
+    market = orgs_repo.list_orgs(conn, kind="market")[0]
+    placement = placements_repo.for_org(conn, org.id)[0]
+    # the suite runs under the frozen clock — the route's today() is
+    # 2026-08-14, and a test on the real date builds a submission the
+    # frozen cutoff cannot see
+    sent = FROZEN_TODAY - timedelta(days=DEFAULT_SLA_DAYS + 5)
+    submissions_repo.create(
+        conn, market.id, sent.isoformat(), placement_id=placement.id
+    )
+    deadline = (sent + timedelta(days=DEFAULT_SLA_DAYS)).isoformat()
+    expected_over = 5
+
+    page = client.get("/today").text
+    needs = page[page.index("Needs you today") : page.index("Renewals coming")]
+
+    assert deadline in needs, "the row does not print the deadline it counts to"
+    assert f"past SLA · {expected_over}d" in needs
+    assert "state-overdue" in needs

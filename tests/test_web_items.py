@@ -98,11 +98,19 @@ def test_the_account_column_names_the_account(client):
 def test_the_overdue_filter_is_a_url_and_narrows_the_list(client):
     everything = client.get("/items").text
     overdue = client.get("/items?overdue=1").text  # the old spelling still lands
+    explicit = client.get("/items?show=overdue").text
 
+    # the old spelling lands on the SAME view as the chip's own URL — the
+    # selected chip is specifically Overdue, not just any chip (review S12)
+    import re
+
+    assert re.search(r'is-selected"\s+href="/items\?show=overdue', overdue), (
+        "overdue=1 no longer lands on the overdue view"
+    )
+    assert _cell_actions(overdue) == _cell_actions(explicit)
     assert len(_cell_actions(overdue)) <= len(_cell_actions(everything))
-    # the way back is the Everything chip — the view is a URL either way
+    # the way back is the Everything chip
     assert 'href="/items"' in overdue, "a filtered view offers no way back"
-    assert "is-selected" in overdue
 
 
 def test_the_account_filter_narrows_to_that_account(client):
