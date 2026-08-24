@@ -3211,30 +3211,90 @@ def test_a_share_edit_previews_before_it_saves(app_and_org):
     assert "Signed becomes" in preview.text
     assert "one revertible batch" in preview.text
     assert path.read_bytes() == before, "the preview wrote"
-    # Save goes through the ordinary cell route, carrying the typed value.
-    assert f'hx-post="{base}/cell/share_pct"' in preview.text
+    # Save commits through the PREVIEW route (commit=1): its refusal is
+    # preview-shaped, which is what the host holds — never a bare <td>
+    # editor with no retarget (review C1).
+    assert f'hx-post="{base}/share-preview"' in preview.text
     assert '"share_pct": "80"' in preview.text
+    assert '"commit": "1"' in preview.text
+
+    saved = client.post(
+        f"{base}/share-preview", data={"share_pct": "80", "commit": "1"}
+    )
+    assert saved.status_code == 200
+    _assert_panel_swap(saved, placement.id)
+    assert path.read_bytes() != before, "Save did not commit"
+    fresh = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["id"] == layer["id"]
+    )
+    assert any(p["share_pct"] == 80.0 for p in fresh["participants"])
+
+
+def test_a_save_refused_between_preview_and_commit_answers_preview_shaped(
+    app_and_org,
+):
+    """The between-preview-and-save conflict: the file moves under the
+    preview, Save refuses — and the refusal is the PREVIEW block again (the
+    shape the host holds), 200, message in the page, no retarget to a cell
+    fragment (review C1)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+    path = Path(placement.program_path)
+    base = _market_cell(org, placement, layer["id"], index, "carrier").rsplit(
+        "/cell", 1
+    )[0]
+
+    preview = client.post(f"{base}/share-preview", data={"share_pct": "80"})
+    assert "Signed becomes" in preview.text
+
+    # tab B edits the file: the sha guard must refuse tab A's Save
+    path.write_text(path.read_text().replace("{", "{ ", 1))
+
+    refused = client.post(
+        f"{base}/share-preview", data={"share_pct": "80", "commit": "1"}
+    )
+
+    assert refused.status_code == 200
+    assert refused.text.lstrip().startswith("<div"), (
+        "the refusal is not preview-shaped"
+    )
+    assert "cell-error-msg" in refused.text
+    assert '"commit": "1"' not in refused.text, "a refused Save offers Save again"
 
 
 def test_an_oversigned_share_preview_refuses_with_no_save(app_and_org):
     """Previewing an edit the commit would refuse, then refusing it on Save,
     would be the preview lying about the write — so the refusal shows
-    towerkit's words and offers only Discard."""
+    towerkit's words and offers only Discard. The seat is made genuinely
+    oversignable first: the review found the old guard's refusal branch
+    never executed (C23)."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement, layer, index, seat = _first_seat(conn, org)
+    # make the seat genuinely oversignable: shrink it, seat a second market
+    assert sync.update_participant(
+        conn, placement.id, str(layer["id"]), seat["carrier"], share_bps=9_000
+    ).ok
+    assert sync.add_participant(
+        conn, placement.id, str(layer["id"]), "Second Seat Co", 1_000
+    ).ok
     base = _market_cell(org, placement, layer["id"], index, "carrier").rsplit(
         "/cell", 1
     )[0]
 
-    preview = client.post(f"{base}/share-preview", data={"share_pct": "100"})
+    preview = client.post(f"{base}/share-preview", data={"share_pct": "95"})
 
     assert preview.status_code == 200
-    if "Signed becomes" not in preview.text:  # the seat may already be solo
-        assert "cell-error-msg" in preview.text
-        assert f'hx-post="{base}/cell/share_pct"' not in preview.text, (
-            "a refused preview still offers Save"
-        )
+    assert "Signed becomes" not in preview.text, (
+        "an over-sign previewed as OK — the refusal branch is not reachable"
+    )
+    assert "cell-error-msg" in preview.text
+    assert "over-signed" in preview.text, "not towerkit's own sentence"
+    assert '"commit": "1"' not in preview.text, (
+        "a refused preview still offers Save"
+    )
 
 
 def test_the_worksheet_share_is_a_preview_input_not_a_cell(app_and_org):
@@ -3246,6 +3306,11 @@ def test_the_worksheet_share_is_a_preview_input_not_a_cell(app_and_org):
 
     assert 'class="share-input' in page
     assert "share-preview" in page
+    # and NOT also a blur-commit cell — the one recorded exception must not
+    # quietly reverse (review C30): no share cell action inside the
+    # participation table
+    table = page[page.index("ws-participation") : page.index("ws-covers")]
+    assert 'data-cell-action' not in table or 'cell/share_pct"' not in table
 
 
 def test_dropping_a_line_states_the_consequence_first(app_and_org, tmp_path):
@@ -3429,3 +3494,150 @@ def test_a_refused_create_keeps_the_worksheet_and_creates_nothing(app_and_org):
     assert {p.id for p in placements_repo.for_org(conn, org.id)} == before, (
         "a refused create still made a placement"
     )
+
+
+def test_move_up_and_the_top_edge_refusal_through_the_web(app_and_org, tmp_path):
+    """The two new primary controls, driven end to end — the review found no
+    web coverage for either direction or edge (C25)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "GL Excess", "line": "gl", "attach_cents": "2,000,000",
+              "limit_cents": "3,000,000", "premium_cents": ""},
+    )
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "GL Excess"
+    )
+
+    # move the PRIMARY up — it swaps with the excess and the whole column
+    # reseats; the excess lands on the ground
+    moved = client.post(
+        f"{_layer_base(org, placement, 'primary-gl')}/move",
+        data={"direction": "up"},
+    )
+    assert moved.status_code == 200
+    _assert_panel_swap(moved, placement.id)
+    rows = {ly["id"]: ly for ly in sync.layer_details(conn, placement.id)}
+    assert rows[layer_id]["attach_cents"] == 0, "the swapped-down slab did not reseat"
+    assert rows["primary-gl"]["attach_cents"] == 3_000_000_00
+
+    # primary is now the top of gl — another up must refuse, in the page
+    refused = client.post(
+        f"{_layer_base(org, placement, 'primary-gl')}/move",
+        data={"direction": "up"},
+    )
+    assert refused.status_code == 200
+    _assert_panel_swap(refused, placement.id)
+    assert "top" in refused.text and "cell-error-msg" in refused.text, (
+        "the off-the-end refusal says nothing"
+    )
+
+
+def test_split_premium_mismatch_refuses_through_the_web_and_keeps_typing(
+    app_and_org, tmp_path
+):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "Wide", "line": "__all__", "attach_cents": "5,000,000",
+              "limit_cents": "10,000,000", "premium_cents": "1,000,000"},
+    )
+    assert added.status_code == 200
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "Wide"
+    )
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        f"{_layer_base(org, placement, layer_id)}/split",
+        data={"move_line": "cy", "new_name": "Cyber Wide",
+              "kept_premium": "900,000", "moved_premium": "200,000"},
+    )
+
+    assert refused.status_code == 200
+    assert "must total" in refused.text
+    assert 'value="Cyber Wide"' in refused.text, "the refusal lost the typing"
+    assert 'value="900,000"' in refused.text
+    assert path.read_bytes() == before
+
+
+def test_a_cell_save_recovers_selection_from_the_browser_url(app_and_org):
+    """The HX-Current-URL seam (review C27): a cell save passes no selected=,
+    so the browser URL is the ONLY thing keeping the broker on their layer.
+    Deleting the fallback must fail a test, not just real browsers."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    rows = sync.layer_details(conn, placement.id)
+    assert len(rows) > 1, "need a second layer to prove selection held"
+    chosen = rows[-1]
+
+    saved = client.post(
+        _cell(org, placement, chosen, "name"),
+        data={"name": "Held Selection"},
+        headers={
+            "HX-Current-URL": (
+                f"http://127.0.0.1/accounts/{org.ref}/program"
+                f"?layer={chosen['id']}"
+            )
+        },
+    )
+
+    assert saved.status_code == 200
+    assert f'data-layer-row="{chosen["id"]}"' in saved.text, (
+        "the save threw the broker off their layer"
+    )
+
+
+def test_collapse_state_survives_selection_and_writes(app_and_org):
+    """Collapse lives in the URL and every select link carries it EXPLICITLY,
+    empty included — and a link carrying only ?layer= recovers it from the
+    browser URL instead of wiping it (review C2/C28)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    layer = sync.layer_details(conn, placement.id)[0]
+    page = client.get(f"/accounts/{org.ref}/program").text
+    import re
+
+    slug = re.search(r'closed=([^"&]+)"', page)
+    assert slug, "no collapse toggle carries a closed param"
+    closed = slug.group(1)
+
+    collapsed = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet"
+        f"?layer={layer['id']}&closed={closed}"
+    )
+    assert "▸" in collapsed.text, "the group did not collapse"
+
+    # a select carrying only ?layer= (the tower click, a preview Discard)
+    # recovers closed from the browser URL
+    reselected = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet?layer={layer['id']}",
+        headers={
+            "HX-Current-URL": (
+                f"http://127.0.0.1/accounts/{org.ref}/program"
+                f"?layer={layer['id']}&closed={closed}"
+            )
+        },
+    )
+    assert "▸" in reselected.text, "a layer-only select wiped the collapse state"
+    # and an EXPLICIT empty closed= still expands everything
+    expanded = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet"
+        f"?layer={layer['id']}&closed=",
+        headers={
+            "HX-Current-URL": (
+                f"http://127.0.0.1/accounts/{org.ref}/program"
+                f"?layer={layer['id']}&closed={closed}"
+            )
+        },
+    )
+    assert "▸" not in expanded.text, "expand-all no longer expands"

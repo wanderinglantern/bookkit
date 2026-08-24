@@ -84,7 +84,10 @@
     </div>
   {% endif %}
 
-  {% if not ws.buffer and not ws.statutory %}
+  {# A statutory layer HAS seats (WC Part A carries a carrier) — hiding the
+     table made them invisible and unbindable (review C15). Only a buffer,
+     which may carry none by rule, goes without. #}
+  {% if not ws.buffer %}
     <div class="ws-participation">
       <div class="ws-block-head">
         <span class="detail-label">participation</span>

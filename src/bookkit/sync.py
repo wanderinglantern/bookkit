@@ -851,8 +851,13 @@ def compose_program(
         for layer in program.layers:
             layer.participants = []
             layer.premium = None
+            # The policy number, its dates and any premium wording belong to
+            # LAST year's paper — a renewal starts unpriced, unplaced and
+            # unissued, and a pre-filled figure off a document is the thing
+            # nobody checks (review C6/C19).
+            layer.policy_number = None
+            layer.premium_detail = None
             if layer.period is not None:
-                # per-layer periods belonged to LAST year's policies
                 layer.period = None
         return program, validate_program(program)
 
@@ -1286,6 +1291,11 @@ def split_layer(
 
     def mutate(program: Program) -> None:
         layer = _find_layer(program, layer_id)
+        if layer.statutory:
+            raise ValueError(
+                f"{layer.name} is statutory — statutory cover is one benefit "
+                f"scheme, not a band that splits; rescope it instead"
+            )
         if not new_name.strip():
             raise ValueError("the new slab needs a name")
         moving = list(dict.fromkeys(move_line_ids))
@@ -1333,6 +1343,12 @@ def split_layer(
         # spans several (heal_follows re-derives per column, and the original's
         # healed attach is exactly the shared band's floor).
         split.attach = layer.attach
+        # A buffer split by line is still a buffer on both sides — dropping
+        # the flag would turn a chosen uninsured band into "To be placed",
+        # the one reading a buffer must never produce (review C4).
+        split.buffer = layer.buffer
+        if layer.buffer:
+            split.premium = None
         split.follows_underlying = len(moving) > 1 and layer.follows_underlying
         # File order is wherever edit.add_layer appended it — repositioning the
         # list is a structural mutation tests/test_conventions.py reserves for
@@ -2495,6 +2511,22 @@ def rescope_preview(
     if program is None or before is None:
         return {"ok": False, "errors": [d.message for d in diags.errors]}
     labels = {line.id: line.label for line in program.lines}
+
+    def contiguous_top(line_id: str) -> tuple[int, bool]:
+        """Cover reachable FROM THE GROUND on this line after the drop —
+        'left with $N' must never count across the gap the drop creates
+        (review C20). Returns (top_dollars, gapped)."""
+        cover = 0
+        gapped = False
+        for ly in program.layers_for_line(line_id):
+            if ly.attach <= cover:
+                cover = max(cover, ly.top)
+            else:
+                gapped = True
+                break
+        return cover, gapped
+
+    reach = {lid: contiguous_top(lid) for lid in dropped}
     return {
         "ok": diags.ok,
         "errors": [d.message for d in diags.errors],
@@ -2507,12 +2539,9 @@ def rescope_preview(
             {
                 "line_id": lid,
                 "label": labels.get(lid, lid),
-                "left_with_cents": dollars_to_cents(
-                    max(
-                        (ly.top for ly in program.layers_for_line(lid)),
-                        default=0,
-                    )
-                ),
+                "left_with_cents": dollars_to_cents(reach[lid][0]),
+                # cover remains ABOVE a hole — the sentence must say so
+                "gapped": reach[lid][1],
                 # True when this slab was the top of that column — dropping
                 # it leaves nothing above what remains.
                 "was_top": before.top

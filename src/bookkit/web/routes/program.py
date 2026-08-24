@@ -98,12 +98,21 @@ def _view_state(request: Request) -> tuple[str | None, frozenset[str]]:
     from urllib.parse import parse_qsl, urlparse
 
     params: dict[str, str] = dict(request.query_params)
-    if "layer" not in params and "closed" not in params:
-        current = request.headers.get("HX-Current-URL", "")
-        if current:
-            params = dict(parse_qsl(urlparse(current).query))
-    layer = params.get("layer") or None
-    closed = frozenset(part for part in (params.get("closed") or "").split(",") if part)
+    recovered: dict[str, str] = {}
+    current = request.headers.get("HX-Current-URL", "")
+    if current:
+        recovered = dict(parse_qsl(urlparse(current).query))
+    # PER KEY, not all-or-nothing: a link carrying only ?layer= (the tower
+    # click, a preview's Discard) must not wipe the collapse state the URL
+    # still holds — and vice versa. An EXPLICIT empty closed= ("expand all")
+    # still wins, which is why presence is the test, not truthiness.
+    layer = (
+        params.get("layer") if "layer" in params else recovered.get("layer")
+    ) or None
+    raw_closed = (
+        params["closed"] if "closed" in params else recovered.get("closed", "")
+    )
+    closed = frozenset(part for part in raw_closed.split(",") if part)
     return layer, closed
 
 
@@ -273,10 +282,12 @@ def _index_groups(
             ordered.append((key, [line]))
 
     def url(layer: str | None, closed_set: frozenset[str]) -> str:
-        query = f"layer={layer}" if layer else ""
-        if closed_set:
-            query += ("&" if query else "") + f"closed={_closed_param(closed_set)}"
-        return f"{base}/worksheet" + (f"?{query}" if query else "")
+        # closed rides EXPLICITLY even when empty: under per-key recovery an
+        # omitted param means "keep what the URL has", and expand-all means
+        # the opposite.
+        query = f"layer={layer}&" if layer else ""
+        query += f"closed={_closed_param(closed_set)}"
+        return f"{base}/worksheet?{query}"
 
     groups: list[dict[str, Any]] = []
     seen_slugs: set[str] = set()
@@ -324,6 +335,46 @@ def _index_groups(
                 }
                 for row in rows
             ] if not is_closed else [],
+        })
+
+    # A layer whose first line the program does not declare (towerkit loads
+    # the file and flags layer-unknown-line as an ERROR) still gets a row —
+    # the diagnostics point at it, so the index must be able to reach it
+    # (review C7).
+    orphans = [
+        row for row in layers
+        if row["applies_to"] and row["applies_to"][0] not in group_of
+    ]
+    if orphans:
+        slug = f"{placement.id}.unknown-line"
+        groups.append({
+            "slug": slug,
+            "name": "Unknown line",
+            "label": " ".join(sorted({row["applies_to"][0] for row in orphans})),
+            "count": len(orphans),
+            "closed": slug in closed,
+            "toggle_url": url(selected, closed ^ {slug}),
+            "rows": [] if slug in closed else [
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "limit": (
+                        "statutory" if row["statutory"]
+                        else format_cents_compact(row["limit_cents"])
+                    ),
+                    "buffer": row["buffer"],
+                    "statutory": row["statutory"],
+                    "signed": (
+                        None if row["buffer"] or row["statutory"]
+                        else f"{row['signed_pct']:g}"
+                    ),
+                    "placed": row["signed_pct"] >= 100,
+                    "spans": len(row["applies_to"]) if len(row["applies_to"]) > 1 else 0,
+                    "selected": row["id"] == selected,
+                    "url": url(row["id"], closed),
+                }
+                for row in orphans
+            ],
         })
 
     all_slugs = frozenset(group["slug"] for group in groups)
@@ -1651,9 +1702,13 @@ async def market_share_preview(
     placement, layer = _owned_layer(request, org, placement_id, layer_id)
     seat = _seated(layer, index)
     field = _market_field("share_pct")
-    raw = str((await request.form()).get("share_pct", ""))
+    form = await request.form()
+    raw = str(form.get("share_pct", ""))
+    commit = str(form.get("commit", "")) == "1"
+    _, closed = _view_state(request)
     select_url = (
-        f"/accounts/{ref}/program/{placement_id}/worksheet?layer={layer_id}"
+        f"/accounts/{ref}/program/{placement_id}/worksheet"
+        f"?layer={layer_id}&closed={_closed_param(closed)}"
     )
     context: dict[str, Any] = {
         "carrier": seat["carrier"],
@@ -1663,8 +1718,8 @@ async def market_share_preview(
             Path(placement.program_path).name if placement.program_path else ""
         ),
         "select_url": select_url,
-        "save_action": _market_cell_action(
-            ref, placement_id, layer_id, index, "share_pct"
+        "preview_action": (
+            f"{_market_base(ref, placement_id, layer_id, index)}/share-preview"
         ),
     }
     try:
@@ -1675,6 +1730,33 @@ async def market_share_preview(
         return TEMPLATES.TemplateResponse(
             request, "account/_share_preview.html",
             {**context, "preview": {"ok": False, "errors": [str(exc)]}},
+        )
+    if commit:
+        # Save goes through THIS route, not the bare cell route: the cell
+        # route's refusal is a <td> editor with no retarget, which inside the
+        # preview's own host renders as a garbled fragment in the Save button
+        # (review C1). Here a refusal re-renders the preview block — the
+        # shape this host holds — with towerkit's words and no Save.
+        try:
+            program_files.write(
+                conn, placement,
+                tool="program_layer_edit",
+                summary=f"corrected {seat['carrier']} on {layer['name']}",
+                mutate=lambda: sync.update_participant(
+                    conn, placement_id, layer_id, seat["carrier"],
+                    share_bps=share_bps,
+                ),
+                open_batch=_open_batch_web,
+            )
+        except Exception as exc:
+            return TEMPLATES.TemplateResponse(
+                request, "account/_share_preview.html",
+                {**context, "preview": {"ok": False, "errors": [str(exc)]}},
+            )
+        forget_program_reads(request)
+        return _panel(
+            request, ref, org, placement_id,
+            selected=layer_id, refocus=f"{layer_id}:market-{index}-share_pct",
         )
     result = sync.share_preview(conn, placement_id, layer_id, seat["carrier"], share_bps)
     if result.get("ok"):
@@ -1746,8 +1828,21 @@ async def layer_applies_to_toggle(
     org = _org(request, ref)
     conn = _conn(request)
     placement, layer = _owned_layer(request, org, placement_id, layer_id)
-    line = str((await request.form()).get("line", ""))
+    form = await request.form()
+    line = str(form.get("line", ""))
+    intent = str(form.get("intent", ""))
     current = list(layer["applies_to"])
+    if intent == "drop" and line not in current:
+        # The confirm was stale — another window already dropped it. A
+        # toggle here would silently RE-WIDEN the slab under a button that
+        # says Drop (review C26); a refusal says what happened instead.
+        return _panel(
+            request, ref, org, placement_id, selected=layer_id,
+            worksheet_error=(
+                f"{line} is no longer on {layer['name']} — it was already "
+                f"dropped; nothing was written"
+            ),
+        )
     wanted = (
         [lid for lid in current if lid != line]
         if line in current
@@ -2856,6 +2951,7 @@ async def new_program_page(request: Request, ref: str) -> Any:
         )
     ]
     error: str | None = None
+    typed_row = {"name": "", "limit": "", "line": ""}
 
     if act == "stack":
         new_name = str(form.get("new_name", "")).strip()
@@ -2872,6 +2968,9 @@ async def new_program_page(request: Request, ref: str) -> Any:
             stacked.append({"line": new_line, "name": new_name, "limit": raw_limit})
         except ValueError as exc:
             error = str(exc)
+            # A REFUSAL KEEPS THE TYPING — the add row's own values ride back
+            # (review C10)
+            typed_row = {"name": new_name, "limit": raw_limit, "line": new_line}
     elif act.startswith("unstack:"):
         index = int(act.split(":", 1)[1])
         if 0 <= index < len(stacked):
@@ -2960,7 +3059,12 @@ async def new_program_page(request: Request, ref: str) -> Any:
             "xs": format_cents(floor),
         })
         running[row["line"]] = floor + cents
-    next_xs = {line: format_cents(total) for line, total in running.items()}
+    # Every line's next floor, zeros included — the add row states the
+    # attachment PER LINE, because a single figure pinned to the first line
+    # lies the moment another line is picked (review C18/C29).
+    next_xs = {
+        line: format_cents(running.get(line, 0)) for line in line_names
+    }
 
     context = _context(conn, org, "program", request)
     context.update({
@@ -2989,6 +3093,7 @@ async def new_program_page(request: Request, ref: str) -> Any:
         "line_names": line_names,
         "stack_rows": stack_rows,
         "next_xs": next_xs,
+        "typed_row": typed_row,
         "dest": str(dest) if dest else None,
         "dest_name": dest.name if dest else None,
         "facts": (
@@ -3422,7 +3527,10 @@ def compare_page(request: Request, ref: str, placement_id: str) -> HTMLResponse:
         shown = new if new is not None else old
         markets = [
             {
-                "name": f"{p.carrier} {p.share_bps / 100:g}",
+                # WITH the %, always — beside two money columns a bare
+                # number reads as money (the market cell's own recorded
+                # rule; review C11).
+                "name": f"{p.carrier} {p.share_bps / 100:g}%",
                 "added": bool(old is not None and p.carrier not in old_names),
             }
             for p in (shown.participants if shown else [])
@@ -3432,6 +3540,12 @@ def compare_page(request: Request, ref: str, placement_id: str) -> HTMLResponse:
         new_premium = new.premium if new else None
         if old_premium is None and new_premium is None:
             premium_delta_text, premium_dir = "—", ""
+        elif new_premium is None and new is not None:
+            # priced last year, not yet priced this year — a fact, not a
+            # −100% cut (review C13)
+            premium_delta_text, premium_dir = "not priced yet", ""
+        elif old_premium is None and old is not None:
+            premium_delta_text, premium_dir = "newly priced", ""
         else:
             moved = (new_premium or 0) - (old_premium or 0)
             if moved == 0:
@@ -3482,15 +3596,34 @@ def compare_page(request: Request, ref: str, placement_id: str) -> HTMLResponse:
         if on:
             churn.append(f"{', '.join(on)} join{'s' if len(on) == 1 else ''}")
         sentences.append("; ".join(churn) + ".")
-    if delta.premium_delta_pct is not None and delta.premium_delta_pct != 0:
+    limit_moved = (delta.limit_new or 0) - (delta.limit_old or 0)
+    proposed_priced = any(ly.premium is not None for ly in prop_program.layers)
+    expiring_priced = any(ly.premium is not None for ly in exp_program.layers)
+    if limit_moved:
+        sentences.append(
+            f"Total limit moves {money(delta.limit_old)} → {money(delta.limit_new)}."
+        )
+    if expiring_priced and not proposed_priced:
+        # a fresh renewal starts unpriced — that is a fact, not a 100% cut
+        # (review C13)
+        sentences.append("The proposed program is not priced yet.")
+    elif (
+        proposed_priced
+        and delta.premium_delta_pct is not None
+        and delta.premium_delta_pct != 0
+    ):
         sentences.append(
             f"Premium moves {money(delta.premium_old)} → {money(delta.premium_new)} "
             f"({delta.premium_delta_pct:+.1f}%)."
         )
     if not sentences:
-        sentences.append("The two programs match — nothing moved.")
+        # never "nothing moved" — share and band edits move without tripping
+        # any clause above, and the table may show them (review C14)
+        sentences.append(
+            "No layers added or lapsed, no carrier moves — the layer rows "
+            "below carry any smaller changes."
+        )
 
-    limit_moved = (delta.limit_new or 0) - (delta.limit_old or 0)
     context.update(
         {
             "proposed": proposed,
@@ -3509,7 +3642,11 @@ def compare_page(request: Request, ref: str, placement_id: str) -> HTMLResponse:
             "limit_dir": "up" if limit_moved > 0 else "down" if limit_moved else "",
             "premium_old": money(delta.premium_old),
             "premium_new": money(delta.premium_new),
-            "premium_delta_pct": delta.premium_delta_pct,
+            "premium_delta_pct": (
+                delta.premium_delta_pct
+                if proposed_priced and expiring_priced
+                else None
+            ),
             "layers_old": len(exp_program.layers),
             "layers_new": len(prop_program.layers),
             "layers_note": f"{len(new_rows)} new · {len(lapsed_rows)} lapsed",

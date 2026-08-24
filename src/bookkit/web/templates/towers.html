@@ -29,7 +29,10 @@
     {% if entries %}
       <div class="towers-queue">
         {% for entry in entries %}
-          {% set target = "/accounts/" ~ entry.org_ref ~ "/program" ~ ("?layer=" ~ entry.jump_layer if entry.jump_layer else "") %}
+          {# the fragment scrolls to the card's own placement — a renewal
+             shares its expiring sibling's layer ids, so the anchor is what
+             says WHICH section the fact was about (review C22) #}
+          {% set target = "/accounts/" ~ entry.org_ref ~ "/program" ~ ("?layer=" ~ entry.jump_layer if entry.jump_layer else "") ~ "#program-" ~ entry.placement.id %}
           <section class="tower-card{% if loop.first and show == 'needs-work' %} is-first{% endif %}">
             <div class="tower-card-head">
               {% if entry.org_ref %}

@@ -23,9 +23,14 @@
       <p class="ws-preview-warning">⚠ {{ warning }}</p>
     {% endfor %}
     <div class="ws-preview-actions">
+      {# Save commits through the PREVIEW route (commit=1): a refusal — the
+         between-preview-and-save conflict included — answers with this
+         block again, the shape this host holds, never a bare cell editor
+         (review C1). #}
       <button type="button" class="btn btn-primary"
-              hx-post="{{ save_action }}"
-              hx-vals='{"share_pct": "{{ typed }}"}'>Save</button>
+              hx-post="{{ preview_action }}"
+              hx-vals='{"share_pct": "{{ typed }}", "commit": "1"}'
+              hx-target="closest .ws-preview" hx-swap="outerHTML">Save</button>
       <button type="button" class="btn"
               hx-get="{{ select_url }}">Discard</button>
     </div>

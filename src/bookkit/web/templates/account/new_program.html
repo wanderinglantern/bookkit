@@ -5,6 +5,13 @@
      in it. The rail's Checks are towerkit's own validation of the composed
      program, live before anything exists; a refusal creates NOTHING. #}
   <form method="post" action="{{ action }}" class="new-program">
+    {# The form's FIRST submit button is what Enter fires (HTML implicit
+       submission). This visually-hidden one makes Enter a harmless
+       re-render that keeps every typed value — without it, Enter in the
+       first-layers row fired the source 'apply' and dropped the row
+       (review C17). Hidden by size, never visibility:hidden. #}
+    <button type="submit" name="act" value="refresh" class="np-default-submit"
+            tabindex="-1" aria-hidden="true"></button>
     <div class="np-main">
       <h3 class="np-title">New program for {{ header.org.name }}</h3>
       <p class="np-lede">Two ways in. Either copy a structure that already works and
@@ -99,18 +106,28 @@
               {% endfor %}
               <tr class="np-stack-add">
                 <td><label class="inline-field"><span class="pair-k">layer</span>
-                  <input type="text" name="new_name" placeholder="Umbrella"></label></td>
+                  <input type="text" name="new_name" placeholder="Umbrella"
+                         value="{{ typed_row.name }}"></label></td>
                 <td class="num"><label class="inline-field"><span class="pair-k">limit</span>
-                  <input class="mono" type="text" name="new_limit" placeholder="25m"></label></td>
+                  <input class="mono" type="text" name="new_limit" placeholder="25m"
+                         value="{{ typed_row.limit }}"></label></td>
                 <td class="mono np-xs">
-                  {%- if line_names and next_xs.get(line_names[0]) %}xs {{ next_xs[line_names[0]] }}{% endif -%}
+                  {# the attachment PER LINE — one figure pinned to the first
+                     line lies the moment another line is picked #}
+                  {%- if line_names | length == 1 and next_xs.get(line_names[0]) -%}
+                    xs {{ next_xs[line_names[0]] }}
+                  {%- elif line_names -%}
+                    {%- for lname in line_names -%}
+                      {{ lname }} xs {{ next_xs[lname] }}{% if not loop.last %} · {% endif %}
+                    {%- endfor -%}
+                  {%- endif -%}
                 </td>
                 <td>
                   <label class="inline-field"><span class="pair-k">line</span>
                     <select name="new_line" aria-label="line of cover">
                       <option value=""></option>
                       {% for lname in line_names %}
-                        <option value="{{ lname }}">{{ lname }}</option>
+                        <option value="{{ lname }}"{% if lname == typed_row.line %} selected{% endif %}>{{ lname }}</option>
                       {% endfor %}
                     </select></label>
                 </td>

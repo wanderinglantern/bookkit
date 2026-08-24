@@ -32,7 +32,6 @@ from fastapi.responses import HTMLResponse
 from ... import sync
 from ...money import format_cents_compact
 from ...repo import orgs, placements
-from ...sync import program_file
 from ..app import TEMPLATES
 from ..tower import panel
 
@@ -63,18 +62,57 @@ def _entries(request: Request) -> list[dict[str, Any]]:
     today = date.today()
     entries: list[dict[str, Any]] = []
     for placement in linked:
-        program, diags = validate_file(program_file(conn, placement))
+        # GUARDED per placement: sync.program_file RAISES when the stored
+        # path cannot be resolved, and one moved file must not 500 the whole
+        # queue — the module's own promise (review C3). The card carries the
+        # reader's sentence instead; recovery stays read-only (bookctl
+        # relink is the writer).
+        path = sync.program_file_or_none(conn, placement)
+        if path is None:
+            entries.append({
+                "placement": placement,
+                "account": names.get(placement.org_id, "(deleted account)"),
+                "org_ref": refs.get(placement.org_id),
+                "kind": "error",
+                "badge": "error",
+                "badge_kind": "error",
+                "reason": sync.linked_program(conn, placement.id).error
+                or "this program file will not open",
+                "jump_layer": None,
+                "unplaced_cents": 0,
+                "renewal_on": placement.period_to,
+                "days": (
+                    date.fromisoformat(placement.period_to) - today
+                ).days,
+                "tower": None,
+            })
+            continue
+        program, diags = validate_file(path)
         rows = sync.layer_details_of(program)
         placeable = [
             row for row in rows if not row["buffer"] and not row["statutory"]
         ]
         unplaced_cents = sum(row["open_limit_cents"] for row in placeable)
         # The one-line reason and the layer it lands on are the VALIDATOR's:
-        # the first error, or the first layer-unplaced warning, each in
-        # towerkit's own sentence with its own ref pointer.
+        # the first error, then the first layer-unplaced warning on a layer
+        # that can actually be placed — a buffer's own unplaced warning
+        # describes a CHOSEN uninsured band and must not read as work
+        # (review C5) — then any OTHER warning (a gap is a warning by
+        # design and belongs in this queue, review C8).
         first_error = next(iter(diags.errors), None)
+        special = {
+            row["id"] for row in rows if row["buffer"] or row["statutory"]
+        }
         unplaced_warning = next(
-            (d for d in diags.warnings if d.code == "layer-unplaced"), None
+            (
+                d for d in diags.warnings
+                if d.code == "layer-unplaced"
+                and not (d.ref and d.ref[0] == "layer" and d.ref[1] in special)
+            ),
+            None,
+        )
+        other_warning = next(
+            (d for d in diags.warnings if d.code != "layer-unplaced"), None
         )
         ends = [end for _, end in sync.line_ends_of(program)]
         renewal_on = min(ends) if ends else date.fromisoformat(placement.period_to)
@@ -86,6 +124,9 @@ def _entries(request: Request) -> list[dict[str, Any]]:
         elif unplaced_warning is not None:
             kind, reason = "open", unplaced_warning.message
             said = unplaced_warning
+        elif other_warning is not None:
+            kind, reason = "warn", other_warning.message
+            said = other_warning
         elif days <= RENEWING_WINDOW_DAYS:
             kind = "renewing"
             reason = f"renews {renewal_on.isoformat()}"
@@ -105,6 +146,8 @@ def _entries(request: Request) -> list[dict[str, Any]]:
             if kind == "error"
             else "open"
             if kind == "open"
+            else "warn"
+            if kind == "warn"
             else (f"{days}d" if days >= 0 else f"{-days}d over")
             if kind == "renewing"
             else "ok"
@@ -118,7 +161,7 @@ def _entries(request: Request) -> list[dict[str, Any]]:
                 "badge": badge,
                 "badge_kind": (
                     "error" if kind == "error"
-                    else "warn" if kind in ("open", "renewing")
+                    else "warn" if kind in ("open", "renewing", "warn")
                     else "ok"
                 ),
                 "reason": reason,
@@ -147,8 +190,10 @@ def towers_page(request: Request, show: str = "needs-work") -> HTMLResponse:
     if show not in _FILTERS:
         show = "needs-work"
     subsets: dict[str, list[dict[str, Any]]] = {
+        # a warning IS work — a gap program must not hide under "ok" (C8)
         "needs-work": [
-            e for e in entries if e["kind"] == "error" or e["unplaced_cents"] > 0
+            e for e in entries
+            if e["kind"] in ("error", "warn") or e["unplaced_cents"] > 0
         ],
         "open": [e for e in entries if e["unplaced_cents"] > 0],
         "renewing": [e for e in entries if e["days"] <= RENEWING_WINDOW_DAYS],

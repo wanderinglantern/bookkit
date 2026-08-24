@@ -112,14 +112,81 @@ def test_the_queue_states_the_reason_and_lands_on_the_layer(client):
     )
 
 
-def test_the_filters_carry_counts_and_the_order_note(client):
+def test_the_filters_carry_real_counts_and_the_open_filter_excludes_ok(client):
+    """The review found the old assertions satisfied by static chrome (C24):
+    the counts and the filtering are asserted against the data now."""
+    import re
+
+    from bookkit.repo import placements
+
     conn = client.app.state.conn
-    _unplace_a_seat(conn)
+    placement, _ = _unplace_a_seat(conn)
+    total = len(placements.all_linked(conn))
 
-    page = client.get("/towers?show=open")
+    page = client.get("/towers?show=open").text
 
-    assert page.status_code == 200
-    assert "Needs work" in page.text and "Open capacity" in page.text
-    assert "the validator decides this order" in page.text
-    # the open filter shows the unplaced program and only unplaced ones
-    assert "unplaced" in page.text
+    counts = {
+        m.group(1): int(m.group(2))
+        for m in re.finditer(
+            r'href="/towers\?show=([a-z-]+)">[^<]*<span class="mono">(\d+)</span>',
+            page,
+        )
+    }
+    assert counts["all"] == total
+    assert counts["open"] == 1, counts
+    assert counts["needs-work"] >= 1
+    # the open filter lists exactly the unplaced program — one card, its
+    # reason the validator's own unplaced sentence
+    assert page.count('<section class="tower-card') == 1
+    assert "% placed" in page and "unplaced" in page
+    assert "?layer=" in page, "the card does not land on the layer"
+
+
+def test_a_gap_program_lands_in_needs_work_with_towerkits_warning(client):
+    """A gap is a WARNING by design — and a warning IS work. The old page
+    badged it; the queue must not file it under ok (review C8)."""
+    from bookkit import sync
+    from bookkit.repo import placements
+
+    conn = client.app.state.conn
+    placement = placements.all_linked(conn)[0]
+    rows = sync.layer_details(conn, placement.id)
+    # build the mid-stack case: pin a new layer on the current top of one
+    # line, then remove the layer beneath it — the pinned attachment leaves
+    # the hole a follows-underlying layer would have healed away
+    below = max(
+        (r for r in rows if not r["buffer"] and not r["statutory"]
+         and r["attach_cents"] > 0 and len(r["applies_to"]) == 1),
+        key=lambda r: r["top_cents"],
+        default=None,
+    )
+    if below is None:
+        below = max(
+            (r for r in rows if not r["buffer"] and not r["statutory"]
+             and r["attach_cents"] > 0),
+            key=lambda r: r["top_cents"],
+        )
+    line = below["applies_to"][0]
+    assert sync.add_layer(
+        conn, placement.id, "Pinned Excess", [line],
+        attach_cents=below["top_cents"], limit_cents=5_000_000_00,
+    ).ok
+    pinned = next(
+        r["id"] for r in sync.layer_details(conn, placement.id)
+        if r["name"] == "Pinned Excess"
+    )
+    # fully place it, so the GAP is the only new fact about this program
+    assert sync.add_participant(
+        conn, placement.id, str(pinned), "Gap Carrier", 10_000
+    ).ok
+    assert sync.remove_layer(conn, placement.id, str(below["id"])).ok
+
+    page = client.get("/towers?show=needs-work").text
+
+    assert placement.ref in page, (
+        "a program with only warnings hides from the needs-work queue"
+    )
+    assert "towers-badge-warn" in page
+    # and the reason line is a warning in towerkit's own words, never a
+    # bookkit-composed health sentence
+    assert "fully signed" not in page.split(placement.ref, 1)[1].split("</section>", 1)[0]

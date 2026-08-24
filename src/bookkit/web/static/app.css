@@ -3750,6 +3750,17 @@ tr:hover .market .chip-remove {
   color: var(--good-badge);
 }
 
+/* A selected buffer inverts like any selected row — the hatch loses to the
+   selection, or the paper text painted by is-selected vanishes into the
+   light hatch and the selection is invisible (review C9). */
+.index-row.is-selected.is-buffer {
+  background: var(--ink);
+}
+
+.index-row.is-selected.is-buffer .index-name {
+  color: var(--paper);
+}
+
 /* A buffer wears the drawing's own hatch — a deliberate uninsured band. */
 .index-row.is-buffer {
   background: repeating-linear-gradient(
@@ -4382,9 +4393,18 @@ s.compare-gone {
   display: block;
 }
 
-.np-source.is-selected {
+/* :has(:checked) keeps the card's styling honest the moment the radio
+   changes — the server class alone showed the LAST post's choice while the
+   radio showed the next one (review C12). */
+.np-source.is-selected,
+.np-source:has(input:checked) {
   border: 2px solid var(--accent);
   background: var(--accent-wash);
+}
+
+.np-source:has(input:not(:checked)) {
+  border: 1px solid var(--border);
+  background: transparent;
 }
 
 .np-source-name {
@@ -4474,10 +4494,29 @@ s.compare-gone {
   cursor: pointer;
 }
 
-.np-chip.is-on {
+.np-chip.is-on,
+.np-chip:has(input:checked) {
   background: var(--ink);
   border-color: var(--ink);
   color: var(--paper);
+}
+
+.np-chip:has(input:not(:checked)) {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+/* Enter's default submit — present and focusable-by-code, hidden by size
+   (never visibility:hidden, which the keyboard sweep bans). */
+.np-default-submit {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
 }
 
 .np-lines {

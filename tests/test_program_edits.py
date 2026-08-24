@@ -1113,3 +1113,86 @@ def test_rescope_preview_states_what_the_dropped_line_keeps(linked) -> None:
     assert dropped["was_top"] is True
     assert result["keeps"] == ["GL"]
     assert path.read_text() == before
+
+
+def test_move_layer_up_swaps_the_other_way_and_the_top_is_refused(linked) -> None:
+    """The review found only 'down' covered — a direction swap in move_layer
+    would ship silently (C25). Both directions, both edges."""
+    conn, _, placement, path = linked
+    assert sync.add_layer(
+        conn, placement.id, "1st Excess", ["gl"],
+        attach_cents=None, limit_cents=10_000_000_00,
+    ).ok
+
+    up = sync.move_layer(conn, placement.id, "primary-gl", direction="up")
+    assert up.ok, [d.message for d in up.errors]
+    program = load_program(path)
+    by_id = {ly.id: ly for ly in program.layers}
+    assert by_id["1st-excess"].attach == 0, "up did not move the slab up"
+    assert by_id["primary-gl"].attach == 10_000_000
+
+    before = path.read_text()
+    top = sync.move_layer(conn, placement.id, "primary-gl", direction="up")
+    assert not top.ok
+    assert "top" in top.errors[0].message
+    assert path.read_text() == before
+
+
+def test_split_layer_keeps_a_buffer_a_buffer(linked) -> None:
+    """A buffer split by line is still a buffer on both sides — dropping the
+    flag turned a chosen uninsured band into 'To be placed' (review C4)."""
+    from towerkit.model import dump_program
+
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+    assert sync.set_applies_to(conn, placement.id, layer_id, ["gl", "cy"]).ok
+    assert sync.remove_participant(conn, placement.id, layer_id, "Chubb").ok
+    # flip the flag on disk directly — buffers are built via insert_layer in
+    # the app, but this test needs an existing multi-line buffer
+    program = load_program(path)
+    target = next(ly for ly in program.layers if ly.id == layer_id)
+    target.buffer = True
+    target.premium = None
+    dump_program(program, path)
+    assert sync.project(conn, path).ok
+
+    diags = sync.split_layer(
+        conn, placement.id, layer_id,
+        move_line_ids=["cy"], new_name="Cyber Buffer",
+    )
+    assert diags.ok, [d.message for d in diags.errors]
+    program = load_program(path)
+    split = next(ly for ly in program.layers if ly.name == "Cyber Buffer")
+    assert split.buffer is True, "the split half stopped being a buffer"
+    original = next(ly for ly in program.layers if ly.id == layer_id)
+    assert original.buffer is True
+
+
+def test_split_layer_refuses_statutory(linked) -> None:
+    """Statutory cover is one benefit scheme, not a band that splits — the
+    refusal says so instead of failing sideways on the limit (review C4)."""
+    from towerkit.model import dump_program
+
+    conn, _, placement, path = linked
+    # a statutory layer on its own line, written directly (the guarded seams
+    # are not the thing under test here)
+    program = load_program(path)
+    from towerkit.model import Layer, Line
+
+    program.lines.append(Line(id="wc", name="Workers Comp", abbr="WC"))
+    program.layers.append(
+        Layer(
+            id="wc-a", name="WC Part A", applies_to=["wc"],
+            attach=0, limit=0, statutory=True, participants=[],
+        )
+    )
+    dump_program(program, path)
+    assert sync.project(conn, path).ok
+    before = path.read_text()
+
+    diags = sync.split_layer(
+        conn, placement.id, "wc-a", move_line_ids=["wc"], new_name="Part B"
+    )
+    assert not diags.ok
+    assert "statutory" in diags.errors[0].message
+    assert path.read_text() == before
