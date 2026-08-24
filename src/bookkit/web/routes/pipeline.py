@@ -365,16 +365,29 @@ async def response_save(request: Request, ref: str, submission_id: str) -> HTMLR
     return _panel(request, ref, org)
 
 
-def _bind_spec(market: Any, layers: list[dict[str, Any]]) -> FormSpec:
-    """The bind-to-layer offer. Layer options are labeled the way the TUI's
-    Picker labels them — name, limit xs attach, signed % — because "Umbrella"
-    alone does not say which of two umbrella layers is short of its share.
+def _bind_spec(
+    market: Any, layers: list[dict[str, Any]], line_named: dict[str, str]
+) -> FormSpec:
+    """The bind-to-layer offer. Layer options are labeled name, limit xs
+    attach, signed % — because "Umbrella" alone does not say which of two
+    umbrella layers is short of its share.
+
+    AND THE NAME IS QUALIFIED BY ITS LINE OF COVERAGE WHERE IT HAS TO BE
+    (`sync.qualified_layer_names`, 2026-08-24). Lines of coverage each arrive
+    with a layer called "To be placed", so a program with three of them offered
+    three byte-identical options here — `To be placed  $5M xs $0  (0% placed)`
+    for Workers Compensation, Crime and Fidelity. The id is correct for
+    whichever one is clicked, which is what makes it worse than the "same
+    policy as" collision it shares a rule with: a mis-click writes a real
+    participation on the wrong line of coverage, through sync.add_participant,
+    in a revertible batch nobody knows to revert.
 
     `share_bps` is kind="share": ONE percent→bps rule, towerkit's own
     (money.parse_share_bps delegates), so '25' and '12.5%' both land right."""
+    named = sync.qualified_layer_names(layers, line_named)
     options = tuple(
         (
-            f"{ly['name']}  {format_cents_compact(ly['limit_cents'])} xs "
+            f"{named[str(ly['id'])]}  {format_cents_compact(ly['limit_cents'])} xs "
             f"{format_cents_compact(ly['attach_cents'])}  ({ly['signed_pct']:g}% placed)",
             str(ly["id"]),
         )
@@ -391,10 +404,13 @@ def _bind_spec(market: Any, layers: list[dict[str, Any]]) -> FormSpec:
 
 def _bind_parts(
     conn: sqlite3.Connection, sub: Submission
-) -> tuple[Any, Any, list[dict[str, Any]]] | None:
-    """(placement, market, layers) when a bind can be offered, else None —
-    the same three gates the TUI's _offer_bind_to_layer walks: a placement,
-    a linked file, at least one layer to put the market on."""
+) -> tuple[Any, Any, list[dict[str, Any]], dict[str, str]] | None:
+    """(placement, market, layers, line names) when a bind can be offered, else
+    None — the same three gates the TUI's _offer_bind_to_layer walks: a
+    placement, a linked file, at least one layer to put the market on.
+
+    The line names ride along because the offer's labels need them to tell two
+    "To be placed" layers apart, and they come off the same read."""
     if sub.placement_id is None:
         return None
     try:
@@ -407,16 +423,17 @@ def _bind_parts(
     if not layers:
         return None
     market = orgs_repo.get(conn, sub.market_org_id)
-    return placement, market, layers
+    line_named = dict(sync.program_lines(conn, placement.id))
+    return placement, market, layers, line_named
 
 
 def _bind_offer(request: Request, ref: str, sub: Submission) -> str | None:
     parts = _bind_parts(_conn(request), sub)
     if parts is None:
         return None
-    _, market, layers = parts
+    _, market, layers, line_named = parts
     action = f"/accounts/{ref}/pipeline/submissions/{sub.id}/bind"
-    return render_form(request, _bind_spec(market, layers), action)
+    return render_form(request, _bind_spec(market, layers, line_named), action)
 
 
 @router.post(
@@ -439,8 +456,8 @@ async def bind_to_layer(request: Request, ref: str, submission_id: str) -> HTMLR
             "nothing to bind to any more — the placement has no linked "
             "program file with layers",
         )
-    placement, market, layers = parts
-    spec = _bind_spec(market, layers)
+    placement, market, layers, line_named = parts
+    spec = _bind_spec(market, layers, line_named)
     action = f"/accounts/{ref}/pipeline/submissions/{submission_id}/bind"
     raw = {k: str(v) for k, v in (await request.form()).items()}
     try:

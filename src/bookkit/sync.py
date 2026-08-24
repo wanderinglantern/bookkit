@@ -2553,6 +2553,44 @@ def program_lines_of(program: Program | None) -> list[tuple[str, str]]:
     return [(line.id, line.name) for line in program.lines]
 
 
+def qualified_layer_names(
+    layers: list[dict[str, Any]], line_named: dict[str, str]
+) -> dict[str, str]:
+    """`{layer_id: the name to show a person choosing between these layers}` —
+    the name as it stands, qualified with its line of coverage only where the
+    name alone is ambiguous.
+
+    THE ONE HOME FOR THAT RULE. Lines of coverage each arrive with a layer
+    called "To be placed", so a program with three of them offers three
+    identical options — and the same collision on two surfaces is two
+    different bugs: on the Program tab's "same policy as" picker the write was
+    addressed by id, so a mis-click only confused (fixed 866c43c); on the
+    pipeline's bind offer the id is also correct for whichever option is
+    clicked, so a mis-click writes a real participation on the WRONG line of
+    coverage, in a revertible batch nobody knows to revert.
+
+    Only the AMBIGUOUS names are qualified. Adding the line to every option
+    would make the common case — distinct names — noisier for a problem it
+    does not have.
+
+    A layer spanning several lines is qualified by the FIRST, which is the one
+    the rail groups it under; two layers sharing a name AND a first line stay
+    identical here, and `test_no_select_offers_the_same_label_twice` is where
+    that would surface.
+    """
+    counts: dict[str, int] = {}
+    for row in layers:
+        counts[str(row["name"])] = counts.get(str(row["name"]), 0) + 1
+    out: dict[str, str] = {}
+    for row in layers:
+        name = str(row["name"])
+        if counts[name] > 1 and row["applies_to"]:
+            line = row["applies_to"][0]
+            name = f"{name} ({line_named.get(line, line)})"
+        out[str(row["id"])] = name
+    return out
+
+
 def _mutate(
     conn: sqlite3.Connection, placement_id: str, mutation: Callable[[Program], None]
 ) -> Diagnostics:

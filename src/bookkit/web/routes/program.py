@@ -2609,31 +2609,17 @@ def _policy_link_options(
     """The layers this one can be told it shares a policy with, as
     (id, label) — self excluded.
 
-    THE LABEL SAYS WHICH LAYER when the name alone does not. Two lines of
-    coverage each arriving with a pending layer both call it "To be placed",
-    so the picker offered the same word twice and a reader could not tell
-    which one they were about to link (Grant, 2026-08-24). The write was
-    always addressed by id, so nothing was ever linked wrongly — but a
-    control that asks a question with two identical answers is a control
-    nobody can use.
-
-    Only the AMBIGUOUS names are qualified. Adding the line of coverage to
-    every option would make the common case — distinct names — noisier for a
-    problem it does not have.
+    THE LABEL SAYS WHICH LAYER when the name alone does not, and the rule for
+    that lives in `sync.qualified_layer_names`, not here: the pipeline's bind
+    offer collides the same way and a second copy would be fixed once
+    (2026-08-24).
     """
-    counts: dict[str, int] = {}
-    for row in layers:
-        counts[str(row["name"])] = counts.get(str(row["name"]), 0) + 1
-    out: list[tuple[str, str]] = []
-    for other in layers:
-        if str(other["id"]) == layer_id:
-            continue
-        name = str(other["name"])
-        if counts[name] > 1 and other["applies_to"]:
-            line = other["applies_to"][0]
-            name = f"{name} ({line_named.get(line, line)})"
-        out.append((str(other["id"]), name))
-    return out
+    named = sync.qualified_layer_names(layers, line_named)
+    return [
+        (str(other["id"]), named[str(other["id"])])
+        for other in layers
+        if str(other["id"]) != layer_id
+    ]
 
 
 def _market_field(key: str) -> Field:
