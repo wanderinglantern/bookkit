@@ -350,6 +350,15 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "tui": "e on a carriers-table row",
         "mcp": "DEFERRED — no tool; same mcpparity decision as remove_layer",
     },
+    "set_participant_premium": {
+        "web": "the participation table's premium cell, with a preview on the "
+        "first override (POST .../markets/{index}/premium and "
+        ".../markets/{index}/premium-preview)",
+        "tui": "NOT BUILT and will not be — the TUI is retired (CLAUDE.md, "
+        "2026-08-21). towerkit's OWN editor reaches the field through its "
+        "participants grid, which is a different surface from bookkit's TUI.",
+        "mcp": "program_market_premium",
+    },
     "remove_participant": {
         "web": "chip remove, confirm in place (POST .../markets/{index}/remove)",
         "tui": "D on a carriers-table row, confirm first",
@@ -595,6 +604,22 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
     "NamedLimit.amount": "part of Layer.named_limits' editor",
     "Participant.carrier": "market chip: carrier cell",
     "Participant.share_bps": "market chip: share cell (entered as percent)",
+    "Participant.premium": (
+        "the participation table's premium column, editable (POST "
+        ".../markets/{index}/premium). A market's own premium where it differs "
+        "from its share of the layer's — a differential, tax and fees on one "
+        "paper, a non-concurrent quote (Grant, 2026-08-24). NOT the derived "
+        "field seam: towerkit denies the field to its generic setter because "
+        "stating one seat's premium states EVERY seat on the layer (each at "
+        "the figure it was already showing) and makes the layer's premium "
+        "their sum, so the write moves three numbers and two are ones the "
+        "broker did not type. The FIRST override on a layer therefore previews "
+        "before it commits (.../premium-preview, the share cell's own "
+        "deliberate exception to blur-commits); a later edit on an "
+        "already-stated layer moves only the sum and commits in place. Blank "
+        "clears the whole layer back to a premium split by share, which is "
+        "towerkit's all-or-nothing rule and not a web decision."
+    ),
     "Period.start": "wherever a period is edited — Program.period, Layer.period",
     "Period.end": "wherever a period is edited — Program.period, Layer.period",
     # --- Program -------------------------------------------------------------
@@ -709,6 +734,15 @@ TOWERKIT_EDIT_OPS: dict[str, str] = {
     "remove_sublimit": "sync.remove_sublimit (phase 4); see SYNC_VERBS",
     # branch-only (feat/mcp-hardening): not on towerkit main — do not depend;
     # re-decide each when the branch merges
+    "set_participant_premium": (
+        "COVERED. The participation table's premium cell reaches it through "
+        "sync.set_participant_premium (POST .../markets/{index}/premium), with "
+        "a preview on the first override on a layer because that write states "
+        "every other seat and moves the layer's premium too. bookkit does NOT "
+        "write the field itself — the all-or-nothing rule and the sum are "
+        "towerkit's, and a second copy of them here is exactly the drift this "
+        "ledger exists to catch."
+    ),
     "set_statutory": (
         "BRANCH-ONLY in towerkit; bookkit's sync.set_statutory writes the "
         "field directly (established field-write practice) so the web toggle "

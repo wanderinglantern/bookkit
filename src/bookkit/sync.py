@@ -254,11 +254,13 @@ def _project_impl(
                     "layer_id": layer.id,
                     "carrier": part.carrier,
                     "share_bps": part.share_bps,
-                    "premium": (
-                        dollars_to_cents(premium_share(layer.premium, part.share_bps))
-                        if layer.premium is not None
-                        else None
-                    ),
+                    # `premium_for`, never a division here: a market that
+                    # states its own premium (towerkit's Participant.premium)
+                    # must project the figure it STATES, or every bookkit
+                    # surface that reads proj_participant — exposure, hit
+                    # rate, the market pages — reports a number the file
+                    # disagrees with.
+                    "premium": _cents_or_none(layer.premium_for(part)),
                 }
             )
     retentions = [
@@ -1039,6 +1041,7 @@ def update_layer(
 ) -> Diagnostics:
     from datetime import date as _date
 
+    from towerkit.edit import set_field as edit_set_field
     from towerkit.model import Period as TkPeriod
 
     def mutate(program: Program) -> None:
@@ -1052,7 +1055,17 @@ def update_layer(
         if limit_cents is not None:
             layer.limit = _require_dollars(limit_cents, "limit")
         if premium_cents is not None:
-            layer.premium = _require_dollars(premium_cents, "premium")
+            # THROUGH towerkit's choke point, not a bare assignment: a layer
+            # whose markets state their own premiums has a premium that IS
+            # their sum, and `edit._guard_premium` is what refuses to let it
+            # be typed over. A direct write here would be a second definition
+            # of when that is allowed — in the one module the guard exists to
+            # keep out of the business — and the web would silently disagree
+            # with towerkit's own editor and with MCP.
+            edit_set_field(
+                program, "layer", "premium",
+                _require_dollars(premium_cents, "premium"), target=layer_id,
+            )
         if period_from or period_to:
             base = layer.period or program.period
             start = _date.fromisoformat(period_from) if period_from else base.start
@@ -1841,6 +1854,108 @@ def remove_participant(
     return _mutate(conn, placement_id, mutate)
 
 
+def set_participant_premium(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    carrier: str,
+    premium_cents: int | None,
+) -> Diagnostics:
+    """State ONE market's premium on a layer its markets share, or clear them.
+
+    The rule lives in towerkit (`edit.set_participant_premium`) and is not
+    restated here: stating one seat states them all — every other seat is
+    written at the figure it was already showing — and the layer's premium
+    becomes their sum. Three numbers move and two of them are ones the broker
+    did not type, which is why the worksheet PREVIEWS the first override on a
+    layer (`premium_preview`) before it commits.
+
+    Addressed by CARRIER, like every other market write on this surface, and
+    translated to towerkit's index here — the web never learns that towerkit
+    addresses a seat positionally.
+
+    Cents in, whole dollars to the file. `cents_to_dollars` refuses a
+    sub-dollar amount, which is the existing write-through rule and stays
+    exactly as it is: a stated premium is a figure off a policy, and a policy
+    does not quote cents.
+    """
+    from towerkit.edit import set_participant_premium as edit_set_premium
+
+    def mutate(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        index = next(
+            (i for i, p in enumerate(layer.participants) if p.carrier == carrier),
+            None,
+        )
+        if index is None:
+            seated = ", ".join(p.carrier for p in layer.participants) or "nobody"
+            raise ValueError(f"{carrier} is not on {layer.name} — {seated} is")
+        edit_set_premium(
+            program,
+            layer_id,
+            index,
+            cents_to_dollars(premium_cents) if premium_cents is not None else None,
+        )
+
+    return _mutate(conn, placement_id, mutate)
+
+
+def premium_preview(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    carrier: str,
+    premium_cents: int,
+) -> dict[str, Any]:
+    """What stating this market's premium WOULD do — the worksheet's write
+    preview, derived here so no surface multiplies money.
+
+    THE FIRST OVERRIDE ON A LAYER IS THE ONE THAT NEEDS SHOWING: it writes
+    every other seat at the figure it was already displaying and moves the
+    layer's premium to their sum, and neither of those is something the
+    broker typed. A later edit on an already-stated layer moves only the sum
+    and commits in place like any other cell.
+
+    Projects through `preview` — same guards, same validation as the commit —
+    and reports the seats as they would stand, or the refusal in towerkit's
+    words. Nothing here writes.
+    """
+    def mutation(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        index = next(
+            (i for i, p in enumerate(layer.participants) if p.carrier == carrier),
+            None,
+        )
+        if index is None:
+            seated = ", ".join(p.carrier for p in layer.participants) or "nobody"
+            raise ValueError(f"{carrier} is not on {layer.name} — {seated} is")
+        from towerkit.edit import set_participant_premium as edit_set_premium
+
+        edit_set_premium(program, layer_id, index, cents_to_dollars(premium_cents))
+
+    program, diags = preview(conn, placement_id, mutation)
+    if program is None:
+        return {"ok": False, "errors": [d.message for d in diags.errors]}
+    layer = _find_layer(program, layer_id)
+    return {
+        "ok": diags.ok,
+        "errors": [d.message for d in diags.errors],
+        "warnings": _new_warnings(conn, placement_id, diags),
+        "carrier": carrier,
+        "layer_name": layer.name,
+        "premium_cents": _cents_or_none(layer.premium),
+        "seats": [
+            {
+                "carrier": part.carrier,
+                "share_pct": part.share_bps / 100,
+                "premium_cents": _cents_or_none(layer.premium_for(part)),
+                "typed": part.carrier == carrier,
+            }
+            for part in layer.participants
+        ],
+    }
+
+
 def set_applies_to(
     conn: sqlite3.Connection, placement_id: str, layer_id: str, line_ids: list[str]
 ) -> Diagnostics:
@@ -2240,11 +2355,14 @@ def layer_details_of(program: Program | None) -> list[dict[str, Any]]:
                         "limit_cents": dollars_to_cents(
                             premium_share(layer.limit, part.share_bps)
                         ),
-                        "premium_cents": (
-                            dollars_to_cents(premium_share(layer.premium, part.share_bps))
-                            if layer.premium is not None
-                            else None
-                        ),
+                        "premium_cents": _cents_or_none(layer.premium_for(part)),
+                        # Whether that figure is TYPED or arithmetic. The
+                        # worksheet greys a derived figure and prints a
+                        # stated one plainly, because "this is what the
+                        # market charges" and "this is the layer's premium
+                        # divided by the share" are different claims and a
+                        # broker checking a split has to be able to tell.
+                        "premium_stated": part.premium is not None,
                     }
                     for part in layer.participants
                 ],
@@ -2569,6 +2687,17 @@ def _new_warnings(
         else set()
     )
     return [d.message for d in diags.warnings if d.message not in standing]
+
+
+def _cents_or_none(dollars: int | None) -> int | None:
+    """towerkit's whole dollars as bookkit's cents, keeping None as None.
+
+    None is not zero here and the distinction is load-bearing: "we do not
+    know this layer's premium" and "this carrier is paid nothing" are
+    different facts, and a surface that prints the second for the first shows
+    revenue that does not exist (the rule `layer_details` already states for
+    a participant's share)."""
+    return dollars_to_cents(dollars) if dollars is not None else None
 
 
 def _find_layer(program: Program, layer_id: str) -> TkModelLayer:

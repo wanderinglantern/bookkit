@@ -148,6 +148,7 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         (
             "program_edit",
             "program_bind",
+            "program_market_premium",
             "program_layer_add",
             "program_layer_edit",
             "program_revert_file",
@@ -155,7 +156,12 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "the guarded towerkit cycle — load, mutate, validate, canonical dump, "
         "re-project, sha256-guarded against a concurrent editor. The "
         "placement ROW is a projection, which is why it is not an edit_field "
-        "kind (mcpsurface.UNMAPPED_BUILDERS).",
+        "kind (mcpsurface.UNMAPPED_BUILDERS). program_market_premium is its "
+        "own verb rather than an argument on program_bind or "
+        "program_layer_edit: stating one market's premium states EVERY market "
+        "on the layer (each at the figure it was already showing) and makes "
+        "the layer's premium their sum, so three numbers move and two are "
+        "ones the caller did not send.",
     ),
     # --- opportunity ---
     ("opportunity", "create"): (

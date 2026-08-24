@@ -1,0 +1,68 @@
+{# The FIRST market premium on a layer, previewed before it lands.
+
+   The share cell previews because it moves the one figure the worksheet
+   exists to close. This previews for a stronger reason: it moves three
+   numbers and the broker typed one of them. towerkit's rule is that stating
+   one market's premium states every seat on the layer — each at the figure it
+   was already showing — and makes the layer's premium their sum, so the whole
+   table below changes and so does the figure above it. Showing that first is
+   the difference between a write and a surprise.
+
+   Only the FIRST one previews. Once every seat is stated, a later edit moves
+   only the sum and commits in place like any other cell.
+
+   Save commits through the same cell route a blur-commit would have used,
+   with commit=1; Discard re-selects the layer and nothing was written. A
+   refusal shows towerkit's words and offers no Save — previewing an edit the
+   commit would refuse, then refusing it on Save, would be the preview lying
+   about the write. #}
+<div class="ws-preview" role="status">
+  <div class="ws-block-head">
+    <span class="detail-label">unsaved edit</span>
+    <span class="ws-preview-change">{{ seat.carrier }} premium → {{ typed }}</span>
+    <span class="ws-hint ws-preview-where">states every market on
+      {{ preview.layer_name }} · one revertible batch</span>
+  </div>
+  {% if preview.ok %}
+    <p class="ws-preview-says">Every market on this layer is stated at the
+      figure it is showing now, and the layer's premium becomes
+      <strong>{{ format_cents(preview.premium_cents) }}</strong> — their sum.</p>
+    <table class="ws-preview-seats">
+      <thead>
+        <tr><th>market</th><th class="num">share</th><th class="num">premium</th></tr>
+      </thead>
+      <tbody>
+        {% for row in preview.seats %}
+          <tr{% if row.typed %} class="is-typed"{% endif %}>
+            <td>{{ row.carrier }}</td>
+            <td class="num mono">{{ '%g' % row.share_pct }}%</td>
+            <td class="num mono">
+              {{ format_cents(row.premium_cents) if row.premium_cents is not none else "—" }}
+              {% if not row.typed %}<span class="ws-hint">held</span>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% for warning in preview.warnings %}
+      <p class="ws-preview-warning">⚠ {{ warning }}</p>
+    {% endfor %}
+    <div class="ws-preview-actions">
+      <button type="button" class="btn btn-primary"
+              hx-post="{{ commit_action }}"
+              hx-vals='{"premium_cents": "{{ typed }}", "commit": "1"}'
+              hx-target="closest .ws-preview" hx-swap="outerHTML">Save</button>
+      <button type="button" class="btn"
+              hx-get="{{ select_url }}">Discard</button>
+    </div>
+  {% else %}
+    {% for error in preview.errors %}
+      <p class="cell-error-msg" role="alert">{{ error }}</p>
+    {% endfor %}
+    <p class="ws-hint">Nothing was written.</p>
+    <div class="ws-preview-actions">
+      <button type="button" class="btn"
+              hx-get="{{ select_url }}">Discard</button>
+    </div>
+  {% endif %}
+</div>

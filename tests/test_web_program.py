@@ -3641,3 +3641,224 @@ def test_collapse_state_survives_selection_and_writes(app_and_org):
         },
     )
     assert "▸" not in expanded.text, "expand-all no longer expands"
+
+
+# --- a market's own premium ---------------------------------------------------
+#
+# A shared layer's premium is split by capacity, which is right until it is
+# not: a differential, surplus-lines tax and stamping fees on one paper, a
+# non-concurrent quote (Grant, 2026-08-24). towerkit owns the rule — stating
+# one market's premium states them ALL, each at the figure it was already
+# showing, and the layer's premium becomes their sum — and bookkit's job is to
+# make that legible before it happens and correct afterwards.
+
+
+def _shared_seat(conn, org):
+    """A (placement, layer, seat index) where more than one market is bound —
+    the shape the feature exists for."""
+    for placement in _linked(conn, org):
+        for layer in sync.layer_details(conn, placement.id):
+            if len(layer["participants"]) > 1:
+                return placement, layer, 1
+    raise AssertionError("the seeded book has no shared layer")
+
+
+def _premium_cell(org, placement, layer_id, index):
+    return _market_cell(org, placement, layer_id, index, "premium_cents")
+
+
+def test_a_derived_market_premium_is_marked_as_derived(app_and_org):
+    """"This is what the market charges" and "this is the layer's premium
+    divided by the share" are different claims, and a broker checking a split
+    has to be able to tell which one a figure is."""
+    client, org = app_and_org
+    placement, layer, index = _shared_seat(client.app.state.conn, org)
+
+    cell = client.get(_premium_cell(org, placement, layer["id"], index)).text
+
+    assert "derived" in cell
+
+
+def test_the_editor_does_not_prefill_a_derived_figure(app_and_org):
+    """A derived premium is arithmetic, not an answer. Pre-filling it would
+    make opening the cell to READ it a way of accidentally stating every other
+    market on the layer — "never pre-fill a figure that comes off a document",
+    with teeth."""
+    client, org = app_and_org
+    placement, layer, index = _shared_seat(client.app.state.conn, org)
+
+    editor = client.get(
+        _premium_cell(org, placement, layer["id"], index) + "/edit"
+    ).text
+
+    assert 'value=""' in editor
+
+
+def test_the_first_override_previews_before_it_writes(app_and_org):
+    """It moves three numbers and the broker typed one of them."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+    before = _file_of(conn, placement).read_bytes()
+
+    posted = client.post(
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "520000.00"},
+    )
+
+    assert posted.status_code == 200
+    assert "unsaved edit" in posted.text
+    assert _file_of(conn, placement).read_bytes() == before, "the preview wrote"
+
+
+def test_the_preview_names_every_market_it_is_about_to_state(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+
+    posted = client.post(
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "520000.00"},
+    )
+
+    for seat in layer["participants"]:
+        assert seat["carrier"] in posted.text
+
+
+def test_the_preview_is_one_top_level_element(app_and_org):
+    """The response is retargeted onto the worksheet host rather than glued to
+    a cell — the parse-context rule, which binds the whole response."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+
+    posted = client.post(
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "520000.00"},
+    )
+
+    assert len(_top_level_tags(posted.text)) == 1
+    assert posted.headers["HX-Retarget"] == f"#ws-host-{placement.id}"
+
+
+def test_committing_states_every_seat_and_sums_the_layer(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+
+    saved = client.post(
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "520000.00", "commit": "1"},
+    )
+
+    assert saved.status_code == 200
+    _assert_panel_swap(saved, placement.id)
+    fresh = next(
+        row for row in sync.layer_details(conn, placement.id) if row["id"] == layer["id"]
+    )
+    assert all(seat["premium_stated"] for seat in fresh["participants"])
+    assert fresh["participants"][index]["premium_cents"] == 52_000_000
+    assert fresh["premium_cents"] == sum(
+        seat["premium_cents"] for seat in fresh["participants"]
+    )
+
+
+def test_a_second_edit_commits_in_place_without_previewing(app_and_org):
+    """Once every seat is stated only the sum moves, so the cell behaves like
+    any other cell."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+    client.post(
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "520000.00", "commit": "1"},
+    )
+
+    again = client.post(
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "530000.00"},
+    )
+
+    assert "unsaved edit" not in again.text
+    _assert_panel_swap(again, placement.id)
+    fresh = next(
+        row for row in sync.layer_details(conn, placement.id) if row["id"] == layer["id"]
+    )
+    assert fresh["participants"][index]["premium_cents"] == 53_000_000
+
+
+def test_blank_clears_the_whole_layer_back_to_a_split(app_and_org):
+    """towerkit's all-or-nothing rule, not a web decision."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+    client.post(
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "520000.00", "commit": "1"},
+    )
+
+    cleared = client.post(
+        _premium_cell(org, placement, layer["id"], index), data={"premium_cents": ""}
+    )
+
+    assert cleared.status_code == 200
+    fresh = next(
+        row for row in sync.layer_details(conn, placement.id) if row["id"] == layer["id"]
+    )
+    assert not any(seat["premium_stated"] for seat in fresh["participants"])
+
+
+def test_the_layer_premium_says_it_comes_from_the_markets(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+
+    saved = client.post(
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "520000.00", "commit": "1"},
+    )
+
+    assert "from markets" in saved.text
+
+
+def test_typing_a_layer_premium_over_a_stated_one_is_refused(app_and_org):
+    """It IS the markets' sum. towerkit refuses the write and the refusal
+    lands in the cell the broker typed in, with what they typed still there."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+    client.post(
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "520000.00", "commit": "1"},
+    )
+    before = _file_of(conn, placement).read_bytes()
+
+    refused = client.post(
+        _cell(org, placement, layer, "premium_cents"),
+        data={"premium_cents": "1.00"},
+    )
+
+    assert "comes from its markets" in refused.text
+    assert _file_of(conn, placement).read_bytes() == before
+
+
+def test_the_stated_premium_reaches_the_projection(app_and_org):
+    """proj_participant is what exposure, hit rate and the market pages read.
+    A stated premium that stopped at the file would leave every one of them
+    reporting a number the file disagrees with."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+    carrier = layer["participants"][index]["carrier"]
+
+    client.post(
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "520000.00", "commit": "1"},
+    )
+
+    row = conn.execute(
+        "SELECT premium FROM proj_participant "
+        "WHERE placement_id = ? AND layer_id = ? AND carrier = ?",
+        (placement.id, layer["id"], carrier),
+    ).fetchone()
+    assert row["premium"] == 52_000_000

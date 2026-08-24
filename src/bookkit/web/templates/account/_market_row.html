@@ -1,10 +1,13 @@
-{# One market's seat as a participation-table row: two inline-editable cells
-   (carrier, share — the cell macro's grammar, so tab-hop, blur-commit and
-   Escape all behave exactly as they do in every other cell), then the two
-   DERIVED dollar columns. Limit and premium here are the carrier's slice,
-   computed once in sync.layer_details — displayed exact, never compact,
-   because these are the figures a broker checks a split against, and they
-   are not editors so no round-trip can lose anything.
+{# One market's seat as a participation-table row: three inline-editable
+   cells (carrier, share, premium — the cell macro's grammar, so tab-hop,
+   blur-commit and Escape all behave exactly as they do in every other cell)
+   with the carrier's slice of the LIMIT between them, computed once in
+   sync.layer_details. Displayed exact, never compact, because these are the
+   figures a broker checks a split against.
+
+   The premium became an editor on 2026-08-24: a market's own premium where
+   it differs from its share of the layer's. Blank clears the whole layer back
+   to a split — that is towerkit's all-or-nothing rule, not a web decision.
 
    `take off` fetches the in-place confirm over this row (closest tr) and
    writes nothing — the write happens on the confirm's own POST. #}
@@ -22,7 +25,13 @@
            hx-target="{{ host }}" hx-swap="innerHTML"> <span class="ws-hint">%</span>
   </td>
   <td class="num mono">{{ limit }}</td>
-  <td class="num mono derived">{{ premium if premium is not none else "—" }}</td>
+  {# The premium is EDITABLE, and the cell says which kind of figure it is
+     holding: a derived one is greyed (it is the layer's premium divided by
+     this share), a stated one is not (it is what this market charges — a
+     differential, tax and fees on one paper, a non-concurrent quote). The
+     first override on a layer previews before it saves, because towerkit
+     states every other seat and moves the layer's premium with it. #}
+  {{ premium_cell | safe }}
   <td class="row-tail">
     {% if unlinked %}
       <a class="market-unlinked" href="/markets#unlinked-panel"

@@ -59,10 +59,16 @@ def test_program_layers_shows_who_is_on_each_layer(linked):
         {
             "carrier": "Chubb", "share_pct": 60.0,
             "limit_cents": 6_000_000_00, "premium_cents": 180_000_00,
+            # DERIVED — the layer's premium taken by share. An assistant has
+            # to be able to tell that from a figure the market STATED
+            # (program_market_premium), because only one of the two is a
+            # claim about what this carrier charges.
+            "premium_stated": False,
         },
         {
             "carrier": "AXA XL", "share_pct": 40.0,
             "limit_cents": 4_000_000_00, "premium_cents": 120_000_00,
+            "premium_stated": False,
         },
     ]
 
@@ -265,3 +271,77 @@ def test_program_tools_are_registered(tmp_path):
         "program_layers", "program_layer_add", "program_bind",
         "program_layer_edit", "program_edit", "program_revert_file",
     } <= names
+
+
+def test_program_market_premium_states_every_seat_and_sums_the_layer(linked):
+    """A shared layer's premium is split by capacity, which is right until it
+    is not — a differential, tax and fees on one paper, a non-concurrent
+    quote. towerkit's rule: stating one market states them all (each at the
+    figure it was already showing) and the layer becomes their sum."""
+    conn, _, placement, path = linked
+    mcpserver._program_layer_add(
+        conn, placement.ref, "1st Excess", line_ids=["gl"],
+        attach="2m", limit="10m", premium="300k",
+    )
+    mcpserver._program_bind(conn, placement.ref, "1st-excess", "Chubb", "60%")
+    mcpserver._program_bind(conn, placement.ref, "1st-excess", "AXA XL", "40%")
+
+    out = mcpserver._program_market_premium(
+        conn, placement.ref, "1st-excess", "AXA XL", "150k"
+    )
+
+    assert out["batch"].startswith("MCP-")
+    program = load_program(path)
+    layer = next(ly for ly in program.layers if ly.id == "1st-excess")
+    assert [(p.carrier, p.premium) for p in layer.participants] == [
+        ("Chubb", 180_000),
+        ("AXA XL", 150_000),
+    ]
+    assert layer.premium == 330_000
+
+
+def test_program_market_premium_with_no_figure_clears_the_layer(linked):
+    conn, _, placement, path = linked
+    mcpserver._program_layer_add(
+        conn, placement.ref, "1st Excess", line_ids=["gl"],
+        attach="2m", limit="10m", premium="300k",
+    )
+    mcpserver._program_bind(conn, placement.ref, "1st-excess", "Chubb", "60%")
+    mcpserver._program_bind(conn, placement.ref, "1st-excess", "AXA XL", "40%")
+    mcpserver._program_market_premium(
+        conn, placement.ref, "1st-excess", "AXA XL", "150k"
+    )
+
+    out = mcpserver._program_market_premium(
+        conn, placement.ref, "1st-excess", "Chubb"
+    )
+
+    assert out["cleared"] is True
+    layer = next(
+        ly for ly in load_program(path).layers if ly.id == "1st-excess"
+    )
+    assert [p.premium for p in layer.participants] == [None, None]
+
+
+def test_program_layers_reports_a_stated_premium_as_stated(linked):
+    """`premium_stated` is what tells an assistant a figure is a CLAIM about
+    what this carrier charges rather than the layer's premium divided by the
+    share. Without it the two are indistinguishable in the read."""
+    conn, _, placement, _ = linked
+    mcpserver._program_layer_add(
+        conn, placement.ref, "1st Excess", line_ids=["gl"],
+        attach="2m", limit="10m", premium="300k",
+    )
+    mcpserver._program_bind(conn, placement.ref, "1st-excess", "Chubb", "60%")
+    mcpserver._program_bind(conn, placement.ref, "1st-excess", "AXA XL", "40%")
+    mcpserver._program_market_premium(
+        conn, placement.ref, "1st-excess", "AXA XL", "150k"
+    )
+
+    layers = {
+        ly["id"]: ly
+        for ly in mcpserver._program_layers(conn, placement.ref)["layers"]
+    }
+    seats = layers["1st-excess"]["participants"]
+    assert all(seat["premium_stated"] for seat in seats)
+    assert seats[1]["premium_cents"] == 150_000_00

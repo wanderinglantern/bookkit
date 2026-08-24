@@ -475,6 +475,14 @@ def _worksheet_ctx(
         ),
         "limit_cell": cell("limit_cents"),
         "premium_cell": cell("premium_cents"),
+        # THE LAYER'S PREMIUM IS ITS MARKETS' SUM once any of them states its
+        # own — towerkit refuses a write to it while that holds, because it IS
+        # the sum and typing over it would make one of the two figures a lie.
+        # The cell stays live so the refusal can say that in the place the
+        # broker typed; this is what tells them before they do.
+        "premium_from_markets": any(
+            part.get("premium_stated") for part in participants
+        ),
         "signed": f"{signed:g}",
         "placed": signed >= 100,
         "open_pct": f"{open_pct:g}",
@@ -2479,10 +2487,20 @@ def _market_field(key: str) -> Field:
 
 
 def _participant_fields(conn: sqlite3.Connection) -> tuple[Field, ...]:
-    """PARTICIPANT_FIELDS with the carrier completing from existing market
-    names — the add form's copy of the rule _market_field_for_editor applies
-    to the carrier cell."""
-    return tuple(_market_field_for_editor(conn, f.key) for f in PARTICIPANT_FIELDS)
+    """The ADD row's fields: carrier and share, with the carrier completing
+    from existing market names — the add form's copy of the rule
+    `_market_field_for_editor` applies to the carrier cell.
+
+    `premium_cents` is deliberately NOT here. A market is bound at a share;
+    its own premium is a correction made afterwards, if at all — and the
+    first one on a layer states every other seat and moves the layer's
+    premium too, which is not something to do from an add row while the
+    shares are still being typed."""
+    return tuple(
+        _market_field_for_editor(conn, f.key)
+        for f in PARTICIPANT_FIELDS
+        if f.key != "premium_cents"
+    )
 
 
 def _market_field_for_editor(conn: sqlite3.Connection, key: str) -> Field:
@@ -2509,10 +2527,17 @@ def _market_cell_action(
 
 
 def _market_display_value(key: str, seat: dict[str, Any]) -> str:
-    """What the chip SHOWS. The share prints with its % because the cell sits
-    beside a Signed column that does too — a bare number would read as money."""
+    """What the cell SHOWS. The share prints with its % because the cell sits
+    beside a Signed column that does too — a bare number would read as money.
+
+    The premium prints the house em dash when there is none to print, which
+    on this cell means the LAYER has no premium either: a seat with no stated
+    premium of its own still shows its share of the layer's."""
     if key == "carrier":
         return str(seat["carrier"])
+    if key == "premium_cents":
+        cents = seat["premium_cents"]
+        return format_cents(cents) if cents is not None else "—"
     return f"{seat['share_pct']:g}%"
 
 
@@ -2521,13 +2546,42 @@ def _market_prefill(key: str, seat: dict[str, Any]) -> str:
     the share parser reads a percent, so the number passes through verbatim.
     The old mini-form fed this percent into initial_text, whose share kind
     formats BPS — a 40% seat pre-filled '0.4', and an unedited save would
-    have cut the share 100x. Never route a percent through a bps formatter."""
+    have cut the share 100x. Never route a percent through a bps formatter.
+
+    THE PREMIUM PRE-FILLS ONLY WHAT IS STATED. A derived figure is arithmetic,
+    not an answer, and pre-filling it would turn opening the cell to read it
+    into a way of accidentally stating every other seat on the layer — the
+    "never pre-fill a figure that comes off a document" rule, with teeth."""
     if key == "carrier":
         return str(seat["carrier"])
+    if key == "premium_cents":
+        # `initial_text`'s own money rule, not a second spelling of it: plain
+        # cents with no dollar sign, because that is exactly what the parser
+        # accepts back.
+        return (
+            initial_text(_market_field(key), seat["premium_cents"])
+            if seat.get("premium_stated")
+            else ""
+        )
     return f"{seat['share_pct']:g}"
 
 
-_MARKET_CELL_CLASS = {"carrier": "market-cell", "share_pct": "market-cell market-share"}
+_MARKET_CELL_CLASS = {
+    "carrier": "market-cell",
+    "share_pct": "market-cell market-share",
+    "premium_cents": "market-cell num mono",
+}
+
+
+def _market_cell_class(key: str, seat: dict[str, Any]) -> str:
+    """A DERIVED premium is greyed and a STATED one is not: "this is what the
+    market charges" and "this is the layer's premium divided by the share"
+    are different claims, and a broker checking a split has to be able to see
+    which one a figure is."""
+    css = _MARKET_CELL_CLASS[key]
+    if key == "premium_cents" and not seat.get("premium_stated"):
+        css += " derived"
+    return css
 
 
 def _market_row_html(
@@ -2543,7 +2597,7 @@ def _market_row_html(
         return render_cell_display(
             request, _market_field(key), _market_display_value(key, seat),
             _market_cell_action(ref, placement_id, layer["id"], index, key),
-            tag="td", extra_class=_MARKET_CELL_CLASS[key],
+            tag="td", extra_class=_market_cell_class(key, seat),
         )
 
     template = TEMPLATES.env.get_template("account/_market_row.html")
@@ -2556,11 +2610,7 @@ def _market_row_html(
         share=_market_prefill("share_pct", seat),
         host=f"#ws-host-{placement_id}",
         limit=format_cents(seat["limit_cents"]),
-        premium=(
-            format_cents(seat["premium_cents"])
-            if seat["premium_cents"] is not None
-            else None
-        ),
+        premium_cell=cell("premium_cents"),
         # A carrier the book does not know is a string in a file and nothing
         # more — it misses exposure, hit rate and the market dossier. Said
         # HERE, where the carrier is, rather than left to be noticed on a tab
@@ -2587,7 +2637,7 @@ def _market_display_cell(
         render_cell_display(
             request, _market_field(key), _market_display_value(key, seat),
             _market_cell_action(ref, placement_id, layer["id"], index, key),
-            tag="td", extra_class=_MARKET_CELL_CLASS[key],
+            tag="td", extra_class=_market_cell_class(key, seat),
         )
     )
 
@@ -2603,7 +2653,7 @@ def _market_editor_cell(
         render_cell(
             request, field, value,
             _market_cell_action(ref, placement_id, layer["id"], index, key),
-            error=error, tag="td", extra_class=_MARKET_CELL_CLASS[key],
+            error=error, tag="td", extra_class=_market_cell_class(key, seat),
         )
     )
 
@@ -2688,7 +2738,8 @@ async def market_cell_save(
     placement, layer = _owned_layer(request, org, placement_id, layer_id)
     seat = _seated(layer, index)
     field = _market_field(key)
-    raw = str((await request.form()).get(key, ""))
+    form = await request.form()
+    raw = str(form.get(key, ""))
     try:
         value = parse_value(field, raw)
         if field.required and value in (None, ""):
@@ -2696,6 +2747,12 @@ async def market_cell_save(
     except ValueError as exc:
         return _market_editor_cell(
             request, conn, ref, placement_id, layer, index, seat, key, str(exc), raw
+        )
+
+    if key == "premium_cents":
+        return _market_premium_save(
+            request, conn, ref, org, placement, layer, index, seat, value, raw,
+            commit=str(form.get("commit", "")) == "1",
         )
 
     changes: dict[str, Any] = (
@@ -2719,6 +2776,120 @@ async def market_cell_save(
     # Re-read: the memo is per request and this one has just written.
     forget_program_reads(request)
     return _panel(request, ref, org, placement_id, refocus=f"{layer_id}:market-{index}-{key}")
+
+
+def _market_premium_save(
+    request: Request,
+    conn: sqlite3.Connection,
+    ref: str,
+    org: Any,
+    placement: Any,
+    layer: dict[str, Any],
+    index: int,
+    seat: dict[str, Any],
+    value: Any,
+    raw: str,
+    commit: bool = False,
+) -> HTMLResponse:
+    """A market's own premium — the one cell whose write moves numbers the
+    broker did not type.
+
+    THE FIRST OVERRIDE ON A LAYER PREVIEWS. towerkit's rule is that stating
+    one seat states them all (each at the figure it was already showing) and
+    the layer's premium becomes their sum, so the first one changes every row
+    of the table and the figure above it. That is shown before it lands — the
+    same deliberate exception to blur-commit the share cell already makes,
+    and for a stronger reason: the share cell moves one number the broker
+    typed, this moves three.
+
+    Afterwards it commits IN PLACE like any other cell: every seat is already
+    stated, so only the sum moves and the panel re-renders with it.
+
+    BLANK CLEARS THE WHOLE LAYER, back to a premium split by share. That is
+    towerkit's all-or-nothing rule, not a web decision, and the confirm says
+    so before it happens.
+    """
+    layer_id = layer["id"]
+    already = any(part.get("premium_stated") for part in layer["participants"])
+    if value is not None and not already and not commit:
+        preview = sync.premium_preview(
+            conn, placement.id, layer_id, seat["carrier"], int(value)
+        )
+        if preview["ok"]:
+            return _premium_preview_response(
+                request, ref, placement.id, layer, index, seat, preview, raw
+            )
+        # A refused preview is a refused write: say it in the cell the broker
+        # typed in, with what they typed still there.
+        return _market_editor_cell(
+            request, conn, ref, placement.id, layer, index, seat,
+            "premium_cents", "; ".join(preview["errors"]), raw,
+        )
+
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_market_premium",
+            summary=(
+                f"cleared the stated market premiums on {layer['name']}"
+                if value is None
+                else f"stated {seat['carrier']}'s premium on {layer['name']}"
+            ),
+            mutate=lambda: sync.set_participant_premium(
+                conn, placement.id, layer_id, seat["carrier"],
+                None if value is None else int(value),
+            ),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _market_editor_cell(
+            request, conn, ref, placement.id, layer, index, seat,
+            "premium_cents", str(exc), raw,
+        )
+
+    forget_program_reads(request)
+    return _panel(
+        request, ref, org, placement.id,
+        refocus=f"{layer_id}:market-{index}-premium_cents",
+    )
+
+
+def _premium_preview_response(
+    request: Request,
+    ref: str,
+    placement_id: str,
+    layer: dict[str, Any],
+    index: int,
+    seat: dict[str, Any],
+    preview: dict[str, Any],
+    raw: str,
+) -> HTMLResponse:
+    """The preview, retargeted over the worksheet host.
+
+    ONE RESPONSE, ONE TOP-LEVEL ELEMENT: this answers with the preview alone
+    and says where it goes with HX-Retarget, rather than gluing a cell and a
+    panel together — a response opening with `<td>` is parsed inside a table
+    and anything else in it is foster-parented away before htmx sees it
+    (DECISIONS.md, and the layer-premium bug that emptied a whole section).
+    """
+    base = _market_base(ref, placement_id, layer["id"], index)
+    _, closed = _view_state(request)
+    html = TEMPLATES.env.get_template("account/_premium_preview.html").render(
+        request=request,
+        preview=preview,
+        typed=raw,
+        seat=seat,
+        commit_action=f"{base}/cell/premium_cents",
+        select_url=(
+            f"/accounts/{ref}/program/{placement_id}/worksheet"
+            f"?layer={layer['id']}&closed={_closed_param(closed)}"
+        ),
+        format_cents=format_cents,
+    )
+    response = HTMLResponse(html)
+    response.headers["HX-Retarget"] = f"#ws-host-{placement_id}"
+    response.headers["HX-Reswap"] = "innerHTML"
+    return response
 
 
 def _market_confirm(

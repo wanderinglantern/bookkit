@@ -1142,6 +1142,10 @@ _BATCHED_WRITES = {
         # primary-cy is the unsigned layer in the fixture program; primary-gl
         # is already 100% Zurich and any share on it over-signs
         rw, _linked_placement(rw, tmp).ref, "primary-cy", "Chubb", "25%"),
+    "program_market_premium": lambda rw, tmp: mcpserver._program_market_premium(
+        # primary-gl is 100% Zurich in the fixture — a lone seat, so there is
+        # nothing to freeze and the layer premium simply becomes the figure.
+        rw, _linked_placement(rw, tmp).ref, "primary-gl", "Zurich", "1.5m"),
     "program_layer_edit": lambda rw, tmp: mcpserver._program_layer_edit(
         rw, _linked_placement(rw, tmp).ref, "primary-gl", policy_number="GL-1"),
     "program_edit": lambda rw, tmp: mcpserver._program_edit(
@@ -1182,6 +1186,7 @@ _TOUCHES = {
     "request_item_waive": {"rfi_item"},
     "program_layer_add": {"placement"},
     "program_bind": {"placement"},
+    "program_market_premium": {"placement"},
     "program_layer_edit": {"placement"},
     "program_edit": {"placement"},
 }

@@ -179,6 +179,17 @@ PARTICIPANT_FIELDS: tuple[Field, ...] = (
     # A seat with no share is not a seat. Blank reached add_participant as None
     # and surfaced as a towerkit type error rather than "share is required".
     Field("share_pct", "share", "share", required=True),
+    # THIS market's own premium, where it differs from its share of the
+    # layer's — a differential, tax and fees on one paper, a non-concurrent
+    # quote (Grant, 2026-08-24). OPTIONAL, and blank is a real answer that
+    # CLEARS the whole layer back to a premium split by share: towerkit's
+    # rule is all-or-nothing, because a seat left deriving beside stated ones
+    # derives from a base that already contains their money.
+    #
+    # Not part of the ADD form — a market is bound at a share, and its own
+    # premium is a correction made afterwards, if at all. `_market_add_fields`
+    # is what drops it.
+    Field("premium_cents", "premium", "money"),
 )
 """A market's seat on a layer.
 
