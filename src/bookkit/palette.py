@@ -62,6 +62,13 @@ WEB_GOOD_WASH = "#F1F7EF"  # success strip
 WEB_GOOD_BADGE = "#E8F3E4"  # status badge background (from the design file)
 WEB_EDIT_UNDERLINE = "#cfd6e8"  # the dashed underline on editable values
 WEB_UNPLACED = "#B9B6B1"  # hatched unplaced capacity
+# The ONE extra accent the system pass allowed (design 4B/P8, 2026-08-24).
+# Its job is STRUCTURAL emphasis that is not a state: second bands, group
+# headers, pattern badges, secondary chart series. Far from --ink in hue and
+# from --accent in saturation, so a slate band never reads as an ink band
+# and slate never reads as a link. Never clickable-by-colour alone.
+WEB_SLATE = "#0F4C5C"
+WEB_SLATE_WASH = "#E8F1F3"
 WEB_HOVER = "#F2F6FF"  # row hover, named separately from the table above it
 
 # Exactly two shadows exist anywhere on the web surface (Geometry section of
@@ -79,5 +86,6 @@ WEB_TOKENS: tuple[str, ...] = (
     "WEB_ACCENT_WASH", "WEB_GRID", "WEB_DANGER", "WEB_DANGER_WASH",
     "WEB_WARN", "WEB_WARN_WASH", "WEB_GOOD", "WEB_GOOD_WASH",
     "WEB_GOOD_BADGE", "WEB_EDIT_UNDERLINE", "WEB_UNPLACED", "WEB_HOVER",
+    "WEB_SLATE", "WEB_SLATE_WASH",
     "WEB_SHADOW_CARD", "WEB_SHADOW_TOAST",
 )

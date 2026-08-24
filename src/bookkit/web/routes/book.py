@@ -117,7 +117,13 @@ def _row(conn: sqlite3.Connection, org: Org) -> dict[str, Any]:
         "renewal_class": _renewal_class(days),
         "due_text": _due_text(days),
         "due_class": _due_class(days),
+        # the attention edge (P4): the cheapest possible signal that THIS row
+        # is the one to work — overdue only, decided by days < 0, never grid
+        # position
+        "edge": "edge-danger" if days is not None and days < 0 else "",
+        "days": days,
         "premium": money.format_cents_compact(book_service.bound_premium_for_org(conn, org.id)),
+        "premium_cents": book_service.bound_premium_for_org(conn, org.id),
         "last_touch": last.occurred_on if last is not None else "—",
     }
 
@@ -129,21 +135,38 @@ def index() -> RedirectResponse:
     return RedirectResponse(url="/today", status_code=307)
 
 
+_BOOK_FILTERS = ("all", "clients", "renewing", "overdue")
+
+
 @router.get("/book", response_class=HTMLResponse)
-def book(request: Request) -> HTMLResponse:
-    """Every client, any status — narrowing to one status is the filter
-    field's job (rendered, not wired yet), not this query's. A book that
-    silently hides every prospect is worse than one that shows them
-    distinguishably coloured: you cannot filter to something you cannot
-    see. Matches tui/screens/book.py's own orgs.list_orgs(kind="client")
-    call, with no status= argument."""
+def book(request: Request, show: str = "all") -> HTMLResponse:
+    """Every client, any status — narrowing is the FILTER CHIPS' job (the
+    system pass gave the header the chips it was missing), never the
+    query's. A book that silently hides every prospect is worse than one
+    that shows them distinguishably coloured: you cannot filter to
+    something you cannot see. The view is a URL (?show=), so a filtered
+    book is something you can keep and share."""
     conn = _conn(request)
+    if show not in _BOOK_FILTERS:
+        show = "all"
     clients = orgs_repo.list_orgs(conn, kind="client")
     rows = [_row(conn, org) for org in clients]
-    total_cents = sum(book_service.bound_premium_for_org(conn, o.id) for o in clients)
+    subsets: dict[str, list[dict[str, Any]]] = {
+        "all": rows,
+        "clients": [r for r in rows if r["status"] not in ("prospect",)],
+        "renewing": [
+            r for r in rows if r["days"] is not None and 0 <= r["days"] <= 90
+        ],
+        "overdue": [r for r in rows if r["days"] is not None and r["days"] < 0],
+    }
+    total_cents = sum(r["premium_cents"] for r in rows)
+    prospects = sum(1 for r in rows if r["status"] == "prospect")
     context = {
-        "rows": rows,
+        "rows": subsets[show],
+        "show": show,
+        "counts": {name: len(members) for name, members in subsets.items()},
         "count": len(rows),
+        "prospects": prospects,
         "total_premium": money.format_cents_compact(total_cents),
     }
     return TEMPLATES.TemplateResponse(request, "book.html", context)

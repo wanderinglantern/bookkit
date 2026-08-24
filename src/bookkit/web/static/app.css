@@ -4630,3 +4630,310 @@ s.compare-gone {
     border-top: 1px solid var(--hairline);
   }
 }
+
+/* === The system pass (design 4B, 2026-08-24) ==============================
+   Eight shared patterns every screen adopts: the page band, section-header
+   tiers, the stat strip (its CSS lives with the program band above — one
+   home), two table species, one action vocabulary, one state vocabulary,
+   four empty-state voices, and the slate structural accent. */
+
+/* --- P1: the page band ---------------------------------------------------- */
+
+.page-band {
+  display: flex;
+  align-items: baseline;
+  gap: 0.9rem;
+  padding: 1rem 1.4rem;
+  background: var(--ink);
+  color: var(--paper);
+  flex-wrap: wrap;
+}
+
+.page-band-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.page-band-standing {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+.page-band-spacer {
+  flex: 1;
+}
+
+/* The band's own actions, at most two: solid paper primary, hairline ghost
+   secondary. Position decides the species (P5). */
+.band-btn {
+  font: inherit;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  padding: 0.3rem 0.75rem;
+  background: var(--paper);
+  color: var(--ink);
+  border: none;
+  cursor: pointer;
+  border-radius: 3px;
+  text-decoration: none;
+}
+
+.band-btn-ghost {
+  background: none;
+  color: var(--paper);
+  border: 1px solid var(--paper);
+  opacity: 0.85;
+}
+
+.band-btn:hover,
+.band-btn-ghost:hover {
+  opacity: 1;
+  color: var(--ink);
+}
+
+.band-btn-ghost:hover {
+  background: var(--paper);
+}
+
+.page-body {
+  padding: 0 1.4rem 2rem;
+  max-width: 68.75rem;
+}
+
+.page-stats {
+  margin-top: 0;
+  border-top: none;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* --- P2: section headers earn their weight -------------------------------- */
+
+.sect-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--ink);
+  margin-top: 1.4rem;
+}
+
+.sect-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.sect-count {
+  font-family: var(--serif);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.sect-count.is-danger { color: var(--danger); }
+.sect-count.is-warn { color: var(--warn); }
+
+.sect-spacer { flex: 1; }
+
+.sect-hint {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.sect-head-2 {
+  border-bottom-width: 1px;
+  padding-bottom: 0.35rem;
+}
+
+.sect-head-2 .sect-title,
+.sect-head-2 .sect-count {
+  font-size: 1rem;
+}
+
+/* stat figures may carry macro tones */
+.stat-figure.is-danger { color: var(--danger); }
+.stat-figure.is-warn { color: var(--warn); }
+.stat-figure.is-good { color: var(--good); }
+
+/* --- filter chips (the Towers pattern, generalised) ------------------------ */
+
+.filter-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--hairline);
+  flex-wrap: wrap;
+}
+
+.filter-chip {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 3px;
+  text-decoration: none;
+  background: var(--paper);
+}
+
+.filter-chip:hover { background: var(--hover); }
+
+.filter-chip.is-selected {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
+.filter-chips-note {
+  margin-left: auto;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+/* --- P4: the attention table's state edge ---------------------------------- */
+
+td.edge-danger, .book-row.edge-danger, tr.edge-danger > td:first-child {
+  border-left: 3px solid var(--danger);
+}
+
+td.edge-warn, .book-row.edge-warn, tr.edge-warn > td:first-child {
+  border-left: 3px solid var(--warn);
+}
+
+/* --- P5: hover-held row actions -------------------------------------------
+   Repeated row controls hold at opacity 0 until the row is live, exactly as
+   the chips do — 40 rows of data, not 120 identical blue words. Opacity,
+   NEVER visibility (focus order); the room stays reserved so nothing shifts
+   under the pointer. */
+.row-tools .row-action-btn {
+  opacity: 0;
+  transition: opacity 90ms ease-in;
+}
+
+tr:hover .row-tools .row-action-btn,
+tr:focus-within .row-tools .row-action-btn,
+.row-tools .row-action-btn:focus-visible {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-tools .row-action-btn { transition: none; }
+}
+
+/* --- P6: one state vocabulary ----------------------------------------------
+   Five states, one rendering each, always a WORD as well as a colour. */
+.state-overdue { font-size: 0.75rem; font-weight: 700; padding: 0.1rem 0.55rem; background: var(--danger-wash); color: var(--danger); border-radius: 3px; white-space: nowrap; }
+.state-soon    { font-size: 0.75rem; font-weight: 700; padding: 0.1rem 0.55rem; background: var(--warn-wash);   color: var(--warn);   border-radius: 3px; white-space: nowrap; }
+.state-bound   { font-size: 0.75rem; font-weight: 700; padding: 0.1rem 0.55rem; background: var(--good-badge);  color: var(--good);   border-radius: 3px; white-space: nowrap; }
+.state-flight  { font-size: 0.75rem; font-weight: 700; padding: 0.1rem 0.55rem; background: var(--accent-wash); color: var(--accent); border-radius: 3px; white-space: nowrap; }
+.state-closed  { font-size: 0.75rem; font-weight: 700; padding: 0.1rem 0.55rem; background: var(--stone);       color: var(--muted);  border-radius: 3px; white-space: nowrap; }
+
+/* --- P7: empty states say which kind of empty ------------------------------ */
+
+.empty-state {
+  padding: 1rem 0;
+  font-size: 0.875rem;
+}
+
+.empty-state .row-action-btn { font-size: 0.875rem; }
+
+.empty-state.is-broken { color: var(--danger); }
+
+/* --- demoted context sections (Today's "Also worth a look") ---------------- */
+
+details.aside-section {
+  border-bottom: 1px solid var(--hairline);
+}
+
+details.aside-section > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.6rem 0;
+}
+
+details.aside-section > summary::-webkit-details-marker { display: none; }
+
+details.aside-section > summary .sect-head {
+  margin-top: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+  display: flex;
+}
+
+details.aside-section[open] > summary {
+  border-bottom: 1px solid var(--ink);
+}
+
+.aside-counts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.6rem;
+}
+
+.aside-count {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.aside-block {
+  margin-top: 1.2rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.aside-count .mono-count {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--body-size);
+  font-weight: 700;
+  width: 1.8rem;
+}
+
+/* --- P8: the slate structural accent --------------------------------------- */
+
+.index-group {
+  background: var(--slate-wash);
+}
+
+.index-group .index-group-name {
+  color: var(--slate);
+}
+
+/* the two-column Today working area */
+.today-columns {
+  display: flex;
+  gap: 1.6rem;
+  align-items: flex-start;
+  margin-top: 1.2rem;
+}
+
+.today-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.today-aside {
+  flex: none;
+  width: 15.5rem;
+  border-left: 1px solid var(--hairline);
+  padding-left: 1.2rem;
+}
+
+@media (max-width: 62.5rem) {
+  .today-columns { flex-wrap: wrap; }
+  .today-aside {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--hairline);
+    padding-left: 0;
+    padding-top: 0.8rem;
+  }
+}

@@ -41,11 +41,84 @@ from .account import _conn
 router = APIRouter()
 
 
+def _needs_you(
+    accounts: dict[str, Any],
+    overdue: list[Any],
+    due_tasks: list[Any],
+    late: list[Any],
+    today: date,
+) -> list[dict[str, Any]]:
+    """ONE morning list, worst first (design 4C): overdue renewals, overdue
+    items and anything past SLA stop being three sections of equal weight
+    and become the screen's spine. Every row states what, whose, how late,
+    and where acting on it lives — and a task keeps its done/drop right
+    here, because the day's list owes you both ways off it."""
+    iso = today.isoformat()
+    rows: list[dict[str, Any]] = []
+    for item in overdue:
+        label = accounts.get(item.org.id)
+        rows.append({
+            "kind": "renewal",
+            # COVER is what runs out; when the placement is unlinked the
+            # clause is dropped — a sentence, unlike the Cover column, may
+            # simply not claim what it does not know (the program name never
+            # stands in, the standing renewal-row rule)
+            "what": (
+                f"Renewal ran out — {item.cover}" if item.cover
+                else "Renewal ran out"
+            ),
+            # PRINT THE DATE YOU COUNT TO (the standing rule): a countdown
+            # without renewal_on beside it is the bug four reviewers found
+            # independently in 2026-08-15's costume
+            "due": item.renewal_on,
+            "org_id": item.org.id,
+            "state_class": "state-overdue",
+            "state": f"overdue · {-item.days_remaining}d",
+            "where": "Program",
+            "link": f"/accounts/{label.ref}/program" if label else None,
+            "task_id": None,
+            "sort": (0, item.days_remaining),
+        })
+    for task in due_tasks:
+        overdue_task = task.due_on is not None and task.due_on < iso
+        days_over = 0
+        if overdue_task and task.due_on:
+            days_over = (today - date.fromisoformat(task.due_on)).days
+        rows.append({
+            "kind": "task",
+            "what": task.title,
+            "due": task.due_on or "—",
+            "org_id": task.org_id,
+            "state_class": "state-overdue" if overdue_task else "state-soon",
+            "state": f"overdue · {days_over}d" if overdue_task else "due today",
+            "where": "Open items",
+            "link": "/items",
+            "task_id": task.id,
+            "sort": (0 if overdue_task else 1, -days_over),
+        })
+    for sub in late:
+        rows.append({
+            "kind": "sla",
+            "what": f"{sub.market.name} — no response, {sub.days_out}d out",
+            "due": sub.submission.sent_on,
+            "org_id": sub.account.id,
+            "state_class": "state-soon",
+            "state": "past SLA",
+            "where": "Pipeline",
+            "link": None,
+            "task_id": None,
+            "sort": (1, -sub.days_out),
+        })
+    rows.sort(key=lambda row: row["sort"])
+    return rows
+
+
 def _sections(conn: sqlite3.Connection, today: date) -> dict[str, Any]:
     items = renewals.upcoming(conn, today, days=120)
     overdue = [i for i in items if i.days_remaining < 0]
     soon = [i for i in items if i.days_remaining >= 0]
     due_tasks = tasks_repo.open_tasks(conn, due_by=today.isoformat())
+    all_open = tasks_repo.open_tasks(conn)
     needs = projects_repo.needs_due(conn, today, days=120)
     late = sla.past_sla(conn, today)
     expiring = quotes_svc.expiring(conn, today, days=120)
@@ -70,13 +143,27 @@ def _sections(conn: sqlite3.Connection, today: date) -> dict[str, Any]:
     # the tasks table came to print `ACC-0004` where every other section on
     # this page printed the account's name: it held only the ref map.
     accounts = orgs_repo.labels_for(conn, org_ids)
+    open_overdue = sum(
+        1 for t in all_open
+        if t.due_on is not None and t.due_on < today.isoformat()
+    )
+    needs_you = _needs_you(accounts, overdue, due_tasks, late, today)
 
     return {
         "today": today.isoformat(),
+        # the band's name for the day — a date a person says, not an ISO stamp
+        "today_said": f"{today:%A}, {today.day} {today:%B}",
+        "standing": (
+            f"{len(overdue)} overdue · {len(all_open)} open items · "
+            f"{len(chases)} requests to chase"
+        ),
         "accounts": accounts,
+        "needs_you": needs_you,
         "overdue": overdue,
         "soon": soon,
         "tasks": due_tasks,
+        "open_count": len(all_open),
+        "open_overdue": open_overdue,
         "needs": [dict(row) for row in needs],
         "late": late,
         "quotes": expiring,
@@ -98,11 +185,11 @@ def today_page(request: Request) -> HTMLResponse:
 
 
 def _tasks_section(request: Request, conn: sqlite3.Connection) -> HTMLResponse:
-    """Taking a task off the list changes this list and nothing else on the
-    page, so the answer is the tasks SECTION — one element, per the htmx
+    """Taking a task off the list changes the Needs-you list and nothing else
+    on the page, so the answer is that SECTION — one element, per the htmx
     parse-context rule."""
     return TEMPLATES.TemplateResponse(
-        request, "partials/_today_tasks.html", _sections(conn, date.today())
+        request, "partials/_today_needs.html", _sections(conn, date.today())
     )
 
 

@@ -1,0 +1,49 @@
+{% import "macros/account.html" as account %}
+{% import "macros/page.html" as page %}
+{# NEEDS YOU TODAY — the morning's one list (design 4C): overdue renewals,
+   overdue items and anything past SLA, worst first. Its own file because
+   done and drop re-render exactly this. Tier-1 header: this is the screen's
+   spine, and the count is the number the broker is reading for. #}
+<section id="today-needs">
+  {% call page.sect("Needs you today", needs_you | length,
+                    tone="danger" if needs_you else "",
+                    hint="overdue renewals, overdue items and anything past SLA — one list, worst first") %}{% endcall %}
+  {% if needs_you %}
+    <div class="table-scroll">
+      <table class="rows rows-fit">
+        <thead><tr><th>Due</th><th>What</th><th>Account</th><th>State</th><th>Where</th><th></th></tr></thead>
+        <tbody>
+          {% for row in needs_you %}
+            <tr class="{{ 'edge-danger' if row.state_class == 'state-overdue' else 'edge-warn' }}">
+              {# the date the state counts to — printed beside the countdown,
+                 the standing renewal-date rule #}
+              <td class="num nowrap">{{ row.due }}</td>
+              <td class="prose">{{ row.what }}</td>
+              <td class="prose">{% if row.org_id and accounts.get(row.org_id) %}{{ account.account_link(accounts, row.org_id, "work" if row.kind == "task" else ("program" if row.kind == "renewal" else "pipeline")) }}{% else %}—{% endif %}</td>
+              <td><span class="{{ row.state_class }}">{{ row.state }}</span></td>
+              <td class="prose muted">{{ row.where }}</td>
+              <td class="row-actions-cell row-tools">
+                {% if row.task_id %}
+                  <button type="button" class="row-action-btn"
+                          aria-label="Done — {{ row.what }}"
+                          hx-post="/today/tasks/{{ row.task_id }}/done"
+                          hx-target="#today-needs" hx-swap="outerHTML">done</button>
+                  <button type="button" class="row-action-btn is-danger"
+                          aria-label="Drop {{ row.what }} — it leaves the list without counting as done"
+                          hx-post="/today/tasks/{{ row.task_id }}/drop"
+                          hx-confirm="Drop {{ row.what }}? It leaves the list without counting as done."
+                          hx-target="#today-needs" hx-swap="outerHTML">drop</button>
+                {% elif row.link %}
+                  <a class="row-action-btn" href="{{ row.link }}">open</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    {# good empty — no action; this is the state you want #}
+    <div class="empty-state">Nothing needs you. The morning is clear.</div>
+  {% endif %}
+</section>

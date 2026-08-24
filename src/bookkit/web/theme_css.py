@@ -33,6 +33,8 @@ _VARIABLES: tuple[tuple[str, str], ...] = (
     ("--good-badge", "WEB_GOOD_BADGE"),
     ("--edit-underline", "WEB_EDIT_UNDERLINE"),
     ("--unplaced", "WEB_UNPLACED"),
+    ("--slate", "WEB_SLATE"),
+    ("--slate-wash", "WEB_SLATE_WASH"),
     ("--hover", "WEB_HOVER"),
     ("--shadow-card", "WEB_SHADOW_CARD"),
     ("--shadow-toast", "WEB_SHADOW_TOAST"),

@@ -66,15 +66,18 @@ def _labels(conn: sqlite3.Connection, tasks: list[Task]) -> dict[str, Any]:
     return orgs_repo.labels_for(conn, {t.org_id for t in tasks if t.org_id})
 
 
-def _view_query(*, overdue_only: bool, ref: str | None) -> str:
+_FILTERS = ("all", "overdue", "week", "undated", "requests")
+
+
+def _view_query(*, show: str, ref: str | None) -> str:
     """The current filter as a query string, ready to append — "" when the view
-    is the whole book. One builder, because the two writer buttons and any
-    later one must all send back the view they were rendered under."""
+    is the whole book. One builder, because the writer buttons and the filter
+    chips must all send back the view they were rendered under."""
     parts = []
     if ref:
         parts.append(f"account={quote(ref)}")
-    if overdue_only:
-        parts.append("overdue=1")
+    if show != "all":
+        parts.append(f"show={show}")
     return f"?{'&'.join(parts)}" if parts else ""
 
 
@@ -145,38 +148,63 @@ def _row(
     }
 
 
-def _open_tasks(conn: sqlite3.Connection, *, overdue_only: bool, ref: str | None) -> list[Task]:
+def _open_tasks(conn: sqlite3.Connection, *, ref: str | None) -> list[Task]:
     tasks = tasks_repo.open_tasks(conn)
     if ref:
         org = orgs_repo.find(conn, ref)
         tasks = [t for t in tasks if org is not None and t.org_id == org.id]
-    if overdue_only:
-        today = date.today().isoformat()
-        tasks = [t for t in tasks if t.due_on is not None and t.due_on < today]
     return tasks
 
 
-def _context(request: Request, *, overdue_only: bool, ref: str | None) -> dict[str, Any]:
+def _task_subsets(tasks: list[Task]) -> dict[str, list[Task]]:
+    """The filter chips' subsets, one derivation (the system pass, 4D): a
+    week is the next seven days and does not re-count the overdue."""
+    from datetime import timedelta
+
+    today = date.today()
+    iso = today.isoformat()
+    week_end = (today + timedelta(days=7)).isoformat()
+    return {
+        "all": tasks,
+        "overdue": [t for t in tasks if t.due_on is not None and t.due_on < iso],
+        "week": [
+            t for t in tasks
+            if t.due_on is not None and iso <= t.due_on <= week_end
+        ],
+        "undated": [t for t in tasks if t.due_on is None],
+    }
+
+
+def _context(request: Request, *, show: str, ref: str | None) -> dict[str, Any]:
     conn = _conn(request)
-    tasks = _open_tasks(conn, overdue_only=overdue_only, ref=ref)
+    everything = _open_tasks(conn, ref=ref)
+    subsets = _task_subsets(everything)
+    tasks = subsets.get(show, everything) if show != "requests" else []
     labels = _labels(conn, tasks)
-    today = date.today().isoformat()
     # Read ONCE. The first cut of this called outstanding_request_rows twice —
     # for the rows and again for their account labels — which is the same
     # repetition, one query lower down, that the account-link macro exists to
     # stop in the markup.
     requests = [dict(r) for r in rfi_repo.outstanding_request_rows(conn)]
+    if ref:
+        org = orgs_repo.find(conn, ref)
+        requests = [
+            r for r in requests if org is not None and str(r.get("org_id")) == org.id
+        ]
     return {
         "section": "items",
         "tasks": [
-            _row(request, t, labels, _view_query(overdue_only=overdue_only, ref=ref))
+            _row(request, t, labels, _view_query(show=show, ref=ref))
             for t in tasks
         ],
         "accounts": labels,
-        "overdue_count": sum(
-            1 for t in tasks if t.due_on is not None and t.due_on < today
-        ),
-        "undated_count": sum(1 for t in tasks if t.due_on is None),
+        "counts": {
+            **{name: len(members) for name, members in subsets.items()},
+            "requests": len(requests),
+        },
+        "overdue_count": len(subsets["overdue"]),
+        "undated_count": len(subsets["undated"]),
+        "open_count": len(everything),
         # The chase queue, read-only here: an outstanding item belongs to a
         # request, and editing one properly means seeing its request. The row
         # links to the account's Work tab rather than growing a second, thinner
@@ -185,8 +213,9 @@ def _context(request: Request, *, overdue_only: bool, ref: str | None) -> dict[s
         "request_accounts": orgs_repo.labels_for(
             conn, {str(r["org_id"]) for r in requests if r.get("org_id")}
         ),
-        "overdue_only": overdue_only,
+        "show": show,
         "filter_ref": ref or "",
+        "view_query": _view_query(show=show, ref=ref),
         "all_accounts": sorted(
             orgs_repo.list_orgs(conn, kind="client"), key=lambda o: o.name
         ),
@@ -194,19 +223,41 @@ def _context(request: Request, *, overdue_only: bool, ref: str | None) -> dict[s
     }
 
 
-def _page(request: Request, *, overdue_only: bool, ref: str | None) -> HTMLResponse:
+def _page(request: Request, *, show: str, ref: str | None) -> HTMLResponse:
     return TEMPLATES.TemplateResponse(
-        request, "items.html", _context(request, overdue_only=overdue_only, ref=ref)
+        request, "items.html", _context(request, show=show, ref=ref)
     )
+
+
+def _list_section(request: Request, *, show: str, ref: str | None) -> HTMLResponse:
+    """The working list alone — what done and drop answer with, so taking a
+    task off the list swaps the SECTION, never the body (the system pass's
+    one 'reloads the page' finding)."""
+    return TEMPLATES.TemplateResponse(
+        request, "partials/_items_list.html", _context(request, show=show, ref=ref)
+    )
+
+
+def _show_param(show: str | None, overdue: str | None) -> str:
+    # overdue=1 was the old spelling of the view; kept as a redirect-shaped
+    # courtesy so old bookmarks still land on the same list
+    if show in _FILTERS:
+        return show or "all"
+    if overdue == "1":
+        return "overdue"
+    return "all"
 
 
 @router.get("/items", response_class=HTMLResponse)
 def items_page(
-    request: Request, overdue: str | None = None, account: str | None = None
+    request: Request,
+    show: str | None = None,
+    overdue: str | None = None,
+    account: str | None = None,
 ) -> HTMLResponse:
     """The filters live in the QUERY STRING so a view is a link: "everything
     overdue" is a URL a broker can keep, and the back button behaves."""
-    return _page(request, overdue_only=overdue == "1", ref=account)
+    return _page(request, show=_show_param(show, overdue), ref=account)
 
 
 @router.get("/items/tasks/new", response_class=HTMLResponse)
@@ -236,13 +287,14 @@ async def task_create(request: Request) -> HTMLResponse:
                 submitted={k: str(v) for k, v in values.items()},
             )
         )
-    return _page(request, overdue_only=False, ref=None)
+    return _page(request, show="all", ref=None)
 
 
 @router.post("/items/tasks/{task_id}/done", response_class=HTMLResponse)
 def task_done(
     request: Request,
     task_id: str,
+    show: str | None = None,
     overdue: str | None = None,
     account: str | None = None,
 ) -> HTMLResponse:
@@ -256,13 +308,14 @@ def task_done(
     task = task_or_404(conn, task_id)
     org: Org | None = orgs_repo.get(conn, task.org_id) if task.org_id else None
     complete_task(conn, org, task_id)
-    return _page(request, overdue_only=overdue == "1", ref=account)
+    return _list_section(request, show=_show_param(show, overdue), ref=account)
 
 
 @router.post("/items/tasks/{task_id}/drop", response_class=HTMLResponse)
 def task_drop(
     request: Request,
     task_id: str,
+    show: str | None = None,
     overdue: str | None = None,
     account: str | None = None,
 ) -> HTMLResponse:
@@ -277,4 +330,4 @@ def task_drop(
     task = task_or_404(conn, task_id)
     org: Org | None = orgs_repo.get(conn, task.org_id) if task.org_id else None
     drop_task(conn, org, task_id)
-    return _page(request, overdue_only=overdue == "1", ref=account)
+    return _list_section(request, show=_show_param(show, overdue), ref=account)

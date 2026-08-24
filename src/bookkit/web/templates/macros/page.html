@@ -1,0 +1,59 @@
+{# The system pass's shared page vocabulary (design 4B, 2026-08-24).
+
+   P1 — the page BAND: every screen opens the same way, an ink band carrying
+   the screen's name in serif and its one-line standing, then the body. The
+   band's own actions are the screen's PRIMARY ones only, at most two,
+   inverted on ink: solid paper for the primary, hairline outline for the
+   secondary. Use with {% call %} for the action buttons.
+
+   P2 — SECTION HEADERS earn their weight: tier 1 is a screen's spine
+   (serif title, the count as a serif figure — the number the broker is
+   reading for — over a 2px ink rule); tier 2 is a real section (smaller,
+   1px rule); tier 3 stays the existing mono rail label, for rails and
+   strips only.
+
+   P3 — the STAT STRIP: any two-to-five headline numbers. Mono label above,
+   serif figure below, hairline dividers, ink rule on top — the same
+   .band-stats/.stat CSS the program band already renders, one home. A
+   figure takes a state class only when it IS that state. #}
+
+{% macro band(title, standing="") %}
+<header class="page-band">
+  <h1 class="page-band-title">{{ title }}</h1>
+  {% if standing %}<span class="page-band-standing mono">{{ standing }}</span>{% endif %}
+  <span class="page-band-spacer"></span>
+  {{ caller() if caller is defined else "" }}
+</header>
+{% endmacro %}
+
+{% macro sect(title, count=none, tone="", hint="") %}
+<div class="sect-head">
+  <h2 class="sect-title">{{ title }}</h2>
+  {% if count is not none %}<span class="sect-count{% if tone %} is-{{ tone }}{% endif %}">{{ count }}</span>{% endif %}
+  <span class="sect-spacer"></span>
+  {% if hint %}<span class="sect-hint">{{ hint }}</span>{% endif %}
+  {{ caller() if caller is defined else "" }}
+</div>
+{% endmacro %}
+
+{% macro sect2(title, count=none, tone="", hint="") %}
+<div class="sect-head sect-head-2">
+  <h2 class="sect-title">{{ title }}</h2>
+  {% if count is not none %}<span class="sect-count{% if tone %} is-{{ tone }}{% endif %}">{{ count }}</span>{% endif %}
+  <span class="sect-spacer"></span>
+  {% if hint %}<span class="sect-hint">{{ hint }}</span>{% endif %}
+  {{ caller() if caller is defined else "" }}
+</div>
+{% endmacro %}
+
+{% macro stats() %}
+<div class="band-stats page-stats">{{ caller() }}</div>
+{% endmacro %}
+
+{% macro stat(label, value, tone="", sub="") %}
+<div class="stat">
+  <span class="stat-label">{{ label }}</span>
+  <span class="stat-value stat-figure{% if tone %} is-{{ tone }}{% endif %}">{{ value }}</span>
+  {% if sub %}<span class="stat-sub{% if tone == 'danger' %} is-danger{% endif %}">{{ sub }}</span>{% endif %}
+</div>
+{% endmacro %}
