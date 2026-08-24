@@ -500,6 +500,24 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         return _program_bind(rw, placement_ref, layer_id, carrier, share)
 
     @server.tool()
+    async def program_market_premium(
+        placement_ref: str, layer_id: str, carrier: str,
+        premium: str | None = None,
+    ) -> dict[str, Any]:
+        """State ONE market's premium on a layer its markets share — a
+        differential, tax and fees on one paper, a non-concurrent quote.
+
+        STATING ONE STATES THEM ALL: every other market on the layer is
+        written at the figure it was already showing, and the layer's premium
+        becomes their sum. Three numbers move and two are ones you did not
+        send. Leave `premium` off to CLEAR the whole layer back to one premium
+        split by share. Money in dollars ('520k', '$520,000');
+        program_revert_file(batch) restores the file."""
+        return _program_market_premium(
+            rw, placement_ref, layer_id, carrier, premium
+        )
+
+    @server.tool()
     async def program_layer_edit(
         placement_ref: str,
         layer_id: str,
@@ -1529,6 +1547,37 @@ def _program_bind(
     )
     return {"bound": carrier, "share_bps": bps, "layer_id": layer_id,
             "warnings": warnings, "batch": batch.ref}
+
+
+def _program_market_premium(
+    conn: sqlite3.Connection, placement_ref: str, layer_id: str,
+    carrier: str, premium: str | None = None,
+) -> dict[str, Any]:
+    from . import sync as sync_mod
+    from .money import parse_money_cents
+
+    placement = _resolve_linked_placement(conn, placement_ref)
+    cents = parse_money_cents(premium) if premium else None
+    batch, warnings = _program_write(
+        conn, placement,
+        tool="program_market_premium",
+        summary=(
+            f"cleared the stated market premiums on {layer_id}"
+            if cents is None
+            else f"stated {carrier}'s premium on {layer_id}"
+        ),
+        write=lambda: sync_mod.set_participant_premium(
+            conn, placement.id, layer_id, carrier, cents
+        ),
+    )
+    return {
+        "layer_id": layer_id,
+        "carrier": carrier,
+        "premium_cents": cents,
+        "cleared": cents is None,
+        "warnings": warnings,
+        "batch": batch.ref,
+    }
 
 
 def _program_layer_edit(

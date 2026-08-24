@@ -65,7 +65,13 @@
         <span class="stat-value">{{ ws.limit_cell | safe }}</span>
       </div>
       <div class="stat">
-        <span class="stat-label">premium</span>
+        {# Once any market states its own premium, this figure is their SUM —
+           towerkit refuses a write to it while that holds, because typing
+           over it would make one of the two numbers a lie. The label says so
+           before the refusal has to. #}
+        <span class="stat-label">premium{% if ws.premium_from_markets %}
+          <span class="ws-hint" title="the sum of this layer's market premiums — clear one of them to type a layer premium again">from markets</span>
+        {% endif %}</span>
         <span class="stat-value">{{ ws.premium_cell | safe }}</span>
       </div>
       {% if not ws.buffer %}

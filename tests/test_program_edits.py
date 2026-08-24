@@ -229,6 +229,9 @@ def test_layer_details_carries_the_carrier_panel(linked) -> None:
         {
             "carrier": "Zurich", "share_pct": 100.0,
             "limit_cents": 2_000_000_00, "premium_cents": 900_000_00,
+            # DERIVED: this is the layer's premium taken by share, not a
+            # figure the market stated (towerkit's Participant.premium).
+            "premium_stated": False,
         },
     ]
     # a layer with no panel is 'To be placed' — an EMPTY list, never absent,
@@ -238,10 +241,12 @@ def test_layer_details_carries_the_carrier_panel(linked) -> None:
         {
             "carrier": "Chubb", "share_pct": 60.0,
             "limit_cents": 6_000_000_00, "premium_cents": 180_000_00,
+            "premium_stated": False,
         },
         {
             "carrier": "AXA XL", "share_pct": 40.0,
             "limit_cents": 4_000_000_00, "premium_cents": 120_000_00,
+            "premium_stated": False,
         },
     ]
     # the shares add up to the signed figure already on the layer — same units
@@ -267,6 +272,10 @@ def test_layer_details_premium_share_is_none_when_the_layer_has_none(linked) -> 
         {
             "carrier": "Berkley", "share_pct": 100.0,
             "limit_cents": 5_000_000_00, "premium_cents": None,
+            # False, not absent: this seat takes a SHARE of the layer's
+            # premium, and the layer has none. "Stated by the market" is a
+            # different claim from "there is no figure" (2026-08-24).
+            "premium_stated": False,
         },
     ]
 
