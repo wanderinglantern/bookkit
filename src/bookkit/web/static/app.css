@@ -4234,6 +4234,14 @@ button.term-label {
   cursor: pointer;
 }
 
+/* The figure a market is giving up, beside the one replacing it, in the
+   clear-premium confirm. Struck through rather than merely dimmed: the row
+   shows two numbers and the reader must not have to work out which is which. */
+.ws-preview-was {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
 .index-group-bucket {
   align-self: center;
   font-size: var(--hint-size);

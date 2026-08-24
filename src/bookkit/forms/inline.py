@@ -184,7 +184,10 @@ PARTICIPANT_FIELDS: tuple[Field, ...] = (
     # quote (Grant, 2026-08-24). OPTIONAL, and blank is a real answer that
     # CLEARS the whole layer back to a premium split by share: towerkit's
     # rule is all-or-nothing, because a seat left deriving beside stated ones
-    # derives from a base that already contains their money.
+    # derives from a base that already contains their money. It CONFIRMS
+    # first (routes/program.py `_market_premium_save`), naming every figure
+    # given up — the blank moves every number in the table and arrives on
+    # blur, which makes it the easiest of these writes to trigger by accident.
     #
     # Not part of the ADD form — a market is bound at a share, and its own
     # premium is a correction made afterwards, if at all. `_market_add_fields`

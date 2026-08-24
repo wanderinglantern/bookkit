@@ -3787,8 +3787,40 @@ def test_a_second_edit_commits_in_place_without_previewing(app_and_org):
     assert fresh["participants"][index]["premium_cents"] == 53_000_000
 
 
-def test_blank_clears_the_whole_layer_back_to_a_split(app_and_org):
-    """towerkit's all-or-nothing rule, not a web decision."""
+def test_a_blank_confirms_before_it_clears_the_whole_layer(app_and_org):
+    """THE MIRROR OF THE FIRST OVERRIDE, and it went in unannounced.
+
+    Blanking one cell clears the stated premium on EVERY market — towerkit's
+    all-or-nothing rule, not a web decision — and each seat lands on a share of
+    the layer premium instead. The broker typed none of those figures, and the
+    blank arrives on BLUR, so a cell tabbed through empty wrote it. Two
+    docstrings said a confirm named it first; no confirm route existed
+    (surface sweep, 2026-08-24).
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+    client.post(
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "520000.00", "commit": "1"},
+    )
+
+    blanked = client.post(
+        _premium_cell(org, placement, layer["id"], index), data={"premium_cents": ""}
+    )
+
+    assert "unsaved edit" in blanked.text, "the clear went in with no confirm"
+    assert "every" in blanked.text, "the confirm does not say it clears them all"
+    fresh = next(
+        row for row in sync.layer_details(conn, placement.id) if row["id"] == layer["id"]
+    )
+    assert all(seat["premium_stated"] for seat in fresh["participants"]), (
+        "the preview wrote"
+    )
+
+
+def test_the_confirmed_blank_clears_the_whole_layer_back_to_a_split(app_and_org):
+    """And the write itself is unchanged: all of them, back to a split."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement, layer, index = _shared_seat(conn, org)
@@ -3798,7 +3830,8 @@ def test_blank_clears_the_whole_layer_back_to_a_split(app_and_org):
     )
 
     cleared = client.post(
-        _premium_cell(org, placement, layer["id"], index), data={"premium_cents": ""}
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "", "commit": "1"},
     )
 
     assert cleared.status_code == 200
@@ -3806,6 +3839,22 @@ def test_blank_clears_the_whole_layer_back_to_a_split(app_and_org):
         row for row in sync.layer_details(conn, placement.id) if row["id"] == layer["id"]
     )
     assert not any(seat["premium_stated"] for seat in fresh["participants"])
+
+
+def test_a_blank_on_a_layer_nobody_has_stated_still_commits_in_place(app_and_org):
+    """The confirm is about UNDOING stated premiums. A layer with none has
+    nothing to clear, and making the broker confirm a write that changes
+    nothing is the dead-affordance bug in the other direction."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+
+    blanked = client.post(
+        _premium_cell(org, placement, layer["id"], index), data={"premium_cents": ""}
+    )
+
+    assert "unsaved edit" not in blanked.text
+    _assert_panel_swap(blanked, placement.id)
 
 
 def test_the_layer_premium_says_it_comes_from_the_markets(app_and_org):

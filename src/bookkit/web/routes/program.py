@@ -3017,24 +3017,41 @@ def _market_premium_save(
     stated, so only the sum moves and the panel re-renders with it.
 
     BLANK CLEARS THE WHOLE LAYER, back to a premium split by share. That is
-    towerkit's all-or-nothing rule, not a web decision, and the confirm says
-    so before it happens.
+    towerkit's all-or-nothing rule, not a web decision, and it confirms first
+    — `premium_clear_preview` names every figure being given up and the share
+    each seat lands on. This sentence stood for a day while no such route
+    existed and the blank went in on blur (2026-08-24); a docstring that
+    promises a guard is worth less than no docstring at all.
     """
     layer_id = layer["id"]
     already = any(part.get("premium_stated") for part in layer["participants"])
-    if value is not None and not already and not commit:
-        preview = sync.premium_preview(
+    # TWO WRITES ON THIS CELL MOVE FIGURES NOBODY TYPED, and both are shown
+    # first. Stating the first premium on a layer states every seat and sums
+    # them; BLANKING one clears every seat back to a share of the layer's
+    # premium — all-or-nothing is towerkit's rule, not a web decision. The
+    # clear was the unannounced one, and it is the easier of the two to
+    # trigger: blur commits, so a cell tabbed through empty wrote it
+    # (2026-08-24). Both docstrings had promised a confirm for as long as
+    # there was none.
+    previewing = (
+        sync.premium_preview(
             conn, placement.id, layer_id, seat["carrier"], int(value)
         )
-        if preview["ok"]:
+        if value is not None and not already
+        else sync.premium_clear_preview(conn, placement.id, layer_id, seat["carrier"])
+        if value is None and already
+        else None
+    )
+    if previewing is not None and not commit:
+        if previewing["ok"]:
             return _premium_preview_response(
-                request, ref, placement.id, layer, index, seat, preview, raw
+                request, ref, placement.id, layer, index, seat, previewing, raw
             )
         # A refused preview is a refused write: say it in the cell the broker
         # typed in, with what they typed still there.
         return _market_editor_cell(
             request, conn, ref, placement.id, layer, index, seat,
-            "premium_cents", "; ".join(preview["errors"]), raw,
+            "premium_cents", "; ".join(previewing["errors"]), raw,
         )
 
     try:

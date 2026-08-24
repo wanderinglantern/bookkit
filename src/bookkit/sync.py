@@ -2047,6 +2047,79 @@ def premium_preview(
     }
 
 
+def premium_clear_preview(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    carrier: str,
+) -> dict[str, Any]:
+    """What CLEARING this market's premium would do to the whole layer.
+
+    Blanking one cell clears EVERY seat: towerkit's rule is all-or-nothing,
+    because a seat left deriving beside stated ones derives from a base that
+    already contains their money. So the blank is the mirror of the first
+    override — it moves every figure in the table and the broker typed none of
+    them — and it arrives on BLUR, which makes it the easier of the two to
+    trigger by accident. It went in unannounced while two docstrings said a
+    confirm names it first (2026-08-24).
+
+    The layer KEEPS the figure it had, which is the last sum; each seat goes
+    back to its share of it. Derived here through `preview`, like its sibling,
+    so no surface multiplies money.
+    """
+    def mutation(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        index = next(
+            (i for i, p in enumerate(layer.participants) if p.carrier == carrier),
+            None,
+        )
+        if index is None:
+            seated = ", ".join(p.carrier for p in layer.participants) or "nobody"
+            raise ValueError(f"{carrier} is not on {layer.name} — {seated} is")
+        from towerkit.edit import set_participant_premium as edit_set_premium
+
+        edit_set_premium(program, layer_id, index, None)
+
+    before = linked_program(conn, placement_id).program
+    stated: dict[str, int | None] = {}
+    if before is not None:
+        current = next(
+            (ly for ly in before.layers if ly.id == layer_id), None
+        )
+        if current is not None:
+            stated = {
+                part.carrier: _cents_or_none(part.premium)
+                for part in current.participants
+            }
+    program, diags = preview(conn, placement_id, mutation)
+    if program is None:
+        return {"ok": False, "errors": [d.message for d in diags.errors]}
+    layer = _find_layer(program, layer_id)
+    return {
+        "ok": diags.ok,
+        "errors": [d.message for d in diags.errors],
+        "warnings": _new_warnings(conn, placement_id, diags),
+        "carrier": carrier,
+        "layer_name": layer.name,
+        "premium_cents": _cents_or_none(layer.premium),
+        "clearing": True,
+        "seats": [
+            {
+                "carrier": part.carrier,
+                "share_pct": part.share_bps / 100,
+                # What the seat WOULD show: its share of the layer premium,
+                # which is where every one of them lands once none is stated.
+                "premium_cents": _cents_or_none(layer.premium_for(part)),
+                # And what it is showing NOW, so the sentence can name the
+                # figure being given up rather than only the one replacing it.
+                "was_cents": stated.get(part.carrier),
+                "typed": part.carrier == carrier,
+            }
+            for part in layer.participants
+        ],
+    }
+
+
 def set_applies_to(
     conn: sqlite3.Connection, placement_id: str, layer_id: str, line_ids: list[str]
 ) -> Diagnostics:
