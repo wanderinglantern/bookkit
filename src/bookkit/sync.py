@@ -49,7 +49,7 @@ from towerkit.edit import add_retention as edit_add_retention
 from towerkit.edit import add_sublimit as edit_add_sublimit
 from towerkit.edit import edit_retention as edit_edit_retention
 from towerkit.edit import edit_sublimit as edit_edit_sublimit
-from towerkit.edit import heal_follows, slugify, unique_id
+from towerkit.edit import heal_follows, heal_premiums, slugify, unique_id
 from towerkit.edit import move_line as edit_move_line
 from towerkit.edit import remove_layer as edit_remove_layer
 from towerkit.edit import remove_line as edit_remove_line
@@ -2604,6 +2604,7 @@ def preview(
         diags.error("conflict", str(exc))
         return None, diags
     heal_follows(program)
+    heal_premiums(program)
     return program, validate_program(program)
 
 
@@ -2842,6 +2843,15 @@ def write_through(
     # where the excess sits. Healing here means one thing is validated, dumped
     # and re-projected: the healed program.
     heal_follows(program)
+    # AND THE PREMIUM SUM, for the same reason and in the same place. A layer
+    # whose markets all state their own premium IS their sum
+    # (towerkit.edit.heal_premiums), and `set_participant_premium` holds that
+    # only while IT is the writer — unbinding a market left the layer claiming
+    # $1,960,000 with one seat paid $520,000, and the phantom rode into
+    # `placement.total_premium` below while `proj_participant` stayed right.
+    # A heal here fixes every writer, present and future; re-summing at each
+    # mutation site fixes only the ones somebody remembered.
+    heal_premiums(program)
     check = validate_program(program)
     if not check.ok:
         return check
