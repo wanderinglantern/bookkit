@@ -3470,3 +3470,613 @@ tr:hover .market .chip-remove {
   justify-content: flex-end;
   margin: 0 0 0.5rem;
 }
+
+/* === The program worksheet (design 1C/2A/3A, 2026-08-24) ==================
+   One grammar: structure index left, one layer's worksheet in the middle,
+   the rail (diagnostics + tower) right. Figures set in serif, labels in
+   tracked mono caps, every colour a token. */
+
+/* --- the program band ---------------------------------------------------- */
+
+.program-band {
+  background: var(--wash);
+  border-bottom: 1px solid var(--hairline);
+  padding: 0.75rem 1rem 0.6rem;
+  margin: 0 -1rem; /* bleed to the section's edge like the old head did */
+}
+
+.program-band .program-identity {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.program-band .program-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 0.35rem;
+}
+
+/* The stat strip: cells divided by hairlines, labels in tracked mono caps,
+   HEADLINE FIGURES IN SERIF — the redesign's main character move. */
+.band-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  margin-top: 0.6rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.55rem 1.1rem 0.35rem 0;
+  min-width: 0;
+}
+
+.stat + .stat {
+  border-left: 1px solid var(--hairline);
+  padding-left: 1.1rem;
+}
+
+.stat-label {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--label-size);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.stat-value {
+  font-size: var(--body-size);
+  min-width: 0;
+}
+
+.stat-figure {
+  font-family: var(--serif);
+  font-size: 1.0625rem;
+  font-weight: 700;
+}
+
+.stat-sub {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.stat-figure.is-open {
+  color: var(--warn);
+}
+
+.stat-figure.is-placed {
+  color: var(--good);
+}
+
+.stat-lines {
+  flex: 1 1 14rem;
+}
+
+.stat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: baseline;
+}
+
+.stat-wide {
+  flex-basis: 100%;
+  border-left: none;
+}
+
+/* --- the workbench: three panes, siblings, each its own scroll ----------- */
+
+.program-workbench {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border-bottom: 1px solid var(--hairline);
+  margin: 0 -1rem;
+  min-height: 24rem;
+}
+
+.structure-index {
+  flex: none;
+  width: 16.5rem;
+  border-right: 1px solid var(--hairline);
+  background: var(--wash);
+  padding: 0.75rem 0 0.9rem;
+  overflow-y: auto;
+}
+
+.worksheet {
+  flex: 1;
+  min-width: 0; /* without it a long carrier name pushes the rail off-screen */
+  padding: 1rem 1.25rem 1.25rem;
+  overflow-y: auto;
+}
+
+.program-rail {
+  flex: none;
+  width: 14.5rem;
+  border-left: 1px solid var(--hairline);
+  background: var(--wash);
+  padding: 0.9rem 0.85rem;
+  overflow-y: auto;
+}
+
+/* --- the structure index ------------------------------------------------- */
+
+.index-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0 0.85rem 0.5rem;
+}
+
+.index-label,
+.rail-caps {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--label-size);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.index-count {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.index-collapse {
+  margin-left: auto;
+  font: inherit;
+  font-size: var(--hint-size);
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.index-group {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  border: none;
+  cursor: pointer;
+  background: var(--hairline-2);
+  padding: 0.3rem 0.85rem;
+  margin-top: 0.35rem;
+}
+
+.index-group:first-of-type {
+  margin-top: 0;
+}
+
+.index-glyph {
+  /* ▸/▾ are not in Noto Sans — glyph-bearing elements take the mono face
+     (the same rule the app.css font comment records for ◆ and ✕). */
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.index-group-name {
+  flex: 1;
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--label-size);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.index-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0.35rem 0.85rem;
+  min-height: var(--row-height);
+  flex-wrap: wrap;
+}
+
+.index-row:hover {
+  background: var(--hover);
+}
+
+.index-name {
+  flex: 1;
+  font-size: var(--body-size);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.index-limit {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.index-signed {
+  font-size: var(--hint-size);
+}
+
+.index-signed.is-placed {
+  color: var(--good);
+}
+
+.index-signed.is-open {
+  color: var(--warn);
+}
+
+/* The selected row inverts — same move as the design's mock. Its own signed
+   figure keeps a light tint so it stays legible on ink. */
+.index-row.is-selected {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.index-row.is-selected .index-name {
+  font-weight: 700;
+}
+
+.index-row.is-selected .index-limit {
+  color: var(--paper);
+  opacity: 0.75;
+}
+
+.index-row.is-selected .index-signed.is-open {
+  color: var(--warn-wash);
+}
+
+.index-row.is-selected .index-signed.is-placed {
+  color: var(--good-badge);
+}
+
+/* A buffer wears the drawing's own hatch — a deliberate uninsured band. */
+.index-row.is-buffer {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--wash),
+    var(--wash) 5px,
+    var(--stone) 5px,
+    var(--stone) 10px
+  );
+}
+
+.index-row.is-buffer .index-name {
+  color: var(--muted);
+}
+
+.index-spans {
+  flex-basis: 100%;
+  font-size: var(--label-size);
+  color: var(--muted);
+}
+
+.index-row.is-selected .index-spans {
+  color: var(--paper);
+  opacity: 0.75;
+}
+
+.index-foot {
+  padding: 0.75rem 0.85rem 0;
+}
+
+.index-add {
+  font: inherit;
+  font-size: var(--body-size);
+  width: 100%;
+  text-align: left;
+  padding: 0.3rem 0.6rem;
+  border: 1px dashed var(--accent);
+  color: var(--accent);
+  background: none;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.index-terms {
+  margin-top: 0.9rem;
+  padding: 0.75rem 0.85rem 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.index-term-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.45rem;
+}
+
+/* --- the worksheet ------------------------------------------------------- */
+
+.worksheet > .cell-error-msg {
+  display: block;
+  margin: 0 0 0.6rem;
+}
+
+.ws-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.ws-name .cell,
+.ws-name {
+  font-family: var(--serif);
+  font-size: 1.4375rem;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.ws-id {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.ws-flag {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 0 0.3rem;
+  border-radius: 3px;
+}
+
+/* The span pill announces a multi-line slab — in the title AND the index,
+   so the reader never learns it after an edit. */
+.ws-spans {
+  font-size: var(--hint-size);
+  padding: 0.1rem 0.45rem;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 3px;
+}
+
+.ws-position {
+  margin: 0.5rem 0 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  max-width: 42rem;
+}
+
+.ws-figure {
+  font-weight: 700;
+}
+
+.ws-position-hint {
+  display: block;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.ws-controls {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+  flex-wrap: wrap;
+}
+
+/* The worksheet's stat strip: ink rule above, hairline below, dividers
+   between — and the headline figures in serif, cells included. */
+.ws-stats {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.ws-stats .stat-value .cell,
+.ws-stats .stat-figure {
+  font-family: var(--serif);
+  font-size: 1.3125rem;
+  font-weight: 700;
+}
+
+.ws-block-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.ws-hint {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.ws-participation {
+  margin-top: 1.1rem;
+}
+
+.ws-participation .table-less,
+.ws-participation table {
+  margin-top: 0.4rem;
+  max-width: 46rem;
+}
+
+.ws-participation td.derived {
+  color: var(--muted);
+}
+
+.row-tail {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Open capacity is a first-class, actionable row — warn wash, both figures
+   bold, and "place it" focuses the bind row. Colour backs the words. */
+tr.open-capacity td {
+  background: var(--warn-wash);
+  color: var(--warn);
+}
+
+tr.open-capacity td.num {
+  font-weight: 700;
+}
+
+tr.open-capacity .place-it {
+  color: var(--accent);
+}
+
+.market-add-row td {
+  padding-top: 0.45rem;
+}
+
+/* The add row's inputs size to their columns, not the other way round — an
+   unconstrained input is what stretched the Share column under the header. */
+.market-add-row input {
+  font: inherit;
+  border: 1px solid var(--accent);
+  padding: 0.15rem 0.35rem;
+  border-radius: 3px;
+}
+
+.market-add-row td:first-child input {
+  width: 12rem;
+  max-width: 100%;
+}
+
+.market-add-row td.num input {
+  width: 3.5rem;
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+}
+
+/* --- covers: the line matrix -------------------------------------------- */
+
+.ws-covers {
+  margin-top: 1.1rem;
+  border: 1px solid var(--hairline);
+  padding: 0.6rem 0.75rem 0.7rem;
+  max-width: 46rem;
+  border-radius: 3px;
+}
+
+.ws-line-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+}
+
+.line-pill {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--paper);
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.line-pill.is-on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
+/* --- the worksheet's fact blocks ----------------------------------------- */
+
+.ws-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  margin-top: 1.1rem;
+}
+
+.ws-fact-block {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.ws-fact-block > .detail-label {
+  flex: none;
+  width: 5.5rem;
+}
+
+.ws-fact-block > .detail-inline,
+.ws-fact-block > .detail-stack {
+  flex: 1;
+  min-width: 0;
+}
+
+/* --- the rail ------------------------------------------------------------ */
+
+.rail-block + .rail-block {
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.rail-hint {
+  margin: 0.4rem 0 0;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+/* The selected layer, outlined in the rail's drawing — the same accent the
+   index row inverts to. */
+.tower-layer.is-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  z-index: 1;
+}
+
+/* The term chip's label is a real BUTTON now (keyboard sweep); it keeps the
+   chip's text look. */
+button.term-label {
+  font: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+}
+
+/* --- responsive: the rail drops first, then the index -------------------- */
+
+@media (max-width: 62.5rem) {
+  .program-workbench {
+    flex-wrap: wrap;
+  }
+
+  .program-rail {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--hairline);
+  }
+}
+
+@media (max-width: 48rem) {
+  .structure-index {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--hairline);
+  }
+}

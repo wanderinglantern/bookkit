@@ -56,8 +56,9 @@ def _url(org, placement, layer_id):
 
 
 def _details(client, org, placement, layer_id) -> str:
+    """The layer's worksheet — the redesign's home for the policy facts."""
     return client.get(
-        f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/details"
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet?layer={layer_id}"
     ).text
 
 
@@ -227,11 +228,12 @@ class TestTheGuards:
 
         assert got.status_code == 404
 
-    def test_a_refusal_comes_back_as_the_row_not_a_status_code(
+    def test_a_refusal_comes_back_as_the_section_not_a_status_code(
         self, app_and_org
     ) -> None:
         """An error response produces no swap and no message at all under
-        htmx — the control would simply stop working."""
+        htmx — the control would simply stop working. A refusal answers the
+        section, retargeted, with the message at the top of the worksheet."""
         client, org = app_and_org
         conn = client.app.state.conn
         placement, mine, _ = _two_layers(conn, org)
@@ -240,7 +242,10 @@ class TestTheGuards:
             _url(org, placement, mine), data={"policy_group": "not-a-layer"}
         )
 
-        assert refused.text.lstrip().startswith("<tr")
+        assert refused.status_code == 200
+        assert refused.headers.get("HX-Retarget") == f"#program-{placement.id}"
+        assert "cell-error-msg" in refused.text
+        assert "not-a-layer" in refused.text
 
 
 class TestTheRuleItCarries:

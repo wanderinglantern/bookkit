@@ -1,0 +1,36 @@
+{# The worksheet's insert form — a name and a limit, NOTHING ELSE TYPED.
+   Position and anchor ride as hidden fields because the control that opened
+   this already said them ("insert above 2nd Excess"), and an attachment
+   input is the thing this design exists to not have: the new slab seats
+   where the position puts it and everything above moves up.
+
+   Renders into the worksheet's form host; a refusal re-renders this same
+   fragment with the message and the typing kept; success answers the whole
+   section, retargeted. The two submit buttons are the layer/buffer choice —
+   a buffer is a slab (deliberate uninsured band), not a gap. #}
+<form class="entity-form insert-form" hx-post="{{ action }}"
+      hx-target="closest .form-host" hx-swap="innerHTML">
+  <p class="form-title">insert {{ position }} {{ anchor_name }}</p>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <input type="hidden" name="anchor" value="{{ anchor }}">
+  <input type="hidden" name="position" value="{{ position }}">
+  <div class="field">
+    <label>name
+      <input type="text" name="name" required placeholder="2nd Excess"
+             value="{{ typed.get('name', '') }}" autofocus>
+    </label>
+  </div>
+  <div class="field">
+    <label>limit
+      <input type="text" name="limit_cents" required placeholder="10m"
+             value="{{ typed.get('limit_cents', '') }}">
+    </label>
+  </div>
+  <p class="form-hint">everything above moves up — the attachment comes from the position, never typed</p>
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary" name="kind" value="layer">insert layer</button>
+    <button type="submit" class="btn" name="kind" value="buffer"
+            title="a deliberate uninsured band — no carriers, no premium">insert buffer</button>
+    <button type="button" class="btn btn-cancel" data-form-cancel>cancel</button>
+  </div>
+</form>

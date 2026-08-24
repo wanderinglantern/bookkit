@@ -457,15 +457,27 @@ def test_the_stack_editor_has_no_attachment_input(app_and_org) -> None:
     attachment either.
     """
     client, org = app_and_org
-    page = client.get(f"/accounts/{org.ref}/program").text
-    editor = _stack_editor_markup(page)
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    layer = sync.layer_details(conn, placement.id)[0]
 
-    # Not vacuous: reaches the insert form's own LAST control.
-    assert "insert buffer" in editor
+    form = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/layers/{layer['id']}/insert?position=above"
+    ).text
 
-    assert 'name="attach' not in editor
-    assert 'name="anchor"' in editor
-    assert 'name="position"' in editor
+    # Not vacuous: reaches the form's own LAST control.
+    assert "insert buffer" in form
+
+    assert 'name="attach' not in form
+    assert 'name="anchor"' in form
+    assert 'name="position"' in form
+    # and the worksheet itself offers no attachment cell either — the
+    # position sentence replaced the field (design 2026-08-24)
+    page = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet?layer={layer['id']}"
+    ).text
+    assert 'data-field="attach_cents"' not in page
 
 
 def test_no_attachment_input_survives_anywhere_on_the_program_tab(app_and_org) -> None:
@@ -542,16 +554,27 @@ def test_add_carrier_sits_on_the_slab_and_add_layer_on_the_stack(
     are visibly different acts, in different places.
 
     Scoped to WHERE each control lives, not merely that its words appear
-    somewhere on the page — "+ carrier" anywhere in the document would have
-    passed even sitting on the stack's own form."""
+    somewhere on the page. In the worksheet grammar: carriers are bound in
+    the SLAB's own participation table (the bind row), layers are inserted
+    on the stack (the worksheet's insert controls) — sharing and stacking
+    must never look like the same act."""
     client, org = app_and_org
-    page = client.get(f"/accounts/{org.ref}/program").text
-    editor = page[page.index("stack-editor") :]
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    layer = sync.layer_details(conn, placement.id)[0]
+    page = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet?layer={layer['id']}"
+    ).text
 
-    assert "+ carrier" in _slab_blocks(editor)
-    form = _stack_insert_form(editor)
-    assert "insert layer" in form or "+ layer" in form
-    assert "insert buffer" in form
+    table = page[page.index("ws-participation") : page.index("ws-covers")]
+    assert 'class="market-add-row"' in table, "binding does not live on the slab"
+    assert "/markets" in table
+
+    controls = page[page.index("ws-controls") : page.index('class="ws-host')]
+    assert "insert above" in controls and "insert below" in controls, (
+        "inserting a layer does not live on the stack controls"
+    )
+    assert "/markets" not in controls, "the two acts share a home"
 
 
 def test_a_multi_line_layer_says_it_appears_in_other_stacks(
@@ -566,9 +589,14 @@ def test_a_multi_line_layer_says_it_appears_in_other_stacks(
     shared = [ly for ly in program.layers if len(ly.applies_to) > 1]
     assert shared, "fixture drifted — no multi-line layer to warn about"
 
-    page = client.get(f"/accounts/{org.ref}/program").text
+    picked = shared[0]
+    page = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/worksheet?layer={picked.id}"
+    ).text
 
-    assert "also on" in page
+    # The span is announced in the index AND in the worksheet title — the
+    # reader never learns it after an edit (design 3A).
+    assert f"spans {len(picked.applies_to)} lines" in page
 
 
 def _arrange_three_single_line_slabs(conn, placement, line_id):
@@ -927,18 +955,19 @@ def test_a_whole_tower_is_buildable_without_a_pointer(app_and_org) -> None:
     before = _stack_of(conn, placement, line_id)
 
     page = client.get(f"/accounts/{org.ref}/program").text
-    editor = _stack_editor_markup(page)
-
-    # Prove the slice is not vacuous: it reaches the insert form's own LAST
-    # control, not just its first few characters.
-    assert "insert buffer" in editor
+    editor = page[page.index("program-workbench") : page.index("export-strip")]
 
     assert "draggable" not in editor
     assert "onmousedown" not in editor
     # Every interactive element is a real, natively-focusable control — a
     # div or span standing in for one, wired to hx-post/hx-get, is a mouse
-    # trap a keyboard (and a screen reader) cannot reach.
+    # trap a keyboard (and a screen reader) cannot reach. The one sanctioned
+    # exception is the inline cell itself (macros/cell.html): a span by
+    # contract, focusable via tabindex and opened by Enter — the keyboard
+    # path this test exists to protect.
     for handler in re.findall(r'<(?:div|span)[^>]*hx-(?:post|get)=', editor):
+        if 'class="cell' in handler and "tabindex" in handler:
+            continue
         raise AssertionError(f"a div/span is doing a control's job: {handler}")
 
     # Drive it: a keyboard user reaches every one of these through Tab and

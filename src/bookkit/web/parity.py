@@ -538,7 +538,9 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
     "Layer.period": "details row: policy effective / policy expiry cells",
     "Layer.follows_underlying": "details row: one-click toggle",
     "Layer.applies_to": "details row: applies-to chips",
-    "Layer.attach": "layer cell (attach_cents)",
+    "Layer.attach": "the worksheet's position sentence, changed by "
+    "move/insert/split — never typed on the web (design 2026-08-24); "
+    "sync.update_layer(attach_cents=) remains for MCP",
     "Layer.limit": "layer cell (limit_cents)",
     "Layer.statutory": "details row: mark/leave statutory, confirm-first",
     "Layer.premium": "layer cell (premium_cents)",

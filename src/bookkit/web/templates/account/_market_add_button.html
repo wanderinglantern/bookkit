@@ -1,9 +1,0 @@
-{# The collapsed "+ market" control. One file, two renderers — the layers
-   panel's first paint and the inline form's cancel — so the two can never
-   drift apart. It swaps ITSELF for the form (closest .market-add,
-   outerHTML): binding a market happens where the markets are read. #}
-<span class="market-add">
-  <button type="button" class="row-action-btn"
-          hx-get="{{ base }}/new"
-          hx-target="closest .market-add" hx-swap="outerHTML">+ market</button>
-</span>

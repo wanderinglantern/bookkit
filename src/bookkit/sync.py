@@ -1492,9 +1492,15 @@ def policy_partners(
     minted and no screen should ever print it. Empty when the layer is not
     linked.
     """
+    return policy_partners_of(linked_program(conn, placement_id).program, layer_id)
+
+
+def policy_partners_of(
+    program: Program | None, layer_id: str
+) -> list[tuple[str, str]]:
+    """`policy_partners` without the I/O — see `layer_named_limits`."""
     from towerkit import edit
 
-    program = linked_program(conn, placement_id).program
     if program is None:
         return []
     layer = next((ly for ly in program.layers if ly.id == layer_id), None)
@@ -1826,10 +1832,18 @@ def named_limits_of(
     """A layer's coordinate limits as the panel reads them: cents, because
     every money value bookkit HANDS a surface is cents (CLAUDE.md) and the
     file's whole dollars are towerkit's side of the boundary."""
-    linked = linked_program(conn, placement_id)
-    if linked.program is None:
+    return layer_named_limits(linked_program(conn, placement_id).program, layer_id)
+
+
+def layer_named_limits(
+    program: Program | None, layer_id: str
+) -> list[dict[str, Any]]:
+    """`named_limits_of` without the I/O — for callers already holding the
+    one parsed program (the web memoises a LinkedProgram per placement per
+    render, and a second open here would silently undo that)."""
+    if program is None:
         return []
-    for layer in linked.program.layers:
+    for layer in program.layers:
         if layer.id == layer_id:
             return [
                 {

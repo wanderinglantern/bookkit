@@ -32,7 +32,7 @@ from ... import db, sync, towerfields
 from ...forms.entities import apply_placement, apply_submission, placement_form, submission_form
 from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS, PLACEMENT_FIELDS
 from ...forms.spec import Field, checked_option, initial_text, parse_value
-from ...money import format_cents_compact
+from ...money import format_cents, format_cents_compact
 from ...repo import placements as placements_repo
 from ...repo import projection, vocab
 from ...services import batches as batches_svc
@@ -50,7 +50,15 @@ from .account import (
     linked_for,
 )
 
-_LAYER_CELLS: dict[str, Field] = {f.key: f for f in LAYER_FIELDS}
+# ATTACHMENT IS NOT AN EDITABLE WEB FIELD (program-worksheet redesign,
+# 2026-08-24). A slab's attachment comes from its position — the worksheet
+# states it as a sentence and changes it with move/insert/split — so the web
+# offers no cell for it, and the cell routes refuse the key rather than keep
+# a URL-only editor alive. `sync.update_layer(attach_cents=...)` remains for
+# MCP/TUI callers whose figure is already known.
+_LAYER_CELLS: dict[str, Field] = {
+    f.key: f for f in LAYER_FIELDS if f.key != "attach_cents"
+}
 # The add form's amount input, parsed by bookkit's own money field so that
 # "1.5m", "250k" and "1,234.56" mean here exactly what they mean in the layer's
 # own limit cell. The EDIT of the same value goes through towerfields (it is
@@ -76,50 +84,51 @@ _LAYER_CELL_CLASS: dict[str, str] = {
 router = APIRouter()
 
 
-def _layer_row(
-    request: Request, ref: str, placement_id: str, layer: dict[str, Any]
-) -> dict[str, Any]:
-    """One layer, ready to render — the editable fields as CELLS, the derived
-    ones as plain text.
+def _view_state(request: Request) -> tuple[str | None, frozenset[str]]:
+    """The worksheet's two pieces of URL state: the selected layer and the
+    collapsed index groups.
 
-    MONEY DISPLAYS COMPACT, EDITS EXACT (D5, 2026-08-19). The display string
-    and the editor's pre-fill used to be the same string, which forced exact
-    display: "$50M" would have parsed back as $50,000,000 and quietly lost the
-    odd dollars of a layer at $50,123,456 on an unedited save. D5 severed the
-    two — _display_text renders the compact form the tower drawing above this
-    table already uses, and the EDITOR routes keep pre-filling the exact
-    figure through initial_text, so the loss scenario cannot occur. Weakening
-    the pre-fill back to a compact string reintroduces silent data loss.
+    SERVER-HELD, IN THE URL, BY DESIGN (program-worksheet hand-off,
+    2026-08-24): the section is re-rendered by htmx on every write, so
+    client-only state would be lost on each one — and a refresh must land
+    back on the same layer. Explicit query params win (the worksheet GET and
+    the full tab both carry them); every other request recovers them from the
+    browser URL htmx reports in HX-Current-URL, which is what keeps a cell
+    save from throwing the broker back to the first layer."""
+    from urllib.parse import parse_qsl, urlparse
 
-    `signed_pct` and `statutory` stay plain: both are derived — signed is the
-    sum of the participants' shares — and a cell offering to edit a derived
-    value writes nothing and reads as broken.
-    """
-    def cell(key: str) -> str:
-        field = _LAYER_CELLS[key]
-        return render_cell_display(
-            request, field, _display_text(field, layer.get(key)),
-            _layer_cell_action(ref, placement_id, layer["id"], key),
-            extra_class=_LAYER_CELL_CLASS.get(key, ""),
-        )
+    params: dict[str, str] = dict(request.query_params)
+    if "layer" not in params and "closed" not in params:
+        current = request.headers.get("HX-Current-URL", "")
+        if current:
+            params = dict(parse_qsl(urlparse(current).query))
+    layer = params.get("layer") or None
+    closed = frozenset(part for part in (params.get("closed") or "").split(",") if part)
+    return layer, closed
 
+
+def _closed_param(closed: frozenset[str]) -> str:
+    return ",".join(sorted(closed))
+
+
+def _band_stats(layers: list[dict[str, Any]]) -> dict[str, Any]:
+    """The program band's derived figures — sums of the per-layer derivations
+    sync.layer_details already made, so nothing here converts or multiplies
+    money. Buffers and statutory layers carry no capacity to place, so they
+    are outside the open figure by definition, not by rounding."""
+    placeable = [
+        row for row in layers if not row["buffer"] and not row["statutory"]
+    ]
+    premiums = [row["premium_cents"] for row in layers if row["premium_cents"]]
+    open_rows = [row for row in placeable if row["open_limit_cents"] > 0]
     return {
-        "id": layer["id"],
-        "name": layer["name"],
-        "cells": {key: cell(key) for key in _LAYER_CELLS},
-        # A statutory layer carries benefits and NO dollar limit: towerkit
-        # forces limit == 0 and draws it off-scale. Printing "$0" would render
-        # unlimited statutory cover as cover worth nothing — opposite facts
-        # that arithmetic alone makes identical. So the limit CELL is replaced
-        # by the word, and the layer is not editable into or out of statutory
-        # from here.
-        "statutory": layer["statutory"],
-        "signed_pct": layer["signed_pct"],
-        "participants": layer["participants"],
-        "market_chips": [
-            _market_chip_html(request, ref, placement_id, layer, i, seat)
-            for i, seat in enumerate(layer["participants"])
-        ],
+        "premium": format_cents_compact(sum(premiums)) if premiums else None,
+        "open": (
+            format_cents_compact(sum(row["open_limit_cents"] for row in open_rows))
+            if open_rows
+            else None
+        ),
+        "open_layers": len(open_rows),
     }
 
 
@@ -215,95 +224,266 @@ def _diagnostics(linked: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _stacks(
+def _index_groups(
     request: Request,
     ref: str,
     placement: Any,
     layers: list[dict[str, Any]],
     *,
-    insert_error: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    """One stack per LINE, bottom-up — the editor's model.
+    selected: str | None,
+    closed: frozenset[str],
+) -> dict[str, Any] | None:
+    """The structure index — the one list of everything the tower holds,
+    grouped by line group and collapsible, replacing the per-line stack
+    editor (design 3A, 2026-08-24).
 
-    `insert_error` is the refused insert form's own message and typed values
-    (`{"line_id", "message", "typed"}`), attached to the ONE stack it belongs
-    to so a refusal keeps the typing instead of blanking every insert form on
-    the page — see `stack_insert`.
+    Built from the SAME `layer_details` rows the worksheet reads (`layers_for`
+    memo) — never a second walk of the towerkit model. `attach`/`limit` come
+    off the rows' `*_cents` values, already converted at the source, so this
+    function does no money conversion of its own.
 
-    Built from the SAME `layer_details` rows `_section_html` already fetched
-    for the table above this editor (`layers_for`) — not by walking the
-    towerkit model a second time. `signed`, `carriers`, `statutory` and
-    `buffer` are already on those rows, computed once in sync.py; deriving
-    them again here from `linked.program` would be a second copy of facts
-    that can drift, which is the violation this project cares most about.
-    `attach`/`limit` come off `attach_cents`/`limit_cents` on the rows — both
-    already converted by `dollars_to_cents` at the source — so this function
-    does no money conversion of its own, keeping that rule (sync.py /
-    money.py only) trivially true rather than merely followed.
+    Grouping: a line belongs to `line.group` (a LINE fact, read off the parsed
+    program — never duplicated on a layer row); lines without one share a
+    single 'Cover' group rather than each becoming a one-line group of
+    themselves. A layer sits in the group of the FIRST line it covers, once —
+    a spanning slab announces its span on the row instead of appearing three
+    times. Rows are top-of-tower first, matching the drawing.
 
-    `program.lines` is the one thing still read off the parsed program: it is
-    a LINE fact (id, name, label), never duplicated by a layer_details row,
-    so there is no second copy to avoid.
-
-    A layer spanning several lines appears in EACH of their stacks, because it
-    does. `also_on` carries the other lines so the row can say so: a layer that
-    silently moves two other columns is worse than one that warns.
+    Collapse state is a QUERY PARAM, not JS state (see `_view_state`); the
+    group count stays visible while collapsed, which is the point of
+    collapsing. Group slugs are prefixed with the placement id so two
+    programs' 'Casualty' groups collapse independently.
     """
+    from towerkit.edit import slugify
+
     conn = _conn(request)
     linked = linked_for(request, conn, placement.id)
-    if linked.program is None:
-        return []
+    if linked.program is None or not layers:
+        return None
     lines = linked.program.lines
     base = f"/accounts/{ref}/program/{placement.id}"
-    out: list[dict[str, Any]] = []
+    group_of = {line.id: (line.group or "") for line in lines}
+
+    ordered: list[tuple[str, list[Any]]] = []
     for line in lines:
+        key = line.group or ""
+        if ordered and ordered[-1][0] == key:
+            ordered[-1][1].append(line)
+        else:
+            ordered.append((key, [line]))
+
+    def url(layer: str | None, closed_set: frozenset[str]) -> str:
+        query = f"layer={layer}" if layer else ""
+        if closed_set:
+            query += ("&" if query else "") + f"closed={_closed_param(closed_set)}"
+        return f"{base}/worksheet" + (f"?{query}" if query else "")
+
+    groups: list[dict[str, Any]] = []
+    seen_slugs: set[str] = set()
+    for key, group_lines in ordered:
+        line_ids = {line.id for line in group_lines}
+        slug = f"{placement.id}.{slugify(key) if key else 'cover'}"
+        while slug in seen_slugs:  # two ungrouped runs must collapse apart
+            slug += "-"
+        seen_slugs.add(slug)
         rows = sorted(
-            (row for row in layers if line.id in row["applies_to"]),
-            key=lambda row: row["attach_cents"],
+            (row for row in layers if group_of.get(row["applies_to"][0], "") == key
+             and row["applies_to"][0] in line_ids),
+            key=lambda row: (-row["attach_cents"], -row["limit_cents"]),
         )
-        slabs = []
-        for row in rows:
-            others = [
-                other.label
-                for other in lines
-                if other.id != line.id and other.id in row["applies_to"]
-            ]
-            slabs.append({
-                "id": row["id"],
-                "name": row["name"],
-                "attach": format_cents_compact(row["attach_cents"]),
-                "limit": format_cents_compact(row["limit_cents"]),
-                "buffer": row["buffer"],
-                "statutory": row["statutory"],
-                "also_on": others,
-                "carriers": [
-                    {"name": p["carrier"], "share": f"{p['share_pct']:g}%"}
-                    for p in row["participants"]
-                ],
-                "signed": f"{row['signed_pct']:g}%",
-                # Amendment (a): the finished URL, published from the context
-                # rather than assembled in the template — `_stacks` already
-                # has `base` as a local, and a bare `base` in the template
-                # context rendered as an empty string under this Jinja
-                # environment (no StrictUndefined), which made `+ carrier`
-                # post to a URL nothing serves.
-                "carrier_action": f"{base}/layers/{row['id']}/markets/new",
-            })
-        line_error = (
-            insert_error
-            if insert_error is not None and insert_error["line_id"] == line.id
-            else None
-        )
-        out.append({
-            "line_id": line.id,
-            "label": line.label,
-            "name": line.name,
-            "slabs": list(reversed(slabs)),  # top of tower first, as drawn
-            "insert_action": f"{base}/lines/{line.id}/layers",
-            "insert_error": line_error["message"] if line_error else None,
-            "insert_typed": line_error["typed"] if line_error else None,
+        is_closed = slug in closed
+        groups.append({
+            "slug": slug,
+            "name": key or "Cover",
+            "label": " ".join(line.label for line in group_lines),
+            "count": len(rows),
+            "closed": is_closed,
+            "toggle_url": url(selected, closed ^ {slug}),
+            "rows": [
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "limit": (
+                        "statutory"
+                        if row["statutory"]
+                        else format_cents_compact(row["limit_cents"])
+                    ),
+                    "buffer": row["buffer"],
+                    "statutory": row["statutory"],
+                    # A buffer carries no carriers, so a signed figure on it
+                    # would claim placement of a band nobody insures.
+                    "signed": (
+                        None
+                        if row["buffer"] or row["statutory"]
+                        else f"{row['signed_pct']:g}"
+                    ),
+                    "placed": row["signed_pct"] >= 100,
+                    "spans": len(row["applies_to"]) if len(row["applies_to"]) > 1 else 0,
+                    "selected": row["id"] == selected,
+                    "url": url(row["id"], closed),
+                }
+                for row in rows
+            ] if not is_closed else [],
         })
-    return out
+
+    all_slugs = frozenset(group["slug"] for group in groups)
+    return {
+        "total": len(layers),
+        "groups": groups,
+        "all_closed": closed >= all_slugs,
+        "collapse_all_url": url(selected, all_slugs),
+        "expand_all_url": url(selected, frozenset()),
+    }
+
+
+def _default_selection(
+    layers: list[dict[str, Any]], index: dict[str, Any] | None, wanted: str | None
+) -> str | None:
+    """The layer the worksheet shows: the one asked for if it exists, else the
+    top of the first group — never a guess between programs (an id from
+    another placement simply is not in this one's rows)."""
+    if wanted and any(row["id"] == wanted for row in layers):
+        return wanted
+    if index:
+        for group in index["groups"]:
+            if group["rows"]:
+                return str(group["rows"][0]["id"])
+    if layers:
+        return str(layers[0]["id"])
+    return None
+
+
+def _worksheet_ctx(
+    request: Request,
+    ref: str,
+    placement_id: str,
+    layer: dict[str, Any],
+    layers: list[dict[str, Any]],
+    error: str | None = None,
+) -> dict[str, Any]:
+    """One layer's whole worksheet — the pane's single context builder, for
+    the section render and every structure write's answer alike, so the pane
+    cannot drift between its producers (the same one-renderer rule the old
+    details row carried; this absorbs it).
+
+    The position sentence replaces the attachment FIELD: attachment is never
+    typed here, it is stated — 'Sits on 2nd Excess → attaches at
+    $102,000,000' — and changed only by the move/insert controls (design 1C,
+    2026-08-24). Statutory and ground layers get their own true sentences
+    rather than a $0 dressed up as a figure.
+    """
+    conn = _conn(request)
+    layer_id = str(layer["id"])
+    base = f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}"
+    linked = linked_for(request, conn, placement_id)
+    lines = linked.program.lines if linked.program else []
+    label_of = {line.id: line.label for line in lines}
+
+    def cell(key: str) -> str:
+        field = _layer_field(key)
+        return render_cell_display(
+            request, field, _display_text(field, layer.get(key)),
+            _layer_cell_action(ref, placement_id, layer_id, key),
+            tag="span", extra_class=_LAYER_CELL_CLASS.get(key, ""),
+        )
+
+    def tower_cell(kind: str, name: str, addr: str) -> str:
+        placement = placements_repo.get(conn, placement_id)
+        return _field_display(request, ref, placement, kind, name, addr)
+
+    # The slab this one sits on: the same column (its first line), the
+    # nearest attachment below — derived from the rows already read, never a
+    # second model walk.
+    column = layer["applies_to"][0] if layer["applies_to"] else None
+    underneath = [
+        row for row in layers
+        if column in row["applies_to"]
+        and row["id"] != layer_id
+        and row["attach_cents"] < layer["attach_cents"]
+    ]
+    below = max(underneath, key=lambda row: row["attach_cents"], default=None)
+
+    named = sync.layer_named_limits(linked.program, layer_id)
+    spans = len(layer["applies_to"])
+    signed = layer["signed_pct"]
+    open_pct = layer["open_pct"]
+    participants = layer["participants"]
+    return {
+        "id": layer_id,
+        "base": base,
+        "error": error,
+        "name_cell": cell("name"),
+        "spans": spans if spans > 1 else 0,
+        "buffer": layer["buffer"],
+        "statutory": layer["statutory"],
+        "below_name": below["name"] if below else None,
+        "attach": format_cents(layer["attach_cents"]),
+        "top": format_cents(layer["top_cents"]),
+        "covers_label": " · ".join(
+            label_of.get(lid, lid) for lid in layer["applies_to"]
+        ),
+        "limit_cell": cell("limit_cents"),
+        "premium_cell": cell("premium_cents"),
+        "signed": f"{signed:g}",
+        "placed": signed >= 100,
+        "open_pct": f"{open_pct:g}",
+        "open_limit": (
+            format_cents_compact(layer["open_limit_cents"])
+            if layer["open_limit_cents"]
+            else None
+        ),
+        "open_limit_exact": (
+            format_cents(layer["open_limit_cents"])
+            if layer["open_limit_cents"]
+            else None
+        ),
+        "market_rows": [
+            _market_row_html(request, ref, placement_id, layer, i, seat)
+            for i, seat in enumerate(participants)
+        ],
+        "open_row": (
+            not layer["buffer"] and not layer["statutory"]
+            and layer["open_limit_cents"] > 0
+        ),
+        "markets_base": f"{base}/markets",
+        "add_fields": _participant_fields(conn),
+        "policy_cell": cell("policy_number"),
+        "from_cell": cell("period_from"),
+        "to_cell": cell("period_to"),
+        "policy_link_action": f"{base}/policy",
+        "policy_link_options": [
+            (str(other["id"]), str(other["name"]))
+            for other in layers
+            if str(other["id"]) != layer_id
+        ],
+        "policy_linked_to": sync.policy_partners_of(linked.program, layer_id),
+        "tower_cells": {
+            key.split(".", 1)[1]: tower_cell(
+                "layer", key.split(".", 1)[1], _addr(layer_id, None)
+            )
+            for key in _PLACED
+            if key.startswith("layer.")
+        },
+        "named_limits": [
+            {
+                "index": item["index"],
+                "name_cell": tower_cell(
+                    "named_limit", "name", _addr(layer_id, item["index"])
+                ),
+                "amount_cell": tower_cell(
+                    "named_limit", "amount", _addr(layer_id, item["index"])
+                ),
+            }
+            for item in named
+        ],
+        "lines": [
+            {"id": lid, "name": name, "label": label_of.get(lid, name),
+             "on": lid in layer["applies_to"]}
+            for lid, name in sync.program_lines_of(linked.program)
+        ],
+        "follows": bool(layer.get("follows_underlying")),
+        "remove_url": f"{base}/remove",
+    }
 
 
 def _section_html(
@@ -313,8 +493,8 @@ def _section_html(
     placement: Any,
     *,
     refocus: str | None = None,
-    expanded: str | None = None,
-    insert_error: dict[str, Any] | None = None,
+    selected: str | None = None,
+    worksheet_error: str | None = None,
 ) -> str:
     """ONE renderer for a program section, for every caller.
 
@@ -334,6 +514,39 @@ def _section_html(
     conn = _conn(request)
     linked = linked_for(request, conn, placement.id)
     layers = layers_for(request, conn, placement.id) if placement.program_path else []
+    wanted, closed = _view_state(request)
+    index = _index_groups(
+        request, ref, placement, layers,
+        selected=selected or wanted, closed=closed,
+    )
+    chosen = _default_selection(layers, index, selected or wanted)
+    if index is not None and (selected or wanted) != chosen:
+        # The row the index highlights must be the layer the worksheet shows,
+        # so a fallback selection re-derives the index with it.
+        index = _index_groups(
+            request, ref, placement, layers, selected=chosen, closed=closed,
+        )
+    selected_layer = next((row for row in layers if row["id"] == chosen), None)
+    # A pane that fails to build must not take the section with it: the index
+    # and the band still render so another layer stays selectable — the same
+    # rule that kept a broken details row from reading as a dead chevron. The
+    # exception is logged, not swallowed; the pane prints why.
+    worksheet = None
+    worksheet_failure = None
+    if selected_layer is not None:
+        try:
+            worksheet = _worksheet_ctx(
+                request, ref, placement.id, selected_layer, layers,
+                error=worksheet_error,
+            )
+        except Exception as exc:  # noqa: BLE001 - logged, then shown
+            logging.getLogger(__name__).exception(
+                "worksheet build failed for %s/%s", placement.id, chosen
+            )
+            worksheet_failure = (
+                f"this layer's worksheet could not be read — "
+                f"{type(exc).__name__}: {exc}"
+            )
     template = TEMPLATES.env.get_template("account/_layers_panel.html")
     return template.render(
         header={"org": org},
@@ -378,32 +591,15 @@ def _section_html(
             if placement.program_path
             else {}
         ),
-        layers=[_layer_row(request, ref, placement.id, layer) for layer in layers],
-        stacks=_stacks(request, ref, placement, layers, insert_error=insert_error),
+        has_layers=bool(layers),
+        band=_band_stats(layers),
+        file_name=Path(placement.program_path).name if placement.program_path else None,
+        index=index,
+        selected=chosen,
+        worksheet=worksheet,
+        worksheet_failure=worksheet_failure,
         refocus=refocus,
-        expanded=expanded,
-        expanded_row=_expanded_row_html(request, ref, placement.id, expanded),
     )
-
-
-def _expanded_row_html(
-    request: Request, ref: str, placement_id: str, expanded: str | None
-) -> str | None:
-    """The open details row, re-rendered inside the section that replaces it."""
-    if not expanded:
-        return None
-    conn = _conn(request)
-    layer = next(
-        (
-            candidate
-            for candidate in layers_for(request, conn, placement_id)
-            if candidate["id"] == expanded
-        ),
-        None,
-    )
-    if layer is None:
-        return None
-    return _text(_details_row(request, ref, placement_id, layer))
 
 
 def _programs(request: Request, org: Any) -> list[str]:
@@ -1144,138 +1340,210 @@ def _layer_editor_cell(
     )
 
 
-def _details_row(
-    request: Request, ref: str, placement_id: str, layer: dict[str, Any],
-    error: str | None = None,
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/worksheet",
+    response_class=HTMLResponse,
+)
+def worksheet_select(
+    request: Request, ref: str, placement_id: str
 ) -> HTMLResponse:
-    """The details row's one renderer — the chevron's GET, every structure
-    write's success, and every structure refusal all answer with this, so
-    the row cannot drift between its three producers."""
+    """Select a layer (and carry the index's collapse state): one GET, the
+    whole section back, retargeted — the same swap discipline every write
+    uses, so selection and writes cannot disagree about what a section render
+    is. `?layer=` and `?closed=` are the state (see `_view_state`); the
+    response pushes them onto the browser URL so refresh and every later
+    write land back on the same layer."""
+    org = _org(request, ref)
+    _owned(_conn(request), org, "placement", placement_id, placements_repo.get)
+    layer, closed = _view_state(request)
+    response = _panel(request, ref, org, placement_id, selected=layer)
+    query = f"layer={layer}" if layer else ""
+    if closed:
+        query += ("&" if query else "") + f"closed={_closed_param(closed)}"
+    response.headers["HX-Push-Url"] = f"/accounts/{ref}/program" + (
+        f"?{query}" if query else ""
+    )
+    return response
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/move",
+    response_class=HTMLResponse,
+)
+async def layer_move(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """Move the slab one step up or down its own column. Position is the
+    attachment, so this is the counterpart of typing one — the whole column
+    reseats inside the one mutation (sync.move_layer). Off-the-end comes back
+    as a worksheet refusal, not a silent nothing."""
+    org = _org(request, ref)
     conn = _conn(request)
-    layer_id = str(layer["id"])
-
-    def cell(key: str) -> str:
-        field = _layer_field(key)
-        return render_cell_display(
-            request, field, _display_text(field, layer.get(key)),
-            _layer_cell_action(ref, placement_id, layer_id, key),
-            tag="span", extra_class=_LAYER_CELL_CLASS.get(key, ""),
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    direction = str((await request.form()).get("direction", ""))
+    if direction not in ("up", "down"):
+        return _panel(
+            request, ref, org, placement_id, selected=layer_id,
+            worksheet_error=f"direction is 'up' or 'down', not {direction!r}",
         )
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_edit",
+            summary=f"moved {layer['name']} {direction}",
+            mutate=lambda: sync.move_layer(
+                conn, placement_id, layer_id, direction=direction
+            ),
+            open_batch=_open_batch_web,
+        )
+    except Exception as exc:
+        return _panel(
+            request, ref, org, placement_id, selected=layer_id,
+            worksheet_error=str(exc),
+        )
+    forget_program_reads(request)
+    return _panel(request, ref, org, placement_id, selected=layer_id)
 
-    def tower_cell(kind: str, name: str, addr: str) -> str:
-        """A derived towerkit field, rendered by the same seam that saves it.
 
-        Built HERE rather than in the template so the details row cannot
-        acquire a second way of addressing a field — the row is re-rendered by
-        three producers already (the chevron, every structure write, and the
-        panel's `expanded`), and a fourth spelling of the URL is how one of
-        them starts pointing somewhere the others do not."""
-        placement = placements_repo.get(conn, placement_id)
-        return _field_display(request, ref, placement, kind, name, addr)
-
-    base = f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}"
-    named = sync.named_limits_of(conn, placement_id, layer_id)
+def _insert_form(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any],
+    position: str, *, line_id: str,
+    error: str | None = None, typed: dict[str, str] | None = None,
+) -> HTMLResponse:
+    """The worksheet's insert-above/below form — name and limit only; the
+    position and anchor are implied by the control that opened it and ride as
+    hidden fields, because position IS the attachment."""
     return TEMPLATES.TemplateResponse(
-        request, "account/_layer_details.html",
+        request, "account/_insert_form.html",
         {
-            "policy_cell": cell("policy_number"),
-            "from_cell": cell("period_from"),
-            "to_cell": cell("period_to"),
-            # ONE POLICY, SEVERAL LAYERS — WC Part A and Part B. A PICKER of
-            # this program's other layers and never a text box: towerkit mints
-            # the token and no screen should print one, so the only storable
-            # answers are the other layers and "not linked". Built here with
-            # the rest of the row so the row keeps its one renderer.
-            "policy_link_action": f"{base}/policy",
-            "policy_link_options": [
-                (str(other["id"]), str(other["name"]))
-                for other in sync.layer_details(conn, placement_id)
-                if str(other["id"]) != layer_id
-            ],
-            "policy_linked_to": sync.policy_partners(conn, placement_id, layer_id),
-            # D6: the coverage facts a broker states on a quote and towerkit
-            # prints on the SOI and the schematic. Reachable only from
-            # towerkit's own editor until now — "built but not accessible"
-            # (statutory, 2026-08-19), which is a bug class, not a gap.
-            # DERIVED FROM `_PLACED`, not listed again. It was a hand-written
-            # tuple of five names until 2026-08-21, which made it a second
-            # placement table beside the first: `layer.auditable` was added to
-            # `_PLACED`, rendered nowhere, and only
-            # `test_every_placed_field_actually_renders_on_the_page` noticed.
-            # A key here that `_PLACED` does not carry would 404 at the user;
-            # a key there that this forgot is invisible. One list.
-            "tower_cells": {
-                key.split(".", 1)[1]: tower_cell(
-                    "layer", key.split(".", 1)[1], _addr(layer_id, None)
-                )
-                for key in _PLACED
-                if key.startswith("layer.")
-            },
-            "named_limits": [
-                {
-                    "index": item["index"],
-                    "name_cell": tower_cell(
-                        "named_limit", "name", _addr(layer_id, item["index"])
-                    ),
-                    "amount_cell": tower_cell(
-                        "named_limit", "amount", _addr(layer_id, item["index"])
-                    ),
-                }
-                for item in named
-            ],
-            "base": base,
-            "remove_url": f"{base}/remove",
-            "lines": [
-                {"id": lid, "name": name, "on": lid in layer["applies_to"]}
-                for lid, name in sync.program_lines(conn, placement_id)
-            ],
-            "statutory": layer["statutory"],
-            "follows": bool(layer.get("follows_underlying")),
+            "action": f"/accounts/{ref}/program/{placement_id}/lines/{line_id}/layers",
+            "anchor": layer["id"],
+            "anchor_name": layer["name"],
+            "position": position,
+            "line_id": line_id,
             "error": error,
+            "typed": typed or {},
         },
     )
 
 
 @router.get(
-    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/details",
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/insert",
     response_class=HTMLResponse,
 )
-def layer_details_row(
+def layer_insert_form(
+    request: Request, ref: str, placement_id: str, layer_id: str,
+    position: str = "above",
+) -> HTMLResponse:
+    org = _org(request, ref)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    if position not in ("above", "below"):
+        raise HTTPException(status_code=404, detail="position is above or below")
+    return _insert_form(
+        request, ref, placement_id, layer, position,
+        line_id=str(layer["applies_to"][0]),
+    )
+
+
+def _split_form(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any],
+    lines: list[dict[str, Any]],
+    error: str | None = None, typed: dict[str, str] | None = None,
+) -> HTMLResponse:
+    """Split-by-line: the same band twice, the lines divided, the premium
+    division typed and totalled. The amounts arrive EMPTY — a figure this
+    surface pre-filled is a figure nobody checked (data-entry integrity),
+    and towerkit has no apportioning rule to borrow."""
+    return TEMPLATES.TemplateResponse(
+        request, "account/_split_form.html",
+        {
+            "action": f"/accounts/{ref}/program/{placement_id}/layers/{layer['id']}/split",
+            "layer": layer,
+            "premium": (
+                format_cents(layer["premium_cents"])
+                if layer["premium_cents"] is not None
+                else None
+            ),
+            "lines": lines,
+            "error": error,
+            "typed": typed or {},
+        },
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/split",
+    response_class=HTMLResponse,
+)
+def layer_split_form(
     request: Request, ref: str, placement_id: str, layer_id: str
 ) -> HTMLResponse:
-    """The chevron's row: the layer's long tail (policy number, policy dates)
-    plus its STRUCTURE — applies-to chips, statutory, follows-underlying —
-    the writes that used to live only behind the TUI's `o` into towerkit's
-    editor, which a browser does not have (Grant, 2026-08-19).
-
-    IT ANSWERS WITH A ROW WHATEVER HAPPENS. htmx swaps nothing on a 4xx or a
-    5xx, so a route that refuses or raises here leaves the chevron looking
-    simply DEAD — no modal, no message, no change, which reads as a broken app
-    (Grant, 2026-08-21: "the little toggle arrow on left side is non
-    functional", and the network tab said 500). That is the same failure the
-    navigator's silent row actions had, and CLAUDE.md's rule is the same one:
-    a refusal says something.
-
-    So both outcomes come back as a details row carrying the reason. The
-    exception is NOT swallowed — it is re-raised into the server log after the
-    row is built, because a 500 is still a bug that somebody has to fix; what
-    changes is that the person who clicked can see WHY instead of clicking a
-    dead arrow.
-    """
     org = _org(request, ref)
+    conn = _conn(request)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    labels = dict(sync.program_lines(conn, placement_id))
+    lines = [
+        {"id": lid, "name": labels.get(lid, lid)}
+        for lid in layer["applies_to"]
+    ]
+    return _split_form(request, ref, placement_id, layer, lines)
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/split",
+    response_class=HTMLResponse,
+)
+async def layer_split_save(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """Two slabs from one, same band — an add plus a rescope in ONE batch
+    (sync.split_layer is one mutation, so the halfway state never touches
+    disk). A refusal re-renders the form with everything typed still in it."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    form = await request.form()
+    move_lines = [str(value) for value in form.getlist("move_line")]
+    new_name = str(form.get("new_name", "")).strip()
+    raw_kept = str(form.get("kept_premium", "")).strip()
+    raw_moved = str(form.get("moved_premium", "")).strip()
+    typed = {
+        "new_name": new_name, "kept_premium": raw_kept,
+        "moved_premium": raw_moved, "move_line": ",".join(move_lines),
+    }
+    labels = dict(sync.program_lines(conn, placement_id))
+    lines = [
+        {"id": lid, "name": labels.get(lid, lid)}
+        for lid in layer["applies_to"]
+    ]
+
+    def refused(message: str) -> HTMLResponse:
+        return _split_form(
+            request, ref, placement_id, layer, lines, error=message, typed=typed,
+        )
+
+    money = _LAYER_CELLS["premium_cents"]
     try:
-        _, layer = _owned_layer(request, org, placement_id, layer_id)
-        return _details_row(request, ref, placement_id, layer)
-    except HTTPException as refused:
-        return _details_refusal(request, placement_id, layer_id, str(refused.detail))
-    except Exception as exc:  # noqa: BLE001 - re-raised below, after logging
-        logging.getLogger(__name__).exception(
-            "layer details failed for %s/%s", placement_id, layer_id
+        kept = int(parse_value(money, raw_kept)) if raw_kept else None
+        moved = int(parse_value(money, raw_moved)) if raw_moved else None
+    except ValueError as exc:
+        return refused(str(exc))
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_edit",
+            summary=f"split {layer['name']} by line",
+            mutate=lambda: sync.split_layer(
+                conn, placement_id, layer_id,
+                move_line_ids=move_lines, new_name=new_name,
+                kept_premium_cents=kept, moved_premium_cents=moved,
+            ),
+            open_batch=_open_batch_web,
         )
-        return _details_refusal(
-            request, placement_id, layer_id,
-            f"this layer's details could not be read — {type(exc).__name__}: {exc}",
-        )
+    except Exception as exc:
+        return refused(str(exc))
+    forget_program_reads(request)
+    return _panel(request, ref, org, placement_id, selected=layer_id)
 
 
 @router.post(
@@ -1295,14 +1563,11 @@ async def stack_insert(
     own layers — an id in a body is only checked if somebody checks it, which
     is the hole `forms.spec.checked_option` exists to close.
 
-    A REFUSAL KEEPS THE TYPING (spec, section 2). Every refusal below answers
-    through `_panel(..., insert_error=...)` — the one placement's section,
-    retargeted onto itself — rather than `_programs_panel`, which rebuilds
-    every placement on the account from scratch and blanks every stack
-    editor's inputs on the page, not just the one the user was working
-    (found in whole-branch review, 2026-08-21: the spec's own words say the
-    opposite, and the sibling route `layer_add`/`_refused_form` already got
-    this right twelve lines away).
+    A REFUSAL KEEPS THE TYPING (spec, section 2): it re-renders the insert
+    form fragment with the message and the typed values, in the form host it
+    was posted from. Success answers the one placement's section, retargeted
+    (`_panel`) — the write changed one program, so rebuilding every placement
+    on the account was never honest.
     """
     org = _org(request, ref)
     conn = _conn(request)
@@ -1318,14 +1583,18 @@ async def stack_insert(
         "anchor": anchor or "", "kind": kind,
     }
 
+    rows = sync.layer_details(conn, placement_id)
+    anchor_row = next((row for row in rows if row["id"] == anchor), None)
+
     def refused(message: str) -> HTMLResponse:
-        return _panel(
-            request, ref, org, placement_id,
-            insert_error={"line_id": line_id, "message": message, "typed": typed},
+        subject = anchor_row or (rows[0] if rows else {"id": "", "name": ""})
+        return _insert_form(
+            request, ref, placement_id, subject,
+            position if position in ("above", "below") else "above",
+            line_id=line_id, error=message, typed=typed,
         )
 
-    known = {row["id"] for row in sync.layer_details(conn, placement_id)}
-    if anchor is not None and anchor not in known:
+    if anchor is not None and anchor_row is None:
         return refused(f"no layer {anchor!r} on {placement.ref} — reload the tab")
     if not name:
         return refused("a slab needs a name")
@@ -1355,22 +1624,9 @@ async def stack_insert(
     except Exception as exc:
         return refused(str(exc))
     forget_program_reads(request)
-    return _programs_panel(request, ref, org)
-
-
-def _details_refusal(
-    request: Request, placement_id: str, layer_id: str, message: str
-) -> HTMLResponse:
-    """A details row that says why there is no details row.
-
-    A `<tr>`, because that is what the chevron's `hx-swap="afterend"` inserts
-    into a table body — anything else is foster-parented out of the fragment by
-    the HTML parser before htmx sees it, which would be the silent failure
-    again wearing a different hat.
-    """
-    return TEMPLATES.TemplateResponse(
-        request, "account/_layer_details_refusal.html",
-        {"message": message, "layer_id": layer_id, "placement_id": placement_id},
+    return _panel(
+        request, ref, org, placement_id,
+        selected=anchor if anchor is not None else None,
     )
 
 
@@ -1396,9 +1652,11 @@ async def layer_applies_to_toggle(
         else [*current, line]
     )
     if not wanted:
-        return _details_row(
-            request, ref, placement_id, layer,
-            f"{layer['name']} must cover at least one line — add another first",
+        return _panel(
+            request, ref, org, placement_id, selected=layer_id,
+            worksheet_error=(
+                f"{layer['name']} must cover at least one line — add another first"
+            ),
         )
     try:
         program_files.write(
@@ -1409,12 +1667,15 @@ async def layer_applies_to_toggle(
             open_batch=_open_batch_web,
         )
     except Exception as exc:
-        return _details_row(request, ref, placement_id, layer, str(exc))
+        return _panel(
+            request, ref, org, placement_id, selected=layer_id,
+            worksheet_error=str(exc),
+        )
     forget_program_reads(request)
     _, fresh = _owned_layer(request, org, placement_id, layer_id)
     return _panel(
         request, ref, org, placement_id,
-        refocus=f"{layer_id}:applies_to", expanded=layer_id,
+        refocus=f"{layer_id}:applies_to", selected=layer_id,
     )
 
 
@@ -1463,7 +1724,10 @@ async def statutory_save(
                 raise ValueError("leaving statutory needs the dollar limit to restore")
             limit_cents = int(parsed)
         except ValueError as exc:
-            return _details_row(request, ref, placement_id, layer, str(exc))
+            return _panel(
+                request, ref, org, placement_id, selected=layer_id,
+                worksheet_error=str(exc),
+            )
     try:
         program_files.write(
             conn, placement,
@@ -1479,12 +1743,15 @@ async def statutory_save(
             open_batch=_open_batch_web,
         )
     except Exception as exc:
-        return _details_row(request, ref, placement_id, layer, str(exc))
+        return _panel(
+            request, ref, org, placement_id, selected=layer_id,
+            worksheet_error=str(exc),
+        )
     forget_program_reads(request)
     _, fresh = _owned_layer(request, org, placement_id, layer_id)
     return _panel(
         request, ref, org, placement_id,
-        refocus=f"{layer_id}:statutory", expanded=layer_id,
+        refocus=f"{layer_id}:statutory", selected=layer_id,
     )
 
 
@@ -1533,7 +1800,10 @@ async def policy_link_save(
                 other_id,
             )
         except ValueError as exc:
-            return _details_row(request, ref, placement_id, layer, str(exc))
+            return _panel(
+                request, ref, org, placement_id, selected=layer_id,
+                worksheet_error=str(exc),
+            )
     partner = dict(siblings).get(other_id, "")
     try:
         program_files.write(
@@ -1552,10 +1822,12 @@ async def policy_link_save(
             open_batch=_open_batch_web,
         )
     except Exception as exc:
-        return _details_row(request, ref, placement_id, layer, str(exc))
+        return _panel(
+            request, ref, org, placement_id, selected=layer_id,
+            worksheet_error=str(exc),
+        )
     forget_program_reads(request)
-    _, fresh = _owned_layer(request, org, placement_id, layer_id)
-    return _details_row(request, ref, placement_id, fresh)
+    return _panel(request, ref, org, placement_id, selected=layer_id)
 
 
 @router.post(
@@ -1587,12 +1859,15 @@ async def follows_save(
             open_batch=_open_batch_web,
         )
     except Exception as exc:
-        return _details_row(request, ref, placement_id, layer, str(exc))
+        return _panel(
+            request, ref, org, placement_id, selected=layer_id,
+            worksheet_error=str(exc),
+        )
     forget_program_reads(request)
     _, fresh = _owned_layer(request, org, placement_id, layer_id)
     return _panel(
         request, ref, org, placement_id,
-        refocus=f"{layer_id}:follows", expanded=layer_id,
+        refocus=f"{layer_id}:follows", selected=layer_id,
     )
 
 
@@ -1821,8 +2096,8 @@ def _panel(
     placement_id: str,
     *,
     refocus: str | None = None,
-    expanded: str | None = None,
-    insert_error: dict[str, Any] | None = None,
+    selected: str | None = None,
+    worksheet_error: str | None = None,
 ) -> HTMLResponse:
     """Re-render this placement's whole panel, AND retarget the swap onto it.
 
@@ -1860,18 +2135,15 @@ def _panel(
     on the cell the user just left, so replacing the section does not cost
     them their place in the table.
 
-    `expanded` names a layer whose DETAILS ROW is open. The row is inserted
-    client-side (the chevron's hx-swap="afterend"), so replacing the section
-    used to close it — on every statutory, follows-underlying and applies-to
-    write, all three of which are made FROM that row. Re-rendering it here
-    keeps the row the user is working in open across the write it caused,
-    which is the whole reason the row exists.
+    `selected` names the layer whose worksheet the section shows — a write
+    made from the worksheet passes the layer it addressed, everything else is
+    recovered from the browser URL (`_view_state`), so a save never throws
+    the broker back to the first layer.
 
-    `insert_error` is a refused stack-insert's message and typed values,
-    passed straight to `_section_html`/`_stacks` so the one stack the user was
-    working keeps what they typed (see `stack_insert`) — a refusal answers
-    200 with this section alone, retargeted here exactly as a success would
-    be, so it is still ONE RESPONSE, ONE TOP-LEVEL ELEMENT.
+    `worksheet_error` is a structural refusal's message, rendered at the top
+    of the worksheet pane with the file untouched — a refusal answers 200
+    with this section alone, retargeted here exactly as a success would be,
+    so it is still ONE RESPONSE, ONE TOP-LEVEL ELEMENT.
     """
     forget_program_reads(request)
     conn = _conn(request)
@@ -1879,7 +2151,7 @@ def _panel(
     response = HTMLResponse(
         _section_html(
             request, ref, org, placement,
-            refocus=refocus, expanded=expanded, insert_error=insert_error,
+            refocus=refocus, selected=selected, worksheet_error=worksheet_error,
         )
     )
     response.headers["HX-Retarget"] = f"#program-{placement_id}"
@@ -1970,12 +2242,6 @@ def _market_add_form(
     )
 
 
-def _market_add_button(request: Request, base: str) -> HTMLResponse:
-    return TEMPLATES.TemplateResponse(
-        request, "account/_market_add_button.html", {"base": base}
-    )
-
-
 @router.post(
     "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets",
     response_class=HTMLResponse,
@@ -2005,7 +2271,7 @@ async def market_add(
         )
     except Exception as exc:
         return _market_add_form(request, conn, base, str(exc), raw)
-    return _panel(request, ref, org, placement_id)
+    return _panel(request, ref, org, placement_id, selected=layer_id)
 
 
 def _market_field(key: str) -> Field:
@@ -2067,24 +2333,33 @@ def _market_prefill(key: str, seat: dict[str, Any]) -> str:
 _MARKET_CELL_CLASS = {"carrier": "market-cell", "share_pct": "market-cell market-share"}
 
 
-def _market_chip_html(
+def _market_row_html(
     request: Request, ref: str, placement_id: str, layer: dict[str, Any],
     index: int, seat: dict[str, Any],
 ) -> str:
-    """One market as a chip of two inline cells plus its remove control — the
-    same editing grammar as the layer cells beside it (F1)."""
+    """One market as a participation-table row: two inline cells (carrier,
+    share — the same editing grammar as the layer cells above), then the
+    DERIVED dollar columns computed once in sync.layer_details, and the
+    take-off control. A row, not a chip, because the worksheet's table is
+    where shares get to 100% (design 1C, 2026-08-24)."""
     def cell(key: str) -> str:
         return render_cell_display(
             request, _market_field(key), _market_display_value(key, seat),
             _market_cell_action(ref, placement_id, layer["id"], index, key),
-            tag="span", extra_class=_MARKET_CELL_CLASS[key],
+            tag="td", extra_class=_MARKET_CELL_CLASS[key],
         )
 
-    template = TEMPLATES.env.get_template("account/_market_chip.html")
+    template = TEMPLATES.env.get_template("account/_market_row.html")
     return template.render(
         base=_market_base(ref, placement_id, layer["id"], index),
         seat=seat, layer_name=layer["name"],
         carrier_cell=cell("carrier"), share_cell=cell("share_pct"),
+        limit=format_cents(seat["limit_cents"]),
+        premium=(
+            format_cents(seat["premium_cents"])
+            if seat["premium_cents"] is not None
+            else None
+        ),
         # A carrier the book does not know is a string in a file and nothing
         # more — it misses exposure, hit rate and the market dossier. Said
         # HERE, where the carrier is, rather than left to be noticed on a tab
@@ -2111,7 +2386,7 @@ def _market_display_cell(
         render_cell_display(
             request, _market_field(key), _market_display_value(key, seat),
             _market_cell_action(ref, placement_id, layer["id"], index, key),
-            tag="span", extra_class=_MARKET_CELL_CLASS[key],
+            tag="td", extra_class=_MARKET_CELL_CLASS[key],
         )
     )
 
@@ -2127,7 +2402,7 @@ def _market_editor_cell(
         render_cell(
             request, field, value,
             _market_cell_action(ref, placement_id, layer["id"], index, key),
-            error=error, tag="span", extra_class=_MARKET_CELL_CLASS[key],
+            error=error, tag="td", extra_class=_MARKET_CELL_CLASS[key],
         )
     )
 
@@ -2142,42 +2417,6 @@ def _seated(layer: dict[str, Any], index: int) -> dict[str, Any]:
     return seat
 
 
-# LITERAL SEGMENTS BEFORE {index}: Starlette resolves in registration order,
-# so /markets/new and /markets/button must be registered before
-# /markets/{index} or the int coercion answers them with a 422 — the same
-# registration-order trap this module's docstring records for the tab route.
-@router.get(
-    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/new",
-    response_class=HTMLResponse,
-)
-def market_add_form(
-    request: Request, ref: str, placement_id: str, layer_id: str
-) -> HTMLResponse:
-    org = _org(request, ref)
-    conn = _conn(request)
-    _owned_layer(request, org, placement_id, layer_id)
-    return _market_add_form(
-        request, conn,
-        f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets",
-    )
-
-
-@router.get(
-    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/button",
-    response_class=HTMLResponse,
-)
-def market_add_button(
-    request: Request, ref: str, placement_id: str, layer_id: str
-) -> HTMLResponse:
-    """What the inline form's cancel restores."""
-    org = _org(request, ref)
-    _owned_layer(request, org, placement_id, layer_id)
-    return _market_add_button(
-        request,
-        f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets",
-    )
-
-
 @router.get(
     "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/markets/{index}",
     response_class=HTMLResponse,
@@ -2185,11 +2424,11 @@ def market_add_button(
 def market_chip(
     request: Request, ref: str, placement_id: str, layer_id: str, index: int
 ) -> HTMLResponse:
-    """The whole chip — what the remove confirm's [keep] restores."""
+    """The whole row — what the remove confirm's [keep] restores."""
     org = _org(request, ref)
     _, layer = _owned_layer(request, org, placement_id, layer_id)
     seat = _seated(layer, index)
-    return HTMLResponse(_market_chip_html(request, ref, placement_id, layer, index, seat))
+    return HTMLResponse(_market_row_html(request, ref, placement_id, layer, index, seat))
 
 
 @router.get(
@@ -2341,7 +2580,7 @@ def market_remove(
         )
     except Exception as exc:
         return _market_confirm(request, ref, placement_id, layer, index, seat, str(exc))
-    return _panel(request, ref, org, placement_id)
+    return _panel(request, ref, org, placement_id, selected=layer_id)
 
 
 # --- the two ghost-row forms --------------------------------------------------
@@ -3059,7 +3298,7 @@ def export_open_items_workbook(request: Request, ref: str) -> Any:
 # REGISTERED LAST ON PURPOSE: Starlette matches /program/{placement_id}/{kind}
 # before FastAPI validates the enum, so EVERY literal sibling — today:
 # /renew, /merge, /scaffold, /compare, /layers, /lines, /submissions, /cell,
-# /export/... — must be registered FIRST to win. This list is the invariant's
+# /worksheet, /remove, /export/... — must be registered FIRST to win. This list is the invariant's
 # one home: when you add a /program/{placement_id}/<one-segment> route, add
 # it ABOVE this block AND name it here, or a future reorder will shadow it
 # into 422s.
@@ -3859,7 +4098,7 @@ def _field_write(
         return _panel(
             request, ref, org, placement.id,
             refocus=f"{target}:{_field_key(kind, name)}" if target else None,
-            expanded=target if kind == "layer" else None,
+            selected=target if kind == "layer" else None,
         )
     return HTMLResponse(_field_display(request, ref, placement, kind, name, addr))
 
@@ -3941,10 +4180,9 @@ async def field_cell_keep(
 # so these two routes are hand-written — the same division the lines strip and
 # the terms strip already use.
 #
-# They answer with the DETAILS ROW, not the panel: the chips live in it, and a
-# panel swap would close the row the user is working in on every add. The row is
-# the same `_details_row` the chevron renders, so the chips cannot drift between
-# how they first appear and how they appear after a write.
+# They answer with the PANEL, selected on the layer: the chips live in the
+# worksheet pane now, which every section render rebuilds, so a panel swap no
+# longer closes anything.
 
 
 @router.post(
@@ -3967,10 +4205,14 @@ async def named_limit_add(
     try:
         amount = parse_value(_NAMED_LIMIT_AMOUNT, raw)
     except ValueError as exc:
-        return _details_row(request, ref, placement_id, layer, str(exc))
+        return _panel(
+            request, ref, org, placement_id, selected=layer_id,
+            worksheet_error=str(exc),
+        )
     if not name:
-        return _details_row(
-            request, ref, placement_id, layer, "a named limit needs a name"
+        return _panel(
+            request, ref, org, placement_id, selected=layer_id,
+            worksheet_error="a named limit needs a name",
         )
     try:
         program_files.write(
@@ -3983,10 +4225,12 @@ async def named_limit_add(
             open_batch=_open_batch_web,
         )
     except Exception as exc:
-        return _details_row(request, ref, placement_id, layer, str(exc))
+        return _panel(
+            request, ref, org, placement_id, selected=layer_id,
+            worksheet_error=str(exc),
+        )
     forget_program_reads(request)
-    _, fresh = _owned_layer(request, org, placement_id, layer_id)
-    return _details_row(request, ref, placement_id, fresh)
+    return _panel(request, ref, org, placement_id, selected=layer_id)
 
 
 @router.post(
@@ -4015,7 +4259,9 @@ def named_limit_remove(
             open_batch=_open_batch_web,
         )
     except Exception as exc:
-        return _details_row(request, ref, placement_id, layer, str(exc))
+        return _panel(
+            request, ref, org, placement_id, selected=layer_id,
+            worksheet_error=str(exc),
+        )
     forget_program_reads(request)
-    _, fresh = _owned_layer(request, org, placement_id, layer_id)
-    return _details_row(request, ref, placement_id, fresh)
+    return _panel(request, ref, org, placement_id, selected=layer_id)

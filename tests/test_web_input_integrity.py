@@ -38,7 +38,7 @@ IN_ROW_FORMS = (
     "account/_market_add.html",
     "account/_line_add.html",
     "account/_term_form.html",
-    "account/_layer_details.html",
+    "account/_worksheet.html",
 )
 
 # What `{{ ... }}` collapses to in the scan below. A dynamic value is not
@@ -194,7 +194,7 @@ def test_a_carrier_the_book_does_not_know_is_not_an_error():
     assert "background" not in block, "the wash is still stacked on the border"
 
     # The word, not the colour, is the signal — and it survives greyscale.
-    chip = (TEMPLATES / "account" / "_market_chip.html").read_text()
+    chip = (TEMPLATES / "account" / "_market_row.html").read_text()
     assert ">new<" in chip
     assert "is not a market in the book" in chip
     assert "border" in block, "the badge stopped being a badge in greyscale"
@@ -314,13 +314,10 @@ def test_the_labels_reach_the_page(app_and_org):
     layer = sync.layer_details(conn, placement.id)[0]
     base = f"/accounts/{org.ref}/program/{placement.id}"
 
+    worksheet = client.get(f"{base}/worksheet?layer={layer['id']}").text
     fragments = {
-        "the market add form": client.get(
-            f"{base}/layers/{layer['id']}/markets/new"
-        ).text,
-        "the named-limit add form": client.get(
-            f"{base}/layers/{layer['id']}/details"
-        ).text,
+        "the market add row": worksheet,
+        "the named-limit add form": worksheet,
         "the line add form": client.get(f"{base}/lines/new").text,
         "the retention form": client.get(f"{base}/retentions/new").text,
     }

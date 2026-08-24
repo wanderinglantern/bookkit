@@ -1,101 +1,94 @@
-{# One placement: its header facts, then its layers and the markets on each.
+{# One placement: the program band, then the workbench — structure index on
+   the left, one layer's worksheet in the middle, the rail (diagnostics +
+   tower) on the right. The program-worksheet redesign (design 2A/3A,
+   2026-08-24): the stack editor, the layers table and the details row became
+   one index plus one worksheet; lines live in the band, retentions and
+   sublimits at the index's foot.
 
-   This table is the surface phase 2 turns into the editor, so its columns are
-   the layer's own fields and nothing invented for display.
-
-   rows-fit + prose: a layer name and a market list are prose, and without
-   them the table sizes itself to the longest unwrapped value and pushes the
-   columns to its right off the panel behind a scrollbar macOS does not draw
-   — the bug found on the request items table on 2026-08-19.
-
-   Three empty states, not one: "no file linked", "a file with no layers" and
-   "layers present" are three different facts, and collapsing the first two is
-   how the stub came to lie.
+   Four empty states, not one: "no file linked", "will not open", "a file
+   with no layers" and "layers present" are four different facts, and
+   collapsing any two is how the stub came to lie.
 
    NOT hx-swap-oob. Every write route answers with this section alone and
    retargets the swap onto it (routes/program.py `_panel`) — a `<td>` and a
    `<section>` in one response is destroyed by HTML fragment parsing before
-   htmx sees it, which is how a saved layer edit emptied the whole table
-   (2026-08-20). `data-refocus` names the cell the user just left so
-   inline-cell.js can put the caret back after the section is replaced. #}
-<section class="program" id="program-{{ placement.id }}"{% if refocus %} data-refocus="{{ refocus }}"{% endif %}>
-  {# The header facts are CELLS (phase 2): name and period write through the
-     towerkit file, status and commission to the row — services.placement_edit
-     owns that split. Commission was not shown on the web at all before. #}
-  {# TWO TIERS, not one run-on line. Identity and actions on top; the facts
-     that qualify the program underneath, each behind its own label. Before
-     this, the program name (in the muted letterspaced caps meant for a
-     SECTION label), the ref, an unlabelled date range, a status, a bare em
-     dash, the words COMM BPS and five actions were one wrapping line at one
-     weight — so at 1440px the name broke mid-phrase and "2026-01-01 →
-     2027-01-01" broke mid-value (Grant, 2026-08-20). A value that wraps in
-     the middle stops being a date. #}
-  <header class="program-head">
+   htmx sees it (2026-08-20). `data-refocus` names the cell the user just
+   left so inline-cell.js can put the caret back after the section is
+   replaced. #}
+<section class="program" id="program-{{ placement.id }}"{% if refocus %} data-refocus="{{ refocus }}"{% endif %}{% if index %} data-select-base="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/worksheet"{% endif %}>
+  <header class="program-band">
     <div class="program-identity">
       <h2 class="program-name">{{ placement_cells.program_name | safe }}</h2>
-      <span class="program-ref mono">{{ placement.ref }}</span>
+      <span class="program-ref mono">{{ placement.ref }}{% if file_name %} · {{ file_name }}{% endif %}</span>
       {{ placement_cells.status | safe }}
-    </div>
-    <div class="program-actions">
-      {% if linked %}
-        <button type="button" class="btn btn-primary"
-                hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/new"
+      <div class="program-actions">
+        <button type="button" class="btn"
+                hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/submissions/new"
                 hx-target="#program-{{ placement.id }} .form-host"
-                hx-swap="innerHTML">Add layer</button>
-      {% endif %}
-      <button type="button" class="btn"
-              hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/submissions/new"
-              hx-target="#program-{{ placement.id }} .form-host"
-              hx-swap="innerHTML">Submission</button>
-      <button type="button" class="btn"
-              hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/renew"
-              hx-target="#program-{{ placement.id }} .form-host"
-              hx-swap="innerHTML">Renew</button>
-      <button type="button" class="btn"
-              hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/merge"
-              hx-target="#program-{{ placement.id }} .form-host"
-              hx-swap="innerHTML">Merge</button>
-      {% if linked %}
-        <a class="btn" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/compare">Compare</a>
-      {% endif %}
-      {# LAST, and set apart: it is the one action here that takes the program
-         away. Confirm-first rather than hx-confirm, because it moves a file
-         and the destination has to be visible beforehand — the fragment shows
-         it (_program_remove_confirm.html). Merge sits beside it on purpose:
-         Merge is for two records of the SAME program, this is for one that
-         should not exist. #}
-      <button type="button" class="btn btn-quiet-danger"
-              hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/remove"
-              hx-target="#program-{{ placement.id }} .form-host"
-              hx-swap="innerHTML">Remove</button>
+                hx-swap="innerHTML">Submission</button>
+        <button type="button" class="btn"
+                hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/renew"
+                hx-target="#program-{{ placement.id }} .form-host"
+                hx-swap="innerHTML">Renew</button>
+        {% if linked %}
+          <a class="btn" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/compare">Compare</a>
+        {% endif %}
+        <button type="button" class="btn"
+                hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/merge"
+                hx-target="#program-{{ placement.id }} .form-host"
+                hx-swap="innerHTML">Merge</button>
+        {# LAST, and set apart: the one action that takes the program away.
+           Confirm-first, because it moves a file and the destination must be
+           visible beforehand (_program_remove_confirm.html). #}
+        <button type="button" class="btn btn-quiet-danger"
+                hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/remove"
+                hx-target="#program-{{ placement.id }} .form-host"
+                hx-swap="innerHTML">Remove</button>
+      </div>
     </div>
-    {# Above the facts and above the drawing: a tower that is wrong should say
-       so before it is read, not after somebody has puzzled at the picture. #}
-    {% include "account/_program_diagnostics.html" %}
-    {% if linked %}
-      {# The stack editor is the MODEL; the drawing below is a view of it. #}
-      {% include "account/_stack_editor.html" %}
-    {% endif %}
-    <dl class="program-facts">
-      <div class="fact">
-        <dt>period</dt>
-        <dd class="nowrap">{{ placement_cells.period_from | safe }}<span class="fact-arrow">→</span>{{ placement_cells.period_to | safe }}</dd>
+    <div class="band-stats">
+      <div class="stat">
+        <span class="stat-label">period</span>
+        <span class="stat-value nowrap mono-figure">{{ placement_cells.period_from | safe }}<span class="fact-arrow">→</span>{{ placement_cells.period_to | safe }}</span>
       </div>
-      <div class="fact">
-        <dt>commission</dt>
-        <dd>{{ placement_cells.commission_bps | safe }} <span class="fact-unit">bps</span></dd>
-      </div>
-      {% if program_notes %}
-        {# The programme's own note, in the FILE — towerkit prints it and until
-           now only towerkit could write it. Behind `linked` because there is
-           no file to hold it otherwise, and an editable cell that refuses
-           every save is worse than no cell. #}
-        <div class="fact fact-wide">
-          <dt>notes</dt>
-          <dd>{{ program_notes | safe }}</dd>
+      {% if band.premium %}
+        <div class="stat">
+          <span class="stat-label">premium</span>
+          <span class="stat-value stat-figure">{{ band.premium }}</span>
         </div>
       {% endif %}
-    </dl>
+      <div class="stat">
+        <span class="stat-label">commission</span>
+        <span class="stat-value">{{ placement_cells.commission_bps | safe }} <span class="fact-unit">bps</span></span>
+      </div>
+      {% if band.open %}
+        <div class="stat">
+          <span class="stat-label">open capacity</span>
+          <span class="stat-value stat-figure is-open">{{ band.open }}</span>
+          <span class="stat-sub">across {{ band.open_layers }} layer{{ "s" if band.open_layers != 1 }}</span>
+        </div>
+      {% endif %}
+      {% if line_chips is not none %}
+        {# Lines of cover belong to the PROGRAM, so they live in its band —
+           rename in place (the id follows the name, cascading), remove
+           behind a blast-naming confirm, add in row. #}
+        <div class="stat stat-lines">
+          <span class="stat-label">lines of cover</span>
+          <span class="stat-value stat-chips">
+            {% for chip in line_chips %}{{ chip | safe }}{% endfor %}
+            {% with lines_base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/lines" %}
+              {% include "account/_line_add_button.html" %}
+            {% endwith %}
+          </span>
+        </div>
+      {% endif %}
+      {% if program_notes %}
+        <div class="stat stat-wide">
+          <span class="stat-label">notes</span>
+          <span class="stat-value">{{ program_notes | safe }}</span>
+        </div>
+      {% endif %}
+    </div>
   </header>
   <div class="form-host"></div>
 
@@ -110,129 +103,50 @@
     </p>
   {% endif %}
 
-  {% if line_chips is not none %}
-    {# The lines strip (phase 3, D1): rename in place (the id follows the
-       name, cascading), remove behind a blast-naming confirm, add in row.
-       This is where a scaffold's "Coverage TBD" stops being forever. #}
-    {# The label sits in its own column so the chips never wrap underneath it
-       and start a new line flush against the section edge, which is what made
-       three strips of different things read as one paragraph. #}
-    <div class="strip lines-strip">
-      <span class="strip-label">lines</span>
-      <div class="strip-content">
-        {% for chip in line_chips %}{{ chip | safe }}{% endfor %}
-        {% with lines_base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/lines" %}
-          {% include "account/_line_add_button.html" %}
+  {% if index and (worksheet or worksheet_failure) %}
+    <div class="program-workbench">
+      {% include "account/_structure_index.html" %}
+      {% if worksheet %}
+        {% with ws = worksheet %}
+          {% include "account/_worksheet.html" %}
         {% endwith %}
-      </div>
-    </div>
-    {# TWO ROWS, not one. A retention is what the insured pays BELOW the
-       tower; a sublimit is a cap carved out WITHIN a limit. Running them
-       together under one "terms" label put nine chips of two different kinds
-       into one wrapping paragraph, with each kind's add button stranded
-       wherever its half happened to end. #}
-    <div class="strip terms-strip">
-      <span class="strip-label">retentions</span>
-      <div class="strip-content">
-        {% for chip in term_chips.retentions %}{{ chip | safe }}{% endfor %}
-        {% with base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/retentions", singular = "retention" %}
-          {% include "account/_term_add_button.html" %}
-        {% endwith %}
-      </div>
-    </div>
-    <div class="strip terms-strip">
-      <span class="strip-label">sublimits</span>
-      <div class="strip-content">
-        {% for chip in term_chips.sublimits %}{{ chip | safe }}{% endfor %}
-        {% with base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/sublimits", singular = "sublimit" %}
-          {% include "account/_term_add_button.html" %}
-        {% endwith %}
-      </div>
-    </div>
-  {% endif %}
-
-  {% if tower %}
-    {% with caption = placement.program_name ~ " · " ~ placement.ref %}
-      {% include "account/_tower_panel.html" %}
-    {% endwith %}
-  {% endif %}
-
-  {% if layers %}
-    <div class="table-scroll">
-      <table class="rows rows-fit">
-        <thead>
-          <tr><th class="row-expand-col"></th>
-              <th>Layer</th><th>Attaches</th><th>Limit</th><th>Premium</th>
-              <th>Signed</th><th>Markets</th></tr>
-        </thead>
-        <tbody>
-          {% for layer in layers %}
-            {# Each cell is ALREADY a full <td> (render_cell_display) — never
-               wrap one in another. A <td> inside a <td> is invalid HTML: the
-               parser closes the outer one empty and opens a real column for
-               the inner one, so every column after it drifts out from under
-               its header with no visible error (found 2026-08-18). #}
-            <tr data-layer-row="{{ layer.id }}">
-              {# The chevron opens the layer's long tail (policy no + dates)
-                 as a row below — [data-row-expand] in form-host.js makes it
-                 a toggle by swallowing the second click before htmx sees
-                 it. #}
-              <td class="row-expand">
-                <button type="button" class="row-action-btn" data-row-expand
-                        title="policy number and dates"
-                        hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/{{ layer.id }}/details"
-                        hx-target="closest tr" hx-swap="afterend">&#9656;</button>
-              </td>
-              {{ layer.cells.name | safe }}
-              {{ layer.cells.attach_cents | safe }}
-              {% if layer.statutory %}
-                <td class="num">statutory</td>
-              {% else %}
-                {{ layer.cells.limit_cents | safe }}
-              {% endif %}
-              {{ layer.cells.premium_cents | safe }}
-              <td class="num">{{ layer.signed_pct }}%</td>
-              <td class="prose">
-                {% if layer.market_chips %}
-                  {# Each chip is PRE-RENDERED (_market_chip.html via
-                     routes/program._market_chip_html): two inline cells and
-                     a confirm-first remove, the same editing grammar as the
-                     layer cells to the left — a market used to open its
-                     editor in the section form host, above the tower,
-                     nowhere near the click (F1, 2026-08-19). #}
-                  {% for chip in layer.market_chips %}{{ chip | safe }}{% endfor %}
-                {% else %}
-                  {# towerkit's own word for open capacity. A blank cell would
-                     assert nothing, and "nobody is on this layer" is the fact
-                     a reader most needs to catch. #}
-                  <span class="unplaced">To be placed</span>
-                {% endif %}
-                {% with base = "/accounts/" ~ header.org.ref ~ "/program/" ~ placement.id ~ "/layers/" ~ layer.id ~ "/markets" %}
-                  {% include "account/_market_add_button.html" %}
-                {% endwith %}
-              </td>
-            </tr>
-            {# The details row travels WITH the panel when it is open. It is
-               normally inserted client-side by the chevron (hx-swap=afterend),
-               so a panel-wide swap closed it — including on the statutory,
-               follows-underlying and applies-to writes that are made from
-               inside it. #}
-            {% if expanded and expanded == layer.id and expanded_row %}
-              {{ expanded_row | safe }}
-            {% endif %}
-          {% endfor %}
-        </tbody>
-      </table>
+      {% else %}
+        {# The pane failed to build; the index and the band survive so
+           another layer stays selectable. The exception was logged. #}
+        <div class="worksheet">
+          <p class="cell-error-msg" role="alert">{{ worksheet_failure }}</p>
+        </div>
+      {% endif %}
+      <aside class="program-rail">
+        {% if diagnostics %}
+          <div class="rail-block">
+            <span class="rail-caps">This program says</span>
+            {% include "account/_program_diagnostics.html" %}
+          </div>
+        {% endif %}
+        {% if tower %}
+          <div class="rail-block">
+            <span class="rail-caps">Tower</span>
+            {% with caption = placement.program_name ~ " · " ~ placement.ref %}
+              {% include "account/_tower_panel.html" %}
+            {% endwith %}
+            <p class="rail-hint">The selected layer is outlined. Read-only.</p>
+          </div>
+        {% endif %}
+      </aside>
     </div>
   {% elif load_error %}
-    {# FOUR empty states, not three. "this file will not load" was rendered as
-       "it has no layers" for as long as the reads swallowed their exceptions,
-       which is how a moved towerkit checkout became five programs the web
-       swore were empty (2026-08-20). The message is towerkit's or
-       programpath's own words, because they name the file and the fix. #}
+    {# "this file will not load" was rendered as "it has no layers" for as
+       long as the reads swallowed their exceptions, which is how a moved
+       towerkit checkout became five programs the web swore were empty
+       (2026-08-20). The message is towerkit's or programpath's own words,
+       because they name the file and the fix. #}
     <div class="panel-empty panel-broken" role="alert">
       <p class="panel-broken-head">This program file will not open.</p>
-      <p class="panel-broken-why">{{ load_error }}</p>
+      <p class="panel-broken-why mono">{{ load_error }}</p>
+      <p class="panel-broken-fix">Nothing below is editable — an editor here would
+        write to a file that is not there. Run <code>bookctl relink</code> to
+        point the book back at it.</p>
     </div>
     {% if last_synced %}
       {# The layers are still in the database from the last successful sync.
@@ -243,7 +157,7 @@
         <table class="rows rows-fit is-stale">
           <caption class="stale-caption">
             Last synced {{ last_synced.synced_at }} — from the database, not the
-            file. Fix the link above to edit again.
+            file. Quote from it with care; fix the link above to edit again.
           </caption>
           <thead>
             <tr><th>Layer</th><th>Attaches</th><th>Limit</th><th>Premium</th>
@@ -265,12 +179,21 @@
     {% endif %}
   {% elif linked %}
     <div class="panel-empty">
-      <p>the linked file has no layers yet</p>
+      <p class="panel-empty-head">The file is there and holds no layers.</p>
+      <p>{% if file_name %}<span class="mono">{{ file_name }}</span> — {% endif %}a
+        scaffold nobody has filled in yet, which is a different fact from a
+        file that will not open.</p>
+      <button type="button" class="btn btn-primary"
+              hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/new"
+              hx-target="#program-{{ placement.id }} .form-host"
+              hx-swap="innerHTML">Add the first layer</button>
     </div>
   {% else %}
     <div class="panel-empty">
-      <p>no program file linked — nothing to draw or edit yet</p>
-      <button type="button" class="people-add"
+      <p class="panel-empty-head">This placement has no program file.</p>
+      <p>There is nothing to draw and nothing to edit yet. Creating one writes
+        a validated towerkit file — the structure comes after.</p>
+      <button type="button" class="btn btn-primary"
               hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/scaffold"
               hx-target="#programs-panel .form-host"
               hx-swap="innerHTML">Create a program file</button>
@@ -279,26 +202,18 @@
 
   {% if linked %}
     {# Downloads, and therefore the LAST thing in the section: they are an
-       output of everything above, not a fourth strip of content identical to
-       the three at the top. Plain anchors — a download is a navigation, not a
-       swap. Every word in each artifact came off towerkit's renderer. #}
+       output of everything above. Plain anchors — a download is a
+       navigation, not a swap. Every word in each artifact came off
+       towerkit's renderer. #}
     <div class="export-strip">
       <span class="strip-label">export</span>
       <a class="btn" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/export/tower.svg">Tower SVG</a>
       <a class="btn" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/export/tower.pdf">Tower PDF</a>
       <a class="btn" href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/export/schematic.xlsx">Schematic XLSX</a>
     </div>
-    {# D6: the program's SAVED CHART OPTIONS, which travel in the file and were
-       writable only from towerkit's own editor. They sit here, with export,
-       because that is what they govern — these decide what the SVG, the PDF
-       and the SOI schematic print, NOT what the drawing above shows: the web
-       tower is towerkit's `render/web.py` geometry and takes no options.
-
-       Saying so in the strip label is not decoration. Until this phase the
-       export route ignored these settings entirely and rendered with the
-       library defaults, so a control here would have changed nothing at all —
-       a dead control being exactly what the house rule about refusals and
-       hints exists to stop. The export honours them now. #}
+    {# D6: the program's SAVED CHART OPTIONS, which travel in the file. They
+       govern the exports above, not the drawing in the rail — the web tower
+       is towerkit's render/web.py geometry and takes no options. #}
     <div class="export-strip chart-options">
       <span class="strip-label" title="saved in the program file; they govern the exports above, not the drawing">chart</span>
       {% for name, cell in render_cells.items() %}
