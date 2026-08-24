@@ -2131,7 +2131,14 @@ def line_ends(
     layer that applies to it expires. Lines with no layers (TBD, unplaced)
     are omitted — there is no policy to expire. Empty when unlinked or
     unreadable (never raises: home must render)."""
-    program = _program_at(program_path, conn)
+    return line_ends_of(_program_at(program_path, conn))
+
+
+def line_ends_of(program: Program | None) -> list[tuple[str, date]]:
+    """`line_ends` without the I/O — for callers already holding the parsed
+    program (the Towers queue orders by the date cover actually runs out,
+    which is the earliest LINE end, never period_to — the standing renewal
+    rule)."""
     if program is None:
         return []
     out: list[tuple[str, date]] = []

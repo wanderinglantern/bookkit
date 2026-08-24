@@ -4,44 +4,62 @@
   {% set section = "towers" %}
   {% include "partials/topbar.html" %}
 
+  {# The queue, not a gallery (design 2D): a card states the one fact that
+     would make you open it, and opening it lands on the layer that fact is
+     about. The filter chips carry counts; the muted note states the
+     ordering rule so the order never reads as arbitrary. #}
   <div class="book-header">
     <h1 class="book-title">Towers</h1>
-    <span class="book-subtitle">{{ entries | length }} drawn program{{ "s" if entries | length != 1 else "" }} across the book</span>
+    <span class="book-subtitle">{{ total }} linked program{{ "s" if total != 1 else "" }} across the book</span>
   </div>
 
   <div class="towers-body">
+    <div class="towers-filters">
+      <a class="towers-filter{% if show == 'needs-work' %} is-selected{% endif %}"
+         href="/towers?show=needs-work">Needs work <span class="mono">{{ counts["needs-work"] }}</span></a>
+      <a class="towers-filter{% if show == 'open' %} is-selected{% endif %}"
+         href="/towers?show=open">Open capacity <span class="mono">{{ counts["open"] }}</span></a>
+      <a class="towers-filter{% if show == 'renewing' %} is-selected{% endif %}"
+         href="/towers?show=renewing">Renewing {{ window_days }}d <span class="mono">{{ counts["renewing"] }}</span></a>
+      <a class="towers-filter{% if show == 'all' %} is-selected{% endif %}"
+         href="/towers?show=all">All <span class="mono">{{ counts["all"] }}</span></a>
+      <span class="towers-order-note">the validator decides this order — errors, then unplaced capacity, then renewal date</span>
+    </div>
+
     {% if entries %}
-      {% for entry in entries %}
-        <section class="towers-entry">
-          <div class="people-head">
-            <h2 class="people-label">
+      <div class="towers-queue">
+        {% for entry in entries %}
+          {% set target = "/accounts/" ~ entry.org_ref ~ "/program" ~ ("?layer=" ~ entry.jump_layer if entry.jump_layer else "") %}
+          <section class="tower-card{% if loop.first and show == 'needs-work' %} is-first{% endif %}">
+            <div class="tower-card-head">
               {% if entry.org_ref %}
-                <a href="/accounts/{{ entry.org_ref }}/program">{{ entry.account }}</a>
+                <a class="tower-card-name" href="{{ target }}">{{ entry.account }}</a>
               {% else %}
-                {{ entry.account }}
+                <span class="tower-card-name">{{ entry.account }}</span>
               {% endif %}
-              — {{ entry.placement.program_name }}
-            </h2>
-            <span class="people-count mono">{{ entry.placement.ref }}</span>
-            <span class="program-period mono">{{ entry.placement.period_from }} → {{ entry.placement.period_to }}</span>
-            <span class="status-{{ entry.placement.status }}">{{ entry.placement.status }}</span>
-            <span class="towers-badge towers-badge-{{ entry.badge_kind }}">{{ entry.badge }}</span>
-          </div>
-          {% if entry.tower %}
-            {% with tower = entry.tower, caption = entry.placement.program_name ~ " · " ~ entry.placement.ref %}
-              {% include "account/_tower_panel.html" %}
-            {% endwith %}
-          {% else %}
-            {# the drawing is withheld, the reasons are not #}
-            <ul class="confirm-remove-notes">
-              {% for problem in entry.problems %}<li>{{ problem }}</li>{% endfor %}
-              {% if not entry.problems %}<li>the file could not be drawn — open it in towerkit</li>{% endif %}
-            </ul>
-          {% endif %}
-        </section>
-      {% endfor %}
+              <span class="towers-badge towers-badge-{{ entry.badge_kind }}">{{ entry.badge }}</span>
+            </div>
+            <div class="tower-card-program mono">{{ entry.placement.program_name }} · {{ entry.placement.ref }}</div>
+            {% if entry.tower %}
+              {% with tower = entry.tower, caption = entry.placement.program_name ~ " · " ~ entry.placement.ref %}
+                {% include "account/_tower_panel.html" %}
+              {% endwith %}
+            {% endif %}
+            {# The one line that would make you open it — the validator's own
+               sentence for errors and unplaced capacity, the date for a
+               renewal, the signed total otherwise. #}
+            <p class="tower-card-reason is-{{ entry.badge_kind }}">{{ entry.reason }}</p>
+          </section>
+        {% endfor %}
+      </div>
     {% else %}
-      <div class="panel-empty"><p>no linked programs yet — scaffold one from an account's Program tab</p></div>
+      <div class="panel-empty">
+        {% if show == "all" %}
+          <p>no linked programs yet — scaffold one from an account's Program tab</p>
+        {% else %}
+          <p>nothing here — every program passes this filter clean</p>
+        {% endif %}
+      </div>
     {% endif %}
   </div>
 {% endblock %}

@@ -23,7 +23,9 @@ def test_every_linked_placement_is_drawn_and_no_unlinked_one(client):
     from bookkit.repo import placements
 
     conn = client.app.state.conn
-    page = client.get("/towers")
+    # ?show=all — the queue's default filter is "needs work" (design 2D),
+    # and a clean book would honestly show nothing there.
+    page = client.get("/towers?show=all")
 
     assert page.status_code == 200
     for placement in placements.all_linked(conn):
@@ -70,8 +72,54 @@ def test_a_deleted_account_does_not_500_the_towers_page(client):
     victim = placements.all_linked(conn)[0]
     base.soft_delete(conn, "org", victim.org_id, note="review regression")
 
-    page = client.get("/towers")
+    page = client.get("/towers?show=all")
 
     assert page.status_code == 200
     assert "(deleted account)" in page.text
     assert victim.ref in page.text
+
+
+def _unplace_a_seat(conn):
+    """Take one market off one layer, leaving real unplaced capacity — and
+    return (placement, layer_id, carrier) so the test can point at it."""
+    from bookkit import sync
+    from bookkit.repo import placements
+
+    for placement in placements.all_linked(conn):
+        for layer in sync.layer_details(conn, placement.id):
+            if layer["participants"] and not layer["buffer"] and not layer["statutory"]:
+                carrier = layer["participants"][0]["carrier"]
+                assert sync.remove_participant(
+                    conn, placement.id, layer["id"], carrier
+                ).ok
+                return placement, layer["id"]
+    raise AssertionError("the seeded book has no seat to take off")
+
+
+def test_the_queue_states_the_reason_and_lands_on_the_layer(client):
+    """Design 2D: a card states the one fact that would make you open it —
+    towerkit's own layer-unplaced sentence — and opening it lands on the
+    layer that fact is about, not the top of the program."""
+    conn = client.app.state.conn
+    placement, layer_id = _unplace_a_seat(conn)
+
+    page = client.get("/towers")  # the default filter is needs-work
+
+    assert page.status_code == 200
+    assert "unplaced" in page.text, "the reason line does not state the fact"
+    assert f"?layer={layer_id}" in page.text, (
+        "opening the card does not land on the layer the fact is about"
+    )
+
+
+def test_the_filters_carry_counts_and_the_order_note(client):
+    conn = client.app.state.conn
+    _unplace_a_seat(conn)
+
+    page = client.get("/towers?show=open")
+
+    assert page.status_code == 200
+    assert "Needs work" in page.text and "Open capacity" in page.text
+    assert "the validator decides this order" in page.text
+    # the open filter shows the unplaced program and only unplaced ones
+    assert "unplaced" in page.text

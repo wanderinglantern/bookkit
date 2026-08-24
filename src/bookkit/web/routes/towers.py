@@ -1,29 +1,45 @@
-"""The Towers page: every drawn tower across the book, in one place.
+"""The Towers page: the whole book's programs as a QUEUE, not a gallery
+(design 2D, 2026-08-24).
 
-The nav item existed as an inert span for two days before D4 unrendered it;
-it returns here as a real route. READ-ONLY by design — each tower links to
-its account's Program tab, where the editing grammar lives; a second editing
-surface would fork the contract phases 1–4 settled.
+A card states the ONE fact that would make you open it — an error in
+towerkit's own words, the unplaced dollars, the renewal countdown — and
+opening it lands on the layer that fact is about, not the top of the
+program. The validator decides the order: errors, then unplaced capacity
+descending, then the renewal date.
 
-A file that fails validation renders its badge and its errors instead of a
+READ-ONLY by design — each card links to its account's Program tab, where
+the editing grammar lives; a second editing surface would fork the contract
+phases 1–4 settled.
+
+A file that fails validation renders its badge and its reason instead of a
 drawing — a page that 500s because one program is mid-edit in towerkit would
-hide every other tower in the book. The badge colours carry words (ok /
-errors / warnings), per the colour-is-signal rule.
+hide every other tower in the book. The badge colours carry words, per the
+colour-is-signal rule.
+
+THE RENEWAL DATE IS THE ONE YOU COUNT TO (the standing rule): the countdown
+runs to the earliest LINE end (`sync.line_ends_of`), never period_to — an IM
+layer three months early is exactly the case the rule exists for.
 """
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from ... import sync
+from ...money import format_cents_compact
 from ...repo import orgs, placements
 from ...sync import program_file
 from ..app import TEMPLATES
 from ..tower import panel
 
 router = APIRouter()
+
+_FILTERS = ("needs-work", "open", "renewing", "all")
+RENEWING_WINDOW_DAYS = 90
 
 
 def _entries(request: Request) -> list[dict[str, Any]]:
@@ -36,49 +52,115 @@ def _entries(request: Request) -> list[dict[str, Any]]:
     names = orgs.names_for(conn, {p.org_id for p in linked})
     # One guarded fetch per unique org, not one per placement — and GUARDED:
     # org deletion is a soft delete with no cascade to placements, so a
-    # linked placement can outlive its account. names_for already knows this
-    # (a missing key renders "(deleted account)"); the ref lookup gets the
-    # same tolerance, or one merged-away account 500s the whole book's
-    # towers (fresh-eyes review, phase 4).
+    # linked placement can outlive its account (a missing key renders
+    # "(deleted account)" and no link).
     refs: dict[str, str | None] = {}
     for org_id in {p.org_id for p in linked}:
         try:
             refs[org_id] = str(orgs.get(conn, org_id).ref)
         except KeyError:
             refs[org_id] = None
+    today = date.today()
     entries: list[dict[str, Any]] = []
-    for placement in sorted(
-        linked, key=lambda p: (names.get(p.org_id, ""), p.period_from)
-    ):
+    for placement in linked:
         program, diags = validate_file(program_file(conn, placement))
+        rows = sync.layer_details_of(program)
+        placeable = [
+            row for row in rows if not row["buffer"] and not row["statutory"]
+        ]
+        unplaced_cents = sum(row["open_limit_cents"] for row in placeable)
+        # The one-line reason and the layer it lands on are the VALIDATOR's:
+        # the first error, or the first layer-unplaced warning, each in
+        # towerkit's own sentence with its own ref pointer.
+        first_error = next(iter(diags.errors), None)
+        unplaced_warning = next(
+            (d for d in diags.warnings if d.code == "layer-unplaced"), None
+        )
+        ends = [end for _, end in sync.line_ends_of(program)]
+        renewal_on = min(ends) if ends else date.fromisoformat(placement.period_to)
+        days = (renewal_on - today).days
+
+        if first_error is not None:
+            kind, reason = "error", first_error.message
+            said = first_error
+        elif unplaced_warning is not None:
+            kind, reason = "open", unplaced_warning.message
+            said = unplaced_warning
+        elif days <= RENEWING_WINDOW_DAYS:
+            kind = "renewing"
+            reason = f"renews {renewal_on.isoformat()}"
+            said = None
+        else:
+            kind = "ok"
+            total = sum(row["limit_cents"] for row in placeable)
+            reason = f"{format_cents_compact(total)} · fully signed"
+            said = None
+        jump = (
+            said.ref[1]
+            if said is not None and said.ref and said.ref[0] == "layer" and said.ref[1]
+            else None
+        )
         badge = (
-            "ok"
-            if diags.ok and not diags.warnings
-            else (
-                f"{len(diags.errors)} error{'s' if len(diags.errors) != 1 else ''}"
-                if diags.errors
-                else f"{len(diags.warnings)} warning{'s' if len(diags.warnings) != 1 else ''}"
-            )
+            "error"
+            if kind == "error"
+            else "open"
+            if kind == "open"
+            else (f"{days}d" if days >= 0 else f"{-days}d over")
+            if kind == "renewing"
+            else "ok"
         )
         entries.append(
             {
                 "placement": placement,
                 "account": names.get(placement.org_id, "(deleted account)"),
                 "org_ref": refs.get(placement.org_id),
+                "kind": kind,
                 "badge": badge,
                 "badge_kind": (
-                    "ok" if diags.ok and not diags.warnings
-                    else ("error" if diags.errors else "warn")
+                    "error" if kind == "error"
+                    else "warn" if kind in ("open", "renewing")
+                    else "ok"
                 ),
-                "problems": [str(d) for d in diags.errors],
+                "reason": reason,
+                "jump_layer": jump,
+                "unplaced_cents": unplaced_cents,
+                "renewal_on": renewal_on.isoformat(),
+                "days": days,
                 "tower": panel(program) if program is not None and diags.ok else None,
             }
         )
+    # THE VALIDATOR DECIDES THIS ORDER: errors, then unplaced dollars
+    # descending, then the renewal date — the queue's whole point.
+    entries.sort(
+        key=lambda e: (
+            0 if e["kind"] == "error" else 1,
+            -e["unplaced_cents"],
+            e["renewal_on"],
+        )
+    )
     return entries
 
 
 @router.get("/towers", response_class=HTMLResponse)
-def towers_page(request: Request) -> HTMLResponse:
+def towers_page(request: Request, show: str = "needs-work") -> HTMLResponse:
+    entries = _entries(request)
+    if show not in _FILTERS:
+        show = "needs-work"
+    subsets: dict[str, list[dict[str, Any]]] = {
+        "needs-work": [
+            e for e in entries if e["kind"] == "error" or e["unplaced_cents"] > 0
+        ],
+        "open": [e for e in entries if e["unplaced_cents"] > 0],
+        "renewing": [e for e in entries if e["days"] <= RENEWING_WINDOW_DAYS],
+        "all": entries,
+    }
     return TEMPLATES.TemplateResponse(
-        request, "towers.html", {"entries": _entries(request)}
+        request, "towers.html",
+        {
+            "entries": subsets[show],
+            "show": show,
+            "counts": {name: len(rows) for name, rows in subsets.items()},
+            "window_days": RENEWING_WINDOW_DAYS,
+            "total": len(entries),
+        },
     )
