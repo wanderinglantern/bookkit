@@ -33,10 +33,13 @@ FLOOR = 2.5
 # (widget class, foreground, background) so a pair cannot be broadened by
 # accident. Remove an entry when its finding is fixed — the test will tell you.
 ACCEPTED: dict[tuple[str, str, str], str] = {
-    # F31 — towerkit's ASCII renderer carries its own theme, which assumes
-    # towerkit's background rather than bookkit's. Not this repo's to fix;
-    # the real fix is passing a theme to load_theme().
-    ("TowerPreview", "#1c1c1c", "#15171c"): "F31 towerkit retention rule",
+    # F31 is GONE (2026-08-24), and this test is what said so: towerkit's
+    # ASCII renderer now lifts every foreground it emits into the band a
+    # terminal can show whatever its background (render/ascii.terminal_safe),
+    # so a near-black carrier fill or retention rule no longer draws as a
+    # blank column. The entry that used to sit here named that defect; the
+    # test failed when it stopped occurring, which is the whole point of the
+    # rot check.
     # F30 — "chrome should whisper" (bookkit.tcss) is the right instinct, but
     # theme.RULE on theme.PANEL is inaudible rather than quiet.
     ("Static", "#3a4150", "#232733"): "F30 status-bar / account-header separators",
