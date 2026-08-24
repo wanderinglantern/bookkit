@@ -25,13 +25,33 @@
   </div>
 
   {% for group in index.groups %}
-    <button type="button" class="index-group" hx-get="{{ group.toggle_url }}"
-            aria-expanded="{{ 'false' if group.closed else 'true' }}"
-            title="{{ 'expand' if group.closed else 'collapse' }} {{ group.name }}">
-      <span class="index-glyph mono" aria-hidden="true">{{ "▸" if group.closed else "▾" }}</span>
-      <span class="index-group-name mono">{{ group.name }} · {{ group.label }}</span>
-      <span class="index-count mono">{{ group.count }}</span>
-    </button>
+    {# The group header is a row, not one button: collapsing and reordering
+       are two acts and a button inside a button is not markup. The move
+       controls are the LINE's column order — the same write the chips in the
+       band make, so there is one definition and two doors. #}
+    <div class="index-group-row">
+      <button type="button" class="index-group" hx-get="{{ group.toggle_url }}"
+              aria-expanded="{{ 'false' if group.closed else 'true' }}"
+              title="{{ 'expand' if group.closed else 'collapse' }} {{ group.name }}">
+        <span class="index-glyph mono" aria-hidden="true">{{ "▸" if group.closed else "▾" }}</span>
+        <span class="index-group-name mono">{{ group.name }} · {{ group.label }}</span>
+        <span class="index-count mono">{{ group.count }}</span>
+      </button>
+      {% if group.move_base %}
+        <span class="index-group-move">
+          {# Disabled at the ends rather than hidden: a control that vanishes
+             makes the reader wonder where it went. #}
+          <button type="button" class="chip-arrow" {% if group.first %}disabled{% endif %}
+                  title="Move {{ group.name }} left — column order in the drawing"
+                  aria-label="Move {{ group.name }} left"
+                  hx-post="{{ group.move_base }}" hx-vals='{"delta": "-1"}'>&#9666;</button>
+          <button type="button" class="chip-arrow" {% if group.last %}disabled{% endif %}
+                  title="Move {{ group.name }} right — column order in the drawing"
+                  aria-label="Move {{ group.name }} right"
+                  hx-post="{{ group.move_base }}" hx-vals='{"delta": "1"}'>&#9656;</button>
+        </span>
+      {% endif %}
+    </div>
     {% if not group.closed %}
       {% for row in group.rows %}
         <button type="button"

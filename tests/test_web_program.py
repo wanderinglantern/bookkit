@@ -4048,3 +4048,93 @@ def test_a_statutory_line_is_labelled_in_the_picker(app_and_org):
     form = client.get(f"/accounts/{org.ref}/program/{placement.id}/layers/new").text
 
     assert "statutory, whole column" in form
+
+
+# --- the rail is where the structure is worked --------------------------------
+#
+# Testing on 2026-08-24 Grant hit two things the rail could not do. The
+# "same policy as" picker offered two different layers under one label — both
+# new lines of coverage arrive with a layer called "To be placed" — which read
+# as a list that had not refreshed. And column order could only be changed from
+# the chips in the band above, while the structure itself is read in the rail.
+
+
+def _two_pending_lines(client, org, placement):
+    """Two lines of coverage whose layers are BOTH called 'To be placed' —
+    the shape that makes a name-only picker ambiguous."""
+    base = f"/accounts/{org.ref}/program/{placement.id}"
+    for name in ("Workers Compensation", "Employers Liability"):
+        added = client.post(f"{base}/lines", data={"name": name})
+        assert added.status_code == 200
+    return base
+
+
+def test_the_policy_picker_can_tell_two_layers_of_one_name_apart(app_and_org):
+    """The write was always addressed by id, so nothing was ever linked
+    wrongly — but a control that asks a question with two identical answers
+    is a control nobody can use."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    base = _two_pending_lines(client, org, placement)
+    pending = [
+        row for row in sync.layer_details(conn, placement.id)
+        if row["name"] == "To be placed"
+    ]
+    assert len(pending) == 2, "the fixture did not produce the ambiguous shape"
+
+    page = client.get(f"{base.rsplit('/', 2)[0]}/program?layer={pending[0]['id']}").text
+
+    # the OTHER pending layer is offered, qualified by its line of coverage
+    assert "To be placed (Employers Liability)" in page
+
+
+def test_a_distinct_name_is_not_qualified(app_and_org):
+    """Only the ambiguous ones. Qualifying every option would make the common
+    case noisier for a problem it does not have."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    page = client.get(f"/accounts/{org.ref}/program?layer={layer['id']}").text
+
+    assert "Primary GL (" not in page
+
+
+def test_the_rail_can_reorder_lines_of_coverage(app_and_org):
+    """Column order in the drawing, edited where the structure is read."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    before = [name for _, name in sync.program_lines(conn, placement.id)]
+    line_id = next(lid for lid, _ in sync.program_lines(conn, placement.id))
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    # In the RAIL, not merely somewhere on the page: the chips in the band
+    # above have always carried this URL, so asserting the URL alone would
+    # pass with the rail's own control deleted.
+    rail = page.split('class="structure-index"', 1)[1].split("</nav>", 1)[0]
+    assert "index-group-move" in rail, "the rail offers no move control"
+    assert f"/lines/{line_id}/move" in rail
+
+    moved = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/lines/{line_id}/move",
+        data={"delta": "1"},
+    )
+
+    assert moved.status_code == 200
+    after = [name for _, name in sync.program_lines(conn, placement.id)]
+    assert after == [before[1], before[0], *before[2:]]
+    _assert_panel_swap(moved, placement.id)
+
+
+def test_the_ends_are_disabled_not_hidden(app_and_org):
+    """A control that vanishes makes the reader wonder where it went."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert page.count("chip-arrow") >= 2
+    assert "disabled" in page

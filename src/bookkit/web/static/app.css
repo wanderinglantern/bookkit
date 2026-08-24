@@ -4181,6 +4181,32 @@ button.term-label {
    without :has() shows both controls always — which still works, because the
    SERVER decides whether the name is required (a hidden required input would
    block submit with nothing on screen to fix). */
+/* The rail's group header: the line of coverage, and its column order.
+   A row rather than one button, because collapsing and reordering are two
+   acts — a button inside a button is not markup. */
+.index-group-row {
+  display: flex;
+  align-items: stretch;
+}
+
+.index-group-row .index-group {
+  flex: 1;
+  min-width: 0;
+}
+
+.index-group-move {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  padding-right: 0.25rem;
+  background: var(--wash-2);
+}
+
+.index-group-move .chip-arrow[disabled] {
+  opacity: 0.25;
+  cursor: default;
+}
+
 /* The add-layer / add-line form. It had NO layout at all until 2026-08-24 —
    label and input ran together and five fields wrapped mid-pair, so a
    premium box could sit on a row that started with somebody else's label.
