@@ -219,3 +219,65 @@ def test_a_layer_with_a_typed_premium_still_splits(spanning) -> None:
     kept = next(ly for ly in program.layers if ly.id == "primary-gl")
     moved = next(ly for ly in program.layers if ly.name.endswith("(Auto half)"))
     assert (kept.premium, moved.premium) == (600_000, 300_000)
+
+
+def test_the_advisories_reach_the_caller_on_both_surfaces(shared) -> None:
+    """A CONSEQUENCE MUST REACH EVERY SURFACE (surface sweep, 2026-08-24).
+
+    towerkit returns advisories naming the seats it froze and the sum it set —
+    the two of the three numbers the caller did not send — and this wrapper
+    dropped them on the floor. The web has a preview, so a human was told
+    anyway; MCP has none, and `program_market_premium`'s own docstring
+    promises "two are ones you did not send". A change that lands on the web
+    and not on MCP has shipped to two thirds of its users.
+    """
+    conn, placement, path = shared
+
+    diags = sync.set_participant_premium(
+        conn, placement.id, "primary-gl", "Zurich", 520_000_00
+    )
+    assert diags.ok
+    codes = [d.code for d in diags.warnings]
+    assert codes[:2] == ["premium-frozen", "premium-summed"], (
+        f"the advisories are missing or buried: {codes}"
+    )
+    said = " ".join(d.message for d in diags.warnings)
+    assert "Swiss Re at $540,000" in said, "the frozen seat is not named"
+    assert "$1,060,000" in said, "the sum it set is not named"
+
+
+def test_a_refused_premium_advises_nothing(shared) -> None:
+    """An advisory describes what the write DID, so a refusal must carry
+    none: "premium is now $1,060,000, the sum of its markets" would be a
+    sentence about a file that never changed.
+
+    The reachable refusals — a carrier that is not seated, a stale file —
+    raise before towerkit is asked, so there is nothing to leak. The `ok`
+    guard on the way out covers the ordering itself: it is the reason a
+    refusal added later, between the mutation and the return, cannot start
+    advising about a write that did not land.
+    """
+    conn, placement, path = shared
+    before = path.read_text()
+
+    diags = sync.set_participant_premium(
+        conn, placement.id, "primary-gl", "Nobody At All", 520_000_00
+    )
+
+    assert not diags.ok
+    assert not [d for d in diags.warnings if d.code.startswith("premium-")]
+    assert path.read_text() == before
+
+
+def test_the_mcp_tool_hands_the_advisories_back(shared) -> None:
+    """The surface the finding is about: the tool's return value, not the
+    diagnostics object behind it."""
+    from bookkit.mcpserver import _program_market_premium
+
+    conn, placement, path = shared
+    out = _program_market_premium(
+        conn, placement.ref, "primary-gl", "Zurich", "520k"
+    )
+    said = " ".join(out["warnings"])
+    assert "the figure each was already showing" in said
+    assert "the sum of its markets" in said

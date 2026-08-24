@@ -1955,6 +1955,15 @@ def set_participant_premium(
     """
     from towerkit.edit import set_participant_premium as edit_set_premium
 
+    # towerkit's ADVISORIES, kept rather than dropped. They name the seats it
+    # froze and the sum it set — the two numbers of the three that the caller
+    # did not send — and this wrapper discarded them, so the web previewed
+    # them and MCP said nothing at all, while `program_market_premium`'s own
+    # docstring promises "two are ones you did not send" (2026-08-24). A
+    # consequence has to reach every surface: they ride out as warnings, which
+    # both surfaces already render.
+    advisories: list[Any] = []
+
     def mutate(program: Program) -> None:
         layer = _find_layer(program, layer_id)
         index = next(
@@ -1964,14 +1973,22 @@ def set_participant_premium(
         if index is None:
             seated = ", ".join(p.carrier for p in layer.participants) or "nobody"
             raise ValueError(f"{carrier} is not on {layer.name} — {seated} is")
-        edit_set_premium(
-            program,
-            layer_id,
-            index,
-            cents_to_dollars(premium_cents) if premium_cents is not None else None,
+        advisories.extend(
+            edit_set_premium(
+                program,
+                layer_id,
+                index,
+                cents_to_dollars(premium_cents) if premium_cents is not None else None,
+            )
         )
 
-    return _mutate(conn, placement_id, mutate)
+    diags = _mutate(conn, placement_id, mutate)
+    if diags.ok:
+        # FIRST, and only on a write that happened: an advisory describes what
+        # this edit did, so it leads the standing warnings a program carries —
+        # and after a refusal it would describe a write that never landed.
+        diags.items[:0] = advisories
+    return diags
 
 
 def premium_preview(
