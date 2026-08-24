@@ -4153,6 +4153,37 @@ button.term-label {
   margin-top: 0.6rem;
 }
 
+/* The seats a premium override is about to state. A table, because the
+   reader is checking three columns against each other — and the row they
+   typed is marked, so the two they did NOT type read as consequences. */
+.ws-preview-seats {
+  margin-top: 0.5rem;
+  border-collapse: collapse;
+  font-size: var(--body-size);
+}
+
+.ws-preview-seats th,
+.ws-preview-seats td {
+  padding: 0.15rem 1.1rem 0.15rem 0;
+  text-align: left;
+}
+
+.ws-preview-seats th {
+  font-size: var(--hint-size);
+  font-weight: 400;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ws-preview-seats .num {
+  text-align: right;
+}
+
+.ws-preview-seats .is-typed td {
+  font-weight: 600;
+}
+
 /* The consequence block: warn-framed, because it states cover somebody is
    about to give up — the one place a strong frame is the message. */
 .ws-consequence {

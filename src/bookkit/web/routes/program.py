@@ -2877,7 +2877,20 @@ def _premium_preview_response(
     html = TEMPLATES.env.get_template("account/_premium_preview.html").render(
         request=request,
         preview=preview,
+        # `typed` is what goes back on Save and must round-trip verbatim;
+        # `typed_label` is what the sentence SHOWS. A money cell's keystrokes
+        # ("1050000.00") read as a machine value beside three formatted
+        # figures — the share cell has no such split because a bare percent
+        # reads the same either way.
         typed=raw,
+        typed_label=next(
+            (
+                format_cents(row["premium_cents"])
+                for row in preview["seats"]
+                if row["typed"] and row["premium_cents"] is not None
+            ),
+            raw,
+        ),
         seat=seat,
         commit_action=f"{base}/cell/premium_cents",
         select_url=(
