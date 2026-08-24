@@ -4290,3 +4290,51 @@ button.term-label {
 .tower-card-reason.is-ok {
   color: var(--muted);
 }
+
+/* --- Compare (design 2C): words first, then the delta ---------------------- */
+
+.compare-stats {
+  border-top: 1px solid var(--ink);
+  margin-top: 0.5rem;
+}
+
+.stat-sub.is-good,
+td.is-good,
+.compare-added {
+  color: var(--good);
+}
+
+.stat-sub.is-danger,
+td.is-danger {
+  color: var(--danger);
+}
+
+td .is-warn {
+  color: var(--warn);
+}
+
+/* The renewal read as a paragraph before any table — the same delta, in
+   sentences. */
+.compare-summary {
+  margin: 0.9rem 0 0;
+  max-width: 52rem;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+tr.compare-new td {
+  background: var(--good-wash);
+}
+
+tr.compare-lapsed td {
+  background: var(--danger-wash);
+}
+
+.compare-gone,
+.compare-gone-list {
+  color: var(--muted);
+}
+
+s.compare-gone {
+  color: var(--danger);
+}

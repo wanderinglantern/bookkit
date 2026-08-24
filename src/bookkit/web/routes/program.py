@@ -3148,7 +3148,9 @@ def compare_page(request: Request, ref: str, placement_id: str) -> HTMLResponse:
             raise HTTPException(status_code=404, detail=f"{expiring.ref} has no program file")
     else:
         adjacent = [p for p in siblings if p.period_to == proposed.period_from]
-        if len(adjacent) != 1:
+        # ?pick=1 is the header's "pair with another…" — the picker on
+        # demand, not only on ambiguity.
+        if request.query_params.get("pick") or len(adjacent) != 1:
             context.update(
                 {"proposed": proposed, "candidates": siblings, "action": action}
             )
@@ -3157,9 +3159,9 @@ def compare_page(request: Request, ref: str, placement_id: str) -> HTMLResponse:
             )
         expiring = adjacent[0]
 
-    delta = compare_programs(
-        _loaded_program(conn, expiring), _loaded_program(conn, proposed)
-    )
+    exp_program = _loaded_program(conn, expiring)
+    prop_program = _loaded_program(conn, proposed)
+    delta = compare_programs(exp_program, prop_program)
 
     from ...money import dollars_to_cents
 
@@ -3168,29 +3170,137 @@ def compare_page(request: Request, ref: str, placement_id: str) -> HTMLResponse:
         # even for display (CLAUDE.md: conversion only in sync.py / money.py)
         return format_cents_compact(dollars_to_cents(dollars)) if dollars else "—"
 
-    def share(bps: int | None) -> str:
-        return f"{bps / 100:g}%" if bps else "—"
+    def band(layer: Any) -> str:
+        return f"{money(layer.limit)} xs {money(layer.attach) if layer.attach else '$0'}"
 
+    def signed(layer: Any) -> str | None:
+        return None if layer.signed_bps >= 10_000 else f"{layer.signed_bps / 100:g}%"
+
+    # LAYER-LEVEL rows (design 2C): the renewal is read layer by layer, with
+    # the carrier moves in-line — new rows tinted good, lapsed danger, added
+    # participants marked, removed ones struck. Top of tower first.
+    exp_layers = {ly.id: ly for ly in exp_program.layers}
+    prop_layers = {ly.id: ly for ly in prop_program.layers}
+    ordered = sorted(prop_program.layers, key=lambda ly: -ly.attach) + sorted(
+        (ly for ly in exp_program.layers if ly.id not in prop_layers),
+        key=lambda ly: -ly.attach,
+    )
+    rows = []
+    for layer in ordered:
+        old = exp_layers.get(layer.id)
+        new = prop_layers.get(layer.id)
+        status = "new" if old is None else ("lapsed" if new is None else "")
+        old_names = {p.carrier for p in old.participants} if old else set()
+        new_names = {p.carrier for p in new.participants} if new else set()
+        shown = new if new is not None else old
+        markets = [
+            {
+                "name": f"{p.carrier} {p.share_bps / 100:g}",
+                "added": bool(old is not None and p.carrier not in old_names),
+            }
+            for p in (shown.participants if shown else [])
+        ]
+        gone = sorted(old_names - new_names) if new is not None and old else []
+        old_premium = old.premium if old else None
+        new_premium = new.premium if new else None
+        if old_premium is None and new_premium is None:
+            premium_delta_text, premium_dir = "—", ""
+        else:
+            moved = (new_premium or 0) - (old_premium or 0)
+            if moved == 0:
+                premium_delta_text, premium_dir = "no change", ""
+            else:
+                premium_delta_text = f"{'+' if moved > 0 else '−'}{money(abs(moved))}"
+                # cost framing: an increase reads danger, a reduction good
+                premium_dir = "up" if moved > 0 else "down"
+        if shown is None:  # unreachable: ordered only holds known layers
+            continue
+        rows.append(
+            {
+                "name": shown.name,
+                "status": status,
+                "expiring": band(old) if old else None,
+                "expiring_signed": signed(old) if old else None,
+                "proposed": band(new) if new else None,
+                "proposed_signed": signed(new) if new else None,
+                "premium_delta": premium_delta_text,
+                "premium_dir": premium_dir,
+                "markets": markets,
+                "gone": gone,
+                "lapsed_markets": (
+                    " · ".join(p.carrier for p in old.participants) if new is None and old else None
+                ),
+            }
+        )
+
+    # The plain-English paragraph (design 2C): said in words BEFORE any
+    # table, every sentence derived from the same delta the table shows.
+    new_rows = [r for r in rows if r["status"] == "new"]
+    lapsed_rows = [r for r in rows if r["status"] == "lapsed"]
+    off = sorted({c for ly in exp_program.layers for c in (p.carrier for p in ly.participants)}
+                 - {c for ly in prop_program.layers for c in (p.carrier for p in ly.participants)})
+    on = sorted({c for ly in prop_program.layers for c in (p.carrier for p in ly.participants)}
+                - {c for ly in exp_program.layers for c in (p.carrier for p in ly.participants)})
+    sentences: list[str] = []
+    for r in new_rows:
+        written = " · ".join(m["name"] for m in r["markets"]) or "nobody yet"
+        sentences.append(f"{r['name']} is new at {r['proposed']} — {written}.")
+    if lapsed_rows:
+        names = ", ".join(r["name"] for r in lapsed_rows)
+        sentences.append(f"{names} lapse{'s' if len(lapsed_rows) == 1 else ''}.")
+    if off or on:
+        churn = []
+        if off:
+            churn.append(f"{', '.join(off)} come{'s' if len(off) == 1 else ''} off")
+        if on:
+            churn.append(f"{', '.join(on)} join{'s' if len(on) == 1 else ''}")
+        sentences.append("; ".join(churn) + ".")
+    if delta.premium_delta_pct is not None and delta.premium_delta_pct != 0:
+        sentences.append(
+            f"Premium moves {money(delta.premium_old)} → {money(delta.premium_new)} "
+            f"({delta.premium_delta_pct:+.1f}%)."
+        )
+    if not sentences:
+        sentences.append("The two programs match — nothing moved.")
+
+    limit_moved = (delta.limit_new or 0) - (delta.limit_old or 0)
     context.update(
         {
             "proposed": proposed,
             "expiring": expiring,
+            "pair_note": (
+                "paired on renewal adjacency" if not with_id else "paired by hand"
+            ),
+            "action": action,
             "limit_old": money(delta.limit_old),
             "limit_new": money(delta.limit_new),
+            "limit_delta": (
+                f"{'+' if limit_moved > 0 else '−'}{money(abs(limit_moved))}"
+                if limit_moved
+                else None
+            ),
+            "limit_dir": "up" if limit_moved > 0 else "down" if limit_moved else "",
             "premium_old": money(delta.premium_old),
             "premium_new": money(delta.premium_new),
             "premium_delta_pct": delta.premium_delta_pct,
-            "rows": [
-                {
-                    "carrier": row.carrier,
-                    "layer_name": row.layer_name,
-                    "status": row.status,
-                    "share": f"{share(row.share_old_bps)} → {share(row.share_new_bps)}",
-                    "line": f"{money(row.line_old)} → {money(row.line_new)}",
-                    "premium": f"{money(row.premium_old)} → {money(row.premium_new)}",
-                }
-                for row in delta.rows
-            ],
+            "layers_old": len(exp_program.layers),
+            "layers_new": len(prop_program.layers),
+            "layers_note": f"{len(new_rows)} new · {len(lapsed_rows)} lapsed",
+            "carriers_old": len({p.carrier for ly in exp_program.layers for p in ly.participants}),
+            "carriers_new": len({p.carrier for ly in prop_program.layers for p in ly.participants}),
+            "carriers_note": (
+                " · ".join(
+                    part
+                    for part in (
+                        f"{', '.join(off)} off" if off else "",
+                        f"{', '.join(on)} on" if on else "",
+                    )
+                    if part
+                )
+                or "unchanged"
+            ),
+            "summary": " ".join(sentences),
+            "rows": rows,
         }
     )
     return TEMPLATES.TemplateResponse(request, "account/compare.html", context)
