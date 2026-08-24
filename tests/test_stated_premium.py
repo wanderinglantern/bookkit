@@ -14,6 +14,7 @@ Two answers from one file.
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -112,3 +113,109 @@ def test_a_layer_with_no_markets_is_never_zeroed(shared) -> None:
         conn, placement.id, "primary-gl", "Zurich", 520_000_00
     ).ok
     assert _layer(path, "primary-cy").premium == 400_000
+
+
+@pytest.fixture
+def spanning(conn: sqlite3.Connection, tmp_path: Path):
+    """A layer that covers TWO lines of coverage and is shared by two markets
+    — the only shape `split_layer` applies to. Built as a file rather than
+    grown through the verbs, because widening a layer onto a line that already
+    has one is an overlap towerkit refuses, and removing that one first is a
+    `line-empty` error: the shape is legal, the path to it through the app is
+    not."""
+    from towerkit.model import Layer, Line, Participant, Period, Placement, Retention, RetentionType
+    from towerkit.model import Program as TkProgram
+
+    client = orgs.create(conn, kind="client", name="Span Co.", status="active")
+    lines = [
+        Line(id="gl", name="General Liability", abbr="GL"),
+        Line(id="al", name="Auto Liability", abbr="AL"),
+    ]
+    path = write_program(
+        tmp_path / "p" / "span.json",
+        TkProgram(
+            insured="Span Co.",
+            program="Casualty Program",
+            placement=Placement.BOUND,
+            period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+            lines=lines,
+            layers=[
+                Layer(
+                    id="primary-gl",
+                    name="Primary Casualty",
+                    applies_to=["gl", "al"],
+                    attach=0,
+                    limit=2_000_000,
+                    premium=900_000,
+                    participants=[
+                        Participant(carrier="Zurich", share_bps=4_000),
+                        Participant(carrier="Swiss Re", share_bps=6_000),
+                    ],
+                )
+            ],
+            retentions=[
+                Retention(
+                    applies_to=[ln.id],
+                    type=RetentionType.DEDUCTIBLE,
+                    amount=100_000,
+                )
+                for ln in lines
+            ],
+        ),
+    )
+    assert sync.confirm_link(conn, path, client.id).ok
+    placement = placements.by_program_path(conn, str(path))
+    return conn, placement, path, "al"
+
+
+def test_splitting_a_market_stated_layer_is_refused_like_the_inline_cell(spanning) -> None:
+    """`split_layer` wrote `layer.premium` with a bare setattr, so the split
+    form performed the write the worksheet cell REFUSES — one module holding a
+    second opinion about when a market-derived sum may be typed over. With
+    `heal_premiums` re-deriving the sum immediately afterwards the typed figure
+    then vanished while the new slab kept the half it had been divided into,
+    inventing money the tower never had.
+
+    Both writes go through towerkit's choke point now, so both get the same
+    refusal and the same way out."""
+    conn, placement, path, moved_line = spanning
+    assert sync.set_participant_premium(
+        conn, placement.id, "primary-gl", "Zurich", 520_000_00
+    ).ok
+    before = path.read_text()
+
+    refused = sync.update_layer(
+        conn, placement.id, "primary-gl", premium_cents=1_000_000_00
+    )
+    assert not refused.ok
+    split = sync.split_layer(
+        conn,
+        placement.id,
+        "primary-gl",
+        move_line_ids=[moved_line],
+        new_name="Primary GL (Auto half)",
+        kept_premium_cents=600_000_00,
+        moved_premium_cents=460_000_00,
+    )
+    assert not split.ok, "the split form wrote the figure the inline cell refuses"
+    assert "comes from its markets" in " ".join(d.message for d in split.errors)
+    assert path.read_text() == before, "refused, but the file changed anyway"
+
+
+def test_a_layer_with_a_typed_premium_still_splits(spanning) -> None:
+    """The guard is about market-STATED premiums only — an ordinary layer
+    divides by hand exactly as before."""
+    conn, placement, path, moved_line = spanning
+    assert sync.split_layer(
+        conn,
+        placement.id,
+        "primary-gl",
+        move_line_ids=[moved_line],
+        new_name="Primary GL (Auto half)",
+        kept_premium_cents=600_000_00,
+        moved_premium_cents=300_000_00,
+    ).ok
+    program = load_program(path)
+    kept = next(ly for ly in program.layers if ly.id == "primary-gl")
+    moved = next(ly for ly in program.layers if ly.name.endswith("(Auto half)"))
+    assert (kept.premium, moved.premium) == (600_000, 300_000)

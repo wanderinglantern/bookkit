@@ -1300,6 +1300,7 @@ def split_layer(
     address lines, not layers, so they travel by construction.
     """
     from towerkit.edit import set_applies_to as edit_set_applies_to
+    from towerkit.edit import set_field as edit_set_field
     from towerkit.money import format_money
 
     def mutate(program: Program) -> None:
@@ -1373,7 +1374,19 @@ def split_layer(
         except KeyError as exc:  # pragma: no cover - keeping ⊆ applies_to
             raise ValueError(str(exc).strip("\"'")) from exc
         if layer.premium is not None:
-            layer.premium = kept
+            # THROUGH towerkit's choke point, for the reason `update_layer`
+            # states beside the identical write: a layer whose markets state
+            # their own premiums has a premium that IS their sum, and
+            # `edit._guard_premium` is what refuses to let it be typed over.
+            # This was a bare setattr, so the split form performed the write
+            # the inline cell refuses — and since `heal_premiums` re-derives
+            # the sum straight afterwards, the typed figure vanished while the
+            # new slab kept the half the broker had divided off, inventing
+            # money the tower never had. The refusal names the way out (clear
+            # a market premium and the layer goes back to a figure you type).
+            edit_set_field(
+                program, "layer", "premium", kept, target=layer.id,
+            )
 
     return _mutate(conn, placement_id, mutate)
 
