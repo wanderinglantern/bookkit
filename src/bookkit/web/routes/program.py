@@ -297,7 +297,7 @@ def _index_groups(
 
     groups: list[dict[str, Any]] = []
     seen_slugs: set[str] = set()
-    for line in lines:
+    for index, line in enumerate(lines):
         slug = f"{placement.id}.{slugify(line.id)}"
         while slug in seen_slugs:  # ids are unique; belt and braces
             slug += "-"
@@ -310,6 +310,16 @@ def _index_groups(
         groups.append({
             "slug": slug,
             "name": line.name,
+            # COLUMN ORDER IS EDITED WHERE THE STRUCTURE IS READ. The chips in
+            # the band above have always carried these two, but the rail is
+            # where a broker works the tower now, and reaching back up to a
+            # strip of chips to reorder the columns beside it is a seam nobody
+            # should have to know about (Grant, 2026-08-24: "unable to reorder
+            # lines in the schematic"). Same route, same write, same one undo
+            # unit — this is a second door, never a second definition.
+            "move_base": f"{base}/lines/{line.id}/move",
+            "first": index == 0,
+            "last": index == len(lines) - 1,
             # The bucket, where it says something. A line with no group shows
             # its column label instead — the letters the drawing prints in
             # that column's header, which is how a reader ties the rail to
@@ -360,6 +370,10 @@ def _index_groups(
             "name": "Unknown line",
             "label": " ".join(sorted({row["applies_to"][0] for row in orphans})),
             "count": len(orphans),
+            # No move controls: this group is not a line, it is the layers
+            # whose line the file does not declare. There is nothing to
+            # reorder and towerkit has no id to move.
+            "move_base": None,
             "closed": slug in closed,
             "toggle_url": url(selected, closed ^ {slug}),
             "rows": [] if slug in closed else [
@@ -437,6 +451,10 @@ def _worksheet_ctx(
     linked = linked_for(request, conn, placement_id)
     lines = linked.program.lines if linked.program else []
     label_of = {line.id: line.label for line in lines}
+    # The line's full NAME, for anywhere a reader is choosing between lines
+    # rather than reading a column header — a picker that says "(WC)" makes
+    # somebody translate; "(Workers Compensation)" does not.
+    line_named = {line.id: line.name for line in lines}
 
     def cell(key: str) -> str:
         field = _layer_field(key)
@@ -518,11 +536,7 @@ def _worksheet_ctx(
         "from_cell": cell("period_from"),
         "to_cell": cell("period_to"),
         "policy_link_action": f"{base}/policy",
-        "policy_link_options": [
-            (str(other["id"]), str(other["name"]))
-            for other in layers
-            if str(other["id"]) != layer_id
-        ],
+        "policy_link_options": _policy_link_options(layers, layer_id, line_named),
         "policy_linked_to": sync.policy_partners_of(linked.program, layer_id),
         "tower_cells": {
             key.split(".", 1)[1]: tower_cell(
@@ -2587,6 +2601,39 @@ async def market_add(
     except Exception as exc:
         return _market_add_form(request, conn, base, str(exc), raw)
     return _panel(request, ref, org, placement_id, selected=layer_id)
+
+
+def _policy_link_options(
+    layers: list[dict[str, Any]], layer_id: str, line_named: dict[str, str]
+) -> list[tuple[str, str]]:
+    """The layers this one can be told it shares a policy with, as
+    (id, label) — self excluded.
+
+    THE LABEL SAYS WHICH LAYER when the name alone does not. Two lines of
+    coverage each arriving with a pending layer both call it "To be placed",
+    so the picker offered the same word twice and a reader could not tell
+    which one they were about to link (Grant, 2026-08-24). The write was
+    always addressed by id, so nothing was ever linked wrongly — but a
+    control that asks a question with two identical answers is a control
+    nobody can use.
+
+    Only the AMBIGUOUS names are qualified. Adding the line of coverage to
+    every option would make the common case — distinct names — noisier for a
+    problem it does not have.
+    """
+    counts: dict[str, int] = {}
+    for row in layers:
+        counts[str(row["name"])] = counts.get(str(row["name"]), 0) + 1
+    out: list[tuple[str, str]] = []
+    for other in layers:
+        if str(other["id"]) == layer_id:
+            continue
+        name = str(other["name"])
+        if counts[name] > 1 and other["applies_to"]:
+            line = other["applies_to"][0]
+            name = f"{name} ({line_named.get(line, line)})"
+        out.append((str(other["id"]), name))
+    return out
 
 
 def _market_field(key: str) -> Field:
