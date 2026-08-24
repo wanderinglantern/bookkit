@@ -4138,3 +4138,53 @@ def test_the_ends_are_disabled_not_hidden(app_and_org):
 
     assert page.count("chip-arrow") >= 2
     assert "disabled" in page
+
+
+def test_a_program_with_lines_and_no_layers_still_says_what_is_wrong(app_and_org):
+    """A GAP BETWEEN THE PLAN AND THE CODE (surface sweep, 2026-08-24).
+
+    `_index_groups` returned None when a program had no layers, and the
+    workbench gate in `_layers_panel.html` also required a worksheet — so a
+    linked file with lines and nothing on them rendered neither the
+    diagnostics block nor either terms strip, while towerkit reported one
+    `line-empty` ERROR per line. The one file the app knows is broken was the
+    one it said nothing about.
+
+    The plan for the rail said the opposite in as many words: "a line with no
+    layers still gets its group, with a count of zero: a rail that hid the
+    line would hide the thing the diagnostics point at."
+
+    A broker cannot reach this state from the app — removing the last layer of
+    a line is refused by `line-empty` — so it takes a hand edit, towerkit's
+    editor or MCP. It is exactly the state somebody arrives at the web to
+    understand.
+    """
+    from towerkit.model import dump_program, load_program
+    from towerkit.validate import validate_program
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    path = _file_of(conn, placement)
+
+    program = load_program(path)
+    program.layers = []
+    dump_program(program, path)
+    codes = {d.code for d in validate_program(load_program(path)).errors}
+    assert "line-empty" in codes, "the fixture no longer produces the broken state"
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    section = page[page.index(f'id="program-{placement.id}"') :]
+
+    assert "program-diagnostics" in section, (
+        "the program says nothing about the errors towerkit reports on it"
+    )
+    assert "no layers cover" in section, "the line-empty errors are not printed"
+    assert "structure-index" in section, "the rail is gone, so are its lines"
+    for line in load_program(path).lines:
+        assert line.name in section, f"{line.name} is missing from the rail"
+    assert "+ retention" in section and "+ sublimit" in section, (
+        "the terms strips went with the workbench — the retentions and "
+        "sublimits are still on the file"
+    )
+    assert "Add the first layer" in section

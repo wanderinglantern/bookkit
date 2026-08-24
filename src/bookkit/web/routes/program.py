@@ -281,7 +281,15 @@ def _index_groups(
 
     conn = _conn(request)
     linked = linked_for(request, conn, placement.id)
-    if linked.program is None or not layers:
+    # `not layers` was here, and it contradicted the paragraph above: a linked
+    # file with lines and NO layers returned None, so the whole workbench gate
+    # in `_layers_panel.html` went false and the program rendered neither its
+    # diagnostics nor either terms strip — while towerkit reported one
+    # `line-empty` ERROR per line. The one file the app knows is broken was the
+    # one it said nothing about (2026-08-24). A program with no LINES still
+    # returns None: there is no rail to draw, and the panel's own empty state
+    # is the right answer.
+    if linked.program is None or not linked.program.lines:
         return None
     lines = linked.program.lines
     base = f"/accounts/{ref}/program/{placement.id}"

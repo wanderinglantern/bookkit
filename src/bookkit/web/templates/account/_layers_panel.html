@@ -105,18 +105,37 @@
     </p>
   {% endif %}
 
-  {% if index and (worksheet or worksheet_failure) %}
+  {# THE WORKBENCH IS GATED ON THE INDEX ALONE. It used to also require a
+     worksheet, so a linked file with lines and no layers — which towerkit
+     reports as one `line-empty` ERROR per line — rendered no diagnostics, no
+     retention strip and no sublimit strip: the one program the app knows is
+     broken was the one it said nothing about (2026-08-24). There is no layer
+     to work, so the pane says so and offers the first one; everything the
+     rail carries is about the LINES, which are there. #}
+  {% if index %}
     <div class="program-workbench">
       {% include "account/_structure_index.html" %}
       {% if worksheet %}
         {% with ws = worksheet %}
           {% include "account/_worksheet.html" %}
         {% endwith %}
-      {% else %}
+      {% elif worksheet_failure %}
         {# The pane failed to build; the index and the band survive so
            another layer stays selectable. The exception was logged. #}
         <div class="worksheet">
           <p class="cell-error-msg" role="alert">{{ worksheet_failure }}</p>
+        </div>
+      {% else %}
+        <div class="worksheet">
+          <div class="panel-empty">
+            <p class="panel-empty-head">These lines of coverage hold no layers.</p>
+            <p>A line with nothing on it is an error in the file, not an empty
+              screen — what the rail says about it is beside this pane.</p>
+            <button type="button" class="btn btn-primary"
+                    hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/layers/new"
+                    hx-target="#program-{{ placement.id }} .form-host"
+                    hx-swap="innerHTML">Add the first layer</button>
+          </div>
         </div>
       {% endif %}
       <aside class="program-rail">
