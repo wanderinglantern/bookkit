@@ -2213,6 +2213,120 @@ def preview(
     return program, validate_program(program)
 
 
+def share_preview(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    carrier: str,
+    share_bps: int,
+) -> dict[str, Any]:
+    """What a share edit WOULD do — the worksheet's write preview, derived
+    here so no surface multiplies money. Projects through `preview` (same
+    guards, same validation as the commit) and reports the would-be signed
+    figure and the dollars still open, or the refusal in towerkit's words.
+
+    This backs the one deliberate exception to blur-commits: a share typed in
+    the worksheet previews before it saves (recorded beside the rule in
+    web/static/inline-cell.js). Nothing here writes.
+    """
+    current: dict[str, Any] = {}
+
+    def mutation(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        seat = next((p for p in layer.participants if p.carrier == carrier), None)
+        if seat is None:
+            seated = ", ".join(p.carrier for p in layer.participants) or "nobody"
+            raise ValueError(f"{carrier} is not on {layer.name} — {seated} is")
+        current["share_bps"] = seat.share_bps
+        seat.share_bps = share_bps
+
+    program, diags = preview(conn, placement_id, mutation)
+    if program is None:
+        return {"ok": False, "errors": [d.message for d in diags.errors]}
+    layer = _find_layer(program, layer_id)
+    open_bps = max(0, 10_000 - layer.signed_bps)
+    return {
+        "ok": diags.ok,
+        "errors": [d.message for d in diags.errors],
+        "warnings": [d.message for d in diags.warnings],
+        "carrier": carrier,
+        "share_was_pct": current["share_bps"] / 100,
+        "share_pct": share_bps / 100,
+        "signed_pct": layer.signed_bps / 100,
+        "open_limit_cents": dollars_to_cents(premium_share(layer.limit, open_bps)),
+    }
+
+
+def rescope_preview(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    line_ids: list[str],
+) -> dict[str, Any]:
+    """What dropping lines off a slab WOULD leave behind — the consequence a
+    broker reads before a rescope commits (design 3B: 'Crime would be left
+    with $10,000,000 of cover and nothing above it'). A dry run of the SAME
+    `set_applies_to` call the commit makes, so the two cannot disagree.
+
+    Per dropped line: the cover that remains on it (the top of what still
+    stacks there) and whether this slab was the top of that column. Premium
+    is reported unchanged, because towerkit does not re-rate and this
+    refuses to guess. Nothing here writes.
+    """
+    from towerkit.edit import set_applies_to as edit_set_applies_to
+
+    linked = linked_program(conn, placement_id)
+    before: TkModelLayer | None = None
+    if linked.program is not None:
+        try:
+            before = _find_layer(linked.program, layer_id)
+        except ValueError:
+            before = None
+    dropped = (
+        [lid for lid in before.applies_to if lid not in line_ids] if before else []
+    )
+
+    def mutation(program: Program) -> None:
+        try:
+            edit_set_applies_to(program, layer_id, list(line_ids))
+        except KeyError as exc:
+            raise ValueError(str(exc).strip("\"'")) from exc
+
+    program, diags = preview(conn, placement_id, mutation)
+    if program is None or before is None:
+        return {"ok": False, "errors": [d.message for d in diags.errors]}
+    labels = {line.id: line.label for line in program.lines}
+    return {
+        "ok": diags.ok,
+        "errors": [d.message for d in diags.errors],
+        "warnings": [d.message for d in diags.warnings],
+        "keeps": [labels.get(lid, lid) for lid in line_ids],
+        "premium_cents": (
+            dollars_to_cents(before.premium) if before.premium is not None else None
+        ),
+        "dropped": [
+            {
+                "line_id": lid,
+                "label": labels.get(lid, lid),
+                "left_with_cents": dollars_to_cents(
+                    max(
+                        (ly.top for ly in program.layers_for_line(lid)),
+                        default=0,
+                    )
+                ),
+                # True when this slab was the top of that column — dropping
+                # it leaves nothing above what remains.
+                "was_top": before.top
+                >= max(
+                    (ly.top for ly in program.layers_for_line(lid)),
+                    default=0,
+                ),
+            }
+            for lid in dropped
+        ],
+    }
+
+
 def _find_layer(program: Program, layer_id: str) -> TkModelLayer:
     for layer in program.layers:
         if layer.id == layer_id:

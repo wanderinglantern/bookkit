@@ -1631,6 +1631,108 @@ async def stack_insert(
 
 
 @router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}"
+    "/markets/{index}/share-preview",
+    response_class=HTMLResponse,
+)
+async def market_share_preview(
+    request: Request, ref: str, placement_id: str, layer_id: str, index: int
+) -> HTMLResponse:
+    """The write preview — a share typed in the worksheet projects before it
+    saves: the change, the resulting signed figure, the dollars still open,
+    and where it writes. THIS BREAKS BLUR-COMMITS FOR THE SHARE INPUT ON
+    PURPOSE (the hand-off records the decision beside the rule): a share
+    edit moves the one figure the whole worksheet exists to close, so it is
+    shown before it lands. Save commits through the same cell route a
+    blur-commit would have used; Discard re-selects the layer and nothing
+    was ever written. Cell fields everywhere else keep blur-commit."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    seat = _seated(layer, index)
+    field = _market_field("share_pct")
+    raw = str((await request.form()).get("share_pct", ""))
+    select_url = (
+        f"/accounts/{ref}/program/{placement_id}/worksheet?layer={layer_id}"
+    )
+    context: dict[str, Any] = {
+        "carrier": seat["carrier"],
+        "was_pct": f"{seat['share_pct']:g}",
+        "typed": raw,
+        "file_name": (
+            Path(placement.program_path).name if placement.program_path else ""
+        ),
+        "select_url": select_url,
+        "save_action": _market_cell_action(
+            ref, placement_id, layer_id, index, "share_pct"
+        ),
+    }
+    try:
+        share_bps = int(parse_value(field, raw) or 0)
+        if not raw.strip():
+            raise ValueError(f"{field.label} is required")
+    except ValueError as exc:
+        return TEMPLATES.TemplateResponse(
+            request, "account/_share_preview.html",
+            {**context, "preview": {"ok": False, "errors": [str(exc)]}},
+        )
+    result = sync.share_preview(conn, placement_id, layer_id, seat["carrier"], share_bps)
+    if result.get("ok"):
+        result["pct"] = f"{result['share_pct']:g}"
+        result["signed"] = f"{result['signed_pct']:g}"
+        result["placed"] = result["signed_pct"] >= 100
+        result["open_limit"] = (
+            format_cents(result["open_limit_cents"])
+            if result["open_limit_cents"]
+            else None
+        )
+    return TEMPLATES.TemplateResponse(
+        request, "account/_share_preview.html",
+        {**context, "preview": result},
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/applies-to/confirm",
+    response_class=HTMLResponse,
+)
+def applies_to_confirm(
+    request: Request, ref: str, placement_id: str, layer_id: str, line: str
+) -> HTMLResponse:
+    """The consequence, stated before it is done (design 3B): turning a line
+    off a spanning slab is a decision, not a slip, so the pane shows what
+    that line would be left with — a dry run of the SAME set_applies_to call
+    the commit makes (sync.rescope_preview), never a second derivation.
+    Writes nothing; only the confirm's own POST does."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    _, layer = _owned_layer(request, org, placement_id, layer_id)
+    current = list(layer["applies_to"])
+    if line not in current:
+        raise HTTPException(status_code=404, detail=f"{layer['name']} does not cover {line!r}")
+    wanted = [lid for lid in current if lid != line]
+    result = sync.rescope_preview(conn, placement_id, layer_id, wanted)
+    for item in result.get("dropped", []):
+        item["left_with"] = format_cents(item["left_with_cents"])
+    base = f"/accounts/{ref}/program/{placement_id}/layers/{layer_id}"
+    return TEMPLATES.TemplateResponse(
+        request, "account/_rescope_confirm.html",
+        {
+            "layer": layer,
+            "line": line,
+            "preview": result,
+            "premium": (
+                format_cents(result["premium_cents"])
+                if result.get("premium_cents") is not None
+                else None
+            ),
+            "applies_action": f"{base}/applies-to",
+            "split_url": f"{base}/split",
+        },
+    )
+
+
+@router.post(
     "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/applies-to",
     response_class=HTMLResponse,
 )
@@ -2353,7 +2455,11 @@ def _market_row_html(
     return template.render(
         base=_market_base(ref, placement_id, layer["id"], index),
         seat=seat, layer_name=layer["name"],
-        carrier_cell=cell("carrier"), share_cell=cell("share_pct"),
+        carrier_cell=cell("carrier"),
+        # The share input's pre-fill: the percent verbatim, never through the
+        # bps formatter (_market_prefill carries the history).
+        share=_market_prefill("share_pct", seat),
+        host=f"#ws-host-{placement_id}",
         limit=format_cents(seat["limit_cents"]),
         premium=(
             format_cents(seat["premium_cents"])

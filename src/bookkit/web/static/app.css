@@ -4080,3 +4080,97 @@ button.term-label {
     border-bottom: 1px solid var(--hairline);
   }
 }
+
+/* --- the write preview and the rescope consequence ----------------------- */
+
+.share-input {
+  width: 3.5rem;
+  text-align: right;
+  font: inherit;
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  padding: 0.15rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.share-input:focus {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-wash);
+}
+
+.ws-preview {
+  margin-top: 0.75rem;
+  border: 1px solid var(--hairline);
+  background: var(--wash);
+  padding: 0.6rem 0.8rem;
+  max-width: 42rem;
+  border-radius: 3px;
+}
+
+.ws-preview-change {
+  font-size: var(--body-size);
+}
+
+.ws-preview-where {
+  margin-left: auto;
+}
+
+.ws-preview-says {
+  margin: 0.4rem 0 0;
+  font-size: var(--body-size);
+}
+
+.ws-preview-says .is-placed {
+  color: var(--good);
+}
+
+.ws-preview-says .is-open,
+.ws-preview .is-open {
+  color: var(--warn);
+}
+
+.ws-preview-warning {
+  margin: 0.3rem 0 0;
+  font-size: var(--hint-size);
+  color: var(--warn);
+}
+
+.ws-preview-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+/* The consequence block: warn-framed, because it states cover somebody is
+   about to give up — the one place a strong frame is the message. */
+.ws-consequence {
+  margin-top: 0.75rem;
+  border: 2px solid var(--warn);
+  background: var(--warn-wash);
+  padding: 0.7rem 0.9rem;
+  max-width: 42rem;
+  border-radius: 3px;
+}
+
+.ws-consequence-head {
+  margin: 0;
+  font-weight: 700;
+  font-size: 0.875rem;
+}
+
+.ws-consequence-mark {
+  color: var(--warn);
+  margin-right: 0.3rem;
+}
+
+.ws-consequence-body {
+  margin: 0.4rem 0 0;
+  font-size: var(--body-size);
+}
+
+.ws-drop-btn {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: var(--paper);
+}

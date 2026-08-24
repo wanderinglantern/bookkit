@@ -1065,3 +1065,51 @@ def test_layer_details_derives_open_capacity_and_the_dollar_columns(linked) -> N
     seat = row["participants"][0]
     assert seat["carrier"] == "Chubb"
     assert seat["limit_cents"] == 5_000_000_00
+
+
+def test_share_preview_projects_the_signed_figure_without_writing(linked) -> None:
+    """The worksheet's write preview: same guards as the commit, the would-be
+    signed figure and the dollars still open — file untouched."""
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)  # Chubb at 50% of $10M
+    before = path.read_text()
+
+    result = sync.share_preview(conn, placement.id, layer_id, "Chubb", 8000)
+
+    assert result["ok"], result["errors"]
+    assert result["share_was_pct"] == 50.0 and result["share_pct"] == 80.0
+    assert result["signed_pct"] == 80.0
+    assert result["open_limit_cents"] == 2_000_000_00
+    assert path.read_text() == before
+
+
+def test_share_preview_reports_a_refusal_in_towerkits_words(linked) -> None:
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+    before = path.read_text()
+
+    result = sync.share_preview(conn, placement.id, layer_id, "Chubb", 15_000)
+
+    assert not result["ok"]
+    assert result["errors"], "an oversigned preview said nothing"
+    assert path.read_text() == before
+
+
+def test_rescope_preview_states_what_the_dropped_line_keeps(linked) -> None:
+    """Design 3B: 'Crime would be left with $10,000,000 of cover and nothing
+    above it' — derived from the projected program, not composed twice."""
+    conn, _, placement, path = linked
+    layer_id = _seat(conn, placement, path)
+    assert sync.set_applies_to(conn, placement.id, layer_id, ["gl", "cy"]).ok
+    before = path.read_text()
+
+    result = sync.rescope_preview(conn, placement.id, layer_id, ["gl"])
+
+    assert result["dropped"], "nothing reported for the dropped line"
+    dropped = result["dropped"][0]
+    assert dropped["line_id"] == "cy"
+    # cy keeps its primary ($5M); the 2nd excess above it is what leaves.
+    assert dropped["left_with_cents"] == 5_000_000_00
+    assert dropped["was_top"] is True
+    assert result["keeps"] == ["GL"]
+    assert path.read_text() == before

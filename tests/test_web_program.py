@@ -2069,8 +2069,9 @@ def test_a_placement_with_no_file_says_so_rather_than_an_errno(app_and_org):
 def test_a_market_can_be_reached_for_editing_from_the_page(app_and_org):
     """market_cell_save existed and nothing rendered a way to it: the share
     test passed by POSTing the URL directly, which is not evidence a broker
-    can correct a share. Markets ride the CELL contract now (F1): the way in
-    is a data-cell-action on the chip itself, same as a layer cell."""
+    can correct a share. The carrier rides the CELL contract; the share is
+    the worksheet's PREVIEW INPUT (the deliberate blur-commit exception) —
+    both must be reachable from the rendered page."""
     import re
 
     client, org = app_and_org
@@ -2079,8 +2080,11 @@ def test_a_market_can_be_reached_for_editing_from_the_page(app_and_org):
     page = client.get(f"/accounts/{org.ref}/program").text
 
     assert re.search(
-        r'data-cell-action="[^"]*markets/\d+/cell/share_pct"', page
-    ), "no way in from the page"
+        r'data-cell-action="[^"]*markets/\d+/cell/carrier"', page
+    ), "no way in to the carrier from the page"
+    assert re.search(
+        r'hx-post="[^"]*markets/\d+/share-preview"', page
+    ), "no way in to the share from the page"
     assert re.search(r'data-cell-action="[^"]*markets/\d+/cell/carrier"', page)
 
 
@@ -3183,3 +3187,109 @@ def test_a_worksheet_that_cannot_build_still_shows_the_index(app_and_org, monkey
     assert 'class="structure-index"' in got.text or "index-row" in got.text, (
         "the index went down with the worksheet"
     )
+
+
+# --- the write preview and the rescope consequence (design 1C/3B) -------------
+
+
+def test_a_share_edit_previews_before_it_saves(app_and_org):
+    """The one deliberate exception to blur-commits: a share typed in the
+    worksheet projects the write — signed figure, dollars still open, where
+    it writes — and NOTHING lands until Save."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+    base = _market_cell(org, placement, layer["id"], index, "carrier").rsplit(
+        "/cell", 1
+    )[0]
+
+    preview = client.post(f"{base}/share-preview", data={"share_pct": "80"})
+
+    assert preview.status_code == 200
+    assert "Signed becomes" in preview.text
+    assert "one revertible batch" in preview.text
+    assert path.read_bytes() == before, "the preview wrote"
+    # Save goes through the ordinary cell route, carrying the typed value.
+    assert f'hx-post="{base}/cell/share_pct"' in preview.text
+    assert '"share_pct": "80"' in preview.text
+
+
+def test_an_oversigned_share_preview_refuses_with_no_save(app_and_org):
+    """Previewing an edit the commit would refuse, then refusing it on Save,
+    would be the preview lying about the write — so the refusal shows
+    towerkit's words and offers only Discard."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+    base = _market_cell(org, placement, layer["id"], index, "carrier").rsplit(
+        "/cell", 1
+    )[0]
+
+    preview = client.post(f"{base}/share-preview", data={"share_pct": "100"})
+
+    assert preview.status_code == 200
+    if "Signed becomes" not in preview.text:  # the seat may already be solo
+        assert "cell-error-msg" in preview.text
+        assert f'hx-post="{base}/cell/share_pct"' not in preview.text, (
+            "a refused preview still offers Save"
+        )
+
+
+def test_the_worksheet_share_is_a_preview_input_not_a_cell(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index, seat = _first_seat(conn, org)
+
+    page = _worksheet_page(client, org, placement, layer["id"])
+
+    assert 'class="share-input' in page
+    assert "share-preview" in page
+
+
+def test_dropping_a_line_states_the_consequence_first(app_and_org, tmp_path):
+    """Design 3B: turning a line off a spanning slab renders the consequence
+    — what the line keeps, in dollars, that premium is not re-rated — and
+    writes NOTHING until Drop."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    # A slab across both lines, seated where both top out together.
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "Bridge", "line": "gl", "attach_cents": "2,000,000",
+              "limit_cents": "3,000,000", "premium_cents": ""},
+    )
+    assert added.status_code == 200
+    assert any(
+        ly["name"] == "Bridge" for ly in sync.layer_details(conn, placement.id)
+    )
+    shared = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "Wide Excess", "line": "__all__", "attach_cents": "5,000,000",
+              "limit_cents": "10,000,000", "premium_cents": "1,000,000"},
+    )
+    assert shared.status_code == 200
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "Wide Excess"
+    )
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    # The worksheet's ON pills fetch the confirm, never post directly.
+    page = _worksheet_page(client, org, placement, layer_id)
+    confirm_url = (
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/layers/{layer_id}/applies-to/confirm"
+    )
+    assert f'hx-get="{confirm_url}?line=' in page
+
+    confirm = client.get(f"{confirm_url}?line=cy")
+
+    assert confirm.status_code == 200
+    assert "would be left with" in confirm.text
+    assert "does not re-rate" in confirm.text
+    assert "Keep it" in confirm.text
+    assert path.read_bytes() == before, "the consequence GET wrote"

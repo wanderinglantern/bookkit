@@ -1,0 +1,42 @@
+{# The write preview — the one deliberate exception to blur-commits, and the
+   hand-off's own wording: it states the change, the resulting derived
+   figures, what else moves (nothing), and where it writes. Save commits
+   through the same cell route a blur-commit would have used; Discard
+   re-selects the layer, resetting the typed input, and nothing was written.
+
+   A refusal shows towerkit's words and offers no Save: previewing an edit
+   the commit would refuse, then refusing it on Save, would be the preview
+   lying about the write. #}
+<div class="ws-preview" role="status">
+  <div class="ws-block-head">
+    <span class="detail-label">unsaved edit</span>
+    <span class="ws-preview-change">{{ carrier }} {{ was_pct }}% → {{ typed }}</span>
+    <span class="ws-hint ws-preview-where">writes to {{ file_name }} · one revertible batch</span>
+  </div>
+  {% if preview.ok %}
+    <p class="ws-preview-says">Signed becomes
+      <strong class="{{ 'is-placed' if preview.placed else 'is-open' }}">{{ preview.signed }}%</strong>.
+      {% if preview.open_limit %}<span class="is-open">{{ preview.open_limit }} still open.</span>
+      {% else %}Fully signed.{% endif %}
+      No other layer changes.</p>
+    {% for warning in preview.warnings %}
+      <p class="ws-preview-warning">⚠ {{ warning }}</p>
+    {% endfor %}
+    <div class="ws-preview-actions">
+      <button type="button" class="btn btn-primary"
+              hx-post="{{ save_action }}"
+              hx-vals='{"share_pct": "{{ typed }}"}'>Save</button>
+      <button type="button" class="btn"
+              hx-get="{{ select_url }}">Discard</button>
+    </div>
+  {% else %}
+    {% for error in preview.errors %}
+      <p class="cell-error-msg" role="alert">{{ error }}</p>
+    {% endfor %}
+    <p class="ws-hint">Nothing was written. The figure you typed is still in the row.</p>
+    <div class="ws-preview-actions">
+      <button type="button" class="btn"
+              hx-get="{{ select_url }}">Discard</button>
+    </div>
+  {% endif %}
+</div>

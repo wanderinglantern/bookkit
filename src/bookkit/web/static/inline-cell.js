@@ -40,6 +40,13 @@
  * script has to work for both without knowing which one it's looking at.
  * RECORD_SCOPE below is whatever ancestor groups one record's cells —
  * a <tr>, or a .contact-card. */
+/* THE ONE EXCEPTION TO BLUR-COMMITS (program-worksheet hand-off,
+ * 2026-08-24): the participation table's SHARE input previews before it
+ * saves — blur posts a projection (routes/program.py market_share_preview),
+ * never a write, and Save commits through the ordinary cell route. Taken
+ * deliberately, because a share edit moves the one figure the worksheet
+ * exists to close. It is a plain input, not a .cell, so nothing below
+ * applies to it; every actual cell keeps blur-commit / Escape-discard. */
 (function () {
   "use strict";
 

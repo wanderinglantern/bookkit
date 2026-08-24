@@ -56,7 +56,7 @@
     {% endif %}
   </div>
 
-  <div class="ws-host form-host"></div>
+  <div class="ws-host form-host" id="ws-host-{{ placement.id }}"></div>
 
   {% if not ws.statutory %}
     <div class="ws-stats">
@@ -126,10 +126,23 @@
     </div>
     <div class="ws-line-pills">
       {% for line in ws.lines %}
-        <button type="button"
-                class="line-pill{% if line.on %} is-on{% endif %}"
-                title="{{ 'stop covering' if line.on else 'also cover' }} {{ line.name }}"
-                hx-post="{{ ws.base }}/applies-to" hx-vals='{"line": "{{ line.id }}"}'>{{ line.name }}</button>
+        {% if line.on and ws.spans %}
+          {# Turning a line OFF a spanning slab does not fire immediately —
+             the consequence renders first (design 3B), a dry run of the
+             same call. Turning one ON stays one click; widening is the
+             reversible direction. #}
+          <button type="button"
+                  class="line-pill is-on"
+                  title="stop covering {{ line.name }} — states the consequence first"
+                  hx-get="{{ ws.base }}/applies-to/confirm?line={{ line.id }}"
+                  hx-target="#ws-host-{{ placement.id }}"
+                  hx-swap="innerHTML">{{ line.name }}</button>
+        {% else %}
+          <button type="button"
+                  class="line-pill{% if line.on %} is-on{% endif %}"
+                  title="{{ 'stop covering' if line.on else 'also cover' }} {{ line.name }}"
+                  hx-post="{{ ws.base }}/applies-to" hx-vals='{"line": "{{ line.id }}"}'>{{ line.name }}</button>
+        {% endif %}
       {% endfor %}
     </div>
   </div>
