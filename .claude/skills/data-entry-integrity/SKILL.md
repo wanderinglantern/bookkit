@@ -51,6 +51,29 @@ and an assignment took whichever colleague sorted first.
 with a value sets it as the form's `initial` — a default the user can see,
 which is a different thing from the browser picking row one.
 
+### 2b. Every option must be distinguishable from every other
+
+A picker whose options print the same words twice asks a question with two
+identical answers. The write underneath is usually addressed by an id and lands
+correctly — which is exactly what makes it hard to notice, and useless anyway:
+the reader cannot tell which one they are choosing.
+
+It is rarely typed in deliberately. It arrives when a change makes a name
+REPEATABLE. Every line of coverage in bookkit arrives with a layer called
+"To be placed", so a program with two new lines gave the "same policy as"
+select two identical options (Grant, 2026-08-24) — and a list that cannot tell
+two things apart reads as a list that has not refreshed, which is how it was
+reported.
+
+**Qualify the ambiguous ones, and only those.** The fix is to add what
+distinguishes them — "To be placed (Employers Liability)" — where the name
+alone repeats, and to leave distinct names alone. Qualifying every option
+makes the common case noisier for a problem it does not have.
+
+`test_no_select_offers_the_same_label_twice` (tests/test_form_selects.py)
+holds this over the Program tab, on a shape built to MAKE a name repeat — a
+scan over a book where no name repeats proves nothing.
+
 ### 3. Validation timing: on blur, cleared on keystroke
 
 Validating while typing is actively harmful — two studies (n=77, n=90) found

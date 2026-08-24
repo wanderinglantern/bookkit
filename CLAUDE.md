@@ -375,6 +375,17 @@ renewal date is the one you counted to, and the data-entry rules.
   committed. Redirect to a file, gate on the command, tail the file after.
 - Spec → approval → plan → build, with fresh-eyes review before declaring
   done. Grant approves fast; still present the design first.
+- THE BUG IS USUALLY NOT IN THE DIFF (Grant, 2026-08-24). A review that reads
+  the changed lines cannot find the surface a change broke WITHOUT TOUCHING —
+  a picker that started offering two identical options because a name became
+  repeatable, an affordance left behind at the old home when the place a thing
+  is worked moved. Both shipped past a full review, a green suite and a
+  mutation check in one afternoon. After any change that adds a data shape,
+  moves where something is read or done, or lets a thing exist more than once,
+  read `.claude/skills/surface-consequence-review/SKILL.md` and walk the three
+  questions it asks. Its own first rule: reproduce a finding against the
+  RUNNING app before reporting it — a "panel not refreshing" was diagnosed
+  from the code and fixed, and the fix was wrong.
 - Grant's REAL data is on the production machine (pip access exists there
   now). This Mac's default DB is a stale experiment. Build/verify against
   seeded sample data locally; hand him `bookctl` commands for anything

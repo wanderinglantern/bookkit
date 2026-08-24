@@ -138,3 +138,90 @@ def test_every_select_on_every_form_offers_nothing_chosen_first(app):
         "these selects let the browser answer the question by pre-selecting "
         f"their first option: {offenders}"
     )
+
+
+# --- and every option distinguishable from every other ------------------------
+#
+# A select whose options print the same words twice asks a question with two
+# identical answers. The write underneath is addressed by an id and lands
+# correctly, which is exactly what makes it hard to notice — and useless
+# anyway, because the reader cannot tell which one they are choosing.
+#
+# It is never typed in deliberately; it arrives when a change makes a name
+# REPEATABLE. Every line of coverage arrives with a layer called "To be
+# placed", so a program with two new lines gave the "same policy as" picker two
+# identical options (Grant, 2026-08-24) — reported as a list that had not
+# refreshed, because that is what it looks like.
+#
+# THE SCAN IS ONLY AS GOOD AS THE SHAPE IT WALKS, so this builds the shape
+# first rather than hoping the fixture has one. A scan over a book where no
+# name repeats proves nothing.
+
+
+def _select_labels(html: str) -> dict[str, list[str]]:
+    """name -> its option LABELS, in document order.
+
+    Labels, where `_selects` above reads values: the value is what the write
+    uses and is unique by construction; the label is what the reader chooses
+    between, and is the half that can collide.
+    """
+    out: dict[str, list[str]] = {}
+    for block in re.findall(r"<select\b[^>]*>.*?</select>", html, re.S):
+        name = re.search(r'name="([^"]+)"', block)
+        if not name:
+            continue
+        labels = [
+            re.sub(r"\s+", " ", label).strip()
+            for label in re.findall(r"<option[^>]*>(.*?)</option>", block, re.S)
+        ]
+        out[name.group(1)] = labels
+    return out
+
+
+def test_no_select_offers_the_same_label_twice(app):
+    """Over the Program tab with a shape that MAKES names repeat: two lines of
+    coverage, each arriving with its own 'To be placed' layer."""
+    from bookkit import sync
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import placements as placements_repo
+
+    conn = app.state.conn
+    org = next(
+        o for o in orgs_repo.list_orgs(conn, kind="client")
+        if any(p.program_path for p in placements_repo.for_org(conn, o.id))
+    )
+    placement = next(
+        p for p in placements_repo.for_org(conn, org.id) if p.program_path
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        for name in ("Workers Compensation", "Employers Liability"):
+            client.post(
+                f"/accounts/{org.ref}/program/{placement.id}/lines",
+                data={"name": name},
+            )
+        repeated = [
+            row["name"] for row in sync.layer_details(conn, placement.id)
+        ]
+        assert repeated.count("To be placed") > 1, (
+            "the fixture no longer produces a repeated layer name — this scan "
+            "has nothing to catch; give it a shape that repeats one"
+        )
+
+        offenders = []
+        checked = 0
+        for row in sync.layer_details(conn, placement.id):
+            page = client.get(
+                f"/accounts/{org.ref}/program?layer={row['id']}"
+            ).text
+            for field, labels in _select_labels(page).items():
+                checked += 1
+                real = [label for label in labels if label]
+                dupes = {label for label in real if real.count(label) > 1}
+                if dupes:
+                    offenders.append(f"{field} on layer {row['id']} -> {sorted(dupes)}")
+
+    assert checked, "no selects found on the program tab — the scan is broken"
+    assert not offenders, (
+        "these selects ask a question with two identical answers — qualify the "
+        f"ambiguous options with what tells them apart: {sorted(set(offenders))}"
+    )
