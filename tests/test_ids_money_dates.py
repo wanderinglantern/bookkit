@@ -112,3 +112,62 @@ def test_month_end_clamp() -> None:
 def test_days_until() -> None:
     assert days_until("2026-08-21", date(2026, 8, 11)) == 10
     assert days_until("2026-08-01", date(2026, 8, 11)) == -10
+
+
+def test_a_behind_counter_never_mints_a_taken_ref(conn: sqlite3.Connection) -> None:
+    """Grant, 2026-08-25: making a program on his book died with
+    `UNIQUE constraint failed: placement.ref` out of sync.create_program.
+
+    `ref_counter` had fallen behind the highest PLC-#### already on a row, so
+    every mint handed back a taken ref and EVERY new placement was refused —
+    new program, renewal, import, adoption — with a traceback, not a message.
+    Nothing in this code desyncs the counter; a restored backup or a copied
+    database does, and the surface that fails is nowhere near the cause. So
+    the counter is treated as a cache and the column as the authority.
+    """
+    from bookkit.repo import orgs, placements
+
+    org = orgs.create(conn, name="Acme Manufacturing", kind="client")
+    first = placements.create(conn, org.id, "Casualty", "2026-01-01", "2027-01-01")
+    second = placements.create(conn, org.id, "Property", "2026-01-01", "2027-01-01")
+    assert (first.ref, second.ref) == ("PLC-0001", "PLC-0002")
+
+    conn.execute("UPDATE ref_counter SET next = 1 WHERE kind = 'PLC'")
+    healed = placements.create(conn, org.id, "Auto", "2026-01-01", "2027-01-01")
+
+    assert healed.ref == "PLC-0003"
+    assert conn.execute("SELECT next FROM ref_counter WHERE kind='PLC'").fetchone()[0] == 4
+
+
+def test_a_soft_deleted_ref_is_still_taken(conn: sqlite3.Connection) -> None:
+    """UNIQUE does not care about `deleted_at`, so neither may the check —
+    healing onto a dead row's ref would fail exactly the same way."""
+    from bookkit.repo import orgs, placements
+
+    org = orgs.create(conn, name="Acme Manufacturing", kind="client")
+    dead = placements.create(conn, org.id, "Casualty", "2026-01-01", "2027-01-01")
+    conn.execute(
+        "UPDATE placement SET deleted_at = '2026-08-25T00:00:00+00:00' WHERE id = ?",
+        (dead.id,),
+    )
+    conn.execute("UPDATE ref_counter SET next = 1 WHERE kind = 'PLC'")
+
+    alive = placements.create(conn, org.id, "Property", "2026-01-01", "2027-01-01")
+    assert alive.ref != dead.ref
+
+
+def test_every_ref_kind_names_a_table_that_has_a_ref(conn: sqlite3.Connection) -> None:
+    """The gate, over kinds nobody has written yet: a ref kind whose table is
+    unregistered cannot be checked for collisions, and `next_ref` refuses it
+    rather than minting something it cannot vouch for."""
+    from bookkit import ids
+
+    for kind, table in ids.REF_TABLES.items():
+        columns = {
+            row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        assert "ref" in columns, f"{kind} names {table}, which has no ref column"
+        assert next_ref(conn, kind).startswith(f"{kind}-")
+
+    with pytest.raises(KeyError):
+        next_ref(conn, "ZZZ")

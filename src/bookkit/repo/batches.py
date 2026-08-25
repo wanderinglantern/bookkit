@@ -6,10 +6,8 @@ from __future__ import annotations
 import sqlite3
 
 from .. import db
-from ..ids import new_ulid, next_ref
+from ..ids import BATCH_REF, new_ulid, next_ref
 from ..models import EventBatch, EventLogEntry
-
-BATCH_REF = "MCP"
 
 
 def create(
