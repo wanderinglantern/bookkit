@@ -4256,6 +4256,11 @@ def _export_tower(
             show_premiums=stored.show_premiums if stored else True,
             cell_premiums=bool(stored and stored.cell_premiums),
             cell_dates=bool(stored and stored.cell_dates),
+            # `render.colorBy` is deliberately NOT passed: towerkit's
+            # `render/fills.py` reads it off the file when given no override,
+            # so a fifth copy of "what does this file want" would live here.
+            # The override exists for `towerctl render --color-by`, not for a
+            # route that is rendering the file as saved.
         )
         content = paths[0].read_bytes()
     return _attachment(content, f"{placement.ref}-tower.{fmt}", media_type)
@@ -4304,6 +4309,7 @@ def export_schematic(request: Request, ref: str, placement_id: str) -> Any:
         wb, program, load_theme(theme_path),
         show_premiums=stored.show_premiums if stored else True,
         cell_dates=bool(stored and stored.cell_dates),
+        # `render.colorBy` reads itself off the file, same as the chart above.
     )
     with tempfile.TemporaryDirectory() as tmp:
         out = _Path(tmp) / "schematic.xlsx"
@@ -4771,6 +4777,11 @@ _PLACED: dict[str, _Placed] = {
     "program.render.showPremiums": _Placed(tag="span"),
     "program.render.cellPremiums": _Placed(tag="span"),
     "program.render.cellDates": _Placed(tag="span"),
+    # No `choices=` provider: towerkit publishes colorBy as an ENUM carrying
+    # its own two values (`model.ColorBy`), so `towerfields` derives the picker
+    # from `entry.values` unaided — that is the seam working. `render.theme`
+    # needs one only because it is a file path the model cannot enumerate.
+    "program.render.colorBy": _Placed(tag="span"),
     "program.render.soiSchematic": _Placed(tag="span"),
 }
 
@@ -4788,6 +4799,10 @@ _RENDER_OPTIONS: tuple[tuple[str, str], ...] = (
     # which is exactly why this table exists: the words say what the option
     # does, not what the key is called.
     ("policy periods", "render.cellDates"),
+    # "color by", not "colour by": the derived editor's aria-label comes from
+    # the field name and reads "color by", so a screen reader and a sighted
+    # reader would otherwise be given two different words for one control.
+    ("color by", "render.colorBy"),
     ("SOI schematic", "render.soiSchematic"),
     ("theme", "render.theme"),
 )

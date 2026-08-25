@@ -680,7 +680,10 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
         "the chart strip's premium-per-cell cell"
     ),
     "RenderSettings.cell_dates": (
-        "the chart strip's dates-per-cell cell"
+        "the chart strip's policy-periods cell"
+    ),
+    "RenderSettings.color_by": (
+        "the chart strip's color-by cell — carrier or layer"
     ),
     "RenderSettings.soi_schematic": (
         "the chart strip's SOI-schematic cell"
