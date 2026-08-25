@@ -2092,7 +2092,12 @@ table.rows tr.is-waived td {
 
 .tower-layer {
   position: absolute;
-  border: 1px solid var(--border);
+  /* --tower-edge is towerkit's answer, set per-outline by _tower_panel.html:
+     whichever of the chart's paper/ink reads against the layer's own fill.
+     A midnight outline on a midnight layer is no outline at all, which is
+     exactly what a structure-coloured tower produced. The var() fallback is
+     the un-themed case and the only place it is spelled. */
+  border: 1px solid var(--tower-edge);
   pointer-events: none;
 }
 
@@ -2139,6 +2144,29 @@ table.rows tr.is-waived td {
   border-style: dashed;
 }
 
+/* The un-themed fallbacks for the three chart tokens `_tower_panel.html` sets
+   per element. Declared here, once, rather than as `var(--x, fallback)` at
+   each use: a fallback spelled at every reference is the same value written
+   three times, and `test_every_css_variable_the_stylesheet_uses_is_defined`
+   is right that a reference has to resolve against a declaration it can find.
+   An inline `style="--tower-fill: …"` overrides these per block. */
+.tower {
+  --tower-fill: var(--grid);
+  --tower-ink: inherit;
+  --tower-edge: var(--border);
+}
+
+/* THE FILL IS THE CHART'S, NOT THE PAGE'S. Every block used to paint
+   var(--grid) — one flat colour — so the browser could not show which market
+   held what, and the two downloads beside it disagreed with the preview about
+   the whole point of the picture. --tower-fill / --tower-ink come off
+   towerkit's own `render/fills.py` and `contrast_text`, set per-block by
+   _tower_panel.html; the fallbacks here are the un-themed case and are the
+   only place the old flat treatment is spelled.
+
+   The ink is measured against the FILL, not inherited from the page theme,
+   for the same reason the export measures it: a carrier colour is a fixed hex
+   from a theme file and does not follow the reader's light/dark choice. */
 .tower-block {
   position: absolute;
   overflow: hidden;
@@ -2147,7 +2175,8 @@ table.rows tr.is-waived td {
   justify-content: center;
   gap: 0.05rem;
   padding: 0 0.25rem;
-  background: var(--grid);
+  background: var(--tower-fill);
+  color: var(--tower-ink);
   border: 1px solid var(--border);
 }
 

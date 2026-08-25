@@ -348,3 +348,136 @@ def test_every_fact_the_panel_carries_is_drawn_or_says_why_not() -> None:
         f"the panel carries {undrawn} and the template draws none of it — "
         "draw it, stop carrying it, or name it above with the reason"
     )
+
+
+class TestThePanelIsPaintedByTheRenderer:
+    """The panel painted every block one flat CSS colour until 2026-08-25, so
+    the browser could not show which market held what — and when
+    `render.colorBy` arrived it changed both downloads while the preview
+    between them stayed identical, which is the agreement rule (spec D2.1)
+    failing on the one fact the picture is most about.
+    """
+
+    def test_every_placed_block_carries_the_renderers_own_fill(self, drawn) -> None:
+        from towerkit.layout import build_layout
+        from towerkit.render.fills import block_fills
+        from towerkit.theme import load_theme
+
+        program, built = drawn
+        reference = block_fills(program, load_theme(), build_layout(program))
+        by_block = {
+            (b.layer_id, b.carrier): reference.of(b)
+            for b in build_layout(program).participants
+            if b.carrier is not None
+        }
+        placed = [b for b in built["blocks"] if not b["unplaced"]]
+        assert placed, "no placed block in the sample"
+        for block in placed:
+            key = (block["layer_id"], block["carrier"])
+            assert block["fill"] == by_block[key], (
+                f"{block['carrier']} is {block['fill']} in the browser and "
+                f"{by_block[key]} in the export"
+            )
+
+    def test_unplaced_capacity_has_no_fill_to_state(self, drawn) -> None:
+        """It is HATCHED, and app.css owns that pattern the way the export
+        owns its own. There is no carrier colour for a seat nobody holds."""
+        _program, built = drawn
+        for block in built["blocks"]:
+            if block["unplaced"]:
+                assert block["fill"] is None
+
+    def test_the_ink_is_measured_against_the_fill_not_the_page(self, drawn) -> None:
+        """A carrier colour is a fixed hex out of a theme file and does not
+        follow the reader's light/dark choice, so the label colour cannot come
+        from the page's own tokens — the export measures it and so does this."""
+        from towerkit.theme import contrast_text, load_theme
+
+        chrome = load_theme().chrome
+        _program, built = drawn
+        for block in built["blocks"]:
+            if block["fill"]:
+                assert block["text_colour"] == contrast_text(
+                    block["fill"], chrome.background, chrome.ink
+                )
+
+    def test_every_layer_carries_an_outline_that_reads_against_its_fill(self, drawn) -> None:
+        _program, built = drawn
+        assert built["layers"]
+        for layer in built["layers"]:
+            assert layer["outline_colour"], layer
+
+    def test_colour_by_layer_reaches_the_browser_too(self, drawn) -> None:
+        """The finding this closes: the setting changed the chart and the
+        worksheet and left the preview between them untouched."""
+        from towerkit.model import RenderSettings
+
+        from bookkit.web import tower as tower_mod
+
+        program, _ = drawn
+        by_carrier = tower_mod.panel(program)
+        grouped = program.model_copy(
+            update={"render": RenderSettings(colorBy="layer")}
+        )
+        by_layer = tower_mod.panel(grouped)
+
+        def fills(built):
+            return [b["fill"] for b in built["blocks"] if not b["unplaced"]]
+
+        assert fills(by_carrier) != fills(by_layer), (
+            "colorBy changed nothing in the browser"
+        )
+        # in layer mode every block of one layer shares a colour
+        per_layer: dict[str, set] = {}
+        for block in by_layer["blocks"]:
+            if not block["unplaced"]:
+                per_layer.setdefault(block["layer_id"], set()).add(block["fill"])
+        assert all(len(v) == 1 for v in per_layer.values()), per_layer
+
+    def test_the_panel_uses_the_programs_own_theme(self, drawn) -> None:
+        """Read off `render.theme`, exactly as `_export_tower` reads it, so the
+        picture on the tab and the file the client gets are one picture."""
+        from towerkit.model import RenderSettings
+
+        from bookkit.web import tower as tower_mod
+
+        program, _ = drawn
+        default = tower_mod.panel(program)
+        marsh = tower_mod.panel(
+            program.model_copy(
+                update={"render": RenderSettings(theme="themes/marsh.json")}
+            )
+        )
+        assert [b["fill"] for b in default["blocks"]] != [
+            b["fill"] for b in marsh["blocks"]
+        ], "the stored theme changed nothing"
+
+    def test_a_named_theme_that_is_not_installed_does_not_take_the_tab_down(
+        self, drawn,
+    ) -> None:
+        """The export answers a missing theme with a refusal page, because a
+        download either happens or does not. The panel is a section of a page
+        the broker is already reading, and taking the whole tab down over it
+        would cost them everything else on it to say one thing."""
+        from towerkit.model import RenderSettings
+
+        from bookkit.web import tower as tower_mod
+
+        program, _ = drawn
+        built = tower_mod.panel(
+            program.model_copy(
+                update={"render": RenderSettings(theme="themes/no-such-theme.json")}
+            )
+        )
+        assert built["blocks"]
+        assert any(b["fill"] for b in built["blocks"])
+
+    def test_the_markup_actually_paints_them(self) -> None:
+        """Carried is not drawn — the lesson `chevrons` taught this file."""
+        template = (
+            Path(__file__).parent.parent
+            / "src" / "bookkit" / "web" / "templates" / "account"
+            / "_tower_panel.html"
+        ).read_text()
+        for token in ("--tower-fill", "--tower-ink", "--tower-edge"):
+            assert token in template, f"{token} is carried and drawn by nothing"
