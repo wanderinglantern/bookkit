@@ -52,5 +52,8 @@ def exports_page(request: Request) -> HTMLResponse:
         })
     return TEMPLATES.TemplateResponse(
         request, "exports.html",
-        {"rows": rows, "count": len(rows), "accounts": accounts},
+        # `section` lights this page's own item in the top bar, which the
+        # drawer joined on 2026-08-24. Without it the nav defaults to "book"
+        # and the bar claims you are somewhere you are not.
+        {"rows": rows, "count": len(rows), "accounts": accounts, "section": "exports"},
     )

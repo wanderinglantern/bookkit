@@ -137,3 +137,80 @@ def test_the_export_links_render_on_the_page(client_and_org):
     for artifact in ("tower.svg", "tower.pdf", "schematic.xlsx"):
         assert f'href="{base}/{artifact}"' in page, f"no link to {artifact}"
     assert f'href="/accounts/{org.ref}/export/open-items.xlsx"' in page
+
+
+def test_every_download_route_is_reachable_from_the_drawer(client_and_org):
+    """THE DRAWER'S WHOLE JOB is that no download is reachable only from the
+    tab that happens to serve it — and it missed `work.xlsx`, the Work tab's
+    own workbook (surface sweep, 2026-08-24).
+
+    A LIST OF ROUTES, not a list of links: this walks every registered
+    `/export/` GET and asserts the drawer offers each one, so the next
+    download added anywhere goes red here instead of being reachable from one
+    tab. `open-items.xlsx` and the three program artifacts are the ones that
+    were already right.
+    """
+    import re
+
+    client, org = client_and_org
+    page = client.get("/exports").text
+
+    routes = {
+        path
+        for path, methods in _get_routes(client.app)
+        if "/export/" in path and "GET" in methods
+    }
+    assert routes, "no export routes found at all — the scan is broken"
+
+    offered = set(re.findall(r'href="([^"]*/export/[^"]+)"', page))
+    missing = []
+    for path in sorted(routes):
+        # the route template's own shape, as a regex over the hrefs rendered
+        pattern = re.sub(r"\{[^}]+\}", "[^/]+", path)
+        if not any(re.fullmatch(pattern, href) for href in offered):
+            missing.append(path)
+    assert not missing, (
+        f"the exports drawer does not offer these download routes: {missing}"
+    )
+
+
+def test_the_exports_drawer_is_reachable_from_every_page(client_and_org):
+    """It was linked from Today and from nowhere else, so the last step of the
+    morning meant going home first. The top bar is the one nav every page
+    renders."""
+    client, org = client_and_org
+
+    for path in ("/book", "/towers", "/markets", f"/accounts/{org.ref}/program"):
+        page = client.get(path).text
+        nav = page.split('class="topbar-nav"', 1)[1].split("</nav>", 1)[0]
+        assert 'href="/exports"' in nav, f"no way to the exports drawer from {path}"
+
+    drawer = client.get("/exports").text
+    nav = drawer.split('class="topbar-nav"', 1)[1].split("</nav>", 1)[0]
+    assert 'href="/exports" class="topbar-nav-item is-current-section"' in nav, (
+        "the drawer does not light its own nav item"
+    )
+
+
+def _get_routes(app) -> list[tuple[str, set[str]]]:
+    """(path, methods) for every route the app serves.
+
+    Walks the included routers rather than `app.routes`: FastAPI wraps each
+    `include_router` in a holder whose own `path` is empty, so a scan of the
+    top level finds four static mounts and nothing else — and a gate that
+    finds nothing passes.
+    """
+    found: list[tuple[str, set[str]]] = []
+
+    def walk(routes) -> None:
+        for route in routes:
+            inner = getattr(route, "original_router", None)
+            if inner is not None:
+                walk(inner.routes)
+                continue
+            path = getattr(route, "path", None)
+            if path:
+                found.append((path, set(getattr(route, "methods", ()) or ())))
+
+    walk(app.routes)
+    return found
