@@ -719,6 +719,15 @@ def test_the_drawing_and_the_editor_never_disagree(app_and_org) -> None:
     SCOPED TO THE DRAWING. The stack editor prints every layer name as well, so
     an assertion against the whole page passes on Task 6's markup alone — the
     same trap the buffer test below already avoids.
+
+    NAMED IN THE `title=` ATTRIBUTE, NOT IN THE BLOCKS. The drawing's visible
+    text stopped naming layers on 2026-08-25 (Grant: "the layer name does not
+    need to appear"), so `layer_heading` is the terms now and the name lives
+    only in the layer outline's tooltip. This test kept passing on that
+    tooltip without anyone deciding it should — which made it an assertion
+    about markup nobody reads. It says where it is looking now, so the day
+    the tooltip goes too, the test fails and asks the question rather than
+    quietly checking nothing.
     """
     client, org = app_and_org
     conn = client.app.state.conn
@@ -727,11 +736,41 @@ def test_the_drawing_and_the_editor_never_disagree(app_and_org) -> None:
 
     page = client.get(f"/accounts/{org.ref}/program").text
     drawing = _tower_panel_markup(page)
-
+    titles = re.findall(r'class="tower-layer[^"]*"[^>]*title="([^"]*)"', drawing)
+    assert len(titles) == len(program.layers), (
+        f"{len(program.layers)} layers in the file, {len(titles)} outlines drawn"
+    )
     for layer in program.layers:
-        assert layer.name in drawing, (
-            f"{layer.name} is in the file and not in the drawing"
+        assert any(title.startswith(f"{layer.name} —") for title in titles), (
+            f"{layer.name} is in the file and not named by the drawing"
         )
+
+
+def test_the_drawing_no_longer_prints_a_layer_name_in_its_cells(app_and_org) -> None:
+    """The visible text is the carrier and the terms; the name is redundant
+    with a column already headed by its line of coverage and a block whose
+    height and axis already say how big it is (Grant, 2026-08-25).
+
+    Asserted against the `<span class="tower-line">` texts specifically —
+    the same elements `_tower_panel.html` paints — because the name IS still
+    in the panel's markup, in the outline's `title`, and a slice-wide
+    assertion would therefore be answering a different question.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)
+    program = sync.linked_program(conn, placement.id).program
+
+    drawing = _tower_panel_markup(client.get(f"/accounts/{org.ref}/program").text)
+    printed = re.findall(r'<span class="tower-line">([^<]*)</span>', drawing)
+    assert printed, "the drawing printed nothing at all"
+    for layer in program.layers:
+        assert not [line for line in printed if layer.name in line], (
+            f"{layer.name} is still printed in a cell"
+        )
+    # and it still says the things it is FOR
+    carriers = {p.carrier for layer in program.layers for p in layer.participants}
+    assert carriers & set(printed), printed
 
 
 def test_a_buffer_draws_as_a_buffer(app_and_org) -> None:

@@ -2879,6 +2879,116 @@ def test_the_tower_download_honours_the_saved_chart_options(app_and_org):
     assert b"<svg" in drawn.content
 
 
+def test_the_schematic_download_honours_the_saved_chart_options(app_and_org):
+    """The same defect as the tower download above, in the button an inch to
+    its right, and it outlived the D6 fix by four days: this route called
+    `add_schematic_sheet(wb, program, load_theme())` — no stored theme, no
+    `show_premiums`, no `cell_dates` — so one Program tab produced a chart
+    honouring the file's settings and a worksheet ignoring every one of them.
+    Two pictures of one tower (found 2026-08-25).
+
+    SPY ON THE RENDERER, for the reason the test above gives: watching the
+    load only proves the SAVE worked and stays green with the hand-off gone.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    client.post(
+        _field_url(org, placement, "program", "render.showPremiums", "_:_"),
+        data={"program.render.showPremiums": "false"},
+    )
+    client.post(
+        _field_url(org, placement, "program", "render.cellDates", "_:_"),
+        data={"program.render.cellDates": "true"},
+    )
+
+    # The route imports the function INSIDE its body, so patching the module
+    # attribute is what it will actually pick up.
+    import towerkit.render.schematic_xlsx as sx
+
+    seen: dict = {}
+    real = sx.add_schematic_sheet
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        seen["theme"] = args[2]
+        return real(*args, **kwargs)
+
+    sx.add_schematic_sheet = spy
+    try:
+        got = client.get(
+            f"/accounts/{org.ref}/program/{placement.id}/export/schematic.xlsx"
+        )
+    finally:
+        sx.add_schematic_sheet = real
+
+    assert got.status_code == 200
+    assert got.content[:2] == b"PK"
+    assert seen.get("show_premiums") is False, (
+        f"the worksheet was handed {seen.get('show_premiums')!r} — the file's "
+        "own saved chart options are being ignored"
+    )
+    assert seen.get("cell_dates") is True
+
+
+def test_colour_by_is_a_picker_on_the_chart_strip_and_reaches_the_export(
+    app_and_org,
+):
+    """`render.colorBy` (towerkit 2026-08-25) — what a fill on the tower means:
+    the market holding the block, or the layer's position in the stack, which
+    is the structure-diagram convention a client deck wants.
+
+    Two halves, and the second is the one that has been missed before. The
+    field must be EDITABLE here — a towerkit capability the browser cannot
+    reach is "built but not accessible", the bug class web/parity.py exists
+    for — and it must actually reach the renderer, which is what the tower
+    download's own test learned to assert after watching the load proved
+    nothing.
+
+    It is a PICKER with no `_CHOICES` provider behind it: towerkit publishes
+    the field as an enum carrying its own values, so the derived editor builds
+    the select unaided. That is the seam working, and asserting the options
+    here is what makes it visible if it stops.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    assert "color by" in page, "the chart strip does not offer it"
+
+    saved = client.post(
+        _field_url(org, placement, "program", "render.colorBy", "_:_"),
+        data={"program.render.colorBy": "layer"},
+    )
+    assert saved.status_code == 200
+    assert _reload_program(conn, placement).render.color_by == "layer"
+
+    import towerkit.render.mpl_program as mpl
+
+    seen = {}
+    real = mpl.draw_tower
+
+    def spy(*args, **kwargs):
+        tower = real(*args, **kwargs)
+        seen["program"] = args[1]
+        return tower
+
+    mpl.draw_tower = spy
+    try:
+        drawn = client.get(
+            f"/accounts/{org.ref}/program/{placement.id}/export/tower.svg"
+        )
+    finally:
+        mpl.draw_tower = real
+
+    assert drawn.status_code == 200
+    # The renderer reads the mode off the FILE (towerkit render/fills.py), so
+    # what has to reach it is the program carrying the saved setting — not a
+    # keyword argument bookkit would have to remember to pass.
+    assert seen["program"].render.color_by == "layer"
+
+
 def _named_limits_base(org, placement, layer_id):
     return (
         f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/named-limits"

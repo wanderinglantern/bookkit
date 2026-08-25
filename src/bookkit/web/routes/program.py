@@ -4256,6 +4256,11 @@ def _export_tower(
             show_premiums=stored.show_premiums if stored else True,
             cell_premiums=bool(stored and stored.cell_premiums),
             cell_dates=bool(stored and stored.cell_dates),
+            # `render.colorBy` is deliberately NOT passed: towerkit's
+            # `render/fills.py` reads it off the file when given no override,
+            # so a fifth copy of "what does this file want" would live here.
+            # The override exists for `towerctl render --color-by`, not for a
+            # route that is rendering the file as saved.
         )
         content = paths[0].read_bytes()
     return _attachment(content, f"{placement.ref}-tower.{fmt}", media_type)
@@ -4287,8 +4292,25 @@ def export_schematic(request: Request, ref: str, placement_id: str) -> Any:
     from towerkit.theme import load_theme
 
     program = _loaded_program(conn, placement)
+    # THE PROGRAM'S OWN SAVED CHART OPTIONS, for the same reason `_export_tower`
+    # above reads them — and this route did not, which made the two downloads
+    # off one Program tab disagree: the chart honoured the stored theme and
+    # premium settings while the worksheet beside it always rendered with the
+    # library default theme and premiums forced on. Two pictures of one tower,
+    # from two buttons an inch apart (found 2026-08-25 while moving the period
+    # out of the cells).
+    stored = program.render
+    try:
+        theme_path = _resolve_theme(stored.theme if stored else None)
+    except FileNotFoundError as missing:
+        return _refusal_page(request, str(missing), f"/accounts/{ref}/program")
     wb = new_workbook()
-    add_schematic_sheet(wb, program, load_theme())
+    add_schematic_sheet(
+        wb, program, load_theme(theme_path),
+        show_premiums=stored.show_premiums if stored else True,
+        cell_dates=bool(stored and stored.cell_dates),
+        # `render.colorBy` reads itself off the file, same as the chart above.
+    )
     with tempfile.TemporaryDirectory() as tmp:
         out = _Path(tmp) / "schematic.xlsx"
         finalize_workbook(wb, out)
@@ -4755,6 +4777,11 @@ _PLACED: dict[str, _Placed] = {
     "program.render.showPremiums": _Placed(tag="span"),
     "program.render.cellPremiums": _Placed(tag="span"),
     "program.render.cellDates": _Placed(tag="span"),
+    # No `choices=` provider: towerkit publishes colorBy as an ENUM carrying
+    # its own two values (`model.ColorBy`), so `towerfields` derives the picker
+    # from `entry.values` unaided — that is the seam working. `render.theme`
+    # needs one only because it is a file path the model cannot enumerate.
+    "program.render.colorBy": _Placed(tag="span"),
     "program.render.soiSchematic": _Placed(tag="span"),
 }
 
@@ -4765,7 +4792,17 @@ _RENDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("totals", "render.showTotals"),
     ("premiums", "render.showPremiums"),
     ("premium per cell", "render.cellPremiums"),
-    ("dates per cell", "render.cellDates"),
+    # NOT "dates per cell" any more: the period is stated once under its line
+    # of coverage now (towerkit render/terms.py, 2026-08-25), and only a layer
+    # that disagrees with its column still says so in a cell. The JSON key is
+    # still `cellDates` — renaming it would break every file that carries it —
+    # which is exactly why this table exists: the words say what the option
+    # does, not what the key is called.
+    ("policy periods", "render.cellDates"),
+    # "color by", not "colour by": the derived editor's aria-label comes from
+    # the field name and reads "color by", so a screen reader and a sighted
+    # reader would otherwise be given two different words for one control.
+    ("color by", "render.colorBy"),
     ("SOI schematic", "render.soiSchematic"),
     ("theme", "render.theme"),
 )
