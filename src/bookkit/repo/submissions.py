@@ -383,3 +383,37 @@ def outstanding_subjectivity_rows_for_org(
         """,
         (org_id, org_id),
     ).fetchall()
+
+
+def sent_dates_for_placement(
+    conn: sqlite3.Connection, placement_id: str
+) -> dict[str, str]:
+    """{submission_id: sent_on} for every live submission on a placement.
+
+    The marketing report puts the submission date in a BLOCK HEADER, because
+    one submission goes out and repeating its date down a column is the
+    duplication the DRY rule names — so it needs them all at once, keyed."""
+    rows = conn.execute(
+        f"SELECT id, sent_on FROM submission WHERE placement_id = ? AND {base.alive()}",
+        (placement_id,),
+    ).fetchall()
+    return {str(r["id"]): str(r["sent_on"]) for r in rows}
+
+
+def open_subjectivity_counts(
+    conn: sqlite3.Connection, placement_id: str
+) -> dict[str, int]:
+    """{submission_id: how many subjectivities are still outstanding}.
+
+    A LEFT JOIN, so a submission with none appears with 0 rather than being
+    missing — the report prints a blank cell for zero, and a KeyError for a
+    quiet market is not the same thing as a market with nothing outstanding."""
+    rows = conn.execute(
+        "SELECT s.id AS submission_id, COUNT(sub.id) AS open_count"
+        " FROM submission s LEFT JOIN submission_subjectivity sub"
+        "   ON sub.submission_id = s.id AND sub.status = 'outstanding'"
+        f"   AND {base.alive('sub')}"
+        f" WHERE s.placement_id = ? AND {base.alive('s')} GROUP BY s.id",
+        (placement_id,),
+    ).fetchall()
+    return {str(r["submission_id"]): int(r["open_count"]) for r in rows}

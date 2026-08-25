@@ -174,6 +174,24 @@ def set_market_profile(conn: sqlite3.Connection, org_id: str, **fields: Any) -> 
     return get_market_profile(conn, org_id)  # type: ignore[return-value]
 
 
+def best_ratings_for(
+    conn: sqlite3.Connection, org_ids: set[str]
+) -> dict[str, str]:
+    """{org_id: A.M. Best rating} for many markets at once.
+
+    Bulk because the marketing report prints a rating beside every market on
+    every line, and `get_market_profile` per row is a query per cell. Shaped
+    on `names_for` above, which exists for the same reason."""
+    if not org_ids:
+        return {}
+    marks = ",".join("?" * len(org_ids))
+    rows = conn.execute(
+        f"SELECT org_id, am_best_rating FROM market_profile WHERE org_id IN ({marks})",
+        tuple(org_ids),
+    ).fetchall()
+    return {str(r["org_id"]): str(r["am_best_rating"]) for r in rows if r["am_best_rating"]}
+
+
 def get_market_profile(conn: sqlite3.Connection, org_id: str) -> MarketProfile | None:
     row = conn.execute("SELECT * FROM market_profile WHERE org_id = ?", (org_id,)).fetchone()
     return MarketProfile.from_row(row) if row else None

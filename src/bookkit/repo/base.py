@@ -31,6 +31,9 @@ ENTITY_TABLES = {
     "project_need": "project_need",
     "rfi_request": "rfi_request",
     "rfi_item": "rfi_item",
+    "line_of_coverage": "line_of_coverage",
+    "market_response": "market_response",
+    "placement_line": "placement_line",
 }
 
 

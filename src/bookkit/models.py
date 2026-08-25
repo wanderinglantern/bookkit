@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 from enum import StrEnum
-from typing import Any, Self
+from typing import Any, NamedTuple, Self
 
 from pydantic import BaseModel, ConfigDict
 
@@ -164,6 +164,10 @@ class Appetite(Row):
     notes: str | None = None
     created_at: str
     updated_at: str
+    # Migration 014: the FK that replaces `line`. Nullable and beside the
+    # text column, not instead of it — NULL reads as "not yet mapped",
+    # which is where every pre-014 row honestly starts.
+    line_id: str | None = None
     deleted_at: str | None = None
 
 
@@ -321,6 +325,10 @@ class ProjectNeed(Row):
     notes: str | None = None
     created_at: str
     updated_at: str
+    # Migration 014: the FK that replaces `line`. Nullable and beside the
+    # text column, not instead of it — NULL reads as "not yet mapped",
+    # which is where every pre-014 row honestly starts.
+    line_id: str | None = None
     deleted_at: str | None = None
 
 
@@ -527,3 +535,236 @@ class EventBatch(Row):
     org_id: str | None = None
     created_at: str
     reverted_at: str | None = None
+
+
+# --- Lines of coverage -----------------------------------------------------
+#
+# THE TERM IS "LINE OF COVERAGE" (Grant, 2026-08-24) and as of 2026-08-25 it
+# is a ROW, not a string. It used to be free text in four independent places
+# — appetite.line, project_need.line, opportunity.lines, team_assignment.lines
+# — which repo/vocab.py::lines() unioned to answer "what does this book call
+# its lines". Nothing reconciled them, so "GL" and "General Liability" were
+# two different lines, and a report grouped BY line of coverage had no
+# grouping key to group on. A LINE OF COVERAGE HOLDS LAYERS; the layers live
+# in towerkit and reference this row's id.
+
+
+class LineOfCoverage(Row):
+    """One line of coverage. `id` is a stable slug, not a ULID: these rows are
+    vocabulary rather than the user's data, they are referenced from towerkit
+    `Line.id` strings a human typed into a program file, and they must be
+    greppable across a migration, a test and a seed. `name` is what a client
+    reads and may be renamed freely; `acord_code` is identity for interchange
+    and is NEVER the display name."""
+
+    id: str
+    name: str
+    abbr: str | None = None
+    acord_code: str | None = None
+    sort_order: int = 0
+    notes: str | None = None
+    created_at: str
+    updated_at: str
+    deleted_at: str | None = None
+
+
+# --- Marketing -------------------------------------------------------------
+
+
+MARKET_RESPONSE_STATUSES = (
+    "pending",
+    "indicated",
+    "quoted",
+    "declined",
+    "non_response",
+    "bound",
+)
+"""What a market has said about ONE line of coverage.
+
+`pending` is load-bearing and was nearly dropped (Grant, 2026-08-25): without
+it a market submitted yesterday renders as `non_response` on tomorrow's client
+report, telling the client a market ignored us when we sent it two days ago.
+`non_response` therefore means what it should — asked, chased, nothing came
+back — which is a JUDGMENT someone makes, not a state a row falls into by the
+clock.
+
+`declined` and `non_response` stay distinct for the same reason: "they looked
+and said no" is a different fact from "they never came back", and collapsing
+them makes the marketing effort look worse than it was on a document whose
+whole purpose is to show the effort.
+
+There is no `not_approached`. In a grid of one row per (line, market), the
+ABSENCE of a row carries it — provided the report renders that absence in
+words rather than as a blank cell a reader has to interpret."""
+
+MARKET_RESPONSE_OPEN_STATUSES = ("pending", "indicated", "quoted")
+"""Still live: worth chasing, and what a clearance collision is checked over."""
+
+
+PUBLIC_DECLINE_REASONS = (
+    "class_appetite",
+    "loss_history",
+    "capacity",
+    "pricing",
+    "incumbent_relationship",
+    "no_reason_given",
+)
+"""The ONLY decline wording that may reach a client.
+
+Two fields, not one field with a "safe to share" flag: real decline reasons
+are routinely unusable verbatim ("underwriter doesn't like the loss runs, off
+the record"), and a single field guarded by a checkbox fails the first time
+somebody forgets to tick it — a failure whose consequence is a client reading
+an underwriter's private opinion. `market_response.decline_reason` is internal
+free text and is never rendered to a client; this tuple fills
+`decline_reason_public`, which is OPTIONAL: blank there says nothing, which is
+safer than a sentence anyone will wish they had not written."""
+
+
+class RatingBasis(NamedTuple):
+    """What a premium is measured against, and how the rate is denominated.
+
+    THREE FACTS, NOT ONE. "Rating basis" conflates what is MEASURED (gross
+    sales, payroll, TIV, power units) with the DENOMINATOR the rate is quoted
+    per (per $1,000 of sales, per $100 of payroll, per unit). Left implied,
+    the rate column becomes uninterpretable the first time a reader assumes
+    the wrong convention — and the conventions genuinely differ by line.
+
+    `monetary` is the load-bearing one and is declared HERE, once. It decides
+    whether `exposure_amount` holds integer CENTS or a whole COUNT, so no read
+    site ever has to make that judgment: a fleet is 42 power units, and 42
+    cannot be cents."""
+
+    key: str
+    label: str
+    monetary: bool
+    default_rate_per: int  # 100, 1000, or 1 (per unit)
+    unit_label: str | None = None  # non-monetary bases name their unit
+
+
+RATING_BASES: tuple[RatingBasis, ...] = (
+    RatingBasis("gross_sales", "Gross sales", True, 1000),
+    RatingBasis("payroll", "Payroll", True, 100),
+    RatingBasis("tiv", "Total insured value", True, 100),
+    RatingBasis("revenue", "Revenue", True, 1000),
+    RatingBasis("units", "Units", False, 1, "units"),
+    RatingBasis("power_units", "Power units", False, 1, "power units"),
+    RatingBasis("headcount", "Headcount", False, 1, "employees"),
+    RatingBasis("flat", "Flat", False, 1, None),
+)
+
+RATING_BASIS_KEYS = tuple(b.key for b in RATING_BASES)
+
+_RATING_BASIS_BY_KEY = {b.key: b for b in RATING_BASES}
+
+
+def rating_basis(key: str) -> RatingBasis:
+    """The one lookup. Raises rather than returning a default, because a basis
+    nobody declared decides whether an exposure is money, and guessing that
+    silently mis-renders a client-facing figure by a factor of a hundred."""
+    try:
+        return _RATING_BASIS_BY_KEY[key]
+    except KeyError:
+        raise ValueError(
+            f"unknown rating basis {key!r} — declare it in models.RATING_BASES"
+        ) from None
+
+
+class MarketResponse(Row):
+    """What ONE market said about ONE line of coverage on ONE submission.
+
+    `market_org_id` is the paper and is NULLABLE: a submission sent to a
+    wholesaler has no carrier yet, and "out to RT Specialty, carrier TBD" is
+    the truth rather than a gap. `via_org_id` is the intermediary. At least
+    one of the two is present (a DB CHECK holds it).
+
+    `attach` / `lim` say WHICH SLAB the answer is about, so the same carrier
+    can answer twice on one line at two attachments — which is how an excess
+    tower is actually marketed. NULL attach reads as primary / whole line.
+
+    Money is cents and is the carrier's STATED figure: commission-inclusive,
+    net of fees and TRIA (Grant, 2026-08-25). NULL is "not quoted yet", never
+    zero — a report printing $0 of surplus lines tax makes a claim nobody
+    made, and on E&S business that tax decides which placement is cheaper."""
+
+    id: str
+    submission_id: str
+    line_id: str
+    market_org_id: str | None = None
+    via_org_id: str | None = None
+    attach: int | None = None
+    lim: int | None = None
+    status: str = "pending"
+    responded_on: str | None = None
+    rating_basis: str | None = None
+    rate_per: int | None = None
+    exposure_amount: int | None = None
+    rate_micros: int | None = None
+    premium: int | None = None
+    commission_bps: int | None = None
+    commission_included: int = 1
+    tria_premium: int | None = None
+    policy_fees: int | None = None
+    surplus_lines_tax: int | None = None
+    decline_reason: str | None = None
+    decline_reason_public: str | None = None
+    notes: str | None = None
+    created_at: str
+    updated_at: str
+    deleted_at: str | None = None
+
+    @property
+    def total_cost(self) -> int | None:
+        """Premium plus everything the client also pays — or None when any
+        component is simply unknown.
+
+        NOT a sum that treats NULL as zero. Most of a marketing cycle has no
+        fee or tax figure at all, and a total that quietly omits them
+        understates an E&S placement by the very amount that decides it.
+        Blank is the honest answer; the grid prints blank, never a number it
+        cannot stand behind.
+
+        NULL AND ZERO ARE DIFFERENT ANSWERS. NULL is "nobody has told us";
+        0 is "we asked, and there is none" — which is the ordinary case on
+        admitted domestic business with no surplus lines tax. Only 0
+        contributes to a total, so the entry form needs a way to SAY "no fees
+        or taxes apply" in one act rather than leaving a broker to type three
+        zeros or, worse, leaving the column permanently blank."""
+        parts = (
+            self.premium,
+            self.tria_premium,
+            self.policy_fees,
+            self.surplus_lines_tax,
+        )
+        if any(part is None for part in parts):
+            return None
+        return sum(part for part in parts if part is not None)
+
+
+class PlacementLine(Row):
+    """What one line of coverage on one placement is expected to do: the
+    expiring figures a client compares against, and the exposure and basis
+    every market response inherits unless it overrides them.
+
+    `expiring_rate_micros` is stored rather than derived because deriving it
+    needs `expiring_exposure`, which is a fact nobody may have recorded. When
+    it is missing the report leaves the rate comparison BLANK — it does not
+    assume exposure was flat, because that assumption puts a number in front
+    of a client that looks like rate change and is not."""
+
+    id: str
+    placement_id: str
+    line_id: str
+    expiring_premium: int | None = None
+    expiring_exposure: int | None = None
+    expiring_rate_micros: int | None = None
+    expiring_basis: str | None = None
+    expected_exposure: int | None = None
+    rating_basis: str | None = None
+    rate_per: int | None = None
+    attach_sought: int | None = None
+    limit_sought: int | None = None
+    notes: str | None = None
+    created_at: str
+    updated_at: str
+    deleted_at: str | None = None

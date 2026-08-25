@@ -318,6 +318,72 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
 # (entity, verb) -> why it is not on the surface. Nothing here is a promise to
 # build it; several are decisions to leave it alone.
 DEFERRED: dict[tuple[str, str], str] = {
+    # --- marketing, added with migrations 014/015 (2026-08-25) ---
+    #
+    # These twelve cells appeared the moment `line_of_coverage`,
+    # `market_response` and `placement_line` were registered in
+    # base.ENTITY_TABLES, and the red gate IS the ticket: the assistant is the
+    # third surface, and Grant works a renewal cycle through it. Every one is
+    # deferred UNTIL the marketing tools land in the same phase as the web
+    # entry surfaces, not because it should not exist.
+    ("line_of_coverage", "create"): (
+        "PENDING, one phase out. `line_add` will reach it, behind the same "
+        "RapidFuzz near-match warning the form uses — an assistant that can "
+        "mint a line without seeing the warning is exactly how a fifth "
+        "spelling of General Liability gets in."
+    ),
+    ("line_of_coverage", "read"): (
+        "PENDING. `lines_list` will return the vocabulary; today the "
+        "assistant cannot name the lines it is being asked to report on."
+    ),
+    ("line_of_coverage", "update"): (
+        "PENDING. Renaming is `edit_field`-shaped and inherits repo/lines.py's "
+        "duplicate guard, which lives in repo/ precisely so a tool cannot "
+        "write past it."
+    ),
+    ("line_of_coverage", "delete"): (
+        "DECISION, not a gap. Retiring a line strands every appetite, need, "
+        "opportunity and response pointing at it. The honest verb is MERGE, "
+        "which moves the references first and is not undoable in one press — "
+        "not something a tool should do in one call."
+    ),
+    ("market_response", "create"): (
+        "PENDING. `market_approach` will record who we went to, for which "
+        "line, through which wholesaler. This is the single most valuable "
+        "marketing verb for the assistant: it is what a renewal cycle is."
+    ),
+    ("market_response", "read"): (
+        "PENDING. `marketing_report` returns the composed blocks — the same "
+        "composer the browser download renders, so the two cannot disagree."
+    ),
+    ("market_response", "update"): (
+        "PENDING. `market_responded` will set the status, date, rate and "
+        "premium in one act, and roll the submission's status up after it."
+    ),
+    ("market_response", "delete"): (
+        "DECISION. A market we approached and then removed is history being "
+        "rewritten; the honest record is a status, and `non_response` and "
+        "`withdrawn` already say what happened."
+    ),
+    ("placement_line", "create"): (
+        "PENDING, and folded into the same verb as update: `set_placement_line` "
+        "upserts, because 'this line expects X' has no meaningful difference "
+        "between the first statement and the second."
+    ),
+    ("placement_line", "read"): (
+        "PENDING. Read today through `marketing_report`, which carries the "
+        "expiring figures in each block header; a standalone reader is worth "
+        "adding only if something needs them without the responses."
+    ),
+    ("placement_line", "update"): (
+        "PENDING. `set_placement_line` — the expiring premium, exposure and "
+        "rate a client's comparison is built on."
+    ),
+    ("placement_line", "delete"): (
+        "DECISION. Removing a line's expectations silently drops the "
+        "comparison every market row on it is measured against; blanking the "
+        "fields says the same thing and leaves the row to point at."
+    ),
     # --- deliberate: the assistant should not do this ---
     ("org", "delete"): (
         "DECISION, not a gap. Removing an account cascades through "

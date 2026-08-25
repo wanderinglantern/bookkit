@@ -72,6 +72,11 @@ _ALIVE_EXEMPT = {
         "the cycle walk must follow soft-deleted ancestors: a deleted org can "
         "be undeleted, and stopping at one would let a cycle through it pass"
     ),
+    ("lines.py", "_free_slug"): (
+        "the slug is a PRIMARY KEY and soft-delete leaves it occupying the "
+        "table, so a retired line's id must still count as taken — filtering "
+        "it out would mint an id the table already holds and raise on INSERT"
+    ),
 }
 
 
