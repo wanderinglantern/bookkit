@@ -2102,6 +2102,33 @@ table.rows tr.is-waived td {
   border-style: dashed;
 }
 
+/* OPEN-TOPPED, because statutory cover has no dollar limit: its top edge is
+   the caret band above it, not a line. mpl_program.py draws the same three
+   sides for the export; the panel drew four, so the browser said "bounded"
+   about the one kind of cover that is not. */
+.tower-layer.is-statutory {
+  border-top: none;
+}
+
+/* The caret band standing in for that top edge. The polyline is towerkit's
+   (`layout.chevron_points`); this only inks it. `preserveAspectRatio: none`
+   is deliberate — the viewBox is stretched onto the layout's own rect, which
+   is where the caret proportion was decided — and `vector-effect` keeps the
+   stroke from being stretched with it. */
+.tower-chevron {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.tower-chevron polyline {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1px;
+  stroke-linejoin: miter;
+  vector-effect: non-scaling-stroke;
+}
+
 /* A buffer in the drawing: hatched, never filled with a carrier colour. The
    same treatment the stack editor gives it, because a band nobody is on must
    not read as cover in either place. */

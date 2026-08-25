@@ -30,6 +30,24 @@
       <div class="tower-refline" style="bottom:{{ line.bottom }}%"><span>{{ line.label }}</span></div>
     {% endfor %}
 
+    {# THE STATUTORY CHEVRON BAND — the top edge of cover that continues
+       upward, drawn as a row of carets. towerkit hands over the polyline
+       (`layout.chevron_points`, the same points ascii.py stamps as `^` and
+       mpl_program.py plots); nothing here chooses a shape. The band sits
+       above y=1.0 by the layout's own reckoning, which is why it is placed at
+       `bottom:100%` and lands in the gap the section already leaves there.
+
+       The panel carried this rect and drew nothing for it, so a statutory
+       layer was closed-topped in the browser and open-topped in every export
+       — the drawing disagreeing with the client's copy (found 2026-08-24). #}
+    {% for chevron in tower.chevrons %}
+      <svg class="tower-chevron" viewBox="0 0 100 100" preserveAspectRatio="none"
+           aria-hidden="true"
+           style="left:{{ chevron.left }}%;bottom:{{ chevron.bottom }}%;width:{{ chevron.width }}%;height:{{ chevron.height }}%">
+        <polyline points="{{ chevron.points }}" />
+      </svg>
+    {% endfor %}
+
     {# Outlines first, so a participant block paints inside its layer. #}
     {% for layer in tower.layers %}
       {% for rect in layer.outlines %}
@@ -41,7 +59,10 @@
            an attribute only; geometry and strings still come off the
            renderer untouched. Pages without a selection (Towers) simply
            never set `selected`. #}
-        <div class="tower-layer{% if layer.pending %} is-pending{% endif %}{% if layer.buffer %} is-buffer{% endif %}{% if selected is defined and selected == layer.layer_id %} is-selected{% endif %}"
+        {# is-statutory draws the layer OPEN-TOPPED: its top edge is the
+           chevron band above, not a line — the same choice mpl_program.py
+           makes for the export. #}
+        <div class="tower-layer{% if layer.pending %} is-pending{% endif %}{% if layer.buffer %} is-buffer{% endif %}{% if layer.statutory %} is-statutory{% endif %}{% if selected is defined and selected == layer.layer_id %} is-selected{% endif %}"
              data-layer-id="{{ layer.layer_id }}"
              style="left:{{ rect.left }}%;bottom:{{ rect.bottom }}%;width:{{ rect.width }}%;height:{{ rect.height }}%"
              title="{{ layer.name }} — {{ layer.terms }}"></div>

@@ -187,3 +187,164 @@ def test_a_retention_sits_below_the_zero_line(drawn):
     for retention in built["retentions"]:
         for rect in retention["rects"]:
             assert rect["bottom"] < 0, rect
+
+
+# --- carried is not drawn -----------------------------------------------------
+#
+# `chevrons` crossed this seam correctly and nothing drew it: `_tower_panel.html`
+# never read the key and app.css had no rule for it, dead since 356ecc9. So a
+# statutory layer — the one kind of cover with no top — drew CLOSED-topped in
+# the browser and open-topped in every export, which is the disagreement the
+# agreement rule (spec D2.1) exists to prevent. Found by the surface sweep,
+# 2026-08-24; a seam test that only checks what crosses cannot see it.
+
+
+def _statutory_program():
+    """A tower with statutory cover on it — the shape that has a chevron band.
+    Built here because the seeded book's first linked program need not have
+    one, and a test asserting nothing is worse than no test."""
+    from datetime import date
+
+    from towerkit.model import (
+        Layer,
+        Line,
+        Participant,
+        Period,
+        Placement,
+        Program,
+        Retention,
+        RetentionType,
+    )
+
+    return Program(
+        insured="Statutory Test Co",
+        program="Casualty",
+        placement=Placement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="wc", name="Workers Compensation", abbr="WC")],
+        layers=[
+            Layer(
+                id="wc-statutory",
+                name="Workers Compensation",
+                applies_to=["wc"],
+                attach=0,
+                limit=0,
+                statutory=True,
+                participants=[Participant(carrier="Travelers", share_bps=10_000)],
+            )
+        ],
+        retentions=[
+            Retention(applies_to=["wc"], type=RetentionType.DEDUCTIBLE, amount=100_000)
+        ],
+    )
+
+
+def test_the_chevron_band_crosses_the_seam_with_its_shape(drawn) -> None:
+    """The rect ALONE cannot be drawn: a band is a box, and what goes in it is
+    a row of carets whose proportion towerkit decided
+    (`layout.chevron_points`, the same points ascii.py stamps as `^`). The
+    panel carries the polyline in the band's own box so the template can ink
+    it without choosing a shape."""
+    from towerkit.layout import build_layout, chevron_points
+
+    program = _statutory_program()
+    built = tower.panel(program)
+    layout = build_layout(program)
+
+    assert built["chevrons"], "a statutory tower crossed with no chevron band"
+    for carried, rect in zip(built["chevrons"], layout.chevrons, strict=True):
+        assert carried["points"], "the band carries no shape, only a box"
+        pairs = [
+            tuple(float(n) for n in pair.split(","))
+            for pair in carried["points"].split()
+        ]
+        assert len(pairs) == len(chevron_points(rect)), (
+            "the panel invented its own tooth count"
+        )
+        # the local box: 0..100 on both axes, y flipped for SVG
+        assert pairs[0] == (0.0, 100.0)
+        assert pairs[-1][0] == 100.0
+        assert {y for _, y in pairs} == {0.0, 100.0}
+
+
+def test_a_statutory_layer_is_drawn_open_topped_under_its_carets(
+    snapshot_db: Path,
+) -> None:
+    """Both halves, in the rendered page: the caret band is inked, and the
+    layer below it has no top edge — the three sides mpl_program.py draws for
+    the export."""
+    from fastapi.testclient import TestClient
+    from towerkit.model import dump_program
+
+    from bookkit import db, sync
+    from bookkit.repo import orgs, placements
+    from bookkit.web.app import create_app
+
+    conn = db.connect(snapshot_db)
+    org = next(
+        o
+        for o in orgs.list_orgs(conn, kind="client")
+        if any(p.program_path for p in placements.for_org(conn, o.id))
+    )
+    placement = next(
+        p for p in placements.for_org(conn, org.id) if p.program_path
+    )
+    path = sync.program_file(conn, placement)
+    dump_program(_statutory_program(), path)
+    sync.project(conn, path)
+    conn.close()
+
+    app = create_app(snapshot_db)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        page = client.get(f"/accounts/{org.ref}/program").text
+
+    assert "tower-chevron" in page, "the caret band is not drawn at all"
+    assert "<polyline points=" in page, "the band is an empty box"
+    assert "is-statutory" in page, "the statutory layer is not marked open-topped"
+
+    css = (Path(tower.__file__).parent / "static" / "app.css").read_text()
+    assert ".tower-chevron" in css, "nothing inks the caret band"
+    assert ".tower-layer.is-statutory" in css, "nothing opens the statutory top"
+
+
+def test_every_fact_the_panel_carries_is_drawn_or_says_why_not() -> None:
+    """THE GATE FOR THE CLASS, not for the one key. `chevrons` was carried
+    across the seam and drawn by nothing for weeks, which no seam test could
+    see. A key the template does not read is either a bug or a decision, and
+    a decision belongs here with its reason attached."""
+    template = (
+        Path(tower.__file__).parent
+        / "templates"
+        / "account"
+        / "_tower_panel.html"
+    ).read_text()
+
+    carried_but_not_drawn = {
+        "chart_height_px": (
+            "the height the label-drop decisions were made against. app.css "
+            "declares it as --tower-chart-height and "
+            "test_the_css_declares_the_same_height_the_panel_is_built_at holds "
+            "the two together — the template must not restate it inline."
+        ),
+        "top_dollars": (
+            "the tower's top in dollars. The topmost REFERENCE LINE already "
+            "prints it (`ref_lines`), and a second copy in the markup would be "
+            "bookkit choosing where a figure goes."
+        ),
+        "retention_band": (
+            "the height of the band BELOW the zero line. The panel draws "
+            "retentions as labels under the chart rather than as blocks in it, "
+            "so there is no box for this number to size."
+        ),
+    }
+
+    built = tower.panel(_statutory_program())
+    undrawn = [
+        key
+        for key in built
+        if f"tower.{key}" not in template and key not in carried_but_not_drawn
+    ]
+    assert not undrawn, (
+        f"the panel carries {undrawn} and the template draws none of it — "
+        "draw it, stop carrying it, or name it above with the reason"
+    )
