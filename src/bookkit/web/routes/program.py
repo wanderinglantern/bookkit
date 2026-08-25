@@ -4751,6 +4751,12 @@ _PLACED: dict[str, _Placed] = {
     # a constrained control, blank option included, with no cell of its own to
     # hand-write here. The seam working as designed.
     "layer.auditable": _Placed(tag="span"),
+    # Which tranche of the tower this slab belongs to — layers sharing the
+    # token are drawn as one band when the chart is coloured by structure
+    # rather than by market. A plain text cell: the vocabulary is the
+    # BROKER's (there is no knowable set of tranche names), which is the one
+    # case the constrained-input rule leaves open.
+    "layer.group": _Placed(tag="span"),
     # The layer's long tail, in the details row the chevron opens.
     "layer.states": _Placed(tag="span"),
     "layer.limitsDetail": _Placed(tag="span"),

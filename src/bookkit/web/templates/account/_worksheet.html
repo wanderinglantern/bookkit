@@ -220,6 +220,15 @@
     <div class="ws-fact-block">
       <span class="detail-label">structure</span>
       <div class="detail-inline">
+        {# Which tranche of the tower this slab belongs to. It sits with the
+           other structure facts and not with the policy ones because it is a
+           statement about the PLACEMENT — layers negotiated and talked about
+           together — where policyGroup above is a statement about paper.
+           Layers sharing the token are drawn as one band when the chart is
+           coloured by structure (towerkit's render.colorBy). #}
+        <span class="pair"><span class="pair-k"
+              title="layers sharing a tranche name are drawn as one band when the chart is coloured by structure"
+              >tranche</span>{{ ws.tower_cells.group | safe }}</span>
         {% if ws.statutory %}
           <form class="market-add-form" hx-post="{{ ws.base }}/statutory">
             <input type="hidden" name="statutory" value="false">

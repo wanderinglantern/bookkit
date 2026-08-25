@@ -64,16 +64,22 @@
            makes for the export. #}
         <div class="tower-layer{% if layer.pending %} is-pending{% endif %}{% if layer.buffer %} is-buffer{% endif %}{% if layer.statutory %} is-statutory{% endif %}{% if selected is defined and selected == layer.layer_id %} is-selected{% endif %}"
              data-layer-id="{{ layer.layer_id }}"
-             style="left:{{ rect.left }}%;bottom:{{ rect.bottom }}%;width:{{ rect.width }}%;height:{{ rect.height }}%"
+             style="left:{{ rect.left }}%;bottom:{{ rect.bottom }}%;width:{{ rect.width }}%;height:{{ rect.height }}%{% if layer.outline_colour %};--tower-edge:{{ layer.outline_colour }}{% endif %}"
              title="{{ layer.name }} — {{ layer.terms }}"></div>
       {% endfor %}
     {% endfor %}
 
     {% for block in tower.blocks %}
       {% for rect in block.rects %}
+        {# The FILL and its ink are the renderer's, like every string here:
+           `render/fills.py` decides what a colour means (the market holding
+           the block, or the layer's position when `render.colorBy` says so)
+           and `contrast_text` picks the ink that reads on it. Custom
+           properties rather than direct declarations, so app.css keeps the
+           fallback for a tower built without a theme in one place. #}
         <div class="tower-block{% if block.unplaced %} is-unplaced{% endif %}"
              data-layer-id="{{ block.layer_id }}"
-             style="left:{{ rect.left }}%;bottom:{{ rect.bottom }}%;width:{{ rect.width }}%;height:{{ rect.height }}%">
+             style="left:{{ rect.left }}%;bottom:{{ rect.bottom }}%;width:{{ rect.width }}%;height:{{ rect.height }}%{% if block.fill %};--tower-fill:{{ block.fill }};--tower-ink:{{ block.text_colour }}{% endif %}">
           {# The label rides the FIRST rect only. A stepped block is one seat
              drawn in several pieces; printing its name on each piece would
              read as several carriers. #}

@@ -528,6 +528,14 @@ TOWERKIT_MODEL_FIELDS: dict[str, str] = {
     "Layer.id": "identity — towerkit owns it (slugify/unique_id); never typed",
     "Layer.name": "layer cell (POST .../layers/{id}/cell/name)",
     "Layer.policy_number": "details row cell",
+    "Layer.group": (
+        "details row, STRUCTURE group: a text cell naming which tranche of "
+        "the tower this slab belongs to. Layers sharing the token are drawn "
+        "as one band by a structure-coloured diagram (render.colorBy=layer, "
+        "towerkit render/fills.py). A shared token, not a pointer, so it is "
+        "an ordinary derived field write — no link/unlink verb the way "
+        "policy_group needs one."
+    ),
     "Layer.policy_group": (
         "details row, POLICY group: a 'same policy as' PICKER of this "
         "program's other layers (POST .../layers/{layer_id}/policy, "

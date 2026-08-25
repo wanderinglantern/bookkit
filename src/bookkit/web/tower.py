@@ -60,8 +60,31 @@ def pct(value: float) -> float:
 
 
 def panel(program: Program) -> dict[str, Any]:
-    """Template context for one program's tower, at the panel's own height."""
-    return context(build_web_tower(program, CHART_HEIGHT_PX))
+    """Template context for one program's tower, at the panel's own height,
+    painted in the program's OWN theme.
+
+    The theme comes off `render.theme`, exactly as `_export_tower` reads it,
+    so the picture on the tab and the file the client gets are the same
+    picture. It is resolved here rather than passed in because both callers
+    (the Program tab and the Towers queue) would otherwise each look it up,
+    and "which theme does this file want" is one rule.
+
+    A NAMED THEME THAT IS NOT INSTALLED FALLS BACK, and does not raise. The
+    export route answers that with a refusal page because a download either
+    happens or does not; the panel is a section of a page the broker is
+    already reading, and taking the whole tab down over a missing theme file
+    would cost them everything else on it to say one thing.
+    """
+    from towerkit.theme import load_theme, resolve_theme
+
+    stored = program.render.theme if program.render else None
+    theme = None
+    if stored:
+        try:
+            theme = load_theme(resolve_theme(stored))
+        except (FileNotFoundError, OSError, ValueError):
+            theme = None
+    return context(build_web_tower(program, CHART_HEIGHT_PX, theme=theme or load_theme()))
 
 
 def context(web: WebTower) -> dict[str, Any]:
@@ -86,6 +109,13 @@ def context(web: WebTower) -> dict[str, Any]:
                 "lines": list(block.lines),
                 "carrier": block.carrier,
                 "unplaced": block.carrier is None,
+                # THE RENDERER'S OWN COLOUR, for the same reason the lines
+                # above are: the panel used to paint every block one flat CSS
+                # colour, so the browser could not show which market held
+                # what, and `render.colorBy` changed both downloads while the
+                # preview between them stayed identical (2026-08-25).
+                "fill": block.fill,
+                "text_colour": block.text_colour,
                 "rects": [_rect(r, span) for r in block.rects],
             }
             for block in web.blocks
@@ -104,6 +134,9 @@ def context(web: WebTower) -> dict[str, Any]:
                 # silently drop the flag and leave the drawing disagreeing
                 # with the file — `pending` and `statutory` are direct too.
                 "buffer": layer.buffer,
+                # Whichever ink reads against the fill it bounds — a midnight
+                # outline on a midnight layer is no outline at all.
+                "outline_colour": layer.outline_colour,
                 "outlines": [_rect(r, span) for r in layer.outlines],
             }
             for layer in web.layers
