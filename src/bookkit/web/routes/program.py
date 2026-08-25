@@ -4287,8 +4287,24 @@ def export_schematic(request: Request, ref: str, placement_id: str) -> Any:
     from towerkit.theme import load_theme
 
     program = _loaded_program(conn, placement)
+    # THE PROGRAM'S OWN SAVED CHART OPTIONS, for the same reason `_export_tower`
+    # above reads them — and this route did not, which made the two downloads
+    # off one Program tab disagree: the chart honoured the stored theme and
+    # premium settings while the worksheet beside it always rendered with the
+    # library default theme and premiums forced on. Two pictures of one tower,
+    # from two buttons an inch apart (found 2026-08-25 while moving the period
+    # out of the cells).
+    stored = program.render
+    try:
+        theme_path = _resolve_theme(stored.theme if stored else None)
+    except FileNotFoundError as missing:
+        return _refusal_page(request, str(missing), f"/accounts/{ref}/program")
     wb = new_workbook()
-    add_schematic_sheet(wb, program, load_theme())
+    add_schematic_sheet(
+        wb, program, load_theme(theme_path),
+        show_premiums=stored.show_premiums if stored else True,
+        cell_dates=bool(stored and stored.cell_dates),
+    )
     with tempfile.TemporaryDirectory() as tmp:
         out = _Path(tmp) / "schematic.xlsx"
         finalize_workbook(wb, out)
@@ -4765,7 +4781,13 @@ _RENDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("totals", "render.showTotals"),
     ("premiums", "render.showPremiums"),
     ("premium per cell", "render.cellPremiums"),
-    ("dates per cell", "render.cellDates"),
+    # NOT "dates per cell" any more: the period is stated once under its line
+    # of coverage now (towerkit render/terms.py, 2026-08-25), and only a layer
+    # that disagrees with its column still says so in a cell. The JSON key is
+    # still `cellDates` — renaming it would break every file that carries it —
+    # which is exactly why this table exists: the words say what the option
+    # does, not what the key is called.
+    ("policy periods", "render.cellDates"),
     ("SOI schematic", "render.soiSchematic"),
     ("theme", "render.theme"),
 )

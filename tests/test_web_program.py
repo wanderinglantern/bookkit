@@ -2879,6 +2879,58 @@ def test_the_tower_download_honours_the_saved_chart_options(app_and_org):
     assert b"<svg" in drawn.content
 
 
+def test_the_schematic_download_honours_the_saved_chart_options(app_and_org):
+    """The same defect as the tower download above, in the button an inch to
+    its right, and it outlived the D6 fix by four days: this route called
+    `add_schematic_sheet(wb, program, load_theme())` — no stored theme, no
+    `show_premiums`, no `cell_dates` — so one Program tab produced a chart
+    honouring the file's settings and a worksheet ignoring every one of them.
+    Two pictures of one tower (found 2026-08-25).
+
+    SPY ON THE RENDERER, for the reason the test above gives: watching the
+    load only proves the SAVE worked and stays green with the hand-off gone.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    client.post(
+        _field_url(org, placement, "program", "render.showPremiums", "_:_"),
+        data={"program.render.showPremiums": "false"},
+    )
+    client.post(
+        _field_url(org, placement, "program", "render.cellDates", "_:_"),
+        data={"program.render.cellDates": "true"},
+    )
+
+    # The route imports the function INSIDE its body, so patching the module
+    # attribute is what it will actually pick up.
+    import towerkit.render.schematic_xlsx as sx
+
+    seen: dict = {}
+    real = sx.add_schematic_sheet
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        seen["theme"] = args[2]
+        return real(*args, **kwargs)
+
+    sx.add_schematic_sheet = spy
+    try:
+        got = client.get(
+            f"/accounts/{org.ref}/program/{placement.id}/export/schematic.xlsx"
+        )
+    finally:
+        sx.add_schematic_sheet = real
+
+    assert got.status_code == 200
+    assert got.content[:2] == b"PK"
+    assert seen.get("show_premiums") is False, (
+        f"the worksheet was handed {seen.get('show_premiums')!r} — the file's "
+        "own saved chart options are being ignored"
+    )
+    assert seen.get("cell_dates") is True
+
+
 def _named_limits_base(org, placement, layer_id):
     return (
         f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}/named-limits"
