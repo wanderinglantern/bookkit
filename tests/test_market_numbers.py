@@ -18,7 +18,10 @@ from bookkit.repo import orgs, placements, projection
 from bookkit.repo import submissions as subs_repo
 from bookkit.services import hit_rate
 
-WINDOW = ("2020-01-01", "2030-01-01")
+# The repo query takes ONE floor now — a program that has already run out is
+# not renewing — and the 90-day window moved to `services.exposure`, where the
+# LINE ends are known and the renewal date is the one CLAUDE.md names.
+LIVE_FROM = "2020-01-01"
 
 
 def _tower(conn: sqlite3.Connection, status: str) -> str:
@@ -48,7 +51,7 @@ def test_exposure_rows_carry_the_placement_status(conn: sqlite3.Connection) -> N
     """Without this the screen cannot tell placed business from a live quote,
     and it read $650K where the book's bound-only total read nothing."""
     _tower(conn, "quoted")
-    rows = projection.carrier_exposure(conn, ["Travelers"], *WINDOW)
+    rows = projection.carrier_exposure(conn, ["Travelers"], LIVE_FROM)
     assert rows, "no exposure rows at all"
     assert "status" in rows[0].keys(), "exposure rows do not carry status"
     assert rows[0]["status"] == "quoted"
@@ -59,7 +62,7 @@ def test_bound_and_quoted_exposure_are_distinguishable(
 ) -> None:
     _tower(conn, "quoted")
     _tower(conn, "bound")
-    statuses = {r["status"] for r in projection.carrier_exposure(conn, ["Travelers"], *WINDOW)}
+    statuses = {r["status"] for r in projection.carrier_exposure(conn, ["Travelers"], LIVE_FROM)}
     assert statuses == {"quoted", "bound"}
 
 

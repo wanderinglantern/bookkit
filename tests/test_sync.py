@@ -168,21 +168,34 @@ def test_cross_book_exposure(synced) -> None:
     # `len(beyond) <= len(rows)` — measured at 0 and 3 — CANNOT FAIL, so
     # ignoring the `days` argument outright was green (2026-08-18). Pin the
     # horizon to its own last day, computed from the data rather than guessed.
+    #
+    # MEASURED ON `renewal_on`, not on `period_to`: the window is the earliest
+    # LINE end capped by the program period, because an Inland Marine layer
+    # runs out months before its program does and this page was the one
+    # surface still counting to the program (2026-08-24). The rows are still
+    # live programs — the repo query keeps expired ones out — but a row's own
+    # renewal date can be in the PAST, and an overdue line never falls off.
     assert all(r.period_to >= TODAY.isoformat() for r in rows)
     horizon = (TODAY + timedelta(days=365)).isoformat()
-    assert all(r.period_to <= horizon for r in rows)
+    assert all(r.renewal_on <= horizon for r in rows)
 
-    soonest = min(r.period_to for r in rows)
+    future = sorted({r.renewal_on for r in rows if r.renewal_on >= TODAY.isoformat()})
+    assert future, "no seeded tower renews in the future at all"
+    soonest = future[0]
     gap = (date.fromisoformat(soonest) - TODAY).days
     on_the_day = exposure.carrier_exposure(conn, "Swiss Re", days=gap, today=TODAY)
-    assert [r.period_to for r in on_the_day] == [soonest], (
-        "the horizon must include its own last day, and nothing past it"
+    assert soonest in {r.renewal_on for r in on_the_day}, (
+        "the horizon must include its own last day"
     )
-    assert exposure.carrier_exposure(conn, "Swiss Re", days=gap - 1, today=TODAY) == [], (
-        "a program expiring the day after the horizon is outside the window"
+    assert all(r.renewal_on <= soonest for r in on_the_day), (
+        "and nothing past it"
     )
+    assert len(on_the_day) < len(rows), "the window is not narrowing at all"
     # and the window really does widen — a staircase, not a constant
     assert 0 < len(on_the_day) < len(rows)
+    assert all(r.renewal_on <= r.period_to for r in rows), (
+        "a renewal date past the program's own period end is uncapped"
+    )
 
 
 def test_seed_projects_its_program_files_it_does_not_just_point_at_them(
@@ -242,3 +255,46 @@ def test_a_placement_bookkit_never_verified_is_refused_not_waved_through(
     with pytest.raises(sync.WriteConflict, match="never verified"):
         sync.write_through(conn, placement.id, bump)
     assert path.read_text() == before, "an unverifiable placement was written anyway"
+
+
+def test_a_line_running_out_early_is_visible_on_the_market_page(synced) -> None:
+    """THE DEFECT (surface sweep, 2026-08-24). The market page's window
+    filtered `placement.period_to`, so a program renewing well past the
+    horizon was invisible here even when one of its lines ran out inside it —
+    and CLAUDE.md's rule is that the renewal date is the earliest LINE end,
+    never `placement.period_to`.
+
+    Built rather than hoped for: the seeded towers all renew inside a
+    generous window, so a scan over them proves nothing about the boundary.
+    """
+    from towerkit.model import Period, dump_program
+
+    conn, programs = synced
+    path = programs / "atomic-casualty.json"
+    program = load_program(path)
+
+    # the program itself renews FAR out — past any window this page offers
+    far = Period(start=program.period.start, end=date(2029, 1, 1))
+    program.period = far
+    for layer in program.layers:
+        layer.period = far
+    # ...but one line's cover runs out in three weeks
+    soon = TODAY + timedelta(days=21)
+    early = next(ly for ly in program.layers if "Swiss Re" in [p.carrier for p in ly.participants])
+    early.period = Period(start=program.period.start, end=soon)
+    dump_program(program, path)
+    sync.project(conn, path)
+
+    refreshed = placements.by_program_path(conn, str(path))
+    assert refreshed.period_to == "2029-01-01", "the fixture did not move the period"
+
+    rows = exposure.carrier_exposure(conn, "Swiss Re", days=90, today=TODAY)
+
+    hit = [r for r in rows if r.placement_id == refreshed.id]
+    assert hit, (
+        "a line running out in three weeks is invisible on the market page "
+        "because the program itself renews in 2029"
+    )
+    assert all(r.renewal_on == soon.isoformat() for r in hit), (
+        "the row prints the program's period end, not the date it renews"
+    )

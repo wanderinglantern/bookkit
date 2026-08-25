@@ -4,8 +4,11 @@
    plus its remove control, which fetches an in-place confirm naming the
    layers that die with the line. #}
 <span class="line-chip">
-  <button type="button" class="chip-arrow" title="Move {{ name }} left"
-          aria-label="Move {{ name }} left"
+  {# Disabled at the ends rather than hidden: a control that vanishes makes
+     the reader wonder where it went, and towerkit treats the move itself as a
+     no-op either way. #}
+  <button type="button" class="chip-arrow" {% if first %}disabled{% endif %}
+          title="Move {{ name }} left" aria-label="Move {{ name }} left"
           hx-post="{{ base }}/move" hx-vals='{"delta": "-1"}'
           hx-target="closest .line-chip" hx-swap="outerHTML">&#9666;</button>
   {{ name_cell | safe }}
@@ -14,8 +17,8 @@
      em-dash here means "derived", not "missing" — the title says so, because
      an empty-looking cell beside a name is otherwise read as a bug. #}
   <span class="chip-abbr" title="column label — blank means towerkit derives it from the name">{{ abbr_cell | safe }}</span>
-  <button type="button" class="chip-arrow" title="Move {{ name }} right"
-          aria-label="Move {{ name }} right"
+  <button type="button" class="chip-arrow" {% if last %}disabled{% endif %}
+          title="Move {{ name }} right" aria-label="Move {{ name }} right"
           hx-post="{{ base }}/move" hx-vals='{"delta": "1"}'
           hx-target="closest .line-chip" hx-swap="outerHTML">&#9656;</button>
   <button type="button" class="chip-remove"

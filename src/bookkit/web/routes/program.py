@@ -281,7 +281,15 @@ def _index_groups(
 
     conn = _conn(request)
     linked = linked_for(request, conn, placement.id)
-    if linked.program is None or not layers:
+    # `not layers` was here, and it contradicted the paragraph above: a linked
+    # file with lines and NO layers returned None, so the whole workbench gate
+    # in `_layers_panel.html` went false and the program rendered neither its
+    # diagnostics nor either terms strip — while towerkit reported one
+    # `line-empty` ERROR per line. The one file the app knows is broken was the
+    # one it said nothing about (2026-08-24). A program with no LINES still
+    # returns None: there is no rail to draw, and the panel's own empty state
+    # is the right answer.
+    if linked.program is None or not linked.program.lines:
         return None
     lines = linked.program.lines
     base = f"/accounts/{ref}/program/{placement.id}"
@@ -320,11 +328,25 @@ def _index_groups(
             "move_base": f"{base}/lines/{line.id}/move",
             "first": index == 0,
             "last": index == len(lines) - 1,
+            # THE LINE'S OWN CONTROLS, the same chip the band above renders —
+            # not a second copy of them. The rail is where the structure is
+            # worked now, and it could reorder a line but not rename it,
+            # relabel it or remove it: the affordances stayed at the old home,
+            # which is the shape of the bug Grant reported about reordering
+            # (2026-08-24). One partial, one set of routes, two doors.
+            "chip": _line_chip_html(
+                request, ref, placement.id, line.id, line.name,
+                first=index == 0, last=index == len(lines) - 1,
+            ),
             # The bucket, where it says something. A line with no group shows
             # its column label instead — the letters the drawing prints in
             # that column's header, which is how a reader ties the rail to
             # the picture.
             "label": line.group or line.label,
+            # The bucket ALONE, for the rail: the chip prints the column label
+            # in its own cell, so repeating it in the header would be the same
+            # word twice — while a real bucket says something neither says.
+            "bucket": line.group or None,
             "count": len(rows),
             "closed": is_closed,
             "toggle_url": url(selected, closed ^ {slug}),
@@ -370,6 +392,9 @@ def _index_groups(
             "name": "Unknown line",
             "label": " ".join(sorted({row["applies_to"][0] for row in orphans})),
             "count": len(orphans),
+            # No chip either: there is no line to rename, relabel or remove.
+            "chip": None,
+            "bucket": None,
             # No move controls: this group is not a line, it is the layers
             # whose line the file does not declare. There is nothing to
             # reorder and towerkit has no id to move.
@@ -874,6 +899,20 @@ def _line_name(conn: sqlite3.Connection, placement_id: str, line_id: str) -> str
     raise HTTPException(status_code=404, detail=f"no line {line_id!r} on this program")
 
 
+def _line_ends(
+    conn: sqlite3.Connection, placement_id: str, line_id: str
+) -> tuple[bool, bool]:
+    """(is first, is last) in COLUMN order — what decides which of a chip's
+    two arrows is dead. The single-chip routes compute it too, or a chip
+    swapped back in place would come back with both arrows live at an end the
+    strip beside it draws as disabled."""
+    ids = [lid for lid, _ in sync.program_lines(conn, placement_id)]
+    if line_id not in ids:
+        return False, False
+    index = ids.index(line_id)
+    return index == 0, index == len(ids) - 1
+
+
 def _lines_base(ref: str, placement_id: str) -> str:
     return f"/accounts/{ref}/program/{placement_id}/lines"
 
@@ -883,8 +922,22 @@ def _line_cell_action(ref: str, placement_id: str, line_id: str) -> str:
 
 
 def _line_chip_html(
-    request: Request, ref: str, placement_id: str, line_id: str, name: str
+    request: Request,
+    ref: str,
+    placement_id: str,
+    line_id: str,
+    name: str,
+    *,
+    first: bool = False,
+    last: bool = False,
 ) -> str:
+    """One line of coverage's controls, wherever a line is worked — the band's
+    strip and the structure rail both render this.
+
+    `first`/`last` disable the arrow that would do nothing. towerkit treats a
+    move off either end as a no-op, so the guard is about the reader, not the
+    write: a live-looking control that changes nothing reads as a broken app.
+    """
     cell = render_cell_display(
         request, _LINE_NAME_FIELD, name,
         _line_cell_action(ref, placement_id, line_id),
@@ -895,6 +948,8 @@ def _line_chip_html(
     return template.render(
         base=f"{_lines_base(ref, placement_id)}/{line_id}",
         name=name,
+        first=first,
+        last=last,
         name_cell=cell,
         # D6, through the derived seam. The NAME is a bespoke cell because
         # renaming a line cascades its id through every appliesTo — bookkit's
@@ -918,9 +973,13 @@ def _line_chips(request: Request, ref: str, placement: Any) -> list[str] | None:
     # test_layer_details_is_read_once_per_page, once it was pointed at the
     # function that actually does the I/O).
     program = linked_for(request, conn, placement.id).program
+    lines = sync.program_lines_of(program)
     return [
-        _line_chip_html(request, ref, placement.id, lid, name)
-        for lid, name in sync.program_lines_of(program)
+        _line_chip_html(
+            request, ref, placement.id, lid, name,
+            first=index == 0, last=index == len(lines) - 1,
+        )
+        for index, (lid, name) in enumerate(lines)
     ]
 
 
@@ -1008,7 +1067,12 @@ def line_chip(
     conn = _conn(request)
     _owned(conn, org, "placement", placement_id, placements_repo.get)
     name = _line_name(conn, placement_id, line_id)
-    return HTMLResponse(_line_chip_html(request, ref, placement_id, line_id, name))
+    first, last = _line_ends(conn, placement_id, line_id)
+    return HTMLResponse(
+        _line_chip_html(
+            request, ref, placement_id, line_id, name, first=first, last=last
+        )
+    )
 
 
 @router.get(
@@ -1080,8 +1144,12 @@ async def line_cell_save(
     if not typed:
         return editor("the line needs a name")
     if typed == current:
+        first, last = _line_ends(conn, placement_id, line_id)
         return HTMLResponse(
-            _line_chip_html(request, ref, placement_id, line_id, current)
+            _line_chip_html(
+                request, ref, placement_id, line_id, current,
+                first=first, last=last,
+            )
         )
     try:
         program_files.write(
@@ -2609,31 +2677,17 @@ def _policy_link_options(
     """The layers this one can be told it shares a policy with, as
     (id, label) — self excluded.
 
-    THE LABEL SAYS WHICH LAYER when the name alone does not. Two lines of
-    coverage each arriving with a pending layer both call it "To be placed",
-    so the picker offered the same word twice and a reader could not tell
-    which one they were about to link (Grant, 2026-08-24). The write was
-    always addressed by id, so nothing was ever linked wrongly — but a
-    control that asks a question with two identical answers is a control
-    nobody can use.
-
-    Only the AMBIGUOUS names are qualified. Adding the line of coverage to
-    every option would make the common case — distinct names — noisier for a
-    problem it does not have.
+    THE LABEL SAYS WHICH LAYER when the name alone does not, and the rule for
+    that lives in `sync.qualified_layer_names`, not here: the pipeline's bind
+    offer collides the same way and a second copy would be fixed once
+    (2026-08-24).
     """
-    counts: dict[str, int] = {}
-    for row in layers:
-        counts[str(row["name"])] = counts.get(str(row["name"]), 0) + 1
-    out: list[tuple[str, str]] = []
-    for other in layers:
-        if str(other["id"]) == layer_id:
-            continue
-        name = str(other["name"])
-        if counts[name] > 1 and other["applies_to"]:
-            line = other["applies_to"][0]
-            name = f"{name} ({line_named.get(line, line)})"
-        out.append((str(other["id"]), name))
-    return out
+    named = sync.qualified_layer_names(layers, line_named)
+    return [
+        (str(other["id"]), named[str(other["id"])])
+        for other in layers
+        if str(other["id"]) != layer_id
+    ]
 
 
 def _market_field(key: str) -> Field:
@@ -2963,24 +3017,41 @@ def _market_premium_save(
     stated, so only the sum moves and the panel re-renders with it.
 
     BLANK CLEARS THE WHOLE LAYER, back to a premium split by share. That is
-    towerkit's all-or-nothing rule, not a web decision, and the confirm says
-    so before it happens.
+    towerkit's all-or-nothing rule, not a web decision, and it confirms first
+    — `premium_clear_preview` names every figure being given up and the share
+    each seat lands on. This sentence stood for a day while no such route
+    existed and the blank went in on blur (2026-08-24); a docstring that
+    promises a guard is worth less than no docstring at all.
     """
     layer_id = layer["id"]
     already = any(part.get("premium_stated") for part in layer["participants"])
-    if value is not None and not already and not commit:
-        preview = sync.premium_preview(
+    # TWO WRITES ON THIS CELL MOVE FIGURES NOBODY TYPED, and both are shown
+    # first. Stating the first premium on a layer states every seat and sums
+    # them; BLANKING one clears every seat back to a share of the layer's
+    # premium — all-or-nothing is towerkit's rule, not a web decision. The
+    # clear was the unannounced one, and it is the easier of the two to
+    # trigger: blur commits, so a cell tabbed through empty wrote it
+    # (2026-08-24). Both docstrings had promised a confirm for as long as
+    # there was none.
+    previewing = (
+        sync.premium_preview(
             conn, placement.id, layer_id, seat["carrier"], int(value)
         )
-        if preview["ok"]:
+        if value is not None and not already
+        else sync.premium_clear_preview(conn, placement.id, layer_id, seat["carrier"])
+        if value is None and already
+        else None
+    )
+    if previewing is not None and not commit:
+        if previewing["ok"]:
             return _premium_preview_response(
-                request, ref, placement.id, layer, index, seat, preview, raw
+                request, ref, placement.id, layer, index, seat, previewing, raw
             )
         # A refused preview is a refused write: say it in the cell the broker
         # typed in, with what they typed still there.
         return _market_editor_cell(
             request, conn, ref, placement.id, layer, index, seat,
-            "premium_cents", "; ".join(preview["errors"]), raw,
+            "premium_cents", "; ".join(previewing["errors"]), raw,
         )
 
     try:

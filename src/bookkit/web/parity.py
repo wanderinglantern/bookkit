@@ -695,6 +695,11 @@ TOWERKIT_EDIT_OPS: dict[str, str] = {
     "ordinal": "utility — layer auto-naming inside edit.add_layer",
     "suggested_attach": "utility — default attachment inside edit.add_layer",
     "heal_follows": "utility — run by sync.write_through on every write",
+    "heal_premiums": (
+        "utility — run by sync.write_through beside heal_follows on every "
+        "write, so a layer whose markets all state their own premium stays "
+        "their sum no matter which writer changed the seats"
+    ),
     "parse_states": (
         "utility — the ENTRY SYNTAX for a jurisdiction list, consumed by "
         "set_states and by mcpsurface's comma-string path. Rewritten "

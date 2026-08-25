@@ -24,6 +24,11 @@
     <a href="/towers" class="topbar-nav-item{% if current == "towers" %} is-current-section{% endif %}">Towers</a>
     <a href="/markets" class="topbar-nav-item{% if current == "markets" %} is-current-section{% endif %}">Markets</a>
     <a href="/team" class="topbar-nav-item{% if current == "team" %} is-current-section{% endif %}">Team</a>
+    {# Exports joined the nav on 2026-08-24: the drawer was linked from Today
+       and from nowhere else, so the last step of the morning was reachable
+       only by going home first. It is a routed section like the rest — the
+       rule above is about INERT labels, not about how many there are. #}
+    <a href="/exports" class="topbar-nav-item{% if current == "exports" %} is-current-section{% endif %}">Exports</a>
   </nav>
   {# Global quick capture — the TUI's app-level `n`, reachable from every
      page. A real link, not a nav section: /capture is a flow you enter and

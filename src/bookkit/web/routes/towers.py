@@ -32,6 +32,7 @@ from fastapi.responses import HTMLResponse
 from ... import sync
 from ...money import format_cents_compact
 from ...repo import orgs, placements
+from ...services import renewals
 from ..app import TEMPLATES
 from ..tower import panel
 
@@ -114,8 +115,15 @@ def _entries(request: Request) -> list[dict[str, Any]]:
         other_warning = next(
             (d for d in diags.warnings if d.code != "layer-unplaced"), None
         )
-        ends = [end for _, end in sync.line_ends_of(program)]
-        renewal_on = min(ends) if ends else date.fromisoformat(placement.period_to)
+        # THE SERVICE'S RULE, not a second copy of it. This was
+        # `min(ends)` — uncapped — while `services.renewals.renewal_on` caps
+        # the earliest line end by the program period end, so a program whose
+        # layers are written past their own period had this page saying 281
+        # days where the service said 20, and the `renewing` filter below
+        # measuring off the wrong one (2026-08-24).
+        renewal_on = renewals.renewal_on(
+            placement, [end for _, end in sync.line_ends_of(program)]
+        )
         days = (renewal_on - today).days
 
         if first_error is not None:

@@ -49,7 +49,7 @@ from towerkit.edit import add_retention as edit_add_retention
 from towerkit.edit import add_sublimit as edit_add_sublimit
 from towerkit.edit import edit_retention as edit_edit_retention
 from towerkit.edit import edit_sublimit as edit_edit_sublimit
-from towerkit.edit import heal_follows, slugify, unique_id
+from towerkit.edit import heal_follows, heal_premiums, slugify, unique_id
 from towerkit.edit import move_line as edit_move_line
 from towerkit.edit import remove_layer as edit_remove_layer
 from towerkit.edit import remove_line as edit_remove_line
@@ -1300,6 +1300,7 @@ def split_layer(
     address lines, not layers, so they travel by construction.
     """
     from towerkit.edit import set_applies_to as edit_set_applies_to
+    from towerkit.edit import set_field as edit_set_field
     from towerkit.money import format_money
 
     def mutate(program: Program) -> None:
@@ -1373,7 +1374,19 @@ def split_layer(
         except KeyError as exc:  # pragma: no cover - keeping ⊆ applies_to
             raise ValueError(str(exc).strip("\"'")) from exc
         if layer.premium is not None:
-            layer.premium = kept
+            # THROUGH towerkit's choke point, for the reason `update_layer`
+            # states beside the identical write: a layer whose markets state
+            # their own premiums has a premium that IS their sum, and
+            # `edit._guard_premium` is what refuses to let it be typed over.
+            # This was a bare setattr, so the split form performed the write
+            # the inline cell refuses — and since `heal_premiums` re-derives
+            # the sum straight afterwards, the typed figure vanished while the
+            # new slab kept the half the broker had divided off, inventing
+            # money the tower never had. The refusal names the way out (clear
+            # a market premium and the layer goes back to a figure you type).
+            edit_set_field(
+                program, "layer", "premium", kept, target=layer.id,
+            )
 
     return _mutate(conn, placement_id, mutate)
 
@@ -1942,6 +1955,15 @@ def set_participant_premium(
     """
     from towerkit.edit import set_participant_premium as edit_set_premium
 
+    # towerkit's ADVISORIES, kept rather than dropped. They name the seats it
+    # froze and the sum it set — the two numbers of the three that the caller
+    # did not send — and this wrapper discarded them, so the web previewed
+    # them and MCP said nothing at all, while `program_market_premium`'s own
+    # docstring promises "two are ones you did not send" (2026-08-24). A
+    # consequence has to reach every surface: they ride out as warnings, which
+    # both surfaces already render.
+    advisories: list[Any] = []
+
     def mutate(program: Program) -> None:
         layer = _find_layer(program, layer_id)
         index = next(
@@ -1951,14 +1973,22 @@ def set_participant_premium(
         if index is None:
             seated = ", ".join(p.carrier for p in layer.participants) or "nobody"
             raise ValueError(f"{carrier} is not on {layer.name} — {seated} is")
-        edit_set_premium(
-            program,
-            layer_id,
-            index,
-            cents_to_dollars(premium_cents) if premium_cents is not None else None,
+        advisories.extend(
+            edit_set_premium(
+                program,
+                layer_id,
+                index,
+                cents_to_dollars(premium_cents) if premium_cents is not None else None,
+            )
         )
 
-    return _mutate(conn, placement_id, mutate)
+    diags = _mutate(conn, placement_id, mutate)
+    if diags.ok:
+        # FIRST, and only on a write that happened: an advisory describes what
+        # this edit did, so it leads the standing warnings a program carries —
+        # and after a refusal it would describe a write that never landed.
+        diags.items[:0] = advisories
+    return diags
 
 
 def premium_preview(
@@ -2010,6 +2040,79 @@ def premium_preview(
                 "carrier": part.carrier,
                 "share_pct": part.share_bps / 100,
                 "premium_cents": _cents_or_none(layer.premium_for(part)),
+                "typed": part.carrier == carrier,
+            }
+            for part in layer.participants
+        ],
+    }
+
+
+def premium_clear_preview(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    carrier: str,
+) -> dict[str, Any]:
+    """What CLEARING this market's premium would do to the whole layer.
+
+    Blanking one cell clears EVERY seat: towerkit's rule is all-or-nothing,
+    because a seat left deriving beside stated ones derives from a base that
+    already contains their money. So the blank is the mirror of the first
+    override — it moves every figure in the table and the broker typed none of
+    them — and it arrives on BLUR, which makes it the easier of the two to
+    trigger by accident. It went in unannounced while two docstrings said a
+    confirm names it first (2026-08-24).
+
+    The layer KEEPS the figure it had, which is the last sum; each seat goes
+    back to its share of it. Derived here through `preview`, like its sibling,
+    so no surface multiplies money.
+    """
+    def mutation(program: Program) -> None:
+        layer = _find_layer(program, layer_id)
+        index = next(
+            (i for i, p in enumerate(layer.participants) if p.carrier == carrier),
+            None,
+        )
+        if index is None:
+            seated = ", ".join(p.carrier for p in layer.participants) or "nobody"
+            raise ValueError(f"{carrier} is not on {layer.name} — {seated} is")
+        from towerkit.edit import set_participant_premium as edit_set_premium
+
+        edit_set_premium(program, layer_id, index, None)
+
+    before = linked_program(conn, placement_id).program
+    stated: dict[str, int | None] = {}
+    if before is not None:
+        current = next(
+            (ly for ly in before.layers if ly.id == layer_id), None
+        )
+        if current is not None:
+            stated = {
+                part.carrier: _cents_or_none(part.premium)
+                for part in current.participants
+            }
+    program, diags = preview(conn, placement_id, mutation)
+    if program is None:
+        return {"ok": False, "errors": [d.message for d in diags.errors]}
+    layer = _find_layer(program, layer_id)
+    return {
+        "ok": diags.ok,
+        "errors": [d.message for d in diags.errors],
+        "warnings": _new_warnings(conn, placement_id, diags),
+        "carrier": carrier,
+        "layer_name": layer.name,
+        "premium_cents": _cents_or_none(layer.premium),
+        "clearing": True,
+        "seats": [
+            {
+                "carrier": part.carrier,
+                "share_pct": part.share_bps / 100,
+                # What the seat WOULD show: its share of the layer premium,
+                # which is where every one of them lands once none is stated.
+                "premium_cents": _cents_or_none(layer.premium_for(part)),
+                # And what it is showing NOW, so the sentence can name the
+                # figure being given up rather than only the one replacing it.
+                "was_cents": stated.get(part.carrier),
                 "typed": part.carrier == carrier,
             }
             for part in layer.participants
@@ -2553,6 +2656,44 @@ def program_lines_of(program: Program | None) -> list[tuple[str, str]]:
     return [(line.id, line.name) for line in program.lines]
 
 
+def qualified_layer_names(
+    layers: list[dict[str, Any]], line_named: dict[str, str]
+) -> dict[str, str]:
+    """`{layer_id: the name to show a person choosing between these layers}` —
+    the name as it stands, qualified with its line of coverage only where the
+    name alone is ambiguous.
+
+    THE ONE HOME FOR THAT RULE. Lines of coverage each arrive with a layer
+    called "To be placed", so a program with three of them offers three
+    identical options — and the same collision on two surfaces is two
+    different bugs: on the Program tab's "same policy as" picker the write was
+    addressed by id, so a mis-click only confused (fixed 866c43c); on the
+    pipeline's bind offer the id is also correct for whichever option is
+    clicked, so a mis-click writes a real participation on the WRONG line of
+    coverage, in a revertible batch nobody knows to revert.
+
+    Only the AMBIGUOUS names are qualified. Adding the line to every option
+    would make the common case — distinct names — noisier for a problem it
+    does not have.
+
+    A layer spanning several lines is qualified by the FIRST, which is the one
+    the rail groups it under; two layers sharing a name AND a first line stay
+    identical here, and `test_no_select_offers_the_same_label_twice` is where
+    that would surface.
+    """
+    counts: dict[str, int] = {}
+    for row in layers:
+        counts[str(row["name"])] = counts.get(str(row["name"]), 0) + 1
+    out: dict[str, str] = {}
+    for row in layers:
+        name = str(row["name"])
+        if counts[name] > 1 and row["applies_to"]:
+            line = row["applies_to"][0]
+            name = f"{name} ({line_named.get(line, line)})"
+        out[str(row["id"])] = name
+    return out
+
+
 def _mutate(
     conn: sqlite3.Connection, placement_id: str, mutation: Callable[[Program], None]
 ) -> Diagnostics:
@@ -2604,6 +2745,7 @@ def preview(
         diags.error("conflict", str(exc))
         return None, diags
     heal_follows(program)
+    heal_premiums(program)
     return program, validate_program(program)
 
 
@@ -2842,6 +2984,15 @@ def write_through(
     # where the excess sits. Healing here means one thing is validated, dumped
     # and re-projected: the healed program.
     heal_follows(program)
+    # AND THE PREMIUM SUM, for the same reason and in the same place. A layer
+    # whose markets all state their own premium IS their sum
+    # (towerkit.edit.heal_premiums), and `set_participant_premium` holds that
+    # only while IT is the writer — unbinding a market left the layer claiming
+    # $1,960,000 with one seat paid $520,000, and the phantom rode into
+    # `placement.total_premium` below while `proj_participant` stayed right.
+    # A heal here fixes every writer, present and future; re-summing at each
+    # mutation site fixes only the ones somebody remembered.
+    heal_premiums(program)
     check = validate_program(program)
     if not check.ok:
         return check

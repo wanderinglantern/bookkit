@@ -3787,8 +3787,40 @@ def test_a_second_edit_commits_in_place_without_previewing(app_and_org):
     assert fresh["participants"][index]["premium_cents"] == 53_000_000
 
 
-def test_blank_clears_the_whole_layer_back_to_a_split(app_and_org):
-    """towerkit's all-or-nothing rule, not a web decision."""
+def test_a_blank_confirms_before_it_clears_the_whole_layer(app_and_org):
+    """THE MIRROR OF THE FIRST OVERRIDE, and it went in unannounced.
+
+    Blanking one cell clears the stated premium on EVERY market — towerkit's
+    all-or-nothing rule, not a web decision — and each seat lands on a share of
+    the layer premium instead. The broker typed none of those figures, and the
+    blank arrives on BLUR, so a cell tabbed through empty wrote it. Two
+    docstrings said a confirm named it first; no confirm route existed
+    (surface sweep, 2026-08-24).
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+    client.post(
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "520000.00", "commit": "1"},
+    )
+
+    blanked = client.post(
+        _premium_cell(org, placement, layer["id"], index), data={"premium_cents": ""}
+    )
+
+    assert "unsaved edit" in blanked.text, "the clear went in with no confirm"
+    assert "every" in blanked.text, "the confirm does not say it clears them all"
+    fresh = next(
+        row for row in sync.layer_details(conn, placement.id) if row["id"] == layer["id"]
+    )
+    assert all(seat["premium_stated"] for seat in fresh["participants"]), (
+        "the preview wrote"
+    )
+
+
+def test_the_confirmed_blank_clears_the_whole_layer_back_to_a_split(app_and_org):
+    """And the write itself is unchanged: all of them, back to a split."""
     client, org = app_and_org
     conn = client.app.state.conn
     placement, layer, index = _shared_seat(conn, org)
@@ -3798,7 +3830,8 @@ def test_blank_clears_the_whole_layer_back_to_a_split(app_and_org):
     )
 
     cleared = client.post(
-        _premium_cell(org, placement, layer["id"], index), data={"premium_cents": ""}
+        _premium_cell(org, placement, layer["id"], index),
+        data={"premium_cents": "", "commit": "1"},
     )
 
     assert cleared.status_code == 200
@@ -3806,6 +3839,22 @@ def test_blank_clears_the_whole_layer_back_to_a_split(app_and_org):
         row for row in sync.layer_details(conn, placement.id) if row["id"] == layer["id"]
     )
     assert not any(seat["premium_stated"] for seat in fresh["participants"])
+
+
+def test_a_blank_on_a_layer_nobody_has_stated_still_commits_in_place(app_and_org):
+    """The confirm is about UNDOING stated premiums. A layer with none has
+    nothing to clear, and making the broker confirm a write that changes
+    nothing is the dead-affordance bug in the other direction."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer, index = _shared_seat(conn, org)
+
+    blanked = client.post(
+        _premium_cell(org, placement, layer["id"], index), data={"premium_cents": ""}
+    )
+
+    assert "unsaved edit" not in blanked.text
+    _assert_panel_swap(blanked, placement.id)
 
 
 def test_the_layer_premium_says_it_comes_from_the_markets(app_and_org):
@@ -3875,10 +3924,28 @@ def test_the_stated_premium_reaches_the_projection(app_and_org):
 # form you were in (2026-08-24).
 
 
+def _rail(html: str) -> str:
+    """The rail alone. Asserting against the whole page passes with the rail's
+    own control deleted, because the band above carries the same URLs."""
+    return html.split('class="structure-index"', 1)[1].split("</nav>", 1)[0]
+
+
 def _rail_groups(html: str) -> list[str]:
+    """The line of coverage each group is headed by. The name is the chip's
+    inline cell now — the rail renders the same `_line_chip.html` the band
+    does, so renaming and removing a line are possible where it is read —
+    and a group with no line (the 'unknown line' pile) still prints static
+    text."""
     import re
 
-    return re.findall(r'class="index-group-name mono">([^<]*)', html)
+    rail = _rail(html)
+    named = [
+        chunk.strip()
+        for chunk in re.findall(
+            r'line-name.*?<span class="is-editable">(.*?)</span>', rail, re.S
+        )
+    ]
+    return named or re.findall(r'class="index-group-name mono">([^<]*)', rail)
 
 
 def test_the_rail_groups_by_line_of_coverage_in_column_order(app_and_org):
@@ -3891,9 +3958,7 @@ def test_the_rail_groups_by_line_of_coverage_in_column_order(app_and_org):
 
     page = client.get(f"/accounts/{org.ref}/program?layer=").text
 
-    assert [g.split(" · ")[0] for g in _rail_groups(page)] == [
-        name for _, name in lines
-    ]
+    assert _rail_groups(page) == [name for _, name in lines]
 
 
 def test_a_spanning_layer_is_listed_once(app_and_org):
@@ -4113,9 +4178,8 @@ def test_the_rail_can_reorder_lines_of_coverage(app_and_org):
     # In the RAIL, not merely somewhere on the page: the chips in the band
     # above have always carried this URL, so asserting the URL alone would
     # pass with the rail's own control deleted.
-    rail = page.split('class="structure-index"', 1)[1].split("</nav>", 1)[0]
-    assert "index-group-move" in rail, "the rail offers no move control"
-    assert f"/lines/{line_id}/move" in rail
+    rail = _rail(page)
+    assert f"/lines/{line_id}/move" in rail, "the rail offers no move control"
 
     moved = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/lines/{line_id}/move",
@@ -4138,3 +4202,89 @@ def test_the_ends_are_disabled_not_hidden(app_and_org):
 
     assert page.count("chip-arrow") >= 2
     assert "disabled" in page
+
+
+def test_a_program_with_lines_and_no_layers_still_says_what_is_wrong(app_and_org):
+    """A GAP BETWEEN THE PLAN AND THE CODE (surface sweep, 2026-08-24).
+
+    `_index_groups` returned None when a program had no layers, and the
+    workbench gate in `_layers_panel.html` also required a worksheet — so a
+    linked file with lines and nothing on them rendered neither the
+    diagnostics block nor either terms strip, while towerkit reported one
+    `line-empty` ERROR per line. The one file the app knows is broken was the
+    one it said nothing about.
+
+    The plan for the rail said the opposite in as many words: "a line with no
+    layers still gets its group, with a count of zero: a rail that hid the
+    line would hide the thing the diagnostics point at."
+
+    A broker cannot reach this state from the app — removing the last layer of
+    a line is refused by `line-empty` — so it takes a hand edit, towerkit's
+    editor or MCP. It is exactly the state somebody arrives at the web to
+    understand.
+    """
+    from towerkit.model import dump_program, load_program
+    from towerkit.validate import validate_program
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _linked(conn, org)[0]
+    path = _file_of(conn, placement)
+
+    program = load_program(path)
+    program.layers = []
+    dump_program(program, path)
+    codes = {d.code for d in validate_program(load_program(path)).errors}
+    assert "line-empty" in codes, "the fixture no longer produces the broken state"
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+    section = page[page.index(f'id="program-{placement.id}"') :]
+
+    assert "program-diagnostics" in section, (
+        "the program says nothing about the errors towerkit reports on it"
+    )
+    assert "no layers cover" in section, "the line-empty errors are not printed"
+    assert "structure-index" in section, "the rail is gone, so are its lines"
+    for line in load_program(path).lines:
+        assert line.name in section, f"{line.name} is missing from the rail"
+    assert "+ retention" in section and "+ sublimit" in section, (
+        "the terms strips went with the workbench — the retentions and "
+        "sublimits are still on the file"
+    )
+    assert "Add the first layer" in section
+
+
+def test_the_rail_can_rename_relabel_and_remove_a_line(app_and_org):
+    """THE AFFORDANCES MOVED HOUSE WITH THE STRUCTURE (surface sweep,
+    2026-08-24). The rail is where a broker works the tower, and it carried
+    only the two move arrows: rename, column label and remove stayed on the
+    chips in the band above, exactly the shape of the bug Grant reported about
+    reordering. The routes existed the whole time.
+
+    Asserted inside the RAIL, because the band above carries the same URLs and
+    a page-wide scan would pass with every one of these deleted.
+    """
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, _ = _first_layer(conn, org)
+    line_id, name = sync.program_lines(conn, placement.id)[0]
+
+    rail = _rail(client.get(f"/accounts/{org.ref}/program").text)
+
+    assert f"/lines/{line_id}/cell/name/edit" in rail, "the rail cannot rename a line"
+    assert f"/field/line/{line_id}:_/abbr/edit" in rail, (
+        "the rail cannot set the column label"
+    )
+    assert f"/lines/{line_id}/remove" in rail, "the rail cannot remove a line"
+
+    # and the removal actually works from here, confirm and all
+    confirm = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/lines/{line_id}/remove"
+    )
+    assert confirm.status_code == 200
+    assert f"remove {name}?" in confirm.text
+    removed = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/lines/{line_id}/remove"
+    )
+    assert removed.status_code == 200
+    assert line_id not in [lid for lid, _ in sync.program_lines(conn, placement.id)]

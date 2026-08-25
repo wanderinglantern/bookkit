@@ -374,3 +374,83 @@ async def test_two_renewals_of_one_program_do_not_collide_as_row_keys(
         # every pane AFTER the renewals table still filled — the real symptom
         assert app.screen.query_one("#renewals-table", ListTable).row_count > 0
         assert app.screen.query_one("#stale-table", ListTable).row_count > 0
+
+
+def test_the_towers_page_and_the_service_agree_on_the_renewal_date(
+    snapshot_db: Path,
+) -> None:
+    """ONE FACT, ONE ANSWER. `routes/towers.py` derived the renewal date with
+    its own `min(ends)` — uncapped — while `renewals.renewal_on` caps the
+    earliest line end by the program period end. On a program whose layers are
+    written past their own period (a data error, and exactly what the cap
+    exists for) the page said 281 days where the service said 20, and the
+    page's `renewing` filter measured off the wrong one (2026-08-24).
+
+    Built here rather than hoped for: the seeded book's layers all end inside
+    their program period, so both answers agree on it and a scan over it would
+    prove nothing.
+    """
+    from fastapi.testclient import TestClient
+    from towerkit.model import Period, dump_program, load_program
+
+    from bookkit import db, sync
+    from bookkit.web.app import create_app
+
+    conn = db.connect(snapshot_db)
+    placement = next(
+        p
+        for org in orgs.list_orgs(conn, kind="client")
+        for p in placements.for_org(conn, org.id)
+        if p.program_path
+    )
+    path = sync.program_file(conn, placement)
+    program = load_program(path)
+    past_the_end = date.fromisoformat(placement.period_to).replace(
+        year=date.fromisoformat(placement.period_to).year + 1
+    )
+    for layer in program.layers:
+        layer.period = Period(start=program.period.start, end=past_the_end)
+    dump_program(program, path)
+    sync.project(conn, path)
+
+    fresh = placements.get(conn, placement.id)
+    ends = [end for _, end in sync.line_ends(fresh.program_path, conn)]
+    assert min(ends) > date.fromisoformat(fresh.period_to), (
+        "the fixture no longer writes the layers past their program's period"
+    )
+
+    assert renewals.renewal_on(fresh, ends) == date.fromisoformat(fresh.period_to)
+
+    conn.close()
+    app = create_app(snapshot_db)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        # The card's own row, not the rendered sentence: a program carrying a
+        # validator error prints THAT instead of its renewal date, so a scan
+        # of the page text would assert nothing while the sort key and the
+        # `renewing` filter both still measured off the wrong date.
+        client.get("/towers")
+        entries = _towers_entries(app)
+    row = next(e for e in entries if e["placement"].id == placement.id)
+    assert row["renewal_on"] == fresh.period_to, (
+        "the Towers page counts to a date past the program's own period — "
+        f"{row['renewal_on']} against the service's {fresh.period_to}"
+    )
+
+
+def _towers_entries(app):
+    """The Towers queue's own rows, built through the route's builder with a
+    request carrying the app's connection — what the page sorts and filters
+    on, before any of it becomes words."""
+    from starlette.requests import Request
+
+    from bookkit.web.routes.towers import _entries
+
+    scope = {
+        "type": "http",
+        "app": app,
+        "headers": [],
+        "method": "GET",
+        "path": "/towers",
+        "query_string": b"",
+    }
+    return _entries(Request(scope))

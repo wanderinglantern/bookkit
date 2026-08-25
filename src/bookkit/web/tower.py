@@ -119,9 +119,41 @@ def context(web: WebTower) -> dict[str, Any]:
             {"label": g.label, "left": pct(g.x0 / span), "width": pct((g.x1 - g.x0) / span)}
             for g in web.groups
         ],
-        "chevrons": [_rect(r, span) for r in web.chevrons],
+        "chevrons": [_chevron(r, span) for r in web.chevrons],
         "retention_band": pct(web.retention_band),
     }
+
+
+def _chevron(rect: Any, span: float) -> dict[str, Any]:
+    """One statutory chevron band: its box, plus the caret polyline to draw
+    in it.
+
+    THE SHAPE IS towerkit's. `layout.chevron_points` is where the caret
+    proportion lives — a tooth roughly as wide as it is tall, the mark Grant
+    draws by hand as a literal `^` — and ascii.py and mpl_program.py both
+    consume it. The panel carried the RECT and drew nothing: `_tower_panel`
+    never read it and app.css had no rule for it, so a statutory layer drew
+    closed-topped in the browser and open-topped in every export, which is the
+    one thing the agreement rule exists to stop (dead since 356ecc9, found
+    2026-08-24).
+
+    The points come back in the band's OWN box, 0..100 on both axes with y
+    flipped for SVG, so the template can place one `<svg viewBox="0 0 100
+    100" preserveAspectRatio="none">` at the rect and let it stretch: the box
+    IS the layout's rect, so stretching to it is what preserves the
+    proportion the layout chose. This is the same carrying `_rect` does — no
+    shape is invented here.
+    """
+    from towerkit.layout import chevron_points
+
+    box: dict[str, Any] = dict(_rect(rect, span))
+    points = chevron_points(rect)
+    box["points"] = " ".join(
+        f"{round((x - rect.x0) / rect.width * 100, 4)},"
+        f"{round((rect.y1 - y) / rect.height * 100, 4)}"
+        for x, y in points
+    )
+    return box
 
 
 def _rect(rect: Any, span: float) -> dict[str, float]:

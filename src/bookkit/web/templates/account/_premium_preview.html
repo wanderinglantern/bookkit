@@ -11,6 +11,13 @@
    Only the FIRST one previews. Once every seat is stated, a later edit moves
    only the sum and commits in place like any other cell.
 
+   AND THE BLANK, which is the mirror: it clears every seat back to a share of
+   the layer's premium, and the broker typed none of those figures either.
+   `preview.clearing` switches the sentence; everything else about the block —
+   the table, Save, Discard, the refusal branch — is the same act read the
+   other way, and one template is what keeps them agreeing about what a
+   preview looks like.
+
    Save commits through the same cell route a blur-commit would have used,
    with commit=1; Discard re-selects the layer and nothing was written. A
    refusal shows towerkit's words and offers no Save — previewing an edit the
@@ -19,14 +26,29 @@
 <div class="ws-preview" role="status">
   <div class="ws-block-head">
     <span class="detail-label">unsaved edit</span>
-    <span class="ws-preview-change">{{ seat.carrier }} premium → {{ typed_label }}</span>
-    <span class="ws-hint ws-preview-where">states every market on
+    <span class="ws-preview-change">
+      {%- if preview.clearing -%}
+        clear {{ seat.carrier }}'s stated premium
+      {%- else -%}
+        {{ seat.carrier }} premium → {{ typed_label }}
+      {%- endif -%}
+    </span>
+    <span class="ws-hint ws-preview-where">
+      {{ "clears every market on" if preview.clearing else "states every market on" }}
       {{ preview.layer_name }} · one revertible batch</span>
   </div>
   {% if preview.ok %}
-    <p class="ws-preview-says">Every market on this layer is stated at the
-      figure it is showing now, and the layer's premium becomes
-      <strong>{{ format_cents(preview.premium_cents) }}</strong> — their sum.</p>
+    {% if preview.clearing %}
+      <p class="ws-preview-says">Blank clears the stated premium on
+        <strong>every</strong> market here, not just this one — towerkit's rule
+        is all or none. The layer keeps
+        <strong>{{ format_cents(preview.premium_cents) }}</strong>, its last
+        sum, and each market goes back to a share of it.</p>
+    {% else %}
+      <p class="ws-preview-says">Every market on this layer is stated at the
+        figure it is showing now, and the layer's premium becomes
+        <strong>{{ format_cents(preview.premium_cents) }}</strong> — their sum.</p>
+    {% endif %}
     <table class="ws-preview-seats">
       <thead>
         <tr><th>market</th><th class="num">share</th><th class="num">premium</th></tr>
@@ -37,8 +59,12 @@
             <td>{{ row.carrier }}</td>
             <td class="num mono">{{ '%g' % row.share_pct }}%</td>
             <td class="num mono">
+              {%- if preview.clearing and row.was_cents is not none %}
+                <span class="ws-preview-was">{{ format_cents(row.was_cents) }}</span>
+                →
+              {%- endif %}
               {{ format_cents(row.premium_cents) if row.premium_cents is not none else "—" }}
-              {% if not row.typed %}<span class="ws-hint">held</span>{% endif %}
+              {% if not row.typed and not preview.clearing %}<span class="ws-hint">held</span>{% endif %}
             </td>
           </tr>
         {% endfor %}
@@ -48,10 +74,10 @@
       <p class="ws-preview-warning">⚠ {{ warning }}</p>
     {% endfor %}
     <div class="ws-preview-actions">
-      <button type="button" class="btn btn-primary"
+      <button type="button" class="btn {{ 'btn-quiet-danger' if preview.clearing else 'btn-primary' }}"
               hx-post="{{ commit_action }}"
               hx-vals='{"premium_cents": "{{ typed }}", "commit": "1"}'
-              hx-target="closest .ws-preview" hx-swap="outerHTML">Save</button>
+              hx-target="closest .ws-preview" hx-swap="outerHTML">{{ "Clear them" if preview.clearing else "Save" }}</button>
       <button type="button" class="btn"
               hx-get="{{ select_url }}">Discard</button>
     </div>

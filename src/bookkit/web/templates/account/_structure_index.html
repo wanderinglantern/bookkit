@@ -25,32 +25,45 @@
   </div>
 
   {% for group in index.groups %}
-    {# The group header is a row, not one button: collapsing and reordering
-       are two acts and a button inside a button is not markup. The move
-       controls are the LINE's column order — the same write the chips in the
-       band make, so there is one definition and two doors. #}
-    <div class="index-group-row">
+    {# The group header is a row, not one button: collapsing and working the
+       line are two acts and a button inside a button is not markup.
+
+       THE LINE'S CONTROLS ARE THE CHIP, not a copy of it. The rail could
+       reorder a line and nothing else — no rename, no column label, no remove
+       — because those affordances stayed at the band above when the place a
+       structure is worked moved down here. That is the same bug Grant
+       reported about reordering, one surface later (2026-08-24). Including
+       `_line_chip.html` means one partial, one set of routes and two doors;
+       the chip carries the NAME, so the collapse control keeps the glyph and
+       the count and says which line it is in its title.
+
+       The "unknown line" group has no chip: it is not a line, it is the
+       layers whose line the file does not declare, and there is nothing to
+       rename or remove. #}
+    <div class="index-group-row{% if group.closed %} is-closed{% endif %}">
       <button type="button" class="index-group" hx-get="{{ group.toggle_url }}"
               aria-expanded="{{ 'false' if group.closed else 'true' }}"
+              aria-label="{{ 'expand' if group.closed else 'collapse' }} {{ group.name }}"
               title="{{ 'expand' if group.closed else 'collapse' }} {{ group.name }}">
         <span class="index-glyph mono" aria-hidden="true">{{ "▸" if group.closed else "▾" }}</span>
-        <span class="index-group-name mono">{{ group.name }} · {{ group.label }}</span>
+        {% if not group.chip %}
+          <span class="index-group-name mono">{{ group.name }} · {{ group.label }}</span>
+        {% endif %}
+      </button>
+      {% if group.chip %}{{ group.chip | safe }}{% endif %}
+      {% if group.bucket %}
+        {# The BUCKET, where the file sets one. It used to ride in the header
+           text beside the name; the chip carries the name now, and a group
+           label that says something must not be the thing that gets dropped. #}
+        <span class="index-group-bucket mono">{{ group.bucket }}</span>
+      {% endif %}
+      {# The count is its own toggle rather than text: it sat inside the one
+         header button before the chip arrived, and reading order — name at
+         the left, count at the right — is worth two doors onto one act. #}
+      <button type="button" class="index-group-count" hx-get="{{ group.toggle_url }}"
+              tabindex="-1" aria-hidden="true">
         <span class="index-count mono">{{ group.count }}</span>
       </button>
-      {% if group.move_base %}
-        <span class="index-group-move">
-          {# Disabled at the ends rather than hidden: a control that vanishes
-             makes the reader wonder where it went. #}
-          <button type="button" class="chip-arrow" {% if group.first %}disabled{% endif %}
-                  title="Move {{ group.name }} left — column order in the drawing"
-                  aria-label="Move {{ group.name }} left"
-                  hx-post="{{ group.move_base }}" hx-vals='{"delta": "-1"}'>&#9666;</button>
-          <button type="button" class="chip-arrow" {% if group.last %}disabled{% endif %}
-                  title="Move {{ group.name }} right — column order in the drawing"
-                  aria-label="Move {{ group.name }} right"
-                  hx-post="{{ group.move_base }}" hx-vals='{"delta": "1"}'>&#9656;</button>
-        </span>
-      {% endif %}
     </div>
     {% if not group.closed %}
       {% for row in group.rows %}

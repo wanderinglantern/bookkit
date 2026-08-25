@@ -8,6 +8,7 @@ exists (or it's marked lapsed, the deliberate let-it-go)."""
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -140,17 +141,32 @@ def _line_ends(
     return cache[program_path]
 
 
-def _renewal_on(placement: Placement, ends: tuple[tuple[str, str], ...]) -> str:
-    """The date this placement FIRST needs attention: the earliest line end
-    when one is known, capped by the program period end.
+def renewal_on(placement: Placement, ends: Sequence[date]) -> date:
+    """THE ONE DEFINITION of the date a placement first needs attention: the
+    earliest line end when one is known, CAPPED by the program period end.
 
-    Still per-placement, and still what `next_for_org` and the account header
-    print. `_events` below is what splits a placement into its several
-    renewals; this is the soonest of them.
+    Public because it was derived twice. `routes/towers.py` had its own
+    `min(ends)` with no cap, so on a program whose layers are written past
+    their own period — a data error, and exactly what the cap exists for — the
+    Towers page said 281 days where the service said 20, and its `renewing`
+    filter measured off the wrong one (2026-08-24). A layer counted to past
+    its program's end pushes a renewal off the attention window instead of
+    surfacing it.
+
+    Takes dates, because the two callers hold dates: the surfaces converting
+    to and from ISO around one rule is how the second copy started.
     """
-    if ends:
-        return min(ends[0][1], placement.period_to)
-    return placement.period_to
+    period_to = date.fromisoformat(placement.period_to)
+    return min(min(ends), period_to) if ends else period_to
+
+
+def _renewal_on(placement: Placement, ends: tuple[tuple[str, str], ...]) -> str:
+    """`renewal_on` in this module's own ISO currency — what `next_for_org`
+    and the account header print. `_events` below is what splits a placement
+    into its several renewals; this is the soonest of them."""
+    return renewal_on(
+        placement, [date.fromisoformat(end) for _, end in ends]
+    ).isoformat()
 
 
 def _events(

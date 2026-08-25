@@ -605,13 +605,18 @@ class MarketDetailScreen(Screen):
             # status, because a QUOTED tower is exposure worth seeing but is
             # not placed business — rendering both alike had this screen
             # reading $650K where the book's bound-only total read nothing
-            "account", "expiry", right("due in"), "program", "layer",
+            "account", "renews", right("due in"), "program", "layer",
             "status", "as written", right("share"), right("premium"),
         )
         for row in exposure.for_market(conn, market.id, days=90):
-            days = days_until(row.period_to)
+            # The date the window is measured to — `renewal_on`, the earliest
+            # LINE end — not the program period this printed beside it. One
+            # line, because the service now carries the right date and a
+            # retired surface disagreeing with the live one is worse than the
+            # zero effort it costs to keep them saying the same thing.
+            days = days_until(row.renewal_on)
             table.add_row(
-                row.org_name, date_text(row.period_to, days), days_text(days),
+                row.org_name, date_text(row.renewal_on, days), days_text(days),
                 row.program_name, row.layer_name,
                 status_text(row.status),
                 row.carrier if row.carrier != market.name else dash(),

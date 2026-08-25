@@ -16,13 +16,22 @@
     {% if rows %}
       <div class="table-scroll">
         <table class="rows rows-fit">
-          <thead><tr><th>Account</th><th>Open items</th><th>Programs</th></tr></thead>
+          <thead><tr><th>Account</th><th>Open items</th><th>Work</th><th>Programs</th></tr></thead>
           <tbody>
             {% for row in rows %}
               <tr>
                 <td class="prose">{{ account.account_link(accounts, row.org_id, "program") }}</td>
                 <td class="prose">
                   <a class="row-action-btn" href="/accounts/{{ row.ref }}/export/open-items.xlsx">Open items XLSX</a>
+                </td>
+                {# The Work tab's own workbook (routes/work.py). This drawer
+                   exists so no download is reachable only from the tab that
+                   happens to serve it, and this was the one it missed — the
+                   same seam as the deliverable beside it
+                   (`export_open_items.write_work`), so the two can never
+                   disagree about what an open item is. #}
+                <td class="prose">
+                  <a class="row-action-btn" href="/accounts/{{ row.ref }}/export/work.xlsx">Work XLSX</a>
                 </td>
                 <td class="prose">
                   {% for program in row.programs %}

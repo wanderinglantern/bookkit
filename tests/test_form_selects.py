@@ -178,6 +178,18 @@ def _select_labels(html: str) -> dict[str, list[str]]:
     return out
 
 
+def _dupes(html: str) -> dict[str, list[str]]:
+    """field -> the labels it offers more than once. Blank options excluded:
+    every select renders exactly one, on purpose."""
+    out: dict[str, list[str]] = {}
+    for field, labels in _select_labels(html).items():
+        real = [label for label in labels if label]
+        repeated = sorted({label for label in real if real.count(label) > 1})
+        if repeated:
+            out[field] = repeated
+    return out
+
+
 def test_no_select_offers_the_same_label_twice(app):
     """Over the Program tab with a shape that MAKES names repeat: two lines of
     coverage, each arriving with its own 'To be placed' layer."""
@@ -213,15 +225,79 @@ def test_no_select_offers_the_same_label_twice(app):
             page = client.get(
                 f"/accounts/{org.ref}/program?layer={row['id']}"
             ).text
-            for field, labels in _select_labels(page).items():
-                checked += 1
-                real = [label for label in labels if label]
-                dupes = {label for label in real if real.count(label) > 1}
-                if dupes:
-                    offenders.append(f"{field} on layer {row['id']} -> {sorted(dupes)}")
+            checked += len(_select_labels(page))
+            for field, dupes in _dupes(page).items():
+                offenders.append(f"{field} on layer {row['id']} -> {dupes}")
 
     assert checked, "no selects found on the program tab — the scan is broken"
     assert not offenders, (
         "these selects ask a question with two identical answers — qualify the "
         f"ambiguous options with what tells them apart: {sorted(set(offenders))}"
+    )
+
+
+# --- and the offer the scan above structurally CANNOT see ---------------------
+#
+# A GATE IS ONLY AS GOOD AS WHERE IT LOOKS. The scan above walks
+# `/accounts/{ref}/program` pages, so it found the "same policy as" collision
+# and was blind to the identical one on the pipeline's bind offer — which is
+# the WORSE of the two: there the write is addressed by id and the id is
+# correct for whichever option is clicked, so a mis-click puts a real
+# participation on the wrong line of coverage through sync.add_participant, in
+# a revertible batch nobody knows to revert.
+#
+# This drives the real route: a market quoted on a linked placement, marked
+# bound, which is what makes the app hand back the bind offer.
+
+
+def test_the_pipeline_bind_offer_tells_two_to_be_placed_layers_apart(app):
+    from bookkit import sync
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import placements as placements_repo
+    from bookkit.repo import submissions as submissions_repo
+
+    conn = app.state.conn
+    found = None
+    for org in orgs_repo.list_orgs(conn, kind="client"):
+        for placement in placements_repo.for_org(conn, org.id):
+            if not placement.program_path:
+                continue
+            live = [
+                sub
+                for sub in submissions_repo.for_placement(conn, placement.id)
+                if str(sub.status) == "quoted"
+            ]
+            if live:
+                found = (org, placement, live[0])
+                break
+        if found:
+            break
+    assert found, "the seeded book has no quoted submission on a linked placement"
+    org, placement, submission = found
+
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        for name in ("Workers Compensation", "Employers Liability"):
+            client.post(
+                f"/accounts/{org.ref}/program/{placement.id}/lines",
+                data={"name": name},
+            )
+        repeated = [row["name"] for row in sync.layer_details(conn, placement.id)]
+        assert repeated.count("To be placed") > 1, (
+            "the fixture no longer produces a repeated layer name — this scan "
+            "has nothing to catch"
+        )
+
+        offer = client.post(
+            f"/accounts/{org.ref}/pipeline/submissions/{submission.id}/response",
+            data={"status": "bound", "response_on": "2026-08-24"},
+        ).text
+
+    selects = _select_labels(offer)
+    assert "layer_id" in selects, (
+        "the bind offer did not render — this test is asserting nothing "
+        f"(fields seen: {sorted(selects)})"
+    )
+    assert not _dupes(offer), (
+        "the bind offer asks which layer with two identical answers, and the "
+        f"mis-click writes a real participation: {_dupes(offer)}"
     )
