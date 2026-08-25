@@ -440,7 +440,10 @@ def market_detail(request: Request, ref: str) -> HTMLResponse:
         {
             "org_ref": r.org_ref,
             "org_name": r.org_name,
-            "period_to": r.period_to,
+            # THE DATE THE 90 DAYS ARE COUNTED TO. This printed `period_to`
+            # beside a heading that says "renewing next 90 days", which is the
+            # same mismatch CLAUDE.md records four surfaces making.
+            "renewal_on": r.renewal_on,
             "program_name": r.program_name,
             "layer_name": r.layer_name,
             "status": r.status,

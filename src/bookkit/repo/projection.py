@@ -93,12 +93,24 @@ def carriers(conn: sqlite3.Connection) -> list[str]:
 def carrier_exposure(
     conn: sqlite3.Connection,
     carriers: list[str],
-    expiring_from: str,
-    expiring_to: str,
+    live_from: str,
 ) -> list[sqlite3.Row]:
     """Every account where any of these carrier strings (a market's name plus
-    its aliases) is on the tower, renewing in the window — the query the
-    proj_ tables exist for.
+    its aliases) is on the tower, and whose program has not already run out —
+    the query the proj_ tables exist for.
+
+    NO RENEWAL WINDOW HERE, and that is the fix rather than an omission. This
+    filtered `p.period_to` between two dates, so "renewing next 90 days" on
+    the market page measured off the PROGRAM period end — and CLAUDE.md's rule
+    is that the renewal date is the earliest LINE end, never
+    `placement.period_to`. An Inland Marine layer running out three months
+    early was invisible on the market page while every other surface counted
+    to it (2026-08-24). `proj_layer` carries no period column, which is why it
+    was written this way; the window now lives in `services.exposure`, where
+    the line ends are known and one rule decides the date.
+
+    `live_from` is the coarse floor that keeps the whole history out: a
+    program whose period has ended is not renewing.
 
     Carries `status`, and does NOT filter by it. A tower a carrier has quoted
     but not bound is real exposure worth seeing, but it is not placed
@@ -119,11 +131,11 @@ def carrier_exposure(
         JOIN placement p ON p.id = pp.placement_id
         JOIN proj_layer pl ON pl.placement_id = pp.placement_id AND pl.layer_id = pp.layer_id
         JOIN org o ON o.id = p.org_id
-        WHERE pp.carrier IN ({marks}) AND p.period_to >= ? AND p.period_to <= ?
+        WHERE pp.carrier IN ({marks}) AND p.period_to >= ?
           AND {base.alive('p')} AND {base.alive('o')}
         ORDER BY p.period_to, o.name
         """,
-        (*carriers, expiring_from, expiring_to),
+        (*carriers, live_from),
     ).fetchall()
 
 

@@ -78,7 +78,7 @@
                of this table reading $650K where the book's bound-only total
                read nothing. "As written" is the file's own carrier spelling
                when it differs from the org name. #}
-            <tr><th>Account</th><th>Expiry</th><th>Program</th><th>Layer</th>
+            <tr><th>Account</th><th>Renews</th><th>Program</th><th>Layer</th>
                 <th>Status</th><th>As written</th>
                 <th class="num">Share</th><th class="num">Premium</th></tr>
           </thead>
@@ -86,7 +86,7 @@
             {% for r in exposure %}
               <tr>
                 <td><a href="/accounts/{{ r.org_ref }}">{{ r.org_name }}</a></td>
-                <td class="num">{{ r.period_to }}</td>
+                <td class="num">{{ r.renewal_on }}</td>
                 <td>{{ r.program_name }}</td>
                 <td>{{ r.layer_name }}</td>
                 <td>{{ r.status }}</td>
