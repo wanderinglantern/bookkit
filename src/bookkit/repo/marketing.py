@@ -304,6 +304,40 @@ def edit_response(
     return response
 
 
+def remove_response(
+    conn: sqlite3.Connection, response_id: str, *, note: str = "recorded in error"
+) -> MarketResponse:
+    """Take back a row that records marketing which did not happen.
+
+    SOFT, like every delete in this book: the row keeps its id and its
+    event-log history and `deleted_at` is written as a field, which is what
+    makes `u` / the change list able to put it back. A hard delete would be the
+    one write nothing can revert, on a table whose whole purpose is to be the
+    record of what was said.
+
+    AND THE PACKAGE IS ROLLED UP AFTER, which is the half that is easy to
+    forget: `submission.status` and its five quote facts are DERIVED from the
+    rows under it, so a submission whose only quoted response has just gone
+    would otherwise keep printing a premium on the Pipeline that no live row
+    states. `roll_up_submission` reads the rows that are still alive.
+
+    IT DOES NOT TOUCH THE SUBMISSION. Removing the last response leaves a
+    package with no line of coverage recorded, which the panel already renders
+    honestly in its own block — the approach still went out on a day. Undoing
+    THAT is a different act (`marketing_entry.withdraw`), and a delete that
+    quietly reached up and took the parent as well would be one undo unit
+    doing two things a broker asked for one of.
+    """
+    response = get_response(conn, response_id)
+    base.soft_delete(conn, _RESPONSE, response_id, note)
+    # DERIVE EVEN WITH NOTHING LEFT — see `roll_up_submission`. This is the one
+    # caller that means it: the submission's figures were a cache of the rows,
+    # and the rows are gone deliberately. A revert reaching the same state is
+    # the opposite case and takes the default.
+    roll_up_submission(conn, response.submission_id, even_with_no_rows=True)
+    return response
+
+
 def responses_for_submission(
     conn: sqlite3.Connection, submission_id: str
 ) -> list[MarketResponse]:
@@ -348,6 +382,14 @@ _BOUND = "bound"
 _QUOTED = "quoted"
 _INDICATED = "indicated"
 _NON_RESPONSE = "non_response"
+# WE RULED THEM OUT. Grouped with the two closed statuses below rather than
+# left to fall through to `out`: a package whose every row is closed is a
+# closed package, and "we decided the economics do not work" ends a market as
+# finally as "they said no". It is `declined` at the PACKAGE level because the
+# submission vocabulary has no word for our own judgment and inventing one
+# would put a second story on the Pipeline — what the broker decided is on the
+# ROW, where the reason sits beside it.
+_NOT_VIABLE = "not_viable"
 
 
 def _rolled_figures(responses: list[MarketResponse]) -> dict[str, Any]:
@@ -437,7 +479,7 @@ def status_from_rows(responses: list[MarketResponse]) -> str:
         return _BOUND
     if _QUOTED in statuses or _INDICATED in statuses:
         return _QUOTED
-    if statuses <= {_DECLINED, _NON_RESPONSE}:
+    if statuses <= {_DECLINED, _NON_RESPONSE, _NOT_VIABLE}:
         return _DECLINED
     # A PACKAGE HOLDING `declined_open_elsewhere` FALLS HERE, to `out`, and
     # that is the answer rather than an omission. The market said no to one
@@ -450,7 +492,11 @@ def status_from_rows(responses: list[MarketResponse]) -> str:
 
 
 def roll_up_submission(
-    conn: sqlite3.Connection, submission_id: str, *, note: str = "roll-up"
+    conn: sqlite3.Connection,
+    submission_id: str,
+    *,
+    note: str = "roll-up",
+    even_with_no_rows: bool = False,
 ) -> str | None:
     """Recompute the submission from its response rows: `status`, and the five
     quote facts beside it.
@@ -495,7 +541,28 @@ def roll_up_submission(
     a package's premium belonged to. Until it lands, the write is inside the
     caller's batch and the old values are in the event log, so `u` and the
     changes list can put them back — visible and revertible, which is the
-    difference between an edge and a silent loss."""
+    difference between an edge and a silent loss.
+
+    AND "NO ROWS LEFT" IS TWO DIFFERENT FACTS, WHICH THE DATA CANNOT TELL
+    APART (found 2026-08-26 by the batch gate, the day `remove_response` was
+    written). Both arrive here as a submission with no live responses and a
+    soft-deleted one behind it:
+
+      * A BATCH BEING REVERTED. The response is being un-created and the
+        submission's pre-row figures have just been restored from the event
+        log — $1.4M that was typed before responses existed and is the only
+        record of that marketing. Deriving over it destroys exactly what the
+        revert restored.
+      * A ROW REMOVED AS RECORDED IN ERROR. The figures were only ever a cache
+        of that row, and leaving them makes the package go on claiming
+        `quoted` with a premium no live row states, on the Pipeline — the
+        second-home defect this whole function exists to close.
+
+    Nothing on disk distinguishes them, so the CALLER says which it is.
+    `even_with_no_rows` defaults to False, which is the protective answer, and
+    `remove_response` is the one caller that passes True. A flag rather than a
+    guess, because the guess is wrong half the time and both halves destroy
+    something."""
     row = conn.execute(
         f"SELECT status FROM submission WHERE id = ? AND {base.alive()}",
         (submission_id,),
@@ -503,7 +570,7 @@ def roll_up_submission(
     if row is None or row["status"] == _WITHDRAWN:
         return None
     responses = responses_for_submission(conn, submission_id)
-    if not responses:
+    if not responses and not even_with_no_rows:
         return None
     rolled = status_from_rows(responses)
     base.update(

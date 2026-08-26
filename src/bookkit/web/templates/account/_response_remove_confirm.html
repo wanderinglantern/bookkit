@@ -1,0 +1,41 @@
+{# The in-place confirm for taking back a marketing row recorded in error.
+
+   SWAPPED OVER THE ROW, so the question sits exactly where the answer will
+   land — the same shape `_market_confirm.html` takes for a participation, and
+   never a modal somewhere else on the page.
+
+   GET renders this and writes NOTHING; only the [remove] POST writes. [keep]
+   re-fetches the row, which is a fragment route, so backing out never costs a
+   whole-section render.
+
+   IT SAYS WHAT SURVIVES. A soft delete is revertible and the change list can
+   put it back, and — the fact a broker actually needs before answering — the
+   APPROACH is not being taken back with the answer. If this is the package's
+   last response the submission stays, and the panel then shows it under
+   "Line of coverage not recorded", because it is still true that we went to
+   that market on that day. Saying so here is the difference between a control
+   somebody trusts and one they undo to find out what it did. #}
+{# THE ROW'S OWN id, because this element STANDS IN FOR IT. `_row_response`
+   answers with `HX-Retarget: #mrow-<id>` — every row-sized answer in this
+   module does — so a confirm without it leaves [keep] fetching a row that
+   lands nowhere and the question sitting there looking ignored (found by
+   clicking it, 2026-08-26). Same reason the add row's id is load-bearing. #}
+<tr id="mrow-{{ response_id }}" class="marketing-row marketing-confirm" role="alert"
+    data-layer-row="{{ response_id }}">
+  <td colspan="{{ span }}" class="prose">
+    {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+    Remove what {{ who }} said about {{ line_name }}? The change list can put
+    it back.
+    {% if last_on_package %}
+      This is the only answer recorded against that approach, so the approach
+      itself stays — it moves to “line of coverage not recorded” below, because
+      the package did go out on {{ sent_on }}.
+    {% endif %}
+    <button type="button" class="row-action-btn row-action-danger"
+            hx-post="{{ base }}/remove"
+            hx-target="closest tr" hx-swap="outerHTML">remove</button>
+    <button type="button" class="row-action-btn"
+            hx-get="{{ base }}/row"
+            hx-target="closest tr" hx-swap="outerHTML">keep</button>
+  </td>
+</tr>

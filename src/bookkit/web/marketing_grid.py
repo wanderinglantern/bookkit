@@ -49,6 +49,7 @@ a screen read over a shoulder is still a decision nobody has made.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import date
@@ -151,6 +152,18 @@ class Column:
     # layout decides from content — so it is measured in marketing-grid.js and
     # cannot be a number in either file.
     pin: int = 0
+
+    @property
+    def sortable(self) -> bool:
+        """Whether a reader can order the grid by this column.
+
+        READ, NOT DECLARED. `marketing_report.SORT_KEYS` is where a column's
+        order is defined and it is keyed by these very keys, so a column is
+        sortable exactly when there is a key for it — a second list here would
+        be the copy that quietly differs, offering a control whose route then
+        refuses, or hiding one that works.
+        """
+        return self.key in marketing_report.SORT_KEYS
 
     @property
     def th_class(self) -> str:
@@ -258,6 +271,11 @@ _STATUS_TONE = {
     # prints its own words either way.
     "declined_open_elsewhere": "is-warn",
     "declined": "is-danger",
+    # OUR judgment, not the market's, so not the decline tint — the market did
+    # not refuse us. Muted like `non_response`: it is closed, there is nothing
+    # left to chase, and it is not bad news about the placement so much as a
+    # market that was never available at this size.
+    "not_viable": "is-muted",
     "non_response": "is-muted",
 }
 
@@ -410,6 +428,22 @@ def cell_action(ref: str, placement_id: str, response_id: str, key: str) -> str:
     return (
         f"/accounts/{ref}/program/{placement_id}"
         f"/marketing/responses/{response_id}/cell/{key}"
+    )
+
+
+def response_base(ref: str, placement_id: str, response_id: str) -> str:
+    """One row's URL prefix — what its confirm hangs `/remove` and `/row` off.
+
+    HERE, beside the other URL builders for this grid, and not in the route
+    module that uses it. Every path this panel renders is spelled once in this
+    file so a route and the markup pointing at it cannot drift; and the G5
+    refusal walk reads `routes/marketing.py`'s returned STRINGS as sentences a
+    broker is refused in, so a URL returned from there is a "refusal" nobody
+    can name a fix for — which is the walk being right about the shape and
+    wrong about the string.
+    """
+    return (
+        f"/accounts/{ref}/program/{placement_id}/marketing/responses/{response_id}"
     )
 
 
@@ -571,6 +605,16 @@ def row_view(
         "no_charges_url": (
             f"/accounts/{ref}/program/{placement_id}"
             f"/marketing/responses/{row.response_id}/no-charges"
+        ),
+        # A ROW RECORDED IN ERROR (Grant, 2026-08-26). Always offered, unlike
+        # "no charges" — that one is hidden once it would do nothing, and this
+        # one can always do something. It fetches the CONFIRM rather than
+        # writing: a delete is the one row action whose mistake looks exactly
+        # like success, because what it destroys is no longer on the screen to
+        # notice missing.
+        "remove_url": (
+            f"/accounts/{ref}/program/{placement_id}"
+            f"/marketing/responses/{row.response_id}/remove"
         ),
     }
 
@@ -968,6 +1012,167 @@ def _clearance(block: marketing_report.ReportBlock) -> list[str]:
     ]
 
 
+# --- the order a reader asked for ------------------------------------------
+#
+# A VIEW, NEVER A STORED FACT. Sorting changes what a broker is looking at and
+# nothing about the book, so it lives in the request and is echoed back into
+# the markup — no column on `placement_line`, no setting, nothing to migrate.
+#
+# IT IS PER LINE OF COVERAGE. Sorting General Liability by premium says
+# nothing about how Auto should read, and one order across a placement would
+# make the two blocks answer a question only one of them was asked.
+#
+# ONE PARAMETER FOR THE WHOLE SECTION, though, and that is deliberate. The
+# Sent cell answers with the ENTIRE section (one submission carries every line
+# of coverage), so a sort held per block would be thrown away by a write in a
+# different block — a view silently resetting, which reads as broken. The spec
+# rides on the section element as one inherited `hx-vals`, so every request
+# from anywhere inside it carries every block's order.
+ASC = "asc"
+DESC = "desc"
+
+# `<line_id>:<column>:<direction>`, comma-joined. Line ids are slugs
+# ("general-liability") and column keys are identifiers, so neither can contain
+# the separators — asserted in tests/test_marketing_gates.py rather than
+# trusted, because a line of coverage is NAMED BY A USER and its id is derived
+# from that name.
+_SPEC_PAIR = ":"
+_SPEC_SEP = ","
+
+
+def parse_sorts(spec: str) -> dict[str, tuple[str, bool]]:
+    """`{line_id: (column, descending)}` off the wire.
+
+    DEFENSIVE, because this arrives in a URL and anything that can make a
+    request can send anything. A malformed entry is DROPPED rather than
+    refused: an unreadable view parameter is not worth a 500, and the header
+    re-renders from what was actually applied — so a spec that names a column
+    this grid cannot order leaves the grid saying, correctly, that it is not
+    sorted by it.
+    """
+    out: dict[str, tuple[str, bool]] = {}
+    for part in spec.split(_SPEC_SEP):
+        bits = part.strip().split(_SPEC_PAIR)
+        if len(bits) != 3:
+            continue
+        line_id, column, direction = (b.strip() for b in bits)
+        if not line_id or column not in marketing_report.SORT_KEYS:
+            continue
+        if direction not in (ASC, DESC):
+            continue
+        out[line_id] = (column, direction == DESC)
+    return out
+
+
+def format_sorts(sorts: dict[str, tuple[str, bool]]) -> str:
+    """The spec, back on the wire. Sorted by line id so the same view produces
+    the same string — an attribute that reshuffles on every render is a diff
+    nobody can read and a cache nothing can match."""
+    return _SPEC_SEP.join(
+        f"{line_id}{_SPEC_PAIR}{column}{_SPEC_PAIR}{DESC if desc else ASC}"
+        for line_id, (column, desc) in sorted(sorts.items())
+    )
+
+
+def cycled(
+    sorts: dict[str, tuple[str, bool]], line_id: str, column: str
+) -> dict[str, tuple[str, bool]]:
+    """What clicking a header does: ascending, then descending, then OFF.
+
+    THE THIRD CLICK IS NOT A FOURTH STATE, it is the way back. The composer's
+    own order — live options first, then cheapest — is what a client should
+    read a block in and what the workbook prints, so a reader who sorted to
+    answer one question has to be able to put it back without reloading the
+    page or guessing which column it started on.
+    """
+    fresh = dict(sorts)
+    current = fresh.get(line_id)
+    if current is None or current[0] != column:
+        fresh[line_id] = (column, False)
+    elif not current[1]:
+        fresh[line_id] = (column, True)
+    else:
+        fresh.pop(line_id, None)
+    return fresh
+
+
+def sort_action(ref: str, placement_id: str) -> str:
+    return f"/accounts/{ref}/program/{placement_id}/marketing/sort"
+
+
+def header_cells(
+    block: marketing_report.ReportBlock,
+    sorts: dict[str, tuple[str, bool]],
+    *,
+    ref: str,
+    placement_id: str,
+) -> list[dict[str, Any]]:
+    """One block's column headers, each carrying what it would do if clicked.
+
+    Built here and not in the template so the header and the rows under it are
+    walked from the SAME COLUMNS tuple in the same order — the failure a
+    hand-ordered header has is silently labelling the wrong column, and it does
+    not look like anything.
+    """
+    column, descending = sorts.get(block.line_id, ("", False))
+    cells = []
+    for spec in COLUMNS:
+        active = spec.sortable and spec.key == column
+        cells.append(
+            {
+                "header": spec.header,
+                "class": spec.th_class,
+                "sortable": spec.sortable,
+                # WHAT A SCREEN READER IS TOLD. `aria-sort` belongs on the
+                # header cell and takes "none" while the column is sortable
+                # and unsorted — omitting it entirely says the column cannot
+                # be sorted, which is a different claim.
+                "aria_sort": (
+                    ("descending" if descending else "ascending")
+                    if active
+                    else "none"
+                ),
+                # THE GLYPH IS BESIDE THE WORD, never instead of it: colour and
+                # shape are signal, and the header still reads as its own name
+                # (CLAUDE.md — every coloured state carries a glyph or a word).
+                "mark": ("▼" if descending else "▲") if active else "",
+                "active": active,
+                "url": sort_action(ref, placement_id) if spec.sortable else "",
+                # THE NEW ORDER AS THE BUTTON'S OWN `hx-vals`, NOT IN ITS URL.
+                # The section publishes the CURRENT order as an inherited
+                # `hx-vals` so every write inside it round-trips the sort — and
+                # htmx builds a GET's query string from that inherited value,
+                # which silently overwrote a `?sort=` the button had put in its
+                # own href. Clicking Premium a second time re-sent the order it
+                # was already in, so the column would sort ascending and then
+                # never move again (found in a browser, 2026-08-26). A child's
+                # `hx-vals` overrides an ancestor's for the same key, which is
+                # exactly the relationship these two have: the section says
+                # where the grid IS, the header says where it is GOING.
+                "vals": json.dumps(
+                    {"sort": format_sorts(cycled(sorts, block.line_id, spec.key))}
+                )
+                if spec.sortable
+                else "",
+                # WHAT THE CLICK WILL DO, in words, on hover and for assistive
+                # tech — "sort by Premium, highest first" beats an arrow
+                # nobody can interpret before they have pressed it once.
+                "title": _sort_title(spec, active, descending),
+            }
+        )
+    return cells
+
+
+def _sort_title(spec: Column, active: bool, descending: bool) -> str:
+    if not spec.sortable:
+        return ""
+    if not active:
+        return f"sort by {spec.header}"
+    if not descending:
+        return f"sort by {spec.header}, the other way"
+    return f"stop sorting by {spec.header} — back to live options first"
+
+
 def block_id(placement_id: str, line_id: str) -> str:
     """The DOM id of one line-of-coverage block, in ONE place.
 
@@ -990,6 +1195,7 @@ def block_view(
     placement_id: str,
     base: str,
     window: marketing_report.DateWindow | None = None,
+    sorts: dict[str, tuple[str, bool]] | None = None,
 ) -> dict[str, Any]:
     """One line-of-coverage block, rendered.
 
@@ -1016,11 +1222,25 @@ def block_view(
         "retired": block.line_retired,
         "groups": _header(request, block, ref=ref, placement_id=placement_id),
         "clearance": _clearance(block),
+        # THE COLUMN HEADERS, each carrying what clicking it would do.
+        "headers": header_cells(
+            block, sorts or {}, ref=ref, placement_id=placement_id
+        ),
+        # ORDERED HERE, AFTER THE BLOCK WAS COMPOSED, and that ordering is
+        # exactly what makes the BRIDGE stay honest. The bridge walks the
+        # expiring premium to the LEADING quote (`_block` picks the first
+        # bound-or-quoted row out of the composer's own ranking), and the
+        # leading quote does not change because a reader asked to see the
+        # column of expiry dates in order. Re-composing under the sort would
+        # have made it follow whatever landed on top — a different carrier's
+        # walk, printed under the same heading.
         "rows": [
             row_view(
                 request, row, ref=ref, placement_id=placement_id, window=window
             )
-            for row in block.rows
+            for row in marketing_report.order_rows(
+                block.rows, *(sorts or {}).get(block.line_id, ("", False))
+            )
         ],
         "bridge": _bridge(block.bridge),
         "add_url": f"{base}/lines/{block.line_id}/approaches",
@@ -1072,6 +1292,7 @@ def panel(
     line_add_preserve: bool = True,
     provisional_error: str | None = None,
     provisional_row: str | None = None,
+    sort_spec: str = "",
 ) -> dict[str, Any]:
     """The whole Marketing section for one placement.
 
@@ -1099,10 +1320,17 @@ def panel(
         conn, placement_id, today, audience=marketing_report.INTERNAL
     )
     base = f"/accounts/{ref}/program/{placement_id}/marketing"
+    # RE-PARSED AND RE-FORMATTED, never echoed back as it arrived. What the
+    # section publishes for every request inside it has to be what was
+    # actually APPLIED: a spec naming a column this grid cannot order is
+    # dropped by the parser, and passing the raw string through would leave
+    # the page claiming an order it is not in — and carrying that claim into
+    # every later write.
+    sorts = parse_sorts(sort_spec)
     blocks = [
         block_view(
             request, block, ref=ref, placement_id=placement_id, base=base,
-            window=report.window,
+            window=report.window, sorts=sorts,
         )
         for block in report.blocks
     ]
@@ -1121,6 +1349,13 @@ def panel(
         # cell the caret was in no longer exists after that swap.
         "refocus": refocus,
         "columns": COLUMNS,
+        # THE ORDER, ON THE SECTION, for every request made from inside it.
+        # htmx inherits `hx-vals` down the tree, so one attribute here is what
+        # keeps a sort alive through a cell save, an added market, a
+        # "no charges" and — the one that mattered — a Sent cell, which
+        # answers with this whole section and would otherwise rebuild every
+        # block in the composer's default order.
+        "sort": format_sorts(sorts),
         "blocks": blocks,
         "add_fields": market_approach_fields(conn),
         # A VISIBLE default, not a browser-chosen one. Both are values a

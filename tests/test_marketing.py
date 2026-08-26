@@ -1084,3 +1084,80 @@ def test_a_plainly_declined_market_is_not_cleared_against(conn) -> None:
     assert not marketing.clearance_conflicts(
         conn, marketing.get_response(conn, direct.id)
     )
+
+
+# --- a row that records marketing which did not happen ---------------------
+
+
+def test_removing_a_row_rolls_the_package_back_down(conn) -> None:
+    """THE FIGURES WERE A CACHE OF THE ROW. Removing the only answer on a
+    quoted package left the submission still saying `quoted` and still carrying
+    a premium no live row stated — visible on the Pipeline, which is the exact
+    second-home defect `roll_up_submission` exists to close."""
+    _, placement = _setup(conn)
+    market, sub = _submission(conn, placement.id, "Chubb")
+    response = marketing.create_response(
+        conn, sub.id, "general-liability", market_org_id=market.id,
+        status="quoted", premium=12_000_000,
+    )
+    assert _submission_status(conn, sub.id) == "quoted"
+
+    marketing.remove_response(conn, response.id)
+
+    assert not marketing.responses_for_submission(conn, sub.id)
+    assert _submission_status(conn, sub.id) == "out"
+    assert submissions.get(conn, sub.id).quoted_premium is None
+
+
+def test_removing_one_row_of_several_leaves_the_rest(conn) -> None:
+    _, placement = _setup(conn)
+    market, sub = _submission(conn, placement.id, "Chubb")
+    kept = marketing.create_response(
+        conn, sub.id, "general-liability", market_org_id=market.id,
+        status="quoted", premium=12_000_000,
+    )
+    gone = marketing.create_response(
+        conn, sub.id, "auto", market_org_id=market.id, status="declined",
+    )
+
+    marketing.remove_response(conn, gone.id)
+
+    assert [r.id for r in marketing.responses_for_submission(conn, sub.id)] == [kept.id]
+    assert _submission_status(conn, sub.id) == "quoted"
+
+
+def test_the_approach_survives_its_last_answer_being_removed(conn) -> None:
+    """A DELETE THAT REACHED UP AND TOOK THE PARENT would be one undo unit
+    doing two things a broker asked for one of — and the approach DID go out on
+    its day, which the panel renders honestly under "line of coverage not
+    recorded"."""
+    _, placement = _setup(conn)
+    market, sub = _submission(conn, placement.id, "Chubb")
+    response = marketing.create_response(
+        conn, sub.id, "general-liability", market_org_id=market.id,
+    )
+
+    marketing.remove_response(conn, response.id)
+
+    assert submissions.get(conn, sub.id).id == sub.id
+
+
+def test_a_market_ruled_out_on_price_closes_the_package(conn) -> None:
+    """`not_viable` is OUR judgment, not the market's — and it closes. A
+    package whose every row is closed is a closed package, and "we decided the
+    economics do not work" ends a market as finally as "they said no"."""
+    _, placement = _setup(conn)
+    market, sub = _submission(conn, placement.id, "Chubb")
+    marketing.create_response(
+        conn, sub.id, "general-liability", market_org_id=market.id,
+        status="not_viable",
+    )
+    assert _submission_status(conn, sub.id) == "declined"
+
+
+def test_a_market_ruled_out_on_price_is_not_chased(conn) -> None:
+    """The other half: it is NOT in the open set, so nothing clears against it
+    and nothing goes looking for an answer that is not coming."""
+    from bookkit.models import MARKET_RESPONSE_OPEN_STATUSES
+
+    assert "not_viable" not in MARKET_RESPONSE_OPEN_STATUSES

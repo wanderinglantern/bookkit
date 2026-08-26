@@ -787,3 +787,85 @@ def test_a_market_can_say_no_here_and_yes_higher_up(conn) -> None:
     # THE PACKAGE IS NOT CLOSED. `declined` would take it off the Pipeline's
     # "out at market" queue with the carrier still in play.
     assert out["submission_status"] == "out"
+
+
+# --- a row recorded in error, on the agent's surface ------------------------
+
+
+def test_the_assistant_can_take_back_a_row_recorded_in_error(conn) -> None:
+    """A MISSING VERB IS NOT A REFUSAL, IT IS A WRONG WRITE (CLAUDE.md).
+    Without this an assistant asked to undo a mis-recorded approach reaches for
+    the nearest door it has — `market_responded` — and re-labels the row
+    `declined`, crediting a carrier with a refusal it never made on a
+    client-facing document."""
+    _, placement = _book(conn)
+    _market(conn, "Zurich")
+    approach = mcpserver._market_approach(
+        conn, placement.ref, "GL", market="Zurich", sent_on="2026-07-07"
+    )
+    mcpserver._market_responded(
+        conn, approach["response_id"], status="quoted",
+        responded_on="2026-07-20", premium="120,000",
+    )
+    assert submissions.get(conn, approach["submission_id"]).status == "quoted"
+
+    out = mcpserver._market_response_remove(conn, approach["response_id"])
+
+    assert out["removed"] == approach["response_id"]
+    assert out["answers_left_on_the_approach"] == 0
+    # THE CACHE FOLLOWS THE ROWS. A package still saying `quoted` and carrying
+    # a premium no live row states is the second-home defect the roll-up exists
+    # to close — and it would show on the Pipeline as revenue.
+    assert out["submission_status"] == "out"
+    rolled = submissions.get(conn, approach["submission_id"])
+    assert rolled.status == "out"
+    assert rolled.quoted_premium is None
+    assert not marketing.responses_for_submission(conn, approach["submission_id"])
+
+
+def test_the_removal_is_revertible(conn) -> None:
+    """SOFT, like every delete in this book. The row keeps its id and its
+    history, and the batch it was removed in can put it back — which is what
+    makes a destructive control safe to offer at all."""
+    from bookkit.services import batches as batches_svc
+
+    _, placement = _book(conn)
+    _market(conn, "Zurich")
+    approach = mcpserver._market_approach(
+        conn, placement.ref, "GL", market="Zurich", sent_on="2026-07-07"
+    )
+
+    out = mcpserver._market_response_remove(conn, approach["response_id"])
+    assert not marketing.responses_for_submission(conn, approach["submission_id"])
+
+    # THE REF, which is what the tool hands back and what a person types.
+    assert batches_svc.revert(conn, out["batch"], "2026-07-21").applied
+    assert [
+        r.id for r in marketing.responses_for_submission(conn, approach["submission_id"])
+    ] == [approach["response_id"]]
+
+
+def test_the_assistant_can_rule_a_market_out_on_price(conn) -> None:
+    """`not_viable` is OUR judgment, not the market's — the minimum premium is
+    above what this account spends, or the economics do not work at any rate
+    they would quote. Filing that as `declined` credits a carrier with a
+    refusal it never made."""
+    _, placement = _book(conn)
+    _market(conn, "Zurich")
+    approach = mcpserver._market_approach(
+        conn, placement.ref, "GL", market="Zurich", sent_on="2026-07-07"
+    )
+
+    out = mcpserver._market_responded(
+        conn, approach["response_id"], status="not_viable",
+        responded_on="2026-07-20", decline_reason_public="minimum_premium",
+    )
+
+    assert out["status"] == "not_viable"
+    assert out["submission_status"] == "declined"
+    # …AND THE CLIENT-SAFE REASON THAT GOES WITH IT. "Their rate was
+    # uncompetitive" and "their minimum premium is more than this account
+    # spends in total" are different facts and a client reads them differently.
+    assert marketing.get_response(
+        conn, approach["response_id"]
+    ).decline_reason_public == "minimum_premium"

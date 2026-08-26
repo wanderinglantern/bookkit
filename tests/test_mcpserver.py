@@ -1191,6 +1191,19 @@ _BATCHED_WRITES = {
     "market_responded": lambda rw, tmp: mcpserver._market_responded(
         rw, _an_approach(rw)["response_id"], status="quoted",
         responded_on="2026-07-20", premium="120,000"),
+    # QUOTED FIRST, so the removal actually MOVES the package. The roll-up only
+    # writes when the derived status changes, and a bare pending approach comes
+    # off leaving the submission exactly where it was — which would let this
+    # tool pass the batch gate while covering only half of what it does.
+    "market_response_remove": lambda rw, tmp: (
+        lambda ref: (
+            mcpserver._market_responded(
+                rw, ref, status="quoted", responded_on="2026-07-20",
+                premium="120,000",
+            ),
+            mcpserver._market_response_remove(rw, ref),
+        )[1]
+    )(_an_approach(rw)["response_id"]),
     "submission_sent_on": lambda rw, tmp: mcpserver._submission_sent_on(
         rw, _an_approach(rw)["response_id"], "2026-07-01"),
     "submission_withdraw": lambda rw, tmp: mcpserver._submission_withdraw(
@@ -1273,6 +1286,10 @@ _TOUCHES = {
     "market_assign_line": {"market_response"},
     # the roll-up moves the submission from 'out' to 'quoted' in the same unit
     "market_responded": {"market_response", "submission"},
+    # The soft delete stamps `deleted_at` on the response; the roll-up under it
+    # writes the submission back down from the rows that are left, which on a
+    # package whose only answer just went is a real status change.
+    "market_response_remove": {"market_response", "submission"},
     # the package alone: the responses hanging off it are untouched, which is
     # exactly why the reply names the rows it moved rather than rewriting them
     "submission_sent_on": {"submission"},

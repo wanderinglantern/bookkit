@@ -18,9 +18,11 @@ recommends the wrong one.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 from babel.dates import format_date
 
@@ -56,8 +58,123 @@ _STATUS_ORDER = {
     "pending": 3,
     "declined_open_elsewhere": 4,
     "declined": 5,
-    "non_response": 6,
+    # LAST BUT ONE, above `non_response` only. A market we ruled out on price
+    # is the least useful row on the block to a reader choosing between
+    # options — but it is still evidence of effort, and above a market that
+    # never answered at all.
+    "not_viable": 6,
+    "non_response": 7,
 }
+
+# THE UNKNOWN, so a sort key can say "nobody has told us" and mean it. Every
+# key below returns this rather than a number for a NULL, and `order_rows`
+# parks those rows at the END in BOTH directions — see its docstring.
+UNKNOWN = object()
+
+
+def _known(value: Any) -> Any:
+    return UNKNOWN if value is None else value
+
+
+# WHAT A COLUMN OF THIS REPORT CAN BE ORDERED BY, and how — ONE HOME.
+#
+# Keyed by the GRID's column key (web/marketing_grid.COLUMNS), because that is
+# what a reader clicks, and read from there rather than declared twice: a
+# column is sortable exactly when it appears here, and `Column.sortable` says
+# so by looking (tests/test_marketing_gates.py holds the two together).
+#
+# Every key reads a TYPED value off the row. That is the whole reason the sort
+# is here and not in the browser: the cells print "$5,000,000" and "7 Jul",
+# and ordering them client-side would mean parsing display strings back into
+# figures — the one thing this codebase refuses everywhere (CLAUDE.md: a
+# surface colours and labels off the KEY and never reverse-maps a label back).
+#
+# WHAT IS DELIBERATELY ABSENT:
+#
+# * `best` — A.M. Best ratings do not sort lexically. "A++" is the strongest
+#   and sorts AFTER "A+" and "A" as text, so an alphabetical Best column would
+#   put the weakest paper on top while looking like it had answered the
+#   question. It needs a declared rank, and that is a piece of domain
+#   vocabulary nobody has written down yet.
+# * `rate_move`, `basis_override`, `exposure_override`, `rate_per` — each is a
+#   composed STRING that is sometimes a figure and sometimes a refusal
+#   ("basis not stated"), and an order over a mixed column is meaningless.
+# * `reason` / `internal_reason` — prose.
+SORT_KEYS: dict[str, Callable[[ReportRow], Any]] = {
+    # The carrier, or the intermediary where the paper is not named yet —
+    # which is exactly what the Market cell prints.
+    "market": lambda r: (r.market or r.via or "").casefold(),
+    # Direct approaches carry no intermediary and group together at one end.
+    "access": lambda r: (r.via or "").casefold(),
+    # NULL ATTACH IS NOT UNKNOWN. It reads as primary / the whole line, which
+    # is the BOTTOM of a tower — a known position, and the ordinary one — so
+    # it sorts as zero rather than being parked with the blanks.
+    "attach": lambda r: r.attach if r.attach is not None else 0,
+    "lim": lambda r: _known(r.lim),
+    # THE SAME RANK THE DEFAULT ORDER USES, never alphabetical. Sorting a
+    # status column A-Z puts "Bound" above "Quoted" by accident and
+    # "Non-response" above "Pending" against every reading of the word; what a
+    # broker means by sorting on status is live first, closed last.
+    "status": lambda r: _STATUS_ORDER.get(r.status_key, 9),
+    "sent_on": lambda r: _known(r.submitted_on),
+    "responded_on": lambda r: _known(r.responded_on),
+    "quote_expires_on": lambda r: _known(r.quote_expires_on),
+    "rate": lambda r: _known(r.rate_micros),
+    "premium": lambda r: _known(r.premium),
+    "tria": lambda r: _known(r.tria),
+    "fees": lambda r: _known(r.fees),
+    "sl_tax": lambda r: _known(r.sl_tax),
+    "total_cost": lambda r: _known(r.total_cost),
+    # A COUNT, where zero is an answer. "No open subjectivities" is a fact
+    # about a quote, not a gap, so it sorts as zero.
+    "subjectivities": lambda r: r.open_subjectivities,
+}
+
+
+def _default_key(row: ReportRow) -> tuple[Any, ...]:
+    """LIVE OPTIONS FIRST, then cheapest, then whoever answered first.
+
+    The order a client should read a block in, and the order every block is
+    composed in before any reader asks for another. It is a FUNCTION rather
+    than a lambda inside `compose` because `order_rows` returns to it whenever
+    a sort is cleared — the default is a real order with a reason, not the
+    absence of one.
+    """
+    return (
+        _STATUS_ORDER.get(row.status_key, 9),
+        row.premium if row.premium is not None else 1 << 62,
+        row.responded_on or "",
+    )
+
+
+def order_rows(
+    rows: tuple[ReportRow, ...], column: str = "", descending: bool = False
+) -> tuple[ReportRow, ...]:
+    """One block's rows in the order a reader asked for, or the default.
+
+    AN UNKNOWN FIGURE IS LAST IN BOTH DIRECTIONS. NULL is "nobody has told us"
+    (models.MarketResponse.total_cost says it once for the whole book), so it
+    is neither the smallest premium nor the largest — and a plain
+    `reverse=True` would flip it from the bottom of the ascending sort to the
+    TOP of the descending one, putting the rows carrying no answer above every
+    quote in hand. The two lists are sorted and rejoined instead.
+
+    THE SORT IS STABLE, so ties keep the order they arrived in — which is the
+    default order, and therefore still live-first. Sorting by a column two
+    markets agree on does not shuffle them.
+
+    An unknown column name returns the default rather than raising: this is
+    reachable from a URL, and a view parameter nobody recognises is not worth
+    a 500 (the grid re-renders its own header from what it actually applied,
+    so nothing then claims to be sorted when it is not).
+    """
+    key = SORT_KEYS.get(column)
+    if key is None:
+        return tuple(sorted(rows, key=_default_key))
+    known = [r for r in rows if key(r) is not UNKNOWN]
+    unknown = [r for r in rows if key(r) is UNKNOWN]
+    known.sort(key=key, reverse=descending)
+    return tuple(known + unknown)
 
 # READ, not declared: models.py owns both vocabularies now, because the
 # Program tab's status picker and decline-reason picker have to offer the very
@@ -761,24 +878,27 @@ def compose(
             # a foreign key says this cannot happen.
             continue
         expectation = expectations.get(line_id)
-        rows = tuple(
-            _row(
-                response,
-                expectation,
-                names=names,
-                best=best,
-                subjectivities=subjectivities,
-                submitted=submitted,
-                audience=audience,
-                conn=conn,
-            )
-            for response in sorted(
-                by_line.get(line_id, []),
-                key=lambda r: (
-                    _STATUS_ORDER.get(r.status, 9),
-                    r.premium if r.premium is not None else 1 << 62,
-                    r.responded_on or "",
-                ),
+        # BUILT FIRST, ORDERED SECOND. The sort used to run over the raw
+        # `MarketResponse` rows, which cannot reach the figures a reader
+        # actually sorts by — the total, the open-subjectivity count, the
+        # carrier's NAME — because those are composed one line down. Ordering
+        # the composed rows through `order_rows` puts every column within
+        # reach of one function, and that function is also what a surface
+        # calls when a reader asks for a different order (CLAUDE.md, DRY: one
+        # rule, one home).
+        rows = order_rows(
+            tuple(
+                _row(
+                    response,
+                    expectation,
+                    names=names,
+                    best=best,
+                    subjectivities=subjectivities,
+                    submitted=submitted,
+                    audience=audience,
+                    conn=conn,
+                )
+                for response in by_line.get(line_id, [])
             )
         )
         blocks.append(_block(line, expectation, rows, by_line.get(line_id, [])))

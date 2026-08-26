@@ -611,6 +611,7 @@ MARKET_RESPONSE_STATUSES = (
     "quoted",
     "declined",
     "declined_open_elsewhere",
+    "not_viable",
     "non_response",
     "bound",
 )
@@ -644,6 +645,21 @@ moment a submission actually goes out there it is a ROW of its own at that
 attachment — which is the honest record, and the one the grid already knows
 how to hold.
 
+`not_viable` IS OUR ANSWER, NOT THEIRS (Grant, 2026-08-26: "carriers where
+minimum premiums are too high or they are just not financially viable"). Every
+other status in this tuple records what a MARKET said; this one records what
+the broker decided about a market — the minimum premium is above what the
+account spends, or the economics do not work at any price it would quote. It
+is separate from `declined` because "they looked and said no" and "we ruled
+them out" are different facts about the effort, and collapsing them credits a
+market with a refusal it never made. It is separate from `non_response`
+because somebody DID decide.
+
+It is CLOSED. Nothing is being chased and nothing is coming back, which is why
+it is absent from MARKET_RESPONSE_OPEN_STATUSES below; the reason belongs in
+`decline_reason_public` (`minimum_premium` is there for exactly this) so the
+client's workbook can say why a market on the list carries no quote.
+
 There is no `not_approached`. In a grid of one row per (line, market), the
 ABSENCE of a row carries it — provided the report renders that absence in
 words rather than as a blank cell a reader has to interpret."""
@@ -654,6 +670,7 @@ MARKET_RESPONSE_STATUS_LABELS: dict[str, str] = {
     "quoted": "Quoted",
     "declined": "Declined",
     "declined_open_elsewhere": "Declined — open elsewhere",
+    "not_viable": "Not viable",
     "non_response": "Non-response",
     "bound": "Bound",
 }
@@ -685,6 +702,14 @@ PUBLIC_DECLINE_REASONS = (
     "loss_history",
     "capacity",
     "pricing",
+    # A MINIMUM PREMIUM IS NOT "PRICING". "Their rate was uncompetitive" and
+    # "their minimum premium is more than this account spends in total" are
+    # different facts and a client reads them differently — the first says we
+    # found a cheaper market, the second says that market was never available
+    # at this size, whatever the rate. It is the ordinary reason a `not_viable`
+    # row exists (models.MARKET_RESPONSE_STATUSES says so), and it is
+    # client-safe as written.
+    "minimum_premium",
     "incumbent_relationship",
     "no_reason_given",
 )
@@ -705,6 +730,7 @@ PUBLIC_DECLINE_REASON_LABELS: dict[str, str] = {
     "loss_history": "Loss history",
     "capacity": "Capacity",
     "pricing": "Pricing",
+    "minimum_premium": "Minimum premium",
     "incumbent_relationship": "Incumbent relationship",
     "no_reason_given": "No reason given",
 }

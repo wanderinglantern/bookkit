@@ -55,6 +55,15 @@
                 hx-target="#mrow-{{ r.id }}" hx-swap="outerHTML"
                 title="record zero TRIA, zero policy fees and zero surplus lines tax — one undo unit">no charges</button>
       {% endif %}
+      {# RECORDED IN ERROR. It fetches the CONFIRM and writes nothing — the
+         split every destructive control in this app makes — and the confirm
+         lands in this row's own place so the question sits where the answer
+         will. `.row-action-danger` is the same quiet-until-you-look-at-it
+         treatment "take off" has on a participation. #}
+      <button type="button" class="row-action-btn row-action-danger"
+              hx-get="{{ r.remove_url }}"
+              hx-target="#mrow-{{ r.id }}" hx-swap="outerHTML"
+              title="remove this answer — it was recorded in error">remove</button>
     </td>
   </tr>
 {% endmacro %}
@@ -358,7 +367,13 @@
 {% endmacro %}
 
 
-{% macro block(b, columns, add_fields, add_values, keep_add_row=True) %}
+{% macro block(b, columns, add_fields, add_values, keep_add_row=True, marketing_id="") %}
+  {# `marketing_id` is the SECTION's DOM id, and a sortable header needs it:
+     the order lives on the section as one inherited `hx-vals` (so a write in
+     any block carries every block's order), which means a header click has to
+     answer with the section rather than with this article. Passed in rather
+     than rebuilt here — `marketing_grid.panel` owns that id and a second
+     formula is a second thing to keep in step. #}
   {# ONE LINE OF COVERAGE. A macro, not markup inlined in the section, because
      there are two callers: the section's first render and a HEADER CELL SAVE.
      A header cell is not a cell that only changes itself — filling in the
@@ -444,12 +459,33 @@
       <table class="rows rows-fit marketing-grid">
         <thead>
           <tr>
-            {% for column in columns %}
-              {# `th_class` and not a literal: a pinned column pins its header
-                 too, and the two classes are declared once on the Column
-                 (web/marketing_grid.py) so the header and the body cells under
-                 it cannot disagree about which columns are pinned. #}
-              <th{% if column.th_class %} class="{{ column.th_class }}"{% endif %}>{{ column.header }}</th>
+            {% for h in b.headers %}
+              {# `class` and `aria-sort` are built in web/marketing_grid
+                 (`header_cells`) off the same COLUMNS tuple the rows below are
+                 walked from — a header assembled separately from its column is
+                 how a table silently labels the wrong one, and that does not
+                 look like anything.
+
+                 `aria-sort` is "none" on a sortable-but-unsorted column and is
+                 absent entirely on one that cannot be sorted: those are two
+                 different claims, and omitting it for both would make the
+                 whole header read as unsortable to a screen reader. #}
+              <th{% if h.class %} class="{{ h.class }}"{% endif %}{% if h.sortable %} aria-sort="{{ h.aria_sort }}"{% endif %}>
+                {% if h.sortable %}
+                  {# A BUTTON, not a link. Sorting is a view of the page you
+                     are already on, and a real <button> is what keyboard and
+                     assistive tech expect for one. The GET answers with the
+                     whole SECTION, because the order lives on the section
+                     (one `hx-vals` for every block) and a block-sized answer
+                     could not update it. #}
+                  <button type="button" class="col-sort{% if h.active %} is-sorted{% endif %}"
+                          hx-get="{{ h.url }}" hx-vals='{{ h.vals }}'
+                          hx-target="#{{ marketing_id }}" hx-swap="outerHTML"
+                          title="{{ h.title }}">{{ h.header }}{% if h.mark %}<span class="col-sort-mark" aria-hidden="true">{{ h.mark }}</span>{% endif %}</button>
+                {% else %}
+                  {{ h.header }}
+                {% endif %}
+              </th>
             {% endfor %}
             <th class="row-tail"><span class="visually-hidden">row actions</span></th>
           </tr>
