@@ -175,6 +175,71 @@ def _task_subsets(tasks: list[Task]) -> dict[str, list[Task]]:
     }
 
 
+# WHERE A TASK NOBODY GAVE AN ACCOUNT GOES. Its own group, at the end, named
+# in words — a placement-attached task can carry `org_id` NULL legitimately
+# (repo/tasks.py says why), and those rows cannot open a cell here. Grouping
+# them under a heading that says so is the same rule the row already follows in
+# its Account column: a silently-uneditable row reads as broken.
+NO_ACCOUNT = "no account"
+
+
+def _grouped(
+    rows: list[dict[str, Any]], labels: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """The open items, gathered under the account that owes them.
+
+    ONE ACCOUNT, ONE HEADING, and the Account COLUMN goes away with it (Grant,
+    2026-08-26: "group by account, with the filter chips still on top"). A book
+    of ten clients carrying ten to fifteen items each is a hundred-odd rows
+    with the same account name printed down a column — which is the
+    duplication the DRY rule names, arriving as something a person has to read
+    past rather than as code.
+
+    THE ORDER IS THE MOST URGENT FIRST, not alphabetical. A group leads with
+    the earliest thing due in it, so the account with something overdue is at
+    the top of the page — the same reading the attention windows take, and
+    the reason this list exists at all. Ties fall back to the account's name so
+    the order is stable between renders rather than depending on dict order.
+
+    An undated group sorts LAST but is never dropped: "no date" is its own
+    filter chip precisely because those items are the easiest to lose.
+    """
+    buckets: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = str(row["org_id"] or "")
+        bucket = buckets.get(key)
+        if bucket is None:
+            label = labels.get(key) if key else None
+            bucket = buckets[key] = {
+                "org_id": key,
+                # The NAME and the REF together, out of one lookup, so the
+                # heading can link on the ref and print the name — the
+                # account-link rule, applied to a heading instead of a cell.
+                "name": label.name if label is not None else NO_ACCOUNT,
+                "ref": label.ref if label is not None else "",
+                "rows": [],
+            }
+        bucket["rows"].append(row)
+    groups = list(buckets.values())
+    for group in groups:
+        dated = [r["due_on"] for r in group["rows"] if r["due_on"]]
+        group["earliest"] = min(dated) if dated else ""
+        group["overdue"] = sum(1 for r in group["rows"] if r["overdue"])
+        group["count"] = len(group["rows"])
+    # "" sorts last for the earliest date (nothing dated in the group) and the
+    # unaccounted group sorts last of all, whatever its dates: it is the one
+    # heading that is not an account, and putting it among them reads as one.
+    groups.sort(
+        key=lambda g: (
+            not g["ref"],
+            not g["earliest"],
+            g["earliest"],
+            g["name"].casefold(),
+        )
+    )
+    return groups
+
+
 def _context(request: Request, *, show: str, ref: str | None) -> dict[str, Any]:
     conn = _conn(request)
     everything = _open_tasks(conn, ref=ref)
@@ -191,12 +256,16 @@ def _context(request: Request, *, show: str, ref: str | None) -> dict[str, Any]:
         requests = [
             r for r in requests if org is not None and str(r.get("org_id")) == org.id
         ]
+    rows = [
+        _row(request, t, labels, _view_query(show=show, ref=ref)) for t in tasks
+    ]
     return {
         "section": "items",
-        "tasks": [
-            _row(request, t, labels, _view_query(show=show, ref=ref))
-            for t in tasks
-        ],
+        # BOTH SHAPES, and the template reads only one. `tasks` stays because
+        # three things still ask "is this list empty" and one number is easier
+        # to be right about than a sum over groups.
+        "tasks": rows,
+        "groups": _grouped(rows, labels),
         "accounts": labels,
         "counts": {
             **{name: len(members) for name, members in subsets.items()},

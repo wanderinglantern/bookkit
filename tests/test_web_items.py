@@ -290,3 +290,123 @@ def test_the_buttons_carry_the_filter_they_were_rendered_under(client):
 
     assert f"/items/tasks/{task.id}/done?account={org.ref}" in page
     assert f"/items/tasks/{task.id}/drop?account={org.ref}" in page
+
+
+# --- gathered under the account that owes them -----------------------------
+#
+# ONE ACCOUNT, ONE HEADING (Grant, 2026-08-26: "group by account, with the
+# filter chips still on top"). His book is ten clients carrying ten to fifteen
+# items each, so the flat list printed the same account name down a column on a
+# hundred-odd rows — the DRY rule arriving as something a person reads past.
+
+
+def _groups(html: str) -> list[str]:
+    """The account heading of each group, in the order the page prints them.
+
+    Read off ONE table: the headings are rows in it, not sections around it —
+    a table per group repeated the column header down the page and let each
+    group size its own columns, so Due and Task landed at a different x in
+    every one (seen the moment it was rendered, 2026-08-26)."""
+    return [
+        re.sub(r"<[^>]+>", " ", block.split('<span class="item-group-counts">', 1)[0])
+        .strip()
+        for block in html.split('<span class="item-group-name">')[1:]
+    ]
+
+
+def _blocks(html: str) -> list[str]:
+    """One block per account heading — the heading row and every task row
+    under it, up to the next heading."""
+    return [
+        b.split("</tbody>", 1)[0]
+        for b in html.split('<tr class="item-group-row">')[1:]
+    ]
+
+
+def test_the_items_are_gathered_under_their_account(client):
+    html = client.get("/items").text
+
+    names = _groups(html)
+    assert len(names) > 1, "the seeded book carries items on more than one account"
+    assert len(names) == len(set(names)), "an account must appear as ONE heading"
+    # AND THE COLUMN IS GONE WITH IT. Stating the account once per group and
+    # again on every row inside it is the duplication grouping exists to remove.
+    header = html.split("<thead>", 1)[1].split("</thead>", 1)[0]
+    assert "<th>Account</th>" not in header
+    assert "<th>Task</th>" in header
+    # ONE table, so ONE header row for the whole book — repeating it per
+    # group is the duplication grouping exists to remove, wearing a row.
+    assert html.count("<thead>") == 1
+
+
+def test_a_group_leads_with_the_account_that_has_something_overdue(client):
+    """THE MOST URGENT FIRST, not alphabetical. The account with an overdue
+    item is at the top of the page — the same reading the attention windows
+    take, and the reason this list exists at all."""
+    html = client.get("/items").text
+
+    blocks = _blocks(html)
+    assert blocks
+    overdue_at = [i for i, b in enumerate(blocks) if "pill-overdue" in b]
+    if overdue_at:
+        assert overdue_at[0] == 0, (
+            "an account with overdue work is not at the top of the page"
+        )
+
+
+def test_the_headings_count_what_is_under_them(client):
+    """A COUNT THAT SURVIVES ITS OWN LIST IS A STALE NUMBER WEARING AUTHORITY
+    — the rule the filter chips already follow, applied to the heading."""
+    html = client.get("/items").text
+
+    for block in _blocks(html):
+        head, body = block.split("</tr>", 1)
+        stated = int(re.search(r'<span class="mono">(\d+)</span>\s*open', head).group(1))
+        assert stated == body.count('<tr data-layer-row='), (
+            "a group heading counts a different number of rows than it holds"
+        )
+        overdue = re.search(r'pill-overdue">(\d+) overdue', head)
+        assert (int(overdue.group(1)) if overdue else 0) == body.count("edge-danger")
+
+
+def test_a_task_with_no_account_gets_its_own_heading_last(client):
+    """A placement-attached task can carry no org legitimately, and those rows
+    cannot open a cell here. The heading says so ONCE instead of every row
+    saying it in a cell — and it is not an account, so it must not sit
+    among them."""
+    from bookkit.repo import tasks as tasks_repo
+
+    conn = client.app.state.conn
+    tasks_repo.create(conn, title="Orphan follow-up", due_on="2026-08-01")
+
+    names = _groups(client.get("/items").text)
+
+    assert names[-1] == "no account — these are not editable here", names
+
+
+def test_the_filter_chips_stay_above_the_groups(client):
+    """Narrowing to overdue narrows INSIDE the groups rather than replacing
+    them — the chips caption the whole page, the headings caption a list."""
+    html = client.get("/items?show=overdue").text
+
+    assert html.index('class="filter-chips"') < html.index('class="item-group-row"')
+    for block in _blocks(html):
+        body = block.split("</tr>", 1)[1]
+        assert body.count('<tr data-layer-row=') == body.count("edge-danger"), (
+            "the overdue view is showing rows that are not overdue"
+        )
+
+
+def test_a_write_keeps_the_grouping(client):
+    """`done` answers with the section, which is where the groups live — so
+    the shape has to come back with it."""
+    from bookkit.repo import tasks as tasks_repo
+
+    conn = client.app.state.conn
+    task = tasks_repo.open_tasks(conn)[0]
+
+    done = client.post(f"/items/tasks/{task.id}/done")
+
+    assert done.status_code == 200
+    assert 'class="item-group-row"' in done.text
+    assert "<th>Account</th>" not in done.text
