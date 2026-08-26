@@ -295,6 +295,22 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "tui": "l on the placements tab",
         "mcp": "program_layer_edit",
     },
+    "record_layer_policy": {
+        "web": "the worksheet's one primary action — GET/POST "
+        ".../layers/{layer_id}/record, the nine facts a policy brings asked "
+        "for together",
+        "tui": "NOT BUILT, and it will not be: bookkit's own TUI has no layer "
+        "sheet (the same reason `link_policy` gives one row down), and the "
+        "TUI is retired.",
+        "mcp": "NOT BUILT, and the absence is deliberate rather than a gap. "
+        "This verb exists because a PERSON fills nine boxes at once; an "
+        "assistant has `program_layer_edit` and `program_field_edit` and can "
+        "call them in whatever order it likes, each already batched and "
+        "revertible. A tool that took nine optional arguments would be those "
+        "two wearing a third name — which is the duplication the DRY rule "
+        "names, not the missing-verb one. Revisit if an assistant is ever "
+        "asked to record a policy and reaches for the wrong door.",
+    },
     "link_policy": {
         "web": "details row -> 'same policy as' picker "
         "(POST .../layers/{layer_id}/policy)",
