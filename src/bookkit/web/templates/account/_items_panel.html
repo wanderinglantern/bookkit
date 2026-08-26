@@ -41,7 +41,9 @@
              "num" class and the "req: <date>" fallback note are baked into
              due_cell itself via render_cell_display's extra_class/suffix. #}
           {% for row in item_rows %}
-            <tr class="is-{{ row.status }}">
+            {# The record hook the vertical hop (shift+Enter) resolves
+               against — see _tasks_panel.html. #}
+            <tr class="is-{{ row.status }}" data-layer-row="{{ row.id }}">
               {{ row.prompt_cell | safe }}
               <td>{{ row.kind }}</td>
               {{ row.category_cell | safe }}

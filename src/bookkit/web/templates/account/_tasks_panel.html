@@ -40,7 +40,11 @@
              "num" class and the overdue badge are baked into due_cell
              itself via render_cell_display's extra_class/suffix. #}
           {% for row in task_rows %}
-            <tr>
+            {# The record hook the vertical hop (shift+Enter) resolves
+               against — announced in #cell-keys on every page, so a table of
+               editable cells without one honours only half of what the help
+               text says. #}
+            <tr data-layer-row="{{ row.id }}">
               {{ row.due_cell | safe }}
               {{ row.title_cell | safe }}
               {{ row.category_cell | safe }}

@@ -68,7 +68,14 @@
         </thead>
         <tbody>
           {% for task in tasks %}
-            <tr{% if task.overdue %} class="edge-danger"{% endif %}>
+            {# `data-layer-row` is the RECORD HOOK — inline-cell.js resolves a
+               vertical hop (shift+Enter, down the same column) against it, and
+               #cell-keys in the shell announces that key on EVERY page. Without
+               it here the key half-worked on the app's second-densest editing
+               surface: 125 cells, and shift+Enter saved without ever moving.
+               A key a hint line names and does not honour is the dead
+               affordance tests/test_dead_keys.py exists to stop. #}
+            <tr data-layer-row="{{ task.id }}"{% if task.overdue %} class="edge-danger"{% endif %}>
               {% if task.editable %}
                 {{ task.cells.due_on | safe }}
                 {{ task.cells.title | safe }}
