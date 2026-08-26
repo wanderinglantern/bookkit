@@ -771,6 +771,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
     async def market_responded(
         response_ref: str,
         status: str | None = None,
+        via: str | None = None,
         responded_on: str | None = None,
         quote_expires_on: str | None = None,
         rate: str | None = None,
@@ -790,6 +791,13 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         client; `decline_reason_public` takes the controlled public wording and
         is what a client-facing report prints — leave it blank to say nothing,
         which is safer than a sentence anyone will wish they had not written.
+        `via` CORRECTS THE ACCESS POINT — the wholesaler or MGA the submission
+        actually went through — and PASSING AN EMPTY STRING makes it a DIRECT
+        approach, which is how an approach recorded through an intermediary
+        that in fact went straight to the carrier is cleaned up. It names a
+        market the book already carries (markets_list / market_create); it
+        does NOT move the approach to a different carrier, which is a
+        re-scoping this tool deliberately cannot do.
         `quote_expires_on` is the day THESE terms die — the date the whole
         chase queue is keyed on, so a quote recorded without one is on no
         clock at all; it is refused if it falls before the reply or before the
@@ -798,7 +806,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         expiry and decline reason: none of them is typed, and the recomputed
         status comes back as `submission_status`."""
         return _market_responded(
-            rw, response_ref, status=status, responded_on=responded_on,
+            rw, response_ref, status=status, via=via, responded_on=responded_on,
             quote_expires_on=quote_expires_on,
             rate=rate, premium=premium, fees=fees,
             decline_reason=decline_reason,
@@ -3515,6 +3523,7 @@ def _market_responded(
     conn: sqlite3.Connection,
     response_ref: str,
     status: str | None = None,
+    via: str | None = None,
     responded_on: str | None = None,
     quote_expires_on: str | None = None,
     rate: str | None = None,
@@ -3545,6 +3554,19 @@ def _market_responded(
     changes: dict[str, Any] = {}
     if status is not None:
         changes["status"] = status  # repo._validate_status refuses with the list
+    if via is not None:
+        # HOW WE REACHED THE PAPER, corrected — not WHICH paper, which would be
+        # a re-scoping (forms/inline.py's MARKET_RESPONSE_FIELDS docstring
+        # draws the line). AN EMPTY STRING IS AN ANSWER: it records a DIRECT
+        # approach, which is the correction that had no door on any surface at
+        # all until 2026-08-26 and is the reason this argument exists. A name
+        # the book does not carry is REFUSED rather than created, because
+        # `market_create` is the door that makes one, and a tool that mints a
+        # market as a side effect of correcting an approach is exactly the
+        # wrong write the missing-verb rule is about.
+        changes["via_org_id"] = (
+            _resolve_market(conn, via).id if via.strip() else None
+        )
     if responded_on is not None:
         changes["responded_on"] = _clean_typed("date", "responded_on", responded_on)
     if quote_expires_on is not None:
@@ -3571,8 +3593,8 @@ def _market_responded(
     if not changes:
         raise ValueError(
             "market_responded was given nothing to record — pass at least one "
-            "of status, responded_on, quote_expires_on, rate, premium, fees or "
-            "a decline reason"
+            "of status, via, responded_on, quote_expires_on, rate, premium, "
+            "fees or a decline reason"
         )
 
     submission = submissions_repo.get(conn, response.submission_id)

@@ -610,6 +610,7 @@ MARKET_RESPONSE_STATUSES = (
     "indicated",
     "quoted",
     "declined",
+    "declined_open_elsewhere",
     "non_response",
     "bound",
 )
@@ -627,6 +628,22 @@ and said no" is a different fact from "they never came back", and collapsing
 them makes the marketing effort look worse than it was on a document whose
 whole purpose is to show the effort.
 
+`declined_open_elsewhere` is A NO ABOUT THIS BAND, NOT ABOUT THIS MARKET
+(Grant, 2026-08-26). "Not for us on the primary, but show us the excess" is an
+ordinary answer and it has two halves; `declined` records only the first, and
+recording only the first ends the market — it drops out of the open set, off
+the clearance check, and reads on the client's workbook as a market that
+looked and walked away. A ROW IS ABOUT A BAND (`attach`/`lim` say which), so
+this is what that row says while the line is still being marketed to the same
+carrier somewhere else on the tower. It is OPEN below, because the thing left
+to do is real work somebody has to remember.
+
+WHERE they are open is not a field. The band a market invites is a sentence
+("would look at $10M xs $10M") that belongs in the internal note, and the
+moment a submission actually goes out there it is a ROW of its own at that
+attachment — which is the honest record, and the one the grid already knows
+how to hold.
+
 There is no `not_approached`. In a grid of one row per (line, market), the
 ABSENCE of a row carries it — provided the report renders that absence in
 words rather than as a blank cell a reader has to interpret."""
@@ -636,6 +653,7 @@ MARKET_RESPONSE_STATUS_LABELS: dict[str, str] = {
     "indicated": "Indicated",
     "quoted": "Quoted",
     "declined": "Declined",
+    "declined_open_elsewhere": "Declined — open elsewhere",
     "non_response": "Non-response",
     "bound": "Bound",
 }
@@ -648,8 +666,18 @@ a vocabulary is the copy that quietly differs (CLAUDE.md, DRY). Keyed by the
 raw status, so a surface colours and labels off the KEY and never reverse-maps
 a label back."""
 
-MARKET_RESPONSE_OPEN_STATUSES = ("pending", "indicated", "quoted")
-"""Still live: worth chasing, and what a clearance collision is checked over."""
+MARKET_RESPONSE_OPEN_STATUSES = (
+    "pending",
+    "indicated",
+    "quoted",
+    "declined_open_elsewhere",
+)
+"""Still live: worth chasing, and what a clearance collision is checked over.
+
+`declined_open_elsewhere` IS LIVE. The market said no to one band and yes to
+being asked about another, so it is still in the placement — and a clearance
+collision is precisely a carrier being reached twice while still in play,
+which is the state this status describes rather than the state it ends."""
 
 
 PUBLIC_DECLINE_REASONS = (

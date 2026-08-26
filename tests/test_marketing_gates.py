@@ -635,11 +635,104 @@ GRID_ONLY: dict[str, str] = {
         "lapse date on the sheet that leaves the building is a decision about "
         "the CLIENT report that nobody has made"
     ),
+    "access": (
+        "the SAME FACT the workbook's Market column already prints — not a "
+        "column the sheet is missing. `ReportRow.market_cell` folds the "
+        "intermediary into one cell ('Zurich (via RT Specialty)') because a "
+        "client only READS it; the grid splits it because a broker has to be "
+        "able to CORRECT it, which is the same reason the grid un-collapses "
+        "the sheet's 'Layer' into Attach and Limit and its 'Total est. cost' "
+        "into TRIA, Fees and SL tax. Printing it in both grid columns AND as "
+        "its own sheet column would state one fact twice on the client's copy"
+    ),
     "internal_reason": (
         "the underwriter's private opinion; INTERNAL only, and the workbook's "
         "own 'Decline reason' column carries it on the internal audience"
     ),
 }
+
+
+# ===========================================================================
+# G3b. A STATUS THE VOCABULARY DECLARES IS DRESSED EVERYWHERE IT IS READ.
+# ===========================================================================
+#
+# `models.MARKET_RESPONSE_STATUSES` is the one home, and three surfaces read it
+# through maps keyed by the raw status: the label a person reads, the tint the
+# pill takes, and the position it sorts to on both the panel and the workbook.
+# Every one of those is a `.get(..., default)`, so a status added to the tuple
+# and forgotten in a map does not raise — it renders untinted and sorts to the
+# bottom, silently, on a client-facing document. That is exactly the shape of
+# drift the DRY rule names: the copy that quietly DIFFERS.
+#
+# The two maps are checked and the LABELS are not, because
+# MARKET_RESPONSE_STATUS_LABELS is subscripted (not `.get`) where the pickers
+# are built (forms/inline.py), so a missing label is already a KeyError at
+# import. This gate is for the two that fail quietly.
+
+
+def test_g3b_every_declared_status_is_tinted_and_sorted(client_and_org) -> None:
+    """G3b — a status this book declares has a tint and a place in the order.
+
+    WHERE THIS GATE LOOKS: `marketing_grid._STATUS_TONE` (the pill's colour on
+    the panel) and `marketing_report._STATUS_ORDER` (the row order on the panel
+    AND in the client's workbook), against `models.MARKET_RESPONSE_STATUSES`.
+
+    WHERE IT CANNOT LOOK: whether the tint chosen is the RIGHT one — that
+    `declined_open_elsewhere` reads as work-to-do rather than as a declination
+    is a judgment, and the pill prints its own word either way.
+    """
+    from bookkit.models import MARKET_RESPONSE_STATUSES
+    from bookkit.web.marketing_grid import _STATUS_TONE
+
+    failures = [
+        f"status {status!r} has no {what}"
+        for status in MARKET_RESPONSE_STATUSES
+        for what, table in (
+            ("tint in marketing_grid._STATUS_TONE", _STATUS_TONE),
+            ("place in marketing_report._STATUS_ORDER", marketing_report._STATUS_ORDER),
+        )
+        if status not in table
+    ]
+    failures += [
+        f"{table_name} names {status!r}, which is not a declared status — "
+        f"a tint or an order for a word nothing can store"
+        for table_name, table in (
+            ("marketing_grid._STATUS_TONE", _STATUS_TONE),
+            ("marketing_report._STATUS_ORDER", marketing_report._STATUS_ORDER),
+        )
+        for status in table
+        if status not in MARKET_RESPONSE_STATUSES
+    ]
+    _named(
+        failures,
+        "a market-response status is declared and not dressed on every surface "
+        "that reads it:",
+    )
+
+
+def test_g3c_the_database_accepts_exactly_the_declared_statuses(conn) -> None:
+    """G3b's other half: the CHECK on `market_response.status` and the tuple in
+    models.py are one vocabulary, and a migration is the only way to widen the
+    first. A word added to the tuple with no migration behind it is refused by
+    SQLite at the moment a broker picks it — a red suite is cheaper than that.
+    """
+    from bookkit.models import MARKET_RESPONSE_STATUSES
+
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        ("market_response",),
+    ).fetchone()[0]
+    _named(
+        [
+            f"status {status!r} is declared in models.MARKET_RESPONSE_STATUSES "
+            f"and is not in the CHECK on market_response.status — widen it in "
+            f"a migration (018 is the worked example; SQLite cannot ALTER a "
+            f"CHECK, so it is a table rebuild)"
+            for status in MARKET_RESPONSE_STATUSES
+            if f"'{status}'" not in sql
+        ],
+        "the status vocabulary and the column that stores it disagree:",
+    )
 
 
 def _client_headers() -> tuple[str, ...]:
@@ -1168,6 +1261,14 @@ NAMED_FIX: dict[str, dict[str, str]] = {
         "field": "market_org_id"
     },
     "a market response needs a carrier or an intermediary": {"field": "via_org_id"},
+    # --- web/routes/marketing.py ------------------------------------------
+    # The Access cell's miss. NOT a retype: the reader typed a market the book
+    # does not carry, and the fix is either a different name (which the
+    # sentence lists, with scores) or minting the market — and minting one is
+    # somewhere else. Web only, because this cell is the web's; MCP's
+    # `market_responded` refuses the same miss in mcpserver.py, which this
+    # walk does not cover.
+    "no market on this book is called": {"web": "/markets/new"},
     "one basis measures money and the other counts things": {
         "field": "expected_exposure"
     },

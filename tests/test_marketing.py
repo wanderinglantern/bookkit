@@ -81,6 +81,11 @@ def _submission_status(conn, sub_id) -> str:
     [
         (["pending"], "out"),
         (["declined", "non_response"], "declined"),
+        # A NO ABOUT ONE BAND IS NOT A CLOSED PACKAGE. `declined` here would
+        # take the package off the "out at market" queue while the work of
+        # going back to that carrier higher up the tower is still to do.
+        (["declined_open_elsewhere"], "out"),
+        (["declined", "declined_open_elsewhere"], "out"),
         (["declined", "indicated"], "quoted"),
         (["declined", "quoted"], "quoted"),
         (["quoted", "bound"], "bound"),
@@ -1029,3 +1034,53 @@ def test_undoing_an_added_market_re_derives_from_the_rows_that_are_left(conn) ->
         "the reply date came off the market that was just removed"
     )
     _assert_cache_is_derived(conn, sub.id)
+
+
+# --- "not for us on the primary, but show us the excess" -------------------
+
+
+def test_a_market_open_elsewhere_is_still_cleared_against(conn) -> None:
+    """DECLINED HERE IS NOT GONE. `declined_open_elsewhere` is in
+    MARKET_RESPONSE_OPEN_STATUSES, so a carrier that said no to one band and
+    yes to being asked about another still collides with a second broker
+    reaching for the same paper on the same line — which is the whole point of
+    a clearance check, and exactly the state a plain `declined` would hide."""
+    _, placement = _setup(conn)
+    carrier, sub = _submission(conn, placement.id, "Zurich")
+    wholesaler = orgs.create(
+        conn, kind="market", name="RT Specialty Grp", status="active"
+    )
+    direct = marketing.create_response(
+        conn, sub.id, "general-liability",
+        market_org_id=carrier.id, status="declined_open_elsewhere",
+    )
+    _, other = _submission(conn, placement.id, "Amwins Grp")
+    marketing.create_response(
+        conn, other.id, "general-liability",
+        market_org_id=carrier.id, via_org_id=wholesaler.id, status="pending",
+    )
+
+    assert marketing.clearance_conflicts(conn, marketing.get_response(conn, direct.id))
+
+
+def test_a_plainly_declined_market_is_not_cleared_against(conn) -> None:
+    """The other half of the pair, so the test above is measuring the STATUS
+    and not merely that clearance works at all."""
+    _, placement = _setup(conn)
+    carrier, sub = _submission(conn, placement.id, "Zurich")
+    wholesaler = orgs.create(
+        conn, kind="market", name="RT Specialty Grp", status="active"
+    )
+    direct = marketing.create_response(
+        conn, sub.id, "general-liability",
+        market_org_id=carrier.id, status="declined",
+    )
+    _, other = _submission(conn, placement.id, "Amwins Grp")
+    marketing.create_response(
+        conn, other.id, "general-liability",
+        market_org_id=carrier.id, via_org_id=wholesaler.id, status="pending",
+    )
+
+    assert not marketing.clearance_conflicts(
+        conn, marketing.get_response(conn, direct.id)
+    )

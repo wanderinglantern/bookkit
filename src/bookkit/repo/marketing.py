@@ -439,6 +439,13 @@ def status_from_rows(responses: list[MarketResponse]) -> str:
         return _QUOTED
     if statuses <= {_DECLINED, _NON_RESPONSE}:
         return _DECLINED
+    # A PACKAGE HOLDING `declined_open_elsewhere` FALLS HERE, to `out`, and
+    # that is the answer rather than an omission. The market said no to one
+    # band and yes to being asked about another, so the package is not closed
+    # — `declined` would take it off the Pipeline's "out at market" queue and
+    # out of the chase while the work of going back to that carrier is still
+    # to do. `_OUT` is "asked, and nothing stronger back yet", which is exactly
+    # what a line still being marketed to that market says.
     return _OUT
 
 

@@ -85,6 +85,19 @@ NOT_SET = "not set"
 # whether an em-dash there means primary or means nobody has said.
 PRIMARY = "primary"
 
+# NO INTERMEDIARY IS NOT A MISSING FIGURE EITHER — it is the ordinary answer,
+# and it has a word for the same reason `primary` does. An em-dash in this
+# column would leave a reader deciding whether it means "we went straight to
+# the carrier" or "nobody has recorded how we got there", and those are
+# different facts. The EDITOR still pre-fills blank: what a form pre-fills has
+# to be something its own parser accepts back unchanged.
+DIRECT = "direct"
+
+# The one field on this grid that is stored as an ID and typed as a NAME. It
+# is spelled once here so the column, the cell route, the editor's completion
+# list and the MCP argument cannot drift apart over which key means it.
+VIA = "via_org_id"
+
 # key -> Field, so a URL segment can be checked against the editable set
 # server-side — the same guard routes/work.py applies to a task cell. The
 # markup constrains a mouse and nothing else.
@@ -125,10 +138,50 @@ class Column:
     # to an unwrapped sentence — the failure that pushed three columns off the
     # right-hand edge of the RFI panel (routes/work.py `_ITEM_CELL_CLASS`).
     prose: bool = False
+    # PINNED TO THE LEFT EDGE WHILE THE REST SCROLLS UNDER IT, 1-based in the
+    # order they pin. The grid is 22 columns and 41% of it is off-screen on a
+    # 1600px window (measured 2026-08-26), so by the time a reader reaches SL
+    # tax there was nothing on screen saying WHOSE row it is — and these two
+    # columns are the answer to exactly that question.
+    #
+    # DECLARED HERE rather than as an `nth-child` in the stylesheet, because
+    # the pin belongs to the column and a CSS rule counting positions goes
+    # silently wrong the moment a column is inserted before it. The second
+    # pin's left OFFSET is the first one's rendered width, which auto table
+    # layout decides from content — so it is measured in marketing-grid.js and
+    # cannot be a number in either file.
+    pin: int = 0
+
+    @property
+    def th_class(self) -> str:
+        """The header cell's class. A pinned column pins its HEADER too, or
+        the column slides out from under its own label."""
+        parts = []
+        if self.numeric:
+            parts.append("num")
+        if self.pin:
+            parts.append(f"pin pin-{self.pin}")
+        return " ".join(parts)
 
 
 COLUMNS: tuple[Column, ...] = (
-    Column("market", "Market", prose=True),
+    Column("market", "Market", prose=True, pin=1),
+    # HOW WE REACHED THAT PAPER, its own column and its own cell.
+    #
+    # THE GRID UN-COLLAPSES WHAT A BROKER HAS TO TYPE — the same rule that
+    # splits the workbook's "Layer" into Attach and Limit and its "Total est.
+    # cost" into three. The sheet prints "Zurich (via RT Specialty)" in one
+    # cell because a client only READS it (`ReportRow.market_cell`, still the
+    # sheet's); a broker has to be able to CORRECT it, and until this column
+    # existed no surface in the app could — not a cell, not a form, not an MCP
+    # argument (Grant, 2026-08-26: "no way to update the access point … to
+    # turn back to a direct approach"). Recording a wholesaler and finding out
+    # the submission went direct is an ordinary correction with no fix.
+    #
+    # AND IT IS NOT A SECOND COPY OF THE MARKET COLUMN. The Market cell beside
+    # it now prints the CARRIER alone, so the two columns state two facts once
+    # each rather than one fact twice (CLAUDE.md, DRY).
+    Column("access", "Access", field=VIA, prose=True, pin=2),
     Column("best", "Best"),
     Column("attach", "Attach", numeric=True, field="attach"),
     Column("lim", "Limit", numeric=True, field="lim"),
@@ -198,6 +251,12 @@ _STATUS_TONE = {
     "quoted": "is-accent",
     "indicated": "is-slate",
     "pending": "is-warn",
+    # THE SAME TINT AS `pending`, because it means the same thing to the eye
+    # scanning this column: there is something still to do here. It is NOT the
+    # decline tint — reading it as danger is exactly the misreading the status
+    # exists to stop (models.MARKET_RESPONSE_STATUSES says why), and the pill
+    # prints its own words either way.
+    "declined_open_elsewhere": "is-warn",
     "declined": "is-danger",
     "non_response": "is-muted",
 }
@@ -239,7 +298,17 @@ def _cells(
     row: marketing_report.ReportRow, window: marketing_report.DateWindow | None
 ) -> dict[str, dict[str, Any]]:
     return {
-        "market": _cell(row.market_cell),
+        # THE CARRIER ALONE. `market_cell` — which folds the intermediary in —
+        # is the SHEET's rendering and stays the sheet's: the Access column
+        # beside this one is where the grid says how the paper was reached, and
+        # printing it in both places states one fact twice. What survives here
+        # is the "carrier TBD" case, because a row addressed only to a
+        # wholesaler has no carrier to print and a blank first cell reads as a
+        # rendering fault.
+        "market": _cell(
+            row.market or ("carrier TBD" if row.via else row.market_cell)
+        ),
+        "access": _cell(row.via or DIRECT),
         "best": _cell(row.best or DASH),
         # PRIMARY IN WORDS, and only in the display. The editor pre-fills from
         # the stored value (blank), because what a form pre-fills has to be
@@ -325,6 +394,11 @@ def _column_class(column: Column, cell: dict[str, Any]) -> str:
         parts.append("num mono")
     elif column.prose:
         parts.append("prose")
+    if column.pin:
+        # THE SAME TWO CLASSES THE HEADER TAKES (`Column.th_class`), because a
+        # pinned body cell and an unpinned header slide apart the moment the
+        # grid is scrolled sideways.
+        parts.append(f"pin pin-{column.pin}")
     if cell["pill"]:
         parts.append("pill-cell")
     if cell["tone"]:
@@ -360,8 +434,29 @@ def sent_display_value(
     return marketing_report.fmt_date(sent_on, window) or DASH
 
 
+def _via_or_raise(key: str, via_name: str | None) -> str:
+    """The access point's name, or a refusal to guess one.
+
+    `via_org_id` is the ONE editable key on this grid whose stored value is an
+    id and whose printed value is a NAME, so the two functions below cannot
+    read it off the row the way they read every other one — the name is a
+    lookup and only the route holds a connection. Raising rather than falling
+    through to `str(value)` is the point: the fall-through prints a ULID into
+    the cell a broker reads, which looks like data rather than like a bug."""
+    if via_name is None:
+        raise ValueError(
+            f"{key} is stored as an id and printed as a name — pass via_name "
+            "(routes/marketing.py resolves it through repo.orgs)"
+        )
+    return via_name
+
+
 def display_value(
-    response: Any, key: str, window: marketing_report.DateWindow | None = None
+    response: Any,
+    key: str,
+    window: marketing_report.DateWindow | None = None,
+    *,
+    via_name: str | None = None,
 ) -> str:
     """What an editable cell SHOWS. Read off the stored row rather than off the
     composed report, because the display route re-renders one cell after a save
@@ -371,6 +466,11 @@ def display_value(
     The one departure from `initial_text` is `attach`: blank means primary and
     says so. The EDITOR still pre-fills blank (see `_cells`)."""
     value = getattr(response, key, None)
+    if key == VIA:
+        # DIRECT IN WORDS, and only in the display — same split as `primary`
+        # one line down: the editor pre-fills blank, because what a form
+        # pre-fills has to be something its own parser accepts back unchanged.
+        return _via_or_raise(key, via_name) or DIRECT
     if key == "attach":
         return _money(value) if value is not None else PRIMARY
     field = CELL_FIELDS[key]
@@ -390,9 +490,15 @@ def display_value(
     return str(value) if value else DASH
 
 
-def editor_value(response: Any, key: str) -> str:
+def editor_value(response: Any, key: str, *, via_name: str | None = None) -> str:
     """What an editable cell's EDITOR pre-fills with — always the stored value
     in the form its own parser accepts back, never the display string."""
+    if key == VIA:
+        # THE NAME, NOT THE ID, and BLANK where the display says "direct":
+        # blank is what this cell's own parser reads as a direct approach, so
+        # clearing the box and typing nothing is the correction Grant asked
+        # for rather than a value that has to be spelled.
+        return _via_or_raise(key, via_name)
     return initial_text(CELL_FIELDS[key], getattr(response, key, None))
 
 
@@ -502,6 +608,13 @@ def _provisional_cells(
     """
     return {
         "market": _cell(row.market),
+        # EMPTY, NOT `direct`. A submission has no intermediary column at all
+        # — the access point is a fact about a RESPONSE — so "direct" here
+        # would be a claim nobody made about a package that has not been
+        # recorded against a line of coverage yet. This is the same reading
+        # the rate and basis cells below take: what could not be known of a
+        # package like this is left blank, and the block heading says why.
+        "access": _cell(""),
         "best": _cell(row.best or DASH),
         # NO ATTACHMENT AND NO "PRIMARY". A submission states a limit, never a
         # band, and `PRIMARY` in this cell would claim the quote sits at the
