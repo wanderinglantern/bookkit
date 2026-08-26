@@ -148,6 +148,81 @@ def find_by_name(conn: sqlite3.Connection, name: str) -> Org | None:
     return Org.from_row(row) if row else None
 
 
+def create_market(conn: sqlite3.Connection, name: str) -> Org:
+    """A market the book has never carried, under the EXACT spelling typed.
+
+    A STUB IS A REAL RECORD, not a placeholder: name, kind and status, which
+    is everything `org_form(default_kind="market")` fills in for itself — the
+    market type, the Best rating, the appetite and the underwriters are all
+    facts nobody has yet, and the data-entry rule is that a fact off a
+    document is never asked for early. /markets/{ref} is where the rest of it
+    is filled in later.
+
+    Status is ACTIVE, the same default `org_form` gives a new market and for
+    the same reason: a market this book is submitting to is in use by
+    definition.
+
+    ONE HOME for the act, because three doors now perform it — the marketing
+    grid's inline create, MCP's `market_create`, and sync's carrier
+    auto-create — and a market minted three ways is three sets of defaults
+    that drift.
+    """
+    return create(conn, kind="market", name=name.strip(), status="active")
+
+
+def find_market(conn: sqlite3.Connection, ref_or_name: str) -> Org | None:
+    """The market a typed ref or name refers to — THE ONE DEFINITION.
+
+    Two surfaces resolve a typed carrier and both used to do it by hand:
+    `routes/marketing.py._market_named` and `mcpserver._resolve_market`. One
+    rule, one home (CLAUDE.md's standing rule), and the copies had already
+    started to differ in what they said about a miss.
+
+    IT LOOKS AMONG MARKETS, not among every org and then checks the kind.
+    `find_by_name` is a bare `WHERE name = ?` over the whole table, so a
+    CLIENT named the same as a market answers first and the market is then
+    unreachable: the caller sees `kind != "market"` and refuses, naming the
+    very market it just failed to find. That is one click away now that a
+    market can be created from the marketing grid.
+
+    NOT CASE-SENSITIVE on the name half, for the reason `guard_name` is not:
+    "zurich" and "Zurich" are the same market to everyone but SQL, and a
+    resolver that misses on case sends a broker to create a second one.
+    """
+    org = find(conn, ref_or_name)
+    if org is not None and org.kind == "market":
+        return org
+    row = conn.execute(
+        f"""SELECT * FROM org
+             WHERE kind = 'market' AND lower(name) = lower(?) AND {base.alive()}
+             ORDER BY name LIMIT 1""",
+        (ref_or_name.strip(),),
+    ).fetchone()
+    return Org.from_row(row) if row else None
+
+
+def near_markets(
+    conn: sqlite3.Connection, typed: str, limit: int = 3
+) -> list[tuple[Org, int]]:
+    """The markets a typed name looks like, best first, with their scores.
+
+    The scores travel with the rows because a surface prints them: "82% alike"
+    is a fact a broker can judge and "did you mean…" is not — the same reading
+    `repo.lines.near_matches` takes, and this is its twin for the other side
+    of the book.
+    """
+    from rapidfuzz import process
+
+    markets = list_orgs(conn, kind="market")
+    by_name = {org.name: org for org in markets}
+    return [
+        (by_name[name], round(score))
+        for name, score, _ in process.extract(
+            typed, list(by_name), limit=limit, score_cutoff=60
+        )
+    ]
+
+
 def list_orgs(
     conn: sqlite3.Connection,
     kind: str | None = None,
@@ -181,21 +256,21 @@ def delete(conn: sqlite3.Connection, org_id: str) -> None:
 
 
 def set_market_profile(conn: sqlite3.Connection, org_id: str, **fields: Any) -> MarketProfile:
-    existing = conn.execute(
-        "SELECT * FROM market_profile WHERE org_id = ?", (org_id,)
-    ).fetchone()
+    """What a market IS — its type and its A.M. Best rating — through
+    base.insert/base.update, so the write is EVENT-LOGGED like every other.
+
+    It was raw SQL until 2026-08-26, which meant a rating typed on the web
+    left no event_log row: nothing in the changes list, nothing for `u` or
+    revert_batch to take back, and no record of when it was set. Migration 017
+    gave the table the id/timestamps/deleted_at that base's contract needs;
+    the id IS the org id, because a profile is 1:1 with its market and has no
+    life of its own.
+    """
+    existing = get_market_profile(conn, org_id)
     if existing is None:
-        cols = ", ".join(["org_id", *fields])
-        marks = ", ".join("?" for _ in range(len(fields) + 1))
-        conn.execute(
-            f"INSERT INTO market_profile ({cols}) VALUES ({marks})",
-            (org_id, *fields.values()),
-        )
+        base.insert(conn, "market_profile", {"id": org_id, "org_id": org_id, **fields})
     elif fields:
-        sets = ", ".join(f"{k} = ?" for k in fields)
-        conn.execute(
-            f"UPDATE market_profile SET {sets} WHERE org_id = ?", (*fields.values(), org_id)
-        )
+        base.update(conn, "market_profile", org_id, fields)
     return get_market_profile(conn, org_id)  # type: ignore[return-value]
 
 
@@ -211,14 +286,18 @@ def best_ratings_for(
         return {}
     marks = ",".join("?" * len(org_ids))
     rows = conn.execute(
-        f"SELECT org_id, am_best_rating FROM market_profile WHERE org_id IN ({marks})",
+        f"SELECT org_id, am_best_rating FROM market_profile"
+        f" WHERE org_id IN ({marks}) AND {base.alive()}",
         tuple(org_ids),
     ).fetchall()
     return {str(r["org_id"]): str(r["am_best_rating"]) for r in rows if r["am_best_rating"]}
 
 
 def get_market_profile(conn: sqlite3.Connection, org_id: str) -> MarketProfile | None:
-    row = conn.execute("SELECT * FROM market_profile WHERE org_id = ?", (org_id,)).fetchone()
+    row = conn.execute(
+        f"SELECT * FROM market_profile WHERE org_id = ? AND {base.alive()}",
+        (org_id,),
+    ).fetchone()
     return MarketProfile.from_row(row) if row else None
 
 

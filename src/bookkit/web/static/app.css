@@ -3422,6 +3422,24 @@ tr:hover .market .chip-remove {
   background: var(--stone);
 }
 
+/* THE QUESTION HAS TO BE WHERE THE READER IS. The marketing grid is
+   `width: max-content` inside a `.table-scroll`, so the add row's `<td>`
+   spans a table that is routinely wider than the window — and a broker who
+   has scrolled right to read the Total column and then types a carrier gets
+   this card rendered off the left edge, buttons and all, with nothing on
+   screen to say a question was even asked. `sticky; left: 0` pins it to the
+   visible edge of the scroller wherever the grid is scrolled to.
+
+   And the max-width is the measure rule: without it the card inherits the
+   whole table's width and sets a sentence across 2500px (Grant, 2026-08-24 —
+   a working surface fills the window, a READING surface keeps its measure,
+   and this card is prose). */
+.market-add-row .marketing-clash {
+  position: sticky;
+  left: 0;
+  max-width: 46rem;
+}
+
 .marketing-clash-head {
   margin: 0 0 0.35rem;
   font-size: var(--body-size);

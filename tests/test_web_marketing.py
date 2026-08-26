@@ -1489,21 +1489,24 @@ def test_the_add_row_refusal_sits_where_a_keystroke_can_clear_it(client_and_org)
     client, org = client_and_org
     placement = _linked(client, org)
 
+    # A MONEY FIELD, not the carrier: a carrier the book has never carried is
+    # no longer refused at all — it is a question with an "add it" button
+    # (2026-08-26) — and this test is about where a REFUSAL sits.
     refused = client.post(
         f"/accounts/{org.ref}/program/{placement.id}/marketing/lines/{GL}/approaches",
-        data={"market": "Zzzz Mutual", "via": "", "attach": "", "lim": "",
+        data={"market": "", "via": "", "attach": "banana", "lim": "",
               "sent_on": "2026-08-10", "status": "pending"},
     )
 
     assert refused.status_code == 200
-    assert "no market matching" in refused.text
+    assert "attaches at" in refused.text
     scope = _scope_of(refused.text, "cell-error-msg")
     assert any("market-add-form" in classes for classes in scope), (
         "the refusal is outside the scope the clear-on-keystroke listener walks: "
         f"{scope}"
     )
     # COMMIT IN PLACE: what was typed is still in the row.
-    assert 'value="Zzzz Mutual"' in refused.text
+    assert 'value="banana"' in refused.text
 
 
 def test_the_add_row_refuses_a_blank_status_rather_than_filing_pending(
@@ -2054,23 +2057,258 @@ def test_a_carrier_cannot_be_reached_through_itself(client_and_org):
     ]
 
 
-def test_a_market_new_to_the_book_is_told_where_to_put_it(client_and_org):
-    """A REFUSAL NAMES THE FIX. A carrier this book has never carried is
-    ordinary in placement, and `nearest: none close` stated the objection and
-    stopped — the one refusal on this panel that fell short of the standard
-    `date_refusal` sets."""
-    client, org = client_and_org
-    placement = _linked(client, org)
+# ===========================================================================
+# A MARKET NEW TO THE BOOK IS ADDED FROM THE ROW (Grant, 2026-08-26)
+# ===========================================================================
+#
+# "Being able to add a market easily if not in the market database vs. having
+# to toggle over to the other tab to add. Default behavior in the program
+# should be to easily create new records without having to navigate away from
+# the work in progress — even if a stub record to come back to later."
+#
+# What was there before named /markets/new and stopped. That is a REFUSAL
+# naming a fix, which is the house standard for a refusal — but the fix was on
+# another page, and going there abandons a half-typed approach: the sent date,
+# the attachment, the limit and the status are all gone when you come back.
 
-    refused = client.post(
+
+def test_a_market_new_to_the_book_is_offered_rather_than_refused(client_and_org):
+    """The question, not the wall — and NOTHING is written while it is open."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing, orgs
+
+    asked = client.post(
         _approaches_url(org, placement),
         data={"market": "Zzzz Mutual", "via": "", "attach": "", "lim": "",
               "sent_on": "2026-08-10", "status": "pending"},
     )
 
-    assert refused.status_code == 200
-    assert "no market matching" in refused.text
-    assert "/markets/new" in refused.text, refused.text[:1200]
+    assert asked.status_code == 200
+    assert "is not a market this book carries" in asked.text
+    assert "add “Zzzz Mutual” to the book" in asked.text, asked.text[:1500]
+    # THE QUESTION IS NOT THE ANSWER: no market, no approach.
+    assert orgs.find_market(conn, "Zzzz Mutual") is None
+    assert not [
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL
+    ]
+    # COMMIT IN PLACE: the rest of the row survives the question.
+    assert 'value="2026-08-10"' in asked.text
+
+
+def test_confirming_mints_the_market_and_records_the_approach(client_and_org):
+    """One click, one write: the stub and the approach it was needed for."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing, orgs
+
+    saved = client.post(
+        _approaches_url(org, placement),
+        data={"market": "Zzzz Mutual", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending",
+              "create_market": "yes"},
+    )
+
+    assert saved.status_code == 200
+    minted = orgs.find_market(conn, "Zzzz Mutual")
+    assert minted is not None
+    # A STUB IS A REAL RECORD: the defaults org_form gives a new market.
+    assert (minted.kind, minted.name) == ("market", "Zzzz Mutual")
+    assert str(getattr(minted.status, "value", minted.status)) == "active"
+    rows = [
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL and r.market_org_id == minted.id
+    ]
+    assert len(rows) == 1
+
+
+def test_the_market_and_the_approach_revert_together(client_and_org):
+    """ONE WRITER ACTION IS ONE UNDO UNIT. A revert that took the approach
+    back and left the market behind would leave a record nobody asked for, on
+    the one table where a duplicate is the thing every guard here prevents."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit import db
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import marketing, orgs
+    from bookkit.services import batches as batches_svc
+
+    client.post(
+        _approaches_url(org, placement),
+        data={"market": "Zzzz Mutual", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending",
+              "create_market": "yes"},
+    )
+    assert orgs.find_market(conn, "Zzzz Mutual") is not None
+
+    batch = batches_repo.recent(conn, since="2000-01-01T00:00:00+00:00", limit=1)[0]
+    assert batch.tool == "market_approach"
+    result = batches_svc.revert(conn, batch.ref, now=db.utc_now())
+    assert result.reverted, result
+
+    assert orgs.find_market(conn, "Zzzz Mutual") is None
+    assert not [
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL
+    ]
+
+
+def test_the_question_offers_the_markets_the_typo_looks_like(client_and_org):
+    """ADVISORY, NEVER A VETO — and the cheap half of the anti-duplicate rule
+    is that the market already on the book is one click away."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import orgs
+
+    existing = _market(conn, "Travelers")
+
+    asked = client.post(
+        _approaches_url(org, placement),
+        data={"market": "Travellers", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending"},
+    )
+
+    assert "use Travelers" in asked.text, asked.text[:1500]
+    assert "% alike" in asked.text
+
+    used = client.post(
+        _approaches_url(org, placement),
+        data={"market": "Travellers", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending",
+              "use_market": existing.id},
+    )
+    assert used.status_code == 200
+    # THE ID IS AUTHORITATIVE: nothing was minted under the misspelling.
+    assert orgs.find_market(conn, "Travellers") is None
+    from bookkit.repo import marketing
+
+    assert [
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL and r.market_org_id == existing.id
+    ]
+
+
+def test_a_market_the_book_already_carries_is_never_asked_about(client_and_org):
+    """Case is not a difference. `find_by_name` is a bare `WHERE name = ?`, so
+    "travelers" missed "Travelers" and the broker was asked to create a second
+    one — the duplicate this question exists to prevent, minted by the question
+    itself."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    existing = _market(conn, "Travelers")
+
+    saved = client.post(
+        _approaches_url(org, placement),
+        data={"market": "travelers", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending"},
+    )
+
+    assert "is not a market this book carries" not in saved.text
+    assert [
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL and r.market_org_id == existing.id
+    ]
+
+
+def test_a_client_of_the_same_name_does_not_hide_the_market(client_and_org):
+    """`find_by_name` reads the whole org table and returns the FIRST match, so
+    a client sharing a market's name answered first, the caller saw
+    `kind != "market"` and refused — naming, as the nearest market, the very
+    market it had just failed to find. One click from real now that a market
+    can be minted from this row."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing, orgs
+
+    # THE CLIENT FIRST, deliberately. `find_by_name` is a bare
+    # `WHERE name = ?` with no ORDER BY, so it answers with whichever row
+    # SQLite reaches first — and with the market created first this test
+    # passes against the OLD code by luck of row order rather than because the
+    # resolver is right (checked by mutation, 2026-08-26).
+    orgs.create(conn, kind="client", name="Hartwell Mutual", status="prospect")
+    market = _market(conn, "Hartwell Mutual")
+
+    saved = client.post(
+        _approaches_url(org, placement),
+        data={"market": "Hartwell Mutual", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending"},
+    )
+
+    assert "is not a market this book carries" not in saved.text
+    assert [
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL and r.market_org_id == market.id
+    ]
+
+
+def test_both_names_new_are_asked_one_at_a_time_and_written_once(client_and_org):
+    """Both boxes can be new to the book. The answer to the first question has
+    to survive the second, or the two ping-pong forever — and NOTHING is
+    written until every name on the row has an answer, so abandoning the second
+    question cannot leave a market behind with no approach."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing, orgs
+
+    row = {"market": "Zzzz Mutual", "via": "Qqqq Brokers", "attach": "",
+           "lim": "", "sent_on": "2026-08-10", "status": "pending"}
+
+    first = client.post(_approaches_url(org, placement), data=row)
+    assert "add “Zzzz Mutual” to the book" in first.text
+
+    second = client.post(
+        _approaches_url(org, placement), data={**row, "create_market": "yes"}
+    )
+    # The SECOND question, with the first answer carried as a hidden input.
+    assert "add “Qqqq Brokers” to the book" in second.text, second.text[:1500]
+    assert 'name="create_market" value="yes"' in second.text
+    assert orgs.find_market(conn, "Zzzz Mutual") is None
+
+    saved = client.post(
+        _approaches_url(org, placement),
+        data={**row, "create_market": "yes", "create_via": "yes"},
+    )
+    assert saved.status_code == 200
+    carrier = orgs.find_market(conn, "Zzzz Mutual")
+    intermediary = orgs.find_market(conn, "Qqqq Brokers")
+    assert carrier is not None and intermediary is not None
+    assert [
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL and r.market_org_id == carrier.id
+        and r.via_org_id == intermediary.id
+    ]
+
+
+def test_one_new_name_in_both_boxes_is_refused_and_mints_nothing(client_and_org):
+    """PAPER IS NOT REACHED THROUGH ITSELF, and the guard compares two IDS —
+    so confirming the same new name in both boxes would have minted it twice,
+    handed that guard two different ids, and left the book with a duplicate the
+    merge tool has to clean up."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import orgs
+
+    refused = client.post(
+        _approaches_url(org, placement),
+        data={"market": "Zzzz Mutual", "via": "Zzzz Mutual", "attach": "",
+              "lim": "", "sent_on": "2026-08-10", "status": "pending",
+              "create_market": "yes", "create_via": "yes"},
+    )
+
+    assert "not reached through itself" in refused.text, refused.text[:1200]
+    # THE WHOLE BATCH ROLLED BACK, the create included.
+    assert orgs.find_market(conn, "Zzzz Mutual") is None
 
 
 # ===========================================================================

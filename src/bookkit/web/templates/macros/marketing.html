@@ -60,7 +60,7 @@
 {% endmacro %}
 
 
-{% macro add_row(block, fields, values, columns, error=None, preserve=False) %}
+{% macro add_row(block, fields, values, columns, error=None, preserve=False, pending=None, decided={}) %}
   {# AN EXPLICIT SAVE, not inline cells (CLAUDE.md: "NOT the rule for whole
      forms"). Six fields are filled in one go and tabbing between them must not
      commit half a row — a half-written approach is a market this book claims
@@ -94,6 +94,16 @@
   <tr class="market-add-row marketing-add-row" id="add-{{ block.id }}"{% if preserve %} hx-preserve="true"{% endif %}>
     <td colspan="{{ columns | length + 1 }}">
       <div class="market-add-form marketing-add-fields">
+        {# WHAT AN EARLIER QUESTION ON THIS ROW WAS ALREADY ANSWERED WITH.
+           Both market names can be new to the book and the question is asked
+           one at a time, so the answer to the first rides back as a hidden
+           input with the next post (`hx-include="closest tr"` gathers it).
+           Without it the two questions ping-pong: confirm the carrier, get
+           asked about the intermediary, and confirming that one re-asks about
+           the carrier. #}
+        {% for key, val in decided.items() %}
+          <input type="hidden" name="{{ key }}" value="{{ val }}">
+        {% endfor %}
         {% for f in fields %}
           {# THE LABEL IS VISIBLE. A placeholder vanishes on the first
              keystroke and is only ever a format example. #}
@@ -152,6 +162,56 @@
       <p class="marketing-add-hint">A carrier or an intermediary — one of the
         two is enough. Leave the carrier blank while a wholesaler has not named
         the paper.</p>
+      {% if pending %}
+        {# A MARKET NEW TO THE BOOK IS ADDED FROM HERE (Grant, 2026-08-26).
+           A carrier this book has never carried is ordinary in placement, and
+           the old answer was a refusal naming /markets/new — which sends a
+           broker away from a row they are half-way through typing, and the
+           rest of it is gone when they come back.
+
+           ADVISORY, NEVER A VETO, the same shape the line-of-coverage clash
+           above takes: "Zurich" and "Zurich American" are two real markets on
+           most books, so nothing here can pick for them. The scores print
+           because "91% alike" is a fact a broker can judge.
+
+           IT LIVES INSIDE THIS `<tr>`. htmx parses a response by its first
+           tag, so a sibling element after a `<tr>` is foster-parented out of
+           the fragment before htmx ever sees it — the rule CLAUDE.md records
+           as ONE RESPONSE, ONE TOP-LEVEL ELEMENT.
+
+           The buttons re-post the whole row (`hx-include="closest tr"`), so
+           every other value the broker typed comes back with the answer. #}
+        <div class="marketing-clash" role="status"
+             aria-label="markets that look like the {{ pending.label }} you typed">
+          <p class="marketing-clash-head">{{ pending.head }}</p>
+          {% if pending.matches %}
+            <ul class="marketing-clash-list">
+              {% for match in pending.matches %}
+                <li class="marketing-clash-match">
+                  <span class="marketing-clash-name">{{ match.name }}</span>
+                  <span class="detail-label">{{ match.score }}% alike</span>
+                  <button type="button" class="row-action-btn"
+                          hx-post="{{ block.add_url }}" hx-include="closest tr"
+                          hx-vals='{{ match.vals }}'
+                          hx-target="closest tr" hx-swap="outerHTML">use {{ match.name }}</button>
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+          <button type="button" class="row-action-btn"
+                  hx-post="{{ block.add_url }}" hx-include="closest tr"
+                  hx-vals='{{ pending.create_vals }}'
+                  hx-target="closest tr" hx-swap="outerHTML">add “{{ pending.name }}” to the book</button>
+          {# WHAT THE BUTTON ABOVE ACTUALLY WRITES, said before it is pressed.
+             A stub is a real record and the rest of it — market type, Best
+             rating, appetite, underwriters — is filled in on the market's own
+             page whenever those facts arrive. None of them is asked for here,
+             because none of them is known while a submission is going out. #}
+          <p class="marketing-add-hint">It is added as the {{ pending.label }}
+            on this approach and as a market on the book, with its name alone —
+            fill the rest in on its own page when you have it.</p>
+        </div>
+      {% endif %}
     </td>
   </tr>
 {% endmacro %}

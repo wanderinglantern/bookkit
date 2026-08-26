@@ -58,6 +58,45 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "a rename point _resolve_client at the wrong account; repo/orgs."
         "guard_name owns that now, so the TUI and the web inherit it too.",
     ),
+    # --- market_profile: what a market IS ---
+    #
+    # THE MARKET HALF OF THE BOOK HAD NO CREATE DOOR AT ALL until 2026-08-26.
+    # An assistant asked to add a carrier reached for the only one there was,
+    # `client_create`, and the carrier landed as an ACCOUNT: invisible to every
+    # market picker, unreachable by market_approach, and a kind that cannot be
+    # corrected (mcpsurface.DENIED). Grant hit it in real use.
+    ("market_profile", "create"): (
+        ("market_create",),
+        "`market_create` is the org create AND the profile in one batch — a "
+        "market is the only org kind whose defining facts (type, Best rating) "
+        "live on a second table, so splitting them across two calls would "
+        "leave the create half revertible and the other half not. Refuses a "
+        "near-duplicate of a market already on the book, naming it: two "
+        "markets four letters apart are 'Zurich' and 'Zurich Insurance "
+        "Group', and a second row for one carrier splits its submissions, "
+        "appetite and underwriters across records no lookup joins. (That is a "
+        "REFUSAL here where `line_add`'s is only a warning, because two lines "
+        "of coverage four letters apart are routinely different cover.)",
+    ),
+    ("market_profile", "read"): (
+        ("markets_list",),
+        "ref, name, market type, Best rating and status, optionally narrowed "
+        "by name — the market half of what `lines_list` is for lines of "
+        "coverage, and the list every marketing tool's exact name comes from. "
+        "`search` finds an org by name but does not say whether it is a "
+        "client or a market, which is how a market came to be created as a "
+        "client.",
+    ),
+    ("market_profile", "update"): (
+        ("market_edit",),
+        "market_type and am_best_rating. A VERB rather than two more "
+        "edit_field columns because neither is a column of `org`: both live "
+        "on market_profile and are written by orgs.set_market_profile, which "
+        "mcpsurface.NOT_A_COLUMN has always said, naming this door. Every "
+        "other field of a market (name, status, website, domain, notes, "
+        "owner, hq) IS an org column and stays edit_field's, under the "
+        "('org', 'update') cell above.",
+    ),
     # --- contact ---
     ("contact", "create"): (
         ("contact_add",),
@@ -452,6 +491,17 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
 # (entity, verb) -> why it is not on the surface. Nothing here is a promise to
 # build it; several are decisions to leave it alone.
 DEFERRED: dict[tuple[str, str], str] = {
+    ("market_profile", "delete"): (
+        "DECISION, not a gap, and the same one ('org', 'delete') takes. A "
+        "market profile has no life of its own — it IS the market, keyed by "
+        "the org's own id (migration 017) — so deleting it means retiring the "
+        "market, which strands every submission, response, appetite row and "
+        "underwriter pointing at it. The honest verb there is MERGE, which "
+        "moves the references first. (`market_edit` sets these two facts and does "
+        "not clear either back to blank — an omitted argument means 'leave it "
+        "alone', which is the reading a partial update needs; unsetting one is "
+        "a real gap and a small one.)"
+    ),
     # --- marketing, added with migrations 014/015 (2026-08-25) ---
     #
     # Twelve cells appeared the moment `line_of_coverage`, `market_response`

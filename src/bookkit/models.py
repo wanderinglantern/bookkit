@@ -166,11 +166,24 @@ class Org(Row):
 
 
 class MarketProfile(Row):
+    """What a market IS, 1:1 with its org row.
+
+    `id` IS `org_id` (migration 017). The row gained an id and the three
+    timestamps so its writes could go through base.insert/base.update and be
+    event-logged like every other — a Best rating used to be written by raw
+    SQL, so it appeared in no changes list and `u` could not take it back.
+    A profile has no life of its own, which is why minting a second identifier
+    for it would only mean a lookup before every write."""
+
+    id: str
     org_id: str
     am_best_rating: str | None = None
     naic_number: str | None = None
     market_type: MarketType | None = None
     notes: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    deleted_at: str | None = None
 
 
 class Appetite(Row):

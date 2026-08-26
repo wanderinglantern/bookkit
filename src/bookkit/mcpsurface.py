@@ -229,12 +229,17 @@ NOT_A_COLUMN: dict[tuple[str, str], str] = {
     ("org", "market_type"): (
         "Lives on the `market_profile` table, not on `org` — forms.entities."
         "apply_org pops it and calls orgs.set_market_profile. base.update "
-        "against `org` cannot reach it. A market_profile kind would need its "
-        "own resolver."
+        "against `org` cannot reach it. NO LONGER UNREACHABLE: `market_edit` "
+        "takes both profile columns and writes them through the same "
+        "set_market_profile (2026-08-26). Denied field, present verb — the "
+        "shape the task.assignee entry above says the answer is, and this "
+        "entry asked for by name when it said a market_profile kind would "
+        "need its own resolver."
     ),
     ("org", "am_best_rating"): (
         "Same: a market_profile column, written by orgs.set_market_profile, "
-        "not by an org field write."
+        "not by an org field write — and reachable the same way, through "
+        "`market_edit`."
     ),
     ("task", "assignee"): (
         "One typed string that becomes THREE task columns — assignee_kind + "

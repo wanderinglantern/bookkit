@@ -1173,13 +1173,21 @@ async def marketing_approach_add(
         if field.required and values[field.key] in (None, ""):
             return refused(f"{field.label} is required")
 
-    carrier = _market_named(conn, values.get("market"))
-    intermediary = _market_named(conn, values.get("via"))
-    if isinstance(carrier, str):
-        return refused(carrier)
-    if isinstance(intermediary, str):
-        return refused(intermediary)
-    if carrier is None and intermediary is None:
+    # A MARKET NEW TO THE BOOK IS ADDED FROM HERE, not on another tab.
+    # `_resolve_markets` answers with the two orgs, or with the question the
+    # add row asks before it mints one — and nothing is created until every
+    # name on the row has an answer, so a confirmed carrier beside an
+    # unanswered intermediary leaves no market behind with no approach.
+    resolution = _resolve_markets(conn, values, raw)
+    if isinstance(resolution, str):
+        return refused(resolution)
+    if isinstance(resolution, dict):
+        return _add_row(
+            request, ref, placement_id, line_id, fields, raw,
+            error=None, pending=resolution, decided=_decided(raw),
+        )
+    carrier, intermediary, to_create = resolution
+    if carrier is None and intermediary is None and not to_create:
         return refused(
             "a carrier or an intermediary — if the wholesaler has not named the "
             "paper yet, give the intermediary alone and fill the carrier in "
@@ -1191,12 +1199,30 @@ async def marketing_approach_add(
         for key in ("attach", "lim", "status")
         if values.get(key) is not None
     }
-    who = (carrier or intermediary)
+    # WHO THE BATCH SAYS WAS APPROACHED. `intermediary` may still be the
+    # "same as the carrier" sentinel here and a market being created has no
+    # row yet, so this reads a name off whatever actually has one and falls
+    # back to the one about to be minted.
+    named = [o for o in (carrier, intermediary) if getattr(o, "name", None)]
+    who: Any = named[0] if named else _Named(to_create[0][1])
     try:
+        # ONE WRITER ACTION IS ONE UNDO UNIT: the market this row minted and
+        # the approach it was minted for revert together. Creating it in its
+        # own batch would leave a market behind after `R` took the approach
+        # back — a record nobody asked for, on a book where a duplicate market
+        # is the thing every guard here exists to prevent.
         with batches_svc.open_batch(
             conn, source="web", tool="market_approach",
             summary=f"approached {who.name}", org_id=org.id,
         ):
+            for key, typed in to_create:
+                minted = orgs_repo.create_market(conn, typed)
+                if key == "market":
+                    carrier = minted
+                else:
+                    intermediary = minted
+            if intermediary is _SAME_AS_MARKET:
+                intermediary = carrier
             marketing_entry.approach(
                 conn,
                 placement_id,
@@ -1222,44 +1248,156 @@ async def marketing_approach_add(
     )
 
 
-def _market_named(conn: sqlite3.Connection, name: str | None) -> Any:
-    """The market a typed name refers to — or the REFUSAL, as a string.
+_SAME_AS_MARKET = object()
+"""`via` is the same brand-new market as `market` — see `_resolve_markets`.
+Not an Org because the row does not exist yet; the writer resolves it to
+whatever the single create returned, which is the point."""
 
-    A name is resolved, never created: a submission recorded against a market
-    the book has never heard of would be a new org minted by a typo, and every
-    later lookup on the real one would miss it. The refusal names the nearest,
-    which is the rule repo/lines.py sets for a vocabulary miss (advisory when
-    reading, authoritative when writing) and the one `_resolve_market` follows
-    on the MCP side.
 
-    AND IT NAMES WHERE TO PUT A MARKET THAT IS GENUINELY NEW. A carrier this
-    book has never carried is ORDINARY in placement — it is most of what
-    growing a market list looks like — and `nearest: none close` stated the
-    objection and stopped, which is the one refusal on this panel that fell
-    short of the standard `date_refusal` sets (found 2026-08-26). It cannot be
-    created from here for the reason above, so the sentence says the page that
-    can. Named on BOTH branches: a near miss that is not the market being typed
-    leaves a broker just as stuck as no match at all.
+class _Named:
+    """A name with nothing behind it yet — only so the batch summary can say
+    who was approached when the market is created inside that same batch and
+    has no row until the transaction is open."""
 
-    Returns None for "nothing typed", an Org for a hit, and a `str` for a miss
-    — the caller distinguishes them, because a miss is not an exception here:
-    it is a message that belongs in the add row beside the input.
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+# The two market names on the add row, and the label each answers to. Both
+# halves of every control below are built from this rather than written twice:
+# a miss on `via` asks exactly the question a miss on `market` asks, and it
+# used to be that only one of them had a way out at all.
+_MARKET_KEYS: tuple[tuple[str, str], ...] = (
+    ("market", "carrier"),
+    ("via", "intermediary"),
+)
+
+
+def _decided(raw: dict[str, str]) -> dict[str, str]:
+    """What the near-match question has already been answered with, as hidden
+    inputs for the row that asks the NEXT question.
+
+    Both names on the row can be new to the book, and the question is asked one
+    at a time. Without this the answer to the first is lost the moment the
+    second is asked, and the two questions ping-pong forever — the broker
+    confirms the carrier, is asked about the intermediary, and confirming that
+    one re-asks about the carrier.
     """
-    from rapidfuzz import process
+    keys = [f"use_{k}" for k, _ in _MARKET_KEYS] + [
+        f"create_{k}" for k, _ in _MARKET_KEYS
+    ]
+    return {k: raw[k] for k in keys if raw.get(k, "").strip()}
 
-    typed = (name or "").strip()
-    if not typed:
-        return None
-    org = orgs_repo.find(conn, typed) or orgs_repo.find_by_name(conn, typed)
-    if org is not None and org.kind == "market":
-        return org
-    names = [o.name for o in orgs_repo.list_orgs(conn, kind="market")]
-    close = process.extract(typed, names, limit=3, score_cutoff=60)
-    hint = ", ".join(m[0] for m in close) if close else "none close"
-    return (
-        f"no market matching {typed!r} — nearest: {hint}. If {typed!r} is new "
-        f"to the book, add it at /markets/new first, then record the approach."
+
+def _resolve_markets(
+    conn: sqlite3.Connection, values: dict[str, Any], raw: dict[str, str]
+) -> Any:
+    """The carrier and the intermediary, or the question to ask about them.
+
+    Returns `(carrier, intermediary, to_create)` when every name on the row has
+    an answer — `to_create` being the ones the broker has confirmed are new,
+    written by the caller inside the approach's own batch. Returns a `dict`
+    when a name still needs the near-match question, and a `str` for a refusal
+    the row shows as it shows any other.
+
+    A NAME IS STILL NEVER CREATED BY ACCIDENT. What changed on 2026-08-26 is
+    where the answer is given: a carrier the book has never carried is ORDINARY
+    in placement — it is most of what growing a market list looks like — and
+    the old refusal named /markets/new and stopped, which sends a broker away
+    from the row they are mid-way through typing and loses the rest of it.
+    The question is asked HERE, with the nearest markets to use instead beside
+    it, and the create is one click that says what it is doing.
+
+    NOTHING IS CREATED WHILE A QUESTION IS STILL OPEN. The confirmations ride
+    back as hidden inputs (`_decided`), so both names can be answered before
+    the first row is written — otherwise a confirmed carrier would be minted,
+    the intermediary question asked, and abandoning it would leave a market on
+    the book with no approach behind it.
+    """
+    resolved: dict[str, Any] = {"market": None, "via": None}
+    to_create: list[tuple[str, str]] = []
+    for key, label in _MARKET_KEYS:
+        picked = raw.get(f"use_{key}", "").strip()
+        typed = str(values.get(key) or "").strip()
+        if picked:
+            # THE ID IS AUTHORITATIVE, the typed name decorative: this is the
+            # "use Zurich" button answering, and the misspelling that raised
+            # the question is still sitting in the box beside it.
+            org = orgs_repo.find(conn, picked)
+            if org is None or org.kind != "market":
+                return (
+                    "that market is no longer on the book — retype the "
+                    "carrier and answer the question again"
+                )
+            resolved[key] = org
+            # BOTH COPIES, because the row is re-rendered from `raw` (the
+            # strings that were typed) and read from `values` (the parsed
+            # ones). Leaving the misspelling in `raw` would put it back in the
+            # box under the answer that just replaced it.
+            values[key] = raw[key] = org.name
+            continue
+        if not typed:
+            continue
+        org = orgs_repo.find_market(conn, typed)
+        if org is not None:
+            resolved[key] = org
+            continue
+        if raw.get(f"create_{key}", "").strip():
+            to_create.append((key, typed))
+            continue
+        return _market_clash(conn, key, label, typed)
+    if len(to_create) == 2 and (
+        to_create[0][1].casefold() == to_create[1][1].casefold()
+    ):
+        # ONE NAME IS ONE MARKET. Confirming the same new name in both boxes
+        # would otherwise mint it twice and hand repo.marketing two DIFFERENT
+        # ids, so the guard that refuses paper reached through itself would
+        # see two markets and pass — leaving the book with a duplicate the
+        # merge tool has to clean up. Creating it once makes the ids equal and
+        # that guard says the sentence it exists to say (the whole batch,
+        # create included, then rolls back).
+        to_create = [to_create[0]]
+        resolved["via"] = _SAME_AS_MARKET
+    return resolved["market"], resolved["via"], to_create
+
+
+def _market_clash(
+    conn: sqlite3.Connection, key: str, label: str, typed: str
+) -> dict[str, Any]:
+    """The near-match question the add row asks before it mints a market.
+
+    ADVISORY, NEVER A VETO — the same shape `_clash` gives a line of coverage,
+    and for the same reason: 'Zurich' and 'Zurich American' are two real
+    markets on most books, so nothing here can decide for the broker. Both
+    answers are buttons: use one that exists, or add the one that was typed.
+    The scores are printed because "91% like Zurich" is a fact somebody can
+    judge and "did you mean…" is not.
+
+    THE CREATE IS ALWAYS OFFERED, near matches or none. A control that shows
+    the question and no way through it is the refusal this replaced, wearing a
+    question's clothes.
+    """
+    matches = orgs_repo.near_markets(conn, typed)
+    head = (
+        f"{typed!r} is not a market this book carries. Use one of these, or "
+        f"add it — a carrier new to the book is ordinary."
+        if matches
+        else f"{typed!r} is not a market this book carries yet — add it."
     )
+    return {
+        "head": head,
+        "name": typed,
+        "label": label,
+        "matches": [
+            {
+                "name": org.name,
+                "score": score,
+                "vals": json.dumps({f"use_{key}": org.id}),
+            }
+            for org, score in matches
+        ],
+        "create_vals": json.dumps({f"create_{key}": "yes"}),
+    }
 
 
 def _add_row(
@@ -1268,14 +1406,25 @@ def _add_row(
     placement_id: str,
     line_id: str,
     fields: tuple[Field, ...],
-    values: dict[str, str],
-    error: str,
+    values: dict[str, Any],
+    error: str | None = None,
+    *,
+    pending: dict[str, Any] | None = None,
+    decided: dict[str, str] | None = None,
 ) -> HTMLResponse:
     """The add row again, with the message and everything typed still in it.
 
     COMMIT IN PLACE, the platform default: a refused save keeps the form open
     with its input intact. One `<tr>`, targeted where it already is, so nothing
-    else on the page moves under a broker mid-correction."""
+    else on the page moves under a broker mid-correction.
+
+    `pending` is the near-match question about a market name, and it rides
+    INSIDE this same `<tr>` rather than answering as a second element: htmx
+    parses a response by its first tag, and anything after a `<tr>` that is not
+    table content is foster-parented out of the fragment before htmx sees it
+    (CLAUDE.md, ONE RESPONSE ONE TOP-LEVEL ELEMENT). `decided` is what earlier
+    questions on this same row were already answered with, carried as hidden
+    inputs so the next answer does not throw the last one away."""
     template = TEMPLATES.env.get_template("macros/marketing.html")
     block = {
         # THE SAME id THE REAL BLOCK CARRIES. The add row's datalists are named
@@ -1291,7 +1440,8 @@ def _add_row(
     }
     html = str(
         template.make_module({}).add_row(  # type: ignore[attr-defined]
-            block, fields, values, marketing_grid.COLUMNS, error
+            block, fields, values, marketing_grid.COLUMNS, error,
+            False, pending, decided or {},
         )
     )
     return HTMLResponse(html)

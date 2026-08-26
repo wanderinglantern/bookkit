@@ -4,6 +4,7 @@ test_mcp_roundtrip.py."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -1173,6 +1174,17 @@ _BATCHED_WRITES = {
     "request_item_waive": lambda rw, tmp: mcpserver._request_item_waive(
         rw, _a_request_item(rw)),
     "line_add": lambda rw, tmp: mcpserver._line_add(rw, "Kidnap & Ransom"),
+    "market_create": lambda rw, tmp: mcpserver._market_create(
+        rw, "Hartwell Mutual"),
+    # BOTH FIELDS, not just the rating. market_type is the enum-typed one, and
+    # a roster case that leaves it None cannot see an enum leak into a JSON
+    # reply — which is exactly what test_every_write_tool_answers_in_json is
+    # for, and it passed under the mutation until this set it (2026-08-26).
+    "market_edit": lambda rw, tmp: (
+        mcpserver._market_create(rw, "Hartwell Mutual"),
+        mcpserver._market_edit(
+            rw, "Hartwell Mutual", market_type="carrier", am_best_rating="A-"),
+    )[1],
     "market_approach": lambda rw, tmp: _an_approach(rw),
     "market_assign_line": lambda rw, tmp: mcpserver._market_assign_line(
         rw, _a_bare_package(rw), "General Liability"),
@@ -1243,6 +1255,11 @@ _TOUCHES = {
     "request_item_remove": {"rfi_item"},
     "request_item_waive": {"rfi_item"},
     "line_add": {"line_of_coverage"},
+    "market_create": {"org"},
+    # THE PROFILE ROW, not the org. market_type and am_best_rating live on
+    # `market_profile`, which is the whole reason this is a verb and not two
+    # more edit_field columns (mcpsurface.NOT_A_COLUMN says so by name).
+    "market_edit": {"market_profile"},
     # the submission is filed by the same call — see mcpparity's submission
     # cells, which say why that is a consequence and not a submission verb
     "market_approach": {"submission", "market_response"},
@@ -1327,6 +1344,117 @@ def test_every_write_tool_stamps_its_events_with_that_batch(tool, server_db, tmp
         f"{tool} stamped {sorted({e.entity_type for e in events})}, "
         f"expected {sorted(_TOUCHES[tool])}"
     )
+
+
+@pytest.mark.parametrize("tool", sorted(_BATCHED_WRITES))
+def test_every_write_tool_answers_in_json(tool, server_db, tmp_path):
+    """EVERY REPLY CROSSES A JSON BOUNDARY, so every value in one has to be a
+    JSON type. A model row handed back whole, a `date`, a `Decimal` or a set
+    reaches the transport as a TypeError at serialisation — after the write
+    has already landed, which is the worst moment for it.
+
+    Over the SAME roster as the two tests above, so a write tool added
+    tomorrow is held to this too.
+
+    WHERE IT CANNOT LOOK: the read tools, which have no roster; `describe`,
+    whose reply is assembled from mcpsurface's declarations rather than from a
+    row; and — checked by mutation, 2026-08-26 — the enum columns, because
+    every enum in models.py is a `StrEnum` and json.dumps writes those as
+    their value. A `str(...)`-shaped reply field is therefore a consistency
+    rule, not something this test is holding up."""
+    rw = db.connect(server_db)
+    out = _BATCHED_WRITES[tool](rw, tmp_path)
+    json.dumps(out)  # raises TypeError on anything that is not JSON
+
+
+def test_market_create_is_the_door_client_create_is_not(server_db):
+    """Grant hit this in real use (2026-08-26): asked to add a carrier, the
+    assistant reached for the only create tool there was and the carrier
+    landed on the book as a CLIENT — invisible to every market picker,
+    unreachable by market_approach, and a kind that cannot be corrected."""
+    rw = db.connect(server_db)
+    out = mcpserver._market_create(rw, "Hartwell Mutual", market_type="carrier")
+
+    assert out["market_ref"].startswith("ACC-")
+    assert out["market_type"] == "carrier"
+    market = orgs.find_market(rw, "Hartwell Mutual")
+    assert market is not None
+    assert str(getattr(market.kind, "value", market.kind)) == "market"
+    # and market_approach can now reach it — the point of the whole thing
+    assert mcpserver._resolve_market(rw, "Hartwell Mutual").id == market.id
+
+
+def test_market_create_refuses_a_near_duplicate_naming_it(server_db):
+    """A REFUSAL here where line_add only warns. Two lines of coverage four
+    letters apart are routinely different cover; two markets four letters
+    apart are 'Zurich' and 'Zurich Insurance Group', and a second row for one
+    carrier splits its submissions, appetite and underwriters across records
+    no lookup joins."""
+    rw = db.connect(server_db)
+    mcpserver._market_create(rw, "Kestrel Specialty")
+
+    with pytest.raises(ValueError, match="possible duplicate of market Kestrel"):
+        mcpserver._market_create(rw, "Kestrel Speciality")
+    with pytest.raises(ValueError, match="already on the book"):
+        mcpserver._market_create(rw, "kestrel specialty")
+
+
+def test_the_market_miss_names_the_tool_that_adds_one(server_db):
+    """A REFUSAL NAMES A FIX, and names the RIGHT one: `nearest: none close`
+    stated the objection and stopped, which is how the assistant went looking
+    for another door and found client_create."""
+    rw = db.connect(server_db)
+    with pytest.raises(ValueError, match="market_create") as caught:
+        mcpserver._resolve_market(rw, "Nowhere Re")
+    assert "never client_create" in str(caught.value)
+
+
+def test_market_edit_reaches_the_two_fields_edit_field_cannot(server_db):
+    """market_type and am_best_rating are `market_profile` columns, so
+    base.update against `org` cannot reach them — mcpsurface.NOT_A_COLUMN has
+    always said so and now names this door."""
+    rw = db.connect(server_db)
+    mcpserver._market_create(rw, "Kestrel Specialty")
+
+    out = mcpserver._market_edit(
+        rw, "Kestrel Specialty", market_type="wholesaler", am_best_rating="A-"
+    )
+    assert (out["market_type"], out["am_best_rating"]) == ("wholesaler", "A-")
+    # an omitted argument LEAVES IT ALONE — a partial update is the common one
+    again = mcpserver._market_edit(rw, "Kestrel Specialty", am_best_rating="A")
+    assert again["market_type"] == "wholesaler"
+    with pytest.raises(ValueError, match="must be one of"):
+        mcpserver._market_edit(rw, "Kestrel Specialty", market_type="bank")
+    with pytest.raises(ValueError, match="nothing to set"):
+        mcpserver._market_edit(rw, "Kestrel Specialty")
+
+
+def test_what_a_market_is_can_be_taken_back(server_db):
+    """A Best rating written by raw SQL appeared in no changes list and `u`
+    could not take it back (migration 017). The write-tool spine gate caught
+    it as 'a batch with no events'; this is the user-facing half of the same
+    fact."""
+    rw = db.connect(server_db)
+    mcpserver._market_create(rw, "Kestrel Specialty")
+    out = mcpserver._market_edit(rw, "Kestrel Specialty", am_best_rating="A-")
+
+    result = batches_svc.revert(rw, out["batch"], now=db.utc_now())
+    assert result.reverted, result
+    profile = orgs.get_market_profile(rw, orgs.find_market(rw, "Kestrel Specialty").id)
+    assert profile is None or profile.am_best_rating is None
+
+
+def test_markets_list_says_which_orgs_are_markets(server_db):
+    """`search` returns kind/title/snippet and does not say whether an org is
+    a client or a market — the gap the assistant fell through."""
+    rw = db.connect(server_db)
+    orgs.create(rw, name="Hartwell Mutual", kind="client")
+    mcpserver._market_create(rw, "Hartwell Mutual", am_best_rating="A")
+
+    rows = mcpserver._markets_list(rw, "hartwell")
+    assert [r["name"] for r in rows] == ["Hartwell Mutual"]
+    assert rows[0]["am_best_rating"] == "A"
+    assert rows[0]["status"] == "active"
 
 
 def test_two_calls_are_two_undo_units(server_db):

@@ -449,8 +449,12 @@ def alias_carrier(conn: sqlite3.Connection, carrier: str, market_org_id: str) ->
 
 def create_market_for_carrier(conn: sqlite3.Connection, carrier: str) -> Org:
     """The carrier really is a market we don't have yet: create it under the
-    exact tower spelling, so it matches by name with no alias needed."""
-    return orgs.create(conn, kind="market", name=carrier, status="active")
+    exact tower spelling, so it matches by name with no alias needed.
+
+    The act itself is `orgs.create_market` — one home, shared with the
+    marketing grid's inline create and MCP's `market_create`, so a market
+    minted here carries the same defaults as one minted there."""
+    return orgs.create_market(conn, carrier)
 
 
 def _insured(path: Path) -> str:

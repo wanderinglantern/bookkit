@@ -327,9 +327,17 @@ def test_the_planner_asks_every_link_a_valid_question(snapshot_db: Path):
 
     Seven of the entity tables are empty in seed.py — submission_subjectivity,
     document, project, project_need, rfi_request, rfi_item, market_response,
-    placement_line — so the second half reaches 10 links of 36. That is a fact
+    placement_line — so the second half reaches 11 links of 37. That is a fact
     about the sample data, not about the planner, and it is written here rather
-    than left for a reader to infer from a floor number. The marketing case at
+    than left for a reader to infer from a floor number.
+
+    IT WENT FROM 10 TO 11 ON 2026-08-26, and the eleventh is
+    market_profile.org_id -> org. What a market IS (its type, its Best rating)
+    was written by raw SQL outside base, so the table was in no entity map at
+    all and a rating changed on the web appeared in no changes list and could
+    not be reverted; migration 017 gave it the id and timestamps base needs and
+    the writes now go through base.insert/update. seed.py has always written
+    market profiles — what changed is that the planner can finally see them. The marketing case at
     the top of this file is the worked end-to-end proof for the link that
     matters most (market_response.submission_id), which seed.py does not
     write."""
@@ -359,7 +367,7 @@ def test_the_planner_asks_every_link_a_valid_question(snapshot_db: Path):
                     f"{table}.{column} -> {parent_entity} is in the map but "
                     f"live_dependents does not find the row through it"
                 )
-        assert exercised == 10, (
+        assert exercised == 11, (
             f"{exercised} of the planner's links are exercised by seeded data, "
             f"not 10 — seed.py started or stopped writing a kind of row. Say "
             f"which in the docstring above rather than moving the number."

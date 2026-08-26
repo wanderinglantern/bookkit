@@ -1213,7 +1213,27 @@ NAMED_FIX: dict[str, dict[str, str]] = {
     "or correct the": {"field": "either date"},
     "does not go with status": {"field": "status"},
     # --- web/routes/marketing.py ------------------------------------------
-    "add it at /markets/new first": {"web": "/markets/new"},
+    # THE MARKET-NEW-TO-THE-BOOK QUESTION, which replaced a refusal naming
+    # /markets/new (2026-08-26). The fix is on the row itself — an "add it to
+    # the book" button posting to the same route — so the web target is that
+    # route rather than another page. It reaches only the web: MCP's own
+    # version of this miss is `_resolve_market`'s refusal, which names
+    # market_create and is walked in mcpserver's own tests.
+    "is not a market this book carries. Use one of these": {
+        "web": (
+            "/accounts/{ref}/program/{placement_id}/marketing"
+            "/lines/{line_id}/approaches"
+        ),
+    },
+    "is not a market this book carries yet": {
+        "web": (
+            "/accounts/{ref}/program/{placement_id}/marketing"
+            "/lines/{line_id}/approaches"
+        ),
+    },
+    # The "use <market>" button answering with an id that has since gone. The
+    # fix is to retype the name and take the question again.
+    "that market is no longer on the book": {"field": "carrier"},
     "is not editable on a market response": {"field": "key"},
     "is not an expectation a line of coverage carries": {"field": "key"},
     "that could not be saved and nothing was written": {
@@ -1320,6 +1340,17 @@ def _refusal_strings(relative: str) -> list[str]:
                         text = literal(kw.value)
                         if text:
                             out.append(" ".join(text.split()))
+        # AND WHEREVER THE HEADLINE IS BUILT FIRST. `_market_clash` has two —
+        # one for a near miss and one for none close — so it assigns `head`
+        # from an IfExp rather than passing a literal at the call. The walk
+        # read only the keyword, so both of a question's sentences could reach
+        # a broker without ever naming a way through (2026-08-26). A question
+        # with no way through IS the refusal it replaced.
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "head" for t in node.targets
+        ):
+            for text in literals(node.value):
+                out.append(" ".join(text.split()))
     return out
 
 

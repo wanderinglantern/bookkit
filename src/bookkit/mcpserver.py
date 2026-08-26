@@ -69,7 +69,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from . import db, mcpsurface
-from .models import EventBatch, RfiItem, RfiRequest, is_internal_category
+from .models import EventBatch, MarketType, RfiItem, RfiRequest, is_internal_category
 from .services import consistency
 
 # _DUP_CUTOFF: score_cutoff for the near-duplicate title guards below
@@ -169,6 +169,22 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         is a duplicate nobody can merge back without moving its references.
         Use line_add only when the line genuinely is not here."""
         return _lines_list(ro)
+
+    @server.tool()
+    async def markets_list(query: str | None = None) -> list[dict[str, Any]]:
+        """The book's markets: ref, name, market type, A.M. Best rating and
+        status, by name. `query` narrows to the ones whose name contains it.
+
+        THE OTHER SIDE OF THE BOOK FROM list_programs, and the market half of
+        what `lines_list` is for lines of coverage: every marketing tool takes
+        a market by its exact name or ref, so read this BEFORE market_approach
+        rather than inventing a spelling — a second 'Zurich Insurance Group'
+        beside 'Zurich' is a duplicate nobody can merge back without moving its
+        references. `search` finds an org by name but does not say whether it
+        is a client or a market, which is how a market came to be created as a
+        client (Grant, 2026-08-26). Use market_create only when the market
+        genuinely is not here."""
+        return _markets_list(ro, query)
 
     @server.tool()
     async def marketing_report(
@@ -665,6 +681,59 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         already on the book is almost always the same line spelled twice.
         Check `near_matches` and revert the batch if it is."""
         return _line_add(rw, name, abbr=abbr, acord_code=acord_code)
+
+    @server.tool(description=_MARKET_CREATE_DESCRIPTION)
+    async def market_create(
+        name: str,
+        market_type: str | None = None,
+        am_best_rating: str | None = None,
+        website: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Add an insurance MARKET to the book — a carrier, wholesaler or MGA.
+
+        USE THIS, NEVER client_create, for anything the book submits TO.
+        client_create writes `kind='client'` and there is no way to correct a
+        kind afterwards, so a market filed that way shows up as an account on
+        the book, is invisible to every market picker, and cannot be reached by
+        market_approach (Grant, 2026-08-26).
+
+        `name` alone is enough and a STUB IS A REAL RECORD: market type, Best
+        rating, appetite and underwriters are facts nobody has while a
+        submission is going out, and none of them is guessed here — fill them
+        in with market_edit when they arrive. Refuses a near-duplicate of a
+        market already on the book, naming it, rather than risking a second
+        record for the same paper; read markets_list first.
+
+        Registered with `description=_MARKET_CREATE_DESCRIPTION` (module
+        level), which spells the `market_type` vocabulary OFF models.MarketType
+        — a list retyped in prose here is a fourth copy of an enum, which is
+        the copy that quietly differs (it already did: the first draft of this
+        docstring named three types the enum does not have)."""
+        return _market_create(
+            rw, name, market_type=market_type, am_best_rating=am_best_rating,
+            website=website, notes=notes,
+        )
+
+    @server.tool()
+    async def market_edit(
+        market: str,
+        market_type: str | None = None,
+        am_best_rating: str | None = None,
+    ) -> dict[str, Any]:
+        """Fill in (or correct) what a market IS: its type and its A.M. Best
+        rating. `market` is the exact name or ref from markets_list.
+
+        A VERB, BECAUSE THESE TWO ARE NOT ORG COLUMNS. Both live on the
+        `market_profile` table and are written by orgs.set_market_profile, so
+        `edit_field(kind='org', …)` cannot reach them and says so — this is the
+        door that entry names, the same shape task_assign is for `assignee`.
+        Every other field of a market (name, status, website, domain, notes,
+        owner, hq) IS an org column and is edit_field's job as it always was.
+        Pass only what you are setting; omitted fields are left alone."""
+        return _market_edit(
+            rw, market, market_type=market_type, am_best_rating=am_best_rating,
+        )
 
     @server.tool()
     async def market_approach(
@@ -2522,13 +2591,21 @@ def _resolve_market(conn: sqlite3.Connection, ref_or_name: str) -> Any:
 
     from .repo import orgs
 
-    org = orgs.find(conn, ref_or_name) or orgs.find_by_name(conn, ref_or_name)
-    if org is not None and org.kind == "market":
+    org = orgs.find_market(conn, ref_or_name)
+    if org is not None:
         return org
     names = [o.name for o in orgs.list_orgs(conn, kind="market")]
     close = process.extract(ref_or_name, names, limit=3, score_cutoff=60)
     hint = ", ".join(m[0] for m in close) if close else "none close"
-    raise ValueError(f"no market matching {ref_or_name!r} — nearest: {hint}")
+    # A MARKET NEW TO THE BOOK IS ORDINARY, so the refusal names the door
+    # rather than stopping at the objection — the standard the web's own
+    # version of this now meets with an "add it" button on the row. Never
+    # client_create: that writes kind='client' and cannot be corrected.
+    raise ValueError(
+        f"no market matching {ref_or_name!r} — nearest: {hint}. Read "
+        f"markets_list; if it is genuinely new to the book, market_create "
+        f"adds it (never client_create, which files it as an account)."
+    )
 
 
 def _request_create(
@@ -3130,6 +3207,203 @@ def _line_add(
         "abbr": line.abbr,
         "acord_code": line.acord_code,
         "near_matches": near,
+        "batch": batch.ref,
+    }
+
+
+_MARKET_CREATE_DESCRIPTION = (
+    "Add an insurance MARKET to the book — a carrier, wholesaler or MGA. USE "
+    "THIS, NEVER client_create, for anything the book submits TO: "
+    "client_create writes kind='client', a kind cannot be corrected "
+    "afterwards, and a market filed that way shows up as an account, is "
+    "invisible to every market picker, and cannot be reached by "
+    "market_approach. `name` alone is enough and a stub is a real record — "
+    "market type, Best rating, appetite and underwriters are facts nobody has "
+    "while a submission is going out, and none is guessed here; market_edit "
+    "fills them in when they arrive. Refuses a near-duplicate of a market "
+    "already on the book, naming it, rather than risking a second record for "
+    "the same paper — read markets_list first. `market_type` is one of "
+    + " / ".join(m.value for m in MarketType)
+    + "; `am_best_rating` is the rating as printed (A++ / A- / NR)."
+)
+"""The vocabulary comes OFF THE ENUM. A type added to models.MarketType
+reaches the assistant with no second edit here, and one removed stops being
+advertised — the same rule forms/entities.py's pickers follow."""
+
+
+_MARKET_PROFILE_TYPES: dict[str, Any] = {
+    # OFF THE ENUM, never a hand-written list — the same rule the pickers in
+    # forms/entities.py follow. A market type added to models.MarketType is
+    # accepted here without a second edit, and one removed stops being
+    # accepted, which is what keeps a stored value renderable.
+    "market_type": tuple(m.value for m in MarketType),
+    "am_best_rating": "text",
+}
+"""The two `market_profile` columns `market_edit` writes, with the value type
+`_clean_typed` cleans each by. Neither is an `org` column, which is why they
+are not in mcpsurface's derived set (NOT_A_COLUMN says so, and names this)."""
+
+
+def _market_facts(profile: Any) -> dict[str, str | None]:
+    """The two profile facts, shaped once for the three replies that print
+    them — markets_list, market_create and market_edit.
+
+    `market_type` is stamped through `str()` because it is enum-typed on the
+    model. That is belt and not braces: `MarketType` is a `StrEnum`, so it
+    already serializes as its value (checked by mutation — the JSON gate does
+    NOT go red without this). What it buys is that the three replies cannot
+    disagree about the shape, which two of them already did before this
+    existed."""
+    return {
+        "market_type": (
+            None if profile is None or profile.market_type is None
+            else str(getattr(profile.market_type, "value", profile.market_type))
+        ),
+        "am_best_rating": None if profile is None else profile.am_best_rating,
+    }
+
+
+def _markets_list(
+    conn: sqlite3.Connection, query: str | None = None
+) -> list[dict[str, Any]]:
+    """Every market on the book, with the two facts that decide whether it is
+    the right one: what kind of market it is and how it is rated."""
+    from .repo import orgs
+
+    markets = orgs.list_orgs(conn, kind="market")
+    if query:
+        needle = query.strip().casefold()
+        markets = [m for m in markets if needle in m.name.casefold()]
+    profiles = {m.id: orgs.get_market_profile(conn, m.id) for m in markets}
+    out = []
+    for market in markets:
+        out.append({
+            "ref": market.ref,
+            "name": market.name,
+            **_market_facts(profiles[market.id]),
+            "status": str(getattr(market.status, "value", market.status)),
+        })
+    return out
+
+
+def _market_create(
+    conn: sqlite3.Connection,
+    name: str,
+    market_type: str | None = None,
+    am_best_rating: str | None = None,
+    website: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """The market half of `_client_create`, and it exists because that one was
+    the only create door: an assistant asked to add a carrier reached for it
+    and the carrier landed on the book as a CLIENT (Grant, 2026-08-26).
+
+    THE NEAR-DUPLICATE GUARD IS A REFUSAL HERE, not a warning as it is on
+    `line_add`. Two lines of coverage four letters apart are routinely
+    different cover, so nothing can refuse for you there; two markets four
+    letters apart are 'Zurich' and 'Zurich Insurance Group', and a second row
+    for one carrier splits its submissions, its appetite and its underwriters
+    across two records that no lookup joins. The refusal names the match and
+    the reader decides — retry with a more distinct name if they really are
+    two markets, which is the same door `_client_create` leaves open.
+
+    The act itself is `orgs.create_market` — one home, shared with the
+    marketing grid's inline create and sync's carrier auto-create.
+    """
+    from rapidfuzz import process
+
+    from .repo import orgs
+
+    typed = name.strip()
+    if not typed:
+        raise ValueError("a market needs a name")
+    existing = orgs.find_market(conn, typed)
+    if existing is not None:
+        raise ValueError(
+            f"{existing.name} ({existing.ref}) is already on the book — use "
+            f"that one; market_edit fills in what it is missing"
+        )
+    names = {m.name: m for m in orgs.list_orgs(conn, kind="market")}
+    match = process.extractOne(typed, list(names), score_cutoff=_DUP_CUTOFF)
+    if match:
+        dup = names[match[0]]
+        raise ValueError(
+            f"possible duplicate of market {dup.name} ({dup.ref}) — if this is "
+            f"the same paper use that one and market_edit; if genuinely a "
+            f"different market, retry with a more distinct name"
+        )
+    profile = {
+        key: value
+        for key, value in (
+            ("market_type", market_type), ("am_best_rating", am_best_rating)
+        )
+        if value
+    }
+    fields = {
+        key: _clean_typed("url" if key == "website" else "text", key, value)
+        for key, value in (("website", website), ("notes", notes))
+        if value
+    }
+    # org_id=None: the org is created INSIDE the batch, so its id is not known
+    # when the batch row is written — the same shape client_create takes.
+    with _open_batch(
+        conn, tool="market_create", summary=f"added market {typed}",
+    ) as batch:
+        market = orgs.create_market(conn, typed)
+        if fields:
+            orgs.update(conn, market.id, **fields)
+        if profile:
+            orgs.set_market_profile(conn, market.id, **profile)
+        _provenance(conn, "org", market.id)
+    market = orgs.get(conn, market.id)
+    return {
+        "market_ref": market.ref,
+        "name": market.name,
+        **_market_facts(orgs.get_market_profile(conn, market.id)),
+        "status": str(getattr(market.status, "value", market.status)),
+        "detail": (
+            "a stub is a real record — market_edit fills in the type and the "
+            "Best rating when they arrive"
+        ),
+        "batch": batch.ref,
+    }
+
+
+def _market_edit(
+    conn: sqlite3.Connection,
+    market: str,
+    market_type: str | None = None,
+    am_best_rating: str | None = None,
+) -> dict[str, Any]:
+    """The two market facts `edit_field` cannot reach, because neither is a
+    column of `org` — see mcpsurface.NOT_A_COLUMN, which named this door."""
+    from .repo import orgs
+
+    target = _resolve_market(conn, market)
+    changes = {
+        key: value
+        for key, value in (
+            ("market_type", market_type), ("am_best_rating", am_best_rating)
+        )
+        if value is not None
+    }
+    if not changes:
+        raise ValueError(
+            "nothing to set — pass market_type and/or am_best_rating"
+        )
+    changes = {
+        key: _clean_typed(_MARKET_PROFILE_TYPES[key], key, value)
+        for key, value in changes.items()
+    }
+    with _open_batch(
+        conn, tool="market_edit", org_id=target.id,
+        summary=f"filled in {target.name}",
+    ) as batch:
+        orgs.set_market_profile(conn, target.id, **changes)
+    return {
+        "market_ref": target.ref,
+        "name": target.name,
+        **_market_facts(orgs.get_market_profile(conn, target.id)),
         "batch": batch.ref,
     }
 

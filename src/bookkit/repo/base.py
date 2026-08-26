@@ -33,6 +33,10 @@ ENTITY_TABLES = {
     "rfi_item": "rfi_item",
     "line_of_coverage": "line_of_coverage",
     "market_response": "market_response",
+    # WHAT A MARKET IS — its type and its Best rating — is a revertible write
+    # like every other (migration 017). Its `id` is the org id: a profile is
+    # 1:1 with its market and has no identity of its own.
+    "market_profile": "market_profile",
     "placement_line": "placement_line",
 }
 

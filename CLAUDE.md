@@ -123,6 +123,19 @@ The rule behind all of it: bookkit has three surfaces and one of them is an
 agent. A change that lands on the web and not on MCP has shipped to two thirds
 of its users.
 
+AND A MISSING VERB IS NOT A REFUSAL — IT IS A WRONG WRITE (Grant, 2026-08-26).
+The market half of the book had no create door on MCP at all, so an assistant
+asked to add a carrier reached for the only create tool there was and the
+carrier landed as a CLIENT: invisible to every market picker, unreachable by
+`market_approach`, and a kind `mcpsurface.DENIED` will not let anyone correct.
+A model does not stop at a wall the way a person does; it finds the nearest
+door and goes through it. So every entity a tool can NAME needs a tool that
+can MAKE one, and the refusal for a miss must name that tool — `no market
+matching X — nearest: none close` stated the objection and stopped, which is
+what sent it looking. `market_create` / `market_edit` / `markets_list` are the
+market's three, and `mcpparity.py` is where the next entity's absence shows up
+as a red test.
+
 ## DRY — the standing rule (Grant, 2026-08-20)
 
 DON'T REPEAT YOURSELF, in code, in what the user has to type, and in how the
