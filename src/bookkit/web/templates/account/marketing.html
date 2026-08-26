@@ -1,0 +1,58 @@
+{% extends "account/page.html" %}
+{# THE MARKETING TAB — one section per placement, each the SAME section the
+   Program tab used to nest inside its middle column (Grant, 2026-08-27).
+
+   WHY IT MOVED. Two measurements: the grid asks for 1,811px and had 1,064 in
+   there, and it was 38% of that page's height. And a reason that is not about
+   pixels — marketing happens BEFORE a tower exists, so it was never
+   subordinate to the program file it was nested inside. Every figure on it
+   lives in SQLite, which is why this tab renders for a placement with no file
+   exactly as it does for one with a tower.
+
+   ONE SECTION PER PLACEMENT, NAMED. An account can carry several placements
+   and the grid is per-placement; without a heading, two grids one above the
+   other are two tables nobody can tell apart. The heading is the placement,
+   printed the way the Program tab prints it. #}
+{% block panel %}
+  {% if sections %}
+    {% for section in sections %}
+      <section class="marketing-placement">
+        <header class="marketing-placement-head">
+          <h2 class="marketing-placement-name">{{ section.placement.program_name }}</h2>
+          <span class="marketing-placement-meta mono">{{ section.placement.ref }}</span>
+          <span class="marketing-placement-meta">
+            {{ section.placement.period_from }} → {{ section.placement.period_to }}
+          </span>
+          {# THE DOOR TO THE WORKBOOK, where the grid that IS it is read.
+             Issue #1: the only client-facing export on the Program tab sat in
+             the band among the action buttons and not in the row labelled
+             EXPORT, and the section's own caption claimed the workbook exists
+             without linking to it. Both audiences are offered and both say
+             WHICH — a download whose audience is invisible undoes the whole
+             reason there are two decline-reason fields. #}
+          <span class="marketing-placement-exports">
+            <a class="btn btn-primary" href="{{ section.export_client }}"
+               download="{{ section.export_name }}">
+              Workbook <span class="btn-note">for the client</span></a>
+            <a class="btn" href="{{ section.export_internal }}"
+               download="{{ section.export_name }}">
+              <span class="btn-note">internal copy</span></a>
+          </span>
+        </header>
+        {% with placement = section.placement, marketing = section.marketing %}
+          {% include "account/_marketing_panel.html" %}
+        {% endwith %}
+      </section>
+    {% endfor %}
+  {% else %}
+    {# WHICH KIND OF EMPTY. An account with no placement cannot be marketed
+       at all, and saying "nothing is being marketed" there points at the
+       wrong thing. #}
+    <div class="panel-empty">
+      <p>This account has no placement yet, so there is nothing to take to
+        market.</p>
+      <p>Start one on the <a href="/accounts/{{ org.ref }}/program">Program</a>
+        tab — marketing does not need a program file, only a placement.</p>
+    </div>
+  {% endif %}
+{% endblock %}

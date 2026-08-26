@@ -89,12 +89,19 @@ def _approach(conn, placement_id: str, market, line_id: str = GL, **fields):
 
 
 def _tab(client, org) -> str:
-    got = client.get(f"/accounts/{org.ref}/program")
+    """THE MARKETING TAB, which is where the grid lives since 2026-08-27.
+
+    It was a section inside the Program tab and moved to its own: the grid
+    asks for 1,811px and had 1,064 in that page's middle column, and marketing
+    happens BEFORE a tower exists, so it was never subordinate to the program
+    file it was nested inside. Every assertion below is about the grid, so
+    every one of them follows it here."""
+    got = client.get(f"/accounts/{org.ref}/marketing")
     assert got.status_code == 200
     return got.text
 
 
-def test_the_grid_renders_beneath_the_workbench_on_a_linked_placement(client_and_org):
+def test_the_grid_renders_on_its_own_tab_for_a_linked_placement(client_and_org):
     client, org = client_and_org
     conn = client.app.state.conn
     placement = _linked(client, org)
@@ -129,15 +136,13 @@ def test_the_grid_renders_beneath_the_workbench_on_a_linked_placement(client_and
     assert "$7,850" in html, "TRIA is not its own cell"
     assert "$3,900" in html, "fees are not their own cell"
     assert "$404,600" in html, "the total is not printed"
-    # And the section is BELOW the workbench, not above it.
-    #
-    # `id="marketing-…"` and not the bare id: the program band above the
-    # workbench carries an ANCHOR to this section (its Submission control, which
-    # stopped writing a line-less submission on 2026-08-26), so the bare string
-    # now appears earlier on the page and would find the link rather than the
-    # section it points at.
+    # AND IT IS UNDER ITS PLACEMENT'S NAME. The grid is per-placement and an
+    # account can carry several, so two grids one above the other with no
+    # heading are two tables nobody can tell apart.
+    assert "marketing-placement-name" in html
     assert (
-        html.index("program-workbench") < html.index(f'id="marketing-{placement.id}"')
+        html.index("marketing-placement-name")
+        < html.index(f'id="marketing-{placement.id}"')
     )
 
 
@@ -158,7 +163,10 @@ def test_it_renders_on_a_placement_with_no_program_file(client_and_org):
 
     html = _tab(client, org)
 
-    assert "This placement has no program file." in html, "the fixture is wrong"
+    # THE FIXTURE'S OWN CHECK, on the tab the grid is on now: this placement
+    # has no program file (the Program tab is where that sentence is printed),
+    # and the marketing tab must render it anyway.
+    assert not bare.program_path, "the fixture is wrong"
     assert f'id="marketing-{bare.id}"' in html
     assert "Chubb" in html
     assert "Indicated" in html
@@ -1825,11 +1833,11 @@ def test_the_marketing_panel_is_reachable_with_no_program_file_anywhere(snapshot
 
         page = client.get(f"/accounts/{org.ref}")
         assert page.status_code == 200
-        assert f'href="/accounts/{org.ref}/program"' in page.text, (
-            "the Program tab is the only way to the marketing panel"
+        assert f'href="/accounts/{org.ref}/marketing"' in page.text, (
+            "the Marketing tab is how the panel is reached"
         )
 
-        tab = client.get(f"/accounts/{org.ref}/program")
+        tab = client.get(f"/accounts/{org.ref}/marketing")
         assert tab.status_code == 200
         for placement in placements:
             assert f'id="marketing-{placement.id}"' in tab.text
@@ -3372,3 +3380,119 @@ def test_the_section_publishes_the_order_it_is_actually_in(client_and_org):
     )
     section = sorted_html.split('<section class="marketing"', 1)[1][:400]
     assert f'{GL}:premium:desc' in section
+
+
+# --- the tab, and the door to the workbook ---------------------------------
+#
+# Marketing moved off the Program tab on 2026-08-27: the grid asks for 1,811px
+# and had 1,064 in that page's middle column, it was 38% of that page's height,
+# and it happens BEFORE a tower exists — so it was never subordinate to the
+# program file it was nested inside.
+#
+# The move also closes issue #1. The only client-facing export on the Program
+# tab sat in the band among the action buttons rather than in the row labelled
+# EXPORT, the marketing section's own caption claimed the workbook exists
+# without linking to it, and neither door said which AUDIENCE it served.
+
+
+def test_marketing_is_a_tab_and_the_program_tab_no_longer_carries_the_grid(
+    client_and_org,
+):
+    client, org = client_and_org
+    placement = _linked(client, org)
+
+    program = client.get(f"/accounts/{org.ref}/program").text
+    marketing = client.get(f"/accounts/{org.ref}/marketing").text
+
+    assert f'id="marketing-{placement.id}"' not in program, (
+        "the grid is still on the Program tab"
+    )
+    assert f'id="marketing-{placement.id}"' in marketing
+    # AND THE PROGRAM TAB SAYS WHERE IT WENT. A section that vanishes with no
+    # forwarding address is the same defect as one that was never built.
+    assert f'/accounts/{org.ref}/marketing#marketing-{placement.id}' in program
+
+
+def test_the_tab_bar_carries_marketing_with_a_live_count(client_and_org):
+    """WHAT IS STILL OUT, not how many markets were ever approached — a badge
+    that counts closed answers never falls to zero."""
+    import re
+
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    _approach(conn, placement.id, _market(conn, "Travelers"), status="quoted")
+    _approach(conn, placement.id, _market(conn, "Chubb"), status="pending")
+    _approach(conn, placement.id, _market(conn, "AIG"), status="declined")
+
+    page = client.get(f"/accounts/{org.ref}/marketing").text
+
+    tab = re.search(
+        r'href="/accounts/[^"]*/marketing"[^>]*>\s*Marketing\s*'
+        r'<span[^>]*>(\d+)</span>',
+        page,
+    )
+    assert tab, "no Marketing tab with a count in the tab bar"
+    assert int(tab.group(1)) == 2, "the closed answer is being counted"
+
+
+def test_the_workbook_has_a_door_and_it_says_who_it_is_for(client_and_org):
+    """ISSUE #1. The client sheet withholds the internal decline reason, the
+    commission and the notes, and a download whose audience is invisible undoes
+    the whole reason there are two decline-reason fields."""
+    client, org = client_and_org
+
+    html = client.get(f"/accounts/{org.ref}/marketing").text
+
+    assert "/export/marketing.xlsx?audience=client" in html
+    assert "/export/marketing.xlsx?audience=internal" in html
+    head = html.split('class="marketing-placement-head"', 1)[1].split("</header>", 1)[0]
+    assert "for the client" in head
+    assert "internal copy" in head
+    # THE NAME IN THE MARKUP TOO. The server's Content-Disposition is right and
+    # a plain browser honours it, but a download that arrives as a bare UUID
+    # is the worst shape for a file somebody is about to send a client: the
+    # bytes open fine and the file is unrecognisable in a folder. Stating the
+    # name a second way means an interception has to lose both to lose it.
+    assert 'download="PLC-' in head and "-marketing.xlsx" in head
+
+
+def test_the_internal_workbook_is_reachable_and_differs(client_and_org):
+    """It had NO door at all — `audience=internal` was reachable only by
+    hand-typing a query parameter, which is the built-but-not-accessible class
+    on the half that must never reach a client by accident."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    _approach(
+        conn, placement.id, _market(conn, "Travelers"),
+        status="declined", responded_on="2026-08-12",
+        decline_reason="underwriter hated the loss runs, off the record",
+    )
+
+    base = f"/accounts/{org.ref}/program/{placement.id}/export/marketing.xlsx"
+    client_sheet = client.get(base + "?audience=client")
+    internal = client.get(base + "?audience=internal")
+
+    assert client_sheet.status_code == 200
+    assert internal.status_code == 200
+    assert len(internal.content) != len(client_sheet.content), (
+        "the two audiences produced the same workbook"
+    )
+
+
+def test_every_placement_gets_its_own_named_section(client_and_org):
+    """The grid is per-placement and an account carries several. Two grids one
+    above the other with no heading are two tables nobody can tell apart."""
+    from bookkit.repo import placements as placements_repo
+
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placements = placements_repo.for_org(conn, org.id)
+    assert len(placements) > 1, "the fixture needs an account with two placements"
+
+    html = client.get(f"/accounts/{org.ref}/marketing").text
+
+    assert html.count('class="marketing-placement"') == len(placements)
+    for placement in placements:
+        assert placement.program_name in html
