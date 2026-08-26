@@ -1162,7 +1162,10 @@ def test_g4_every_entry_control_on_the_panel_keeps_what_was_typed(
     def section(html: str) -> str:
         return _marketing_section(html, placement.id)
 
-    controls = _entry_controls(section(client.get(f"/accounts/{org.ref}/program").text))
+    # THE MARKETING TAB. The section moved off the Program tab on 2026-08-27
+    # (its grid asks for 1,811px and had 1,064 there), and this gate is about
+    # the section's entry controls wherever it renders.
+    controls = _entry_controls(section(client.get(f"/accounts/{org.ref}/marketing").text))
     assert controls, "no entry control was found on the marketing panel at all"
 
     failures: list[str] = []

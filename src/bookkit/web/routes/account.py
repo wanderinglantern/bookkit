@@ -70,6 +70,14 @@ router = APIRouter()
 # doesn't build; Relationship is the one a broker actually opens first.
 TABS: tuple[tuple[str, str], ...] = (
     ("program", "Program"),
+    # MARKETING IS ITS OWN JOB, not a section of the tower (Grant, 2026-08-27).
+    # Two measurements settled it: the grid needs 1,811px and had 1,064 inside
+    # the Program tab's middle column, and it was 38% of that page's height. It
+    # is also the one surface here a CLIENT sees, and it happens BEFORE a tower
+    # exists — so it was never subordinate to the program file it was nested
+    # inside. It sits beside Program rather than after it because the two are
+    # read together during a placement.
+    ("marketing", "Marketing"),
     ("relationship", "Relationship"),
     ("work", "Work"),
     ("pipeline", "Pipeline"),
@@ -378,11 +386,36 @@ def _counts(conn: sqlite3.Connection, org: Org, open_work: int) -> dict[str, int
     )
     return {
         "program": len(placements_repo.for_org(conn, org.id)),
+        # WHAT IS STILL OUT, not how many markets were ever approached. A badge
+        # that counts closed answers never falls to zero and stops meaning
+        # anything — the same rule the `work` and `projects` counts follow, and
+        # `MARKET_RESPONSE_OPEN_STATUSES` is the one definition of "still live"
+        # (it is what the clearance check reads too).
+        "marketing": _open_market_answers(conn, org),
         "projects": open_needs,
         "relationship": len(contacts) + len(interactions),
         "work": open_work,
         "pipeline": len(opportunities) + submissions_count,
     }
+
+
+def _open_market_answers(conn: sqlite3.Connection, org: Org) -> int:
+    """Market responses on this account that are still live.
+
+    Counted over the placements rather than queried across the book, because a
+    tab badge is about THIS account — and read through
+    `repo.marketing.responses_for_placement`, which is the same list the grid
+    itself is composed from, so the number and the rows cannot disagree.
+    """
+    from ...models import MARKET_RESPONSE_OPEN_STATUSES
+    from ...repo import marketing as marketing_repo
+
+    return sum(
+        1
+        for placement in placements_repo.for_org(conn, org.id)
+        for response in marketing_repo.responses_for_placement(conn, placement.id)
+        if response.status in MARKET_RESPONSE_OPEN_STATUSES
+    )
 
 
 def _unplaced_value(layers: list[dict[str, Any]]) -> str:

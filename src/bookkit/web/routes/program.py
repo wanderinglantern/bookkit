@@ -736,11 +736,6 @@ def _section_html(
             else {}
         ),
         has_layers=bool(layers),
-        # THE PANEL IS THE REPORT: rendered for every placement, linked or
-        # not, and part of THIS one context list — the whole reason
-        # `_section_html` exists is that a key added to one caller's list and
-        # not another's went missing on writes (see this function's docstring).
-        marketing=_marketing(request, conn, placement, ref),
         band=_band_stats(layers),
         file_name=Path(placement.program_path).name if placement.program_path else None,
         index=index,

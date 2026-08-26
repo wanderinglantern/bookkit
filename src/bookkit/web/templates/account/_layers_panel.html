@@ -252,7 +252,18 @@
   {# BENEATH THE WORKBENCH AND OUTSIDE EVERY ONE OF THE FOUR BRANCHES ABOVE.
      Marketing happens before a tower exists, so a placement with no program
      file — the one this section is most often for — must still show it. #}
-  {% include "account/_marketing_panel.html" %}
+  {# MARKETING LEFT THIS PAGE ON 2026-08-27 and is its own tab now. It was
+     38% of this page's height and its grid was asking for 1,811px inside a
+     1,064px column — and it happens BEFORE a tower exists, so it was never
+     subordinate to the file this section is about. `routes/marketing.py`
+     registers the tab; every write route in that module still answers with
+     `#marketing-{placement_id}`, which is now on that page instead of this
+     one. The link below is how a reader gets from the tower to what the
+     market said about it. #}
+  <p class="program-marketing-link">
+    <a href="/accounts/{{ header.org.ref }}/marketing#marketing-{{ placement.id }}">
+      What the markets said about {{ placement.program_name }} →</a>
+  </p>
 
   {% if linked %}
     {# Downloads, and therefore the LAST thing in the section: they are an

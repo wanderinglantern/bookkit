@@ -835,6 +835,72 @@ def _block_response(
     return response
 
 
+# --- the tab ------------------------------------------------------------------
+
+
+@router.get("/accounts/{ref}/marketing", response_class=HTMLResponse)
+def marketing_tab(request: Request, ref: str) -> HTMLResponse:
+    """Every placement on the account, each with its marketing grid.
+
+    ITS OWN TAB SINCE 2026-08-27. The grid asks for 1,811px and had 1,064 in
+    the Program tab's middle column, and it was 38% of that page's height —
+    but the reason that decided it is not about pixels: marketing happens
+    BEFORE a tower exists and every figure on it lives in SQLite, so it was
+    never subordinate to the program file it was nested inside.
+
+    IT REGISTERS ITSELF rather than joining `account._PANEL_TEMPLATE`, the way
+    `relationship` does and for the same reason: the panel needs a context the
+    generic tab renderer does not build. `app.py` includes this router before
+    `account.router`, so this specific path wins over that module's `{tab}`
+    catch-all.
+
+    EVERY PLACEMENT, LINKED OR NOT. A placement with no program file is
+    exactly the state most marketing happens in, and the section renders the
+    same either way.
+    """
+    from .account import _context
+
+    conn = _conn(request)
+    org = _org(request, ref)
+    context = _context(conn, org, "marketing", request)
+    context["sections"] = [
+        {
+            "placement": placement,
+            "marketing": marketing_grid.panel(
+                request, conn, placement.id, today=date.today(), ref=ref,
+                sort_spec=str(request.query_params.get("sort", "")),
+            ),
+            # BOTH AUDIENCES, EACH SAYING WHICH. The client sheet withholds the
+            # internal decline reason, the commission and the notes; the
+            # internal one does not. `audience` was reachable only by
+            # hand-typing a query parameter until now — built and not
+            # accessible, on the half that must never reach a client by
+            # accident (issue #1).
+            # THE NAME IN THE MARKUP AS WELL AS THE HEADER. The server sends
+            # `Content-Disposition: attachment; filename="PLC-0001-marketing
+            # .xlsx"` and a plain browser honours it — verified — but Grant's
+            # download landed as a bare UUID while an extension was attached to
+            # his Chrome (2026-08-27). The bytes were right and only the name
+            # was lost, which is the worst shape for a file somebody is about
+            # to send a client: it opens fine and it is unrecognisable in a
+            # folder. `download` states the same name a second way, from the
+            # page, so an interception has to lose both to lose it.
+            "export_name": f"{placement.ref}-marketing.xlsx",
+            "export_client": (
+                f"/accounts/{ref}/program/{placement.id}"
+                f"/export/marketing.xlsx?audience=client"
+            ),
+            "export_internal": (
+                f"/accounts/{ref}/program/{placement.id}"
+                f"/export/marketing.xlsx?audience=internal"
+            ),
+        }
+        for placement in placements_repo.for_org(conn, org.id)
+    ]
+    context["oob"] = False  # a full tab-page render is never an OOB swap
+    return TEMPLATES.TemplateResponse(request, "account/marketing.html", context)
+
+
 # --- a row that records marketing which did not happen ------------------------
 
 
