@@ -11,7 +11,17 @@
 
    `take off` fetches the in-place confirm over this row (closest tr) and
    writes nothing — the write happens on the confirm's own POST. #}
-<tr class="market-row" data-market-row>
+{# `data-layer-row` is the RECORD HOOK inline-cell.js resolves a vertical hop
+   against (shift+Enter, down the same column), and #cell-keys announces that
+   key on every page — so a row of inline cells without one honours half of
+   what the help text says. A stack of carriers on one layer is exactly a
+   column somebody fills down.
+
+   THE ACTION BASE IS THE KEY. A participation has no id of its own — it is
+   the layer plus its INDEX in the seat list — and `base` already spells both,
+   uniquely, in a string this row is holding anyway. It carries no colon, which
+   matters: a refocus token is "<record>:<field>" and splits on one. #}
+<tr class="market-row" data-market-row data-layer-row="{{ base }}">
   {{ carrier_cell | safe }}
   {# The share is the ONE input that previews before it saves (the
      deliberate blur-commit exception, recorded in the hand-off): a change

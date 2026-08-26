@@ -452,6 +452,20 @@
     if (hop.record && scope.getAttribute("data-layer-row") !== hop.record) {
       within =
         scope.querySelector('[data-layer-row="' + CSS.escape(hop.record) + '"]') ||
+        // A VERTICAL HOP LEAVES THE SCOPE THAT ANSWERED, and the fallback to
+        // `scope` is wrong for it. Tab hops WITHIN a record, so the record
+        // that answered always contains the target; shift+Enter hops to the
+        // NEXT record, and a cell that answers with its own `<tr>` hands back
+        // an element that cannot contain it — so the old fallback re-opened
+        // the cell that had just been saved, and the key read as doing
+        // nothing at all. Eight of the marketing grid's cells answer that way;
+        // only the four block-sized ones happened to work (2026-08-26).
+        //
+        // The document is the right place to look: `data-layer-row` holds a
+        // ULID, so the lookup cannot land on the wrong record, and the row
+        // being hopped INTO is by definition somewhere other than the
+        // fragment that came back.
+        document.querySelector('[data-layer-row="' + CSS.escape(hop.record) + '"]') ||
         scope;
     }
     var next = within.querySelector('.cell[data-field="' + CSS.escape(hop.field) + '"]');

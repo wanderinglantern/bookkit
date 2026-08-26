@@ -794,3 +794,76 @@ def test_escape_cannot_lose_its_race_to_a_timer():
     focusout = js[js.index('addEventListener("focusout"') :]
     focusout = focusout[: focusout.index("});")]
     assert "cell.__bkCancelled" in focusout
+
+
+# --- a key the shell announces has to work wherever the shell is -----------
+#
+# `#cell-keys` is ONE element in base.html and every inline cell on every page
+# points its `aria-describedby` at it, so what it says is said EVERYWHERE. When
+# it grew "shift and Enter saves and moves down the same column" (2026-08-26)
+# the hop resolved against `data-layer-row`, and /items — 125 editable cells,
+# the densest editing surface in the app after the marketing grid — had that
+# attribute on none of its rows. The key still saved; it never moved. That is
+# the web's version of the failure tests/test_dead_keys.py exists to stop on
+# the terminal side, and it went unnoticed because the marketing grid, where
+# the feature was built, had the hook already.
+
+# The pages that actually render an editable TABLE on the seeded book. The
+# account's own Work tab is not one — its items and tasks render as panels
+# reached from the account page, and a page with no rows would make this scan
+# pass while seeing nothing, which is worse than not listing it.
+_HOP_PAGES = (
+    "/items",
+    "/accounts/ACC-0001/program",
+)
+
+
+@pytest.mark.parametrize("path", _HOP_PAGES)
+def test_every_editable_row_carries_the_record_the_hop_resolves_against(
+    client, path: str
+) -> None:
+    """Every `<tr>` holding an inline cell names its record.
+
+    WHERE THIS LOOKS: the rendered HTML of the pages that carry editable
+    tables, for `.cell[data-field]` inside a `<tr>` with no `data-layer-row`
+    on it. WHERE IT CANNOT LOOK: a cell outside a table (the contacts card
+    passes `tag="div"` and hops within its own `.contact-card` scope), and
+    whether the record id is the RIGHT one — a wrong id resolves to nothing
+    and the hop is dropped, which is silent.
+    """
+    from html.parser import HTMLParser
+
+    class Rows(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.depth = 0
+            self.has_record = False
+            self.bad = 0
+            self.rows = 0
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            attr = dict(attrs)
+            if tag == "tr":
+                self.depth = 1
+                self.rows += 1
+                self.has_record = "data-layer-row" in attr
+            elif tag in ("td", "th") and self.depth:
+                classes = (attr.get("class") or "").split()
+                if "cell" in classes and "data-field" in attr and not self.has_record:
+                    self.bad += 1
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag == "tr":
+                self.depth = 0
+
+    got = client.get(path)
+    assert got.status_code == 200, path
+    parser = Rows()
+    parser.feed(got.text)
+    assert parser.rows, f"{path} rendered no table rows — the scan is blind"
+    assert parser.bad == 0, (
+        f"{path}: {parser.bad} inline cells sit in a <tr> with no "
+        "`data-layer-row`. #cell-keys announces shift+Enter on every page and "
+        "inline-cell.js resolves that hop against this attribute, so the key "
+        "saves and never moves — add the record hook to the row."
+    )
