@@ -9,6 +9,45 @@ from ..models import SUBJECTIVITY_OPEN_STATUS, Subjectivity, Submission
 from . import base
 
 
+def _sent_guard(
+    conn: sqlite3.Connection, submission_id: str, sent_on: str | None
+) -> None:
+    """A PACKAGE CANNOT HAVE GONE OUT AFTER AN ANSWER IT ALREADY HAS.
+
+    `repo.marketing._reply_guard` states this rule from the reply's side and
+    its refusal names correcting the send date as the other way out. The
+    marketing grid's Sent cell IS that way out (2026-08-26), and it must not be
+    able to walk straight into the state the other guard exists to refuse —
+    which it could, because that guard only ever looks at the reply being
+    typed.
+
+    The sentence differs from `_reply_guard`'s deliberately: the field being
+    corrected is the other one, so the remedy it names is the other one too.
+
+    HERE, in repo/, for the reason repo/team.py's duplicate guard is: every
+    surface that can move this column lands on `update`, and a rule beside one
+    of them is a rule the next one writes past. The FUTURE-date half of the
+    same field's story is not here — a wall clock in repo/ cannot know the
+    caller's today (`services.consistency.check_not_future` owns it, where
+    today is a parameter, the way the composer's is).
+    """
+    if not sent_on:
+        return
+    row = conn.execute(
+        "SELECT MIN(responded_on) AS first_reply FROM market_response"
+        f" WHERE submission_id = ? AND responded_on IS NOT NULL AND {base.alive()}",
+        (submission_id,),
+    ).fetchone()
+    replied = row["first_reply"] if row else None
+    if replied and sent_on > str(replied):
+        raise ValueError(
+            f"this market answered on {replied} and a package sent {sent_on} "
+            f"would not have reached them yet — a market cannot answer a "
+            f"submission it has not been sent. Correct the reply date on the "
+            f"row if that is the one that is wrong."
+        )
+
+
 def create(
     conn: sqlite3.Connection,
     market_org_id: str,
@@ -140,6 +179,38 @@ def outstanding_for_org(conn: sqlite3.Connection, org_id: str) -> list[sqlite3.R
     ).fetchall()
 
 
+def withdrawn_for_org(conn: sqlite3.Connection, org_id: str) -> list[sqlite3.Row]:
+    """The packages this client PULLED, joined for display exactly as
+    `outstanding_for_org` joins the live ones.
+
+    IT HAS TO BE READABLE SOMEWHERE OR IT CANNOT BE UNDONE. A withdrawn
+    submission drops out of every Pipeline queue — `outstanding_for_org` is
+    `status = 'out'` and the quotes queue is `status = 'quoted'` — so before
+    this there was no surface on which a pulled package appeared at all, and
+    "we withdrew the wrong one" had nowhere to be corrected from. Same shape
+    as the team panel's Retired list, which exists for the same reason and
+    carries the same Reactivate.
+
+    The aliveness of both possible subjects sits in the ON clause, the rule
+    `outstanding_for_org` states: a submission whose only tie to the client is
+    a soft-deleted placement drops out, one with a live subject keeps it.
+    """
+    return conn.execute(
+        f"""
+        SELECT s.*, m.name AS market_name,
+               COALESCE(p.program_name, o.title) AS about
+        FROM submission s
+        JOIN org m ON m.id = s.market_org_id
+        LEFT JOIN placement p ON p.id = s.placement_id AND {base.alive('p')}
+        LEFT JOIN opportunity o ON o.id = s.opportunity_id AND {base.alive('o')}
+        WHERE s.status = 'withdrawn' AND {base.alive('s')}
+          AND (p.org_id = ? OR o.org_id = ?)
+        ORDER BY s.sent_on
+        """,
+        (org_id, org_id),
+    ).fetchall()
+
+
 def market_counts(
     conn: sqlite3.Connection, since: str | None = None, until: str | None = None
 ) -> list[sqlite3.Row]:
@@ -172,6 +243,8 @@ def market_counts(
 def update(
     conn: sqlite3.Connection, sub_id: str, note: str | None = None, **changes: Any
 ) -> Submission:
+    if "sent_on" in changes:
+        _sent_guard(conn, sub_id, changes["sent_on"])
     base.update(conn, "submission", sub_id, changes, note)
     return get(conn, sub_id)
 
@@ -383,3 +456,37 @@ def outstanding_subjectivity_rows_for_org(
         """,
         (org_id, org_id),
     ).fetchall()
+
+
+def sent_dates_for_placement(
+    conn: sqlite3.Connection, placement_id: str
+) -> dict[str, str]:
+    """{submission_id: sent_on} for every live submission on a placement.
+
+    The marketing report puts the submission date in a BLOCK HEADER, because
+    one submission goes out and repeating its date down a column is the
+    duplication the DRY rule names — so it needs them all at once, keyed."""
+    rows = conn.execute(
+        f"SELECT id, sent_on FROM submission WHERE placement_id = ? AND {base.alive()}",
+        (placement_id,),
+    ).fetchall()
+    return {str(r["id"]): str(r["sent_on"]) for r in rows}
+
+
+def open_subjectivity_counts(
+    conn: sqlite3.Connection, placement_id: str
+) -> dict[str, int]:
+    """{submission_id: how many subjectivities are still outstanding}.
+
+    A LEFT JOIN, so a submission with none appears with 0 rather than being
+    missing — the report prints a blank cell for zero, and a KeyError for a
+    quiet market is not the same thing as a market with nothing outstanding."""
+    rows = conn.execute(
+        "SELECT s.id AS submission_id, COUNT(sub.id) AS open_count"
+        " FROM submission s LEFT JOIN submission_subjectivity sub"
+        "   ON sub.submission_id = s.id AND sub.status = 'outstanding'"
+        f"   AND {base.alive('sub')}"
+        f" WHERE s.placement_id = ? AND {base.alive('s')} GROUP BY s.id",
+        (placement_id,),
+    ).fetchall()
+    return {str(r["submission_id"]): int(r["open_count"]) for r in rows}

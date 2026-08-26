@@ -248,12 +248,27 @@ def test_settling_late_is_legal(book) -> None:
 
 
 # --- 3. submission / response dates -------------------------------------------
+#
+# THE PAIR MOVED TO THE ROW THAT STATES IT (2026-08-26). `apply_response` used
+# to write the submission's own columns and check them with
+# `check_submission_dates`; it now writes a `market_response`, and the same
+# ordering is held by `repo.marketing._reply_guard` and `._expiry_guard` — in
+# repo/, where the Marketing panel's cells and MCP's `market_responded`
+# inherit it too, which a check in this one form never was.
+#
+# The assertions still read the SUBMISSION, because that is what these dates
+# are rolled up onto and what every quote surface reads.
+
+GL = "general-liability"
 
 
 def test_a_response_before_the_submission_was_sent_is_refused(book) -> None:
     sub = _submission(book, sent_on="2026-08-01")
     with pytest.raises(ValueError) as err:
-        ef.apply_response(book, sub.id, {"status": "quoted", "response_on": "2026-07-25"})
+        ef.apply_response(
+            book, sub.id,
+            {"line_id": GL, "status": "quoted", "responded_on": "2026-07-25"},
+        )
     assert "2026-07-25" in str(err.value) and "2026-08-01" in str(err.value)
     assert submissions.get(book, sub.id).response_on is None
 
@@ -262,7 +277,10 @@ def test_a_same_day_response_is_legal(book) -> None:
     """The ordinary case on a small account: sent in the morning, quoted in
     the afternoon."""
     sub = _submission(book, sent_on="2026-08-01")
-    out = ef.apply_response(book, sub.id, {"status": "quoted", "response_on": "2026-08-01"})
+    out = ef.apply_response(
+        book, sub.id,
+        {"line_id": GL, "status": "quoted", "responded_on": "2026-08-01"},
+    )
     assert out.response_on == "2026-08-01"
 
 
@@ -273,7 +291,7 @@ def test_a_quote_expiring_before_the_response_is_refused(book) -> None:
     with pytest.raises(ValueError) as err:
         ef.apply_response(
             book, sub.id,
-            {"status": "quoted", "response_on": "2026-08-05",
+            {"line_id": GL, "status": "quoted", "responded_on": "2026-08-05",
              "quote_expires_on": "2025-09-04"},
         )
     assert "2025-09-04" in str(err.value)
@@ -285,14 +303,17 @@ def test_an_expiry_is_checked_against_sent_when_there_is_no_response_date(book) 
     whose response date has not been filled in."""
     sub = _submission(book, sent_on="2026-08-01")
     with pytest.raises(ValueError):
-        ef.apply_response(book, sub.id, {"status": "quoted", "quote_expires_on": "2025-09-04"})
+        ef.apply_response(
+            book, sub.id,
+            {"line_id": GL, "status": "quoted", "quote_expires_on": "2025-09-04"},
+        )
 
 
 def test_a_quote_that_expires_the_day_it_arrives_is_legal(book) -> None:
     sub = _submission(book, sent_on="2026-08-01")
     out = ef.apply_response(
         book, sub.id,
-        {"status": "quoted", "response_on": "2026-08-05",
+        {"line_id": GL, "status": "quoted", "responded_on": "2026-08-05",
          "quote_expires_on": "2026-08-05"},
     )
     assert out.quote_expires_on == "2026-08-05"
@@ -305,7 +326,7 @@ def test_an_already_lapsed_quote_still_records(book) -> None:
     sub = _submission(book, sent_on="2020-01-01")
     out = ef.apply_response(
         book, sub.id,
-        {"status": "quoted", "response_on": "2020-01-08",
+        {"line_id": GL, "status": "quoted", "responded_on": "2020-01-08",
          "quote_expires_on": "2020-02-08"},
     )
     assert out.quote_expires_on == "2020-02-08"
@@ -313,7 +334,10 @@ def test_an_already_lapsed_quote_still_records(book) -> None:
 
 def test_a_response_with_no_dates_at_all_still_saves(book) -> None:
     sub = _submission(book, sent_on="2026-08-01")
-    out = ef.apply_response(book, sub.id, {"status": "declined", "decline_reason": "class"})
+    out = ef.apply_response(
+        book, sub.id,
+        {"line_id": GL, "status": "declined", "decline_reason": "class"},
+    )
     assert (out.response_on, out.quote_expires_on) == (None, None)
 
 
@@ -321,9 +345,14 @@ def test_a_later_edit_is_checked_against_the_dates_already_stored(book) -> None:
     """dropped() strips the blanks, so the row as it WILL be is what has to be
     compared — not the two fields that happened to be typed this time."""
     sub = _submission(book, sent_on="2026-08-01")
-    ef.apply_response(book, sub.id, {"status": "quoted", "response_on": "2026-08-20"})
+    ef.apply_response(
+        book, sub.id,
+        {"line_id": GL, "status": "quoted", "responded_on": "2026-08-20"},
+    )
     with pytest.raises(ValueError):
-        ef.apply_response(book, sub.id, {"quote_expires_on": "2026-08-10"})
+        ef.apply_response(
+            book, sub.id, {"line_id": GL, "quote_expires_on": "2026-08-10"}
+        )
 
 
 # --- 4. project start / end ---------------------------------------------------

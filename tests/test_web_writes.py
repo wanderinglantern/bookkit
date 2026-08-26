@@ -503,6 +503,47 @@ def test_two_records_conflicting_on_one_field_say_it_once(app_and_org):
     assert said == f"{batch.ref} refused — contact title changed since", said
 
 
+def test_the_toast_says_what_still_hangs_off_a_shared_row(app_and_org):
+    """A dependent conflict is not a field that moved — nothing on the row
+    changed at all — so the generic mould printed "submission created changed
+    since", which names neither the blocker nor the way past it. The sentence
+    is the planner's (services/batches.dependent_clause) so this toast and the
+    MCP server's `why` cannot drift apart, and the toast is the only place a
+    browser user ever learns why the Revert link did nothing (2026-08-26)."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import placements as placements_repo
+    from bookkit.services import batches as batches_svc
+    from bookkit.services import marketing_entry
+
+    placement = placements_repo.for_org(conn, org.id)[0]
+    market = orgs_repo.list_orgs(conn, kind="market")[0]
+    refs = []
+    for line in ("general-liability", "auto"):
+        with batches_svc.open_batch(
+            conn, source="web", tool="market_approach",
+            summary=f"approached a market on {line}", org_id=org.id,
+        ) as batch:
+            marketing_entry.approach(
+                conn, placement.id, line, sent_on="2026-08-12",
+                market_org_id=market.id, today="2026-08-14",
+            )
+        refs.append(batch.ref)
+
+    response = _revert(client, org.ref, refs[0])
+    assert _redirect_params(response)["outcome"] == "refused"
+
+    page = client.get(response.headers["HX-Redirect"])
+    text = re.search(r'<span class="toast-text">([^<]*)</span>', page.text)
+    assert text, "no toast rendered"
+    said = text.group(1)
+    assert said == (
+        f"{refs[0]} refused — submission still has 1 market response(s) "
+        f"recorded against it since — undo those first"
+    ), said
+
+
 def test_the_refusal_names_three_conflicts_then_counts_the_rest(app_and_org):
     """`+N more` had no test (review round 1, F9). Five distinct fields
     conflict here — five distinct (entity_type, field) pairs, so nothing is

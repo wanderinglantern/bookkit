@@ -1,0 +1,422 @@
+{# The marketing grid's ROW and ADD ROW, in one place.
+
+   ONE RENDERER, because there are two callers and they must not drift: the
+   panel's first render walks every block, and every cell save answers with the
+   ONE row it changed (routes/marketing.py `_row_response`). That is the same
+   rule `_section_html` exists for on the program section — a key or a class
+   added to one caller's copy and not the other's goes missing on writes, which
+   is how the layers table lost its `tower` and then its `load_error`
+   (2026-08-20). #}
+
+{% macro row(r, columns) %}
+  {# id, because a save answers with THIS row and says so with HX-Retarget.
+     Prefixed: a bare ULID starts with a digit and `#01J…` is not a valid CSS
+     id selector, which is why every retarget in this app is prefixed.
+
+     `data-layer-row` is the RECORD HOOK inline-cell.js resolves a refocus
+     token against ("<record>:<field>", the shape a layer cell save uses when
+     the whole section comes back). Three of the cells in this row answer with
+     the whole BLOCK, because they move the premium bridge and the clearance
+     strip above them (routes/marketing.py `_BLOCK_CELLS`) — and a block holds
+     one `premium` cell per market, so "cell:premium" would put the caret back
+     in the first row's rather than in this one's. #}
+  <tr id="mrow-{{ r.id }}" class="marketing-row" data-layer-row="{{ r.id }}"{% if r.refocus %} data-refocus="{{ r.refocus }}"{% endif %}>
+    {% for cell in r.cells %}
+      {% if cell.html %}
+        {# An editable cell, rendered through macros/cell.html by
+           web/marketing_grid.row_view — the SHARED contract (display →
+           editor on activation → POST; blur commits, Escape discards). Never
+           a second copy of that markup. #}
+        {{ cell.html | safe }}
+      {% else %}
+        <td class="{{ cell.class }}">
+          {% if cell.pill %}
+            {# Colour is signal, not decoration: the pill prints the word
+               itself, so a reader who cannot see the tint still reads it. #}
+            <span class="market-pill {{ cell.tone }}">{{ cell.text }}</span>
+          {% else %}
+            {{ cell.text }}
+          {% endif %}
+        </td>
+      {% endif %}
+    {% endfor %}
+    <td class="row-tail">
+      {% if r.charges_unknown %}
+        {# "NO FEES OR TAXES APPLY", in one act. NULL is "nobody has told us"
+           and 0 is "we asked, there is none"; only 0 reaches a Total. Without
+           this the Total column stays permanently blank on ordinary admitted
+           domestic business — or a broker types three zeros into three cells
+           and the book records three edits for one fact. It writes 0 to TRIA,
+           policy fees and surplus lines tax in ONE batch, and disappears once
+           all three are known: an affordance that does nothing is worse than
+           none. #}
+        <button type="button" class="row-action-btn"
+                hx-post="{{ r.no_charges_url }}"
+                hx-target="#mrow-{{ r.id }}" hx-swap="outerHTML"
+                title="record zero TRIA, zero policy fees and zero surplus lines tax — one undo unit">no charges</button>
+      {% endif %}
+    </td>
+  </tr>
+{% endmacro %}
+
+
+{% macro add_row(block, fields, values, columns, error=None, preserve=False) %}
+  {# AN EXPLICIT SAVE, not inline cells (CLAUDE.md: "NOT the rule for whole
+     forms"). Six fields are filled in one go and tabbing between them must not
+     commit half a row — a half-written approach is a market this book claims
+     to have gone to.
+
+     No <form> element: this is inside a table, and the participation add row's
+     comment explains why that matters. The Save button carries the POST and
+     hx-include="closest tr" gathers the inputs; Enter in any of them submits
+     through the same button (form-host.js, which finds `.row-save-btn`).
+
+     `.market-add-row` and `.market-add-form` are deliberate reuses of the
+     participation row's class names: the first is what form-host.js keys
+     Enter off, the second is one of inline-cell.js's ERROR_SCOPEs, so a
+     refusal here clears on the first keystroke of the correction like every
+     other refusal in the app.
+
+     COMMIT IN PLACE: a refusal re-renders this same row with the message and
+     everything typed still in it.
+
+     AND NEVER LOSE TYPING TO SOMEBODY ELSE'S WRITE. Three cells in the grid
+     above answer with the whole BLOCK (routes/marketing.py `_BLOCK_CELLS`),
+     and that swap used to rebuild this row from its DEFAULTS — so correcting a
+     premium four rows up wiped a half-typed approach, both values gone with no
+     message (verified in a browser, 2026-08-26). `hx-preserve` is htmx's own
+     answer: it keeps THIS element, with everything in it, when a swap of an
+     ancestor brings back an element with the same id. It rides on the NEW
+     markup, so the server decides — and the two answers this row's OWN save
+     produces (the refusal, and the block after a successful add) render it
+     WITHOUT the attribute, because a refusal has to swap in the message and a
+     saved approach has to clear the form for the next one. #}
+  <tr class="market-add-row marketing-add-row" id="add-{{ block.id }}"{% if preserve %} hx-preserve="true"{% endif %}>
+    <td colspan="{{ columns | length + 1 }}">
+      <div class="market-add-form marketing-add-fields">
+        {% for f in fields %}
+          {# THE LABEL IS VISIBLE. A placeholder vanishes on the first
+             keystroke and is only ever a format example. #}
+          <label class="inline-field"><span class="pair-k">{{ f.label }}</span>
+            {% if f.kind == "select" %}
+              <select name="{{ f.key }}" aria-label="{{ f.label }}"{% if f.required %} required{% endif %}>
+                {# THE BLANK OPTION IS ALWAYS RENDERED, required or not. A
+                   select with no empty option pre-selects its first, and
+                   `required` is then satisfied by a value nobody chose — which
+                   on THIS field filed an untouched market response as
+                   "quoted". A value that should arrive set is a VISIBLE
+                   default (`values`), which is a different thing. #}
+                <option value=""></option>
+                {% for label, val in f.options %}
+                  <option value="{{ val }}"{% if values.get(f.key) == val %} selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            {% else %}
+              <input type="text" name="{{ f.key }}" aria-label="{{ f.label }}"
+                     value="{{ values.get(f.key, '') }}"
+                     {% if f.placeholder %}placeholder="{{ f.placeholder }}"{% endif %}
+                     {# THE DOM ID CARRIES THE PLACEMENT, not the line alone.
+                        One Program tab renders every placement on the account,
+                        so two of them marketing General Liability emitted
+                        `mk-general-liability-market` twice and both inputs
+                        resolved to the first datalist — the same collision
+                        `mblock-<placement>-<line>` exists to avoid one level
+                        up, which is why this is built from that id. #}
+                     {% if f.suggestions %}list="mk-{{ block.id }}-{{ f.key }}"{% endif %}>
+              {% if f.suggestions %}
+                <datalist id="mk-{{ block.id }}-{{ f.key }}">
+                  {% for s in f.suggestions %}<option value="{{ s }}"></option>{% endfor %}
+                </datalist>
+              {% endif %}
+            {% endif %}
+          </label>
+        {% endfor %}
+        <button type="button" class="row-action-btn row-save-btn"
+                hx-post="{{ block.add_url }}" hx-include="closest tr"
+                hx-target="closest tr" hx-swap="outerHTML">save</button>
+        {# INSIDE `.market-add-form`, which is one of inline-cell.js's
+           ERROR_SCOPEs — that is what makes the first keystroke of the
+           correction clear it (VALIDATE ON BLUR, CLEAR ON KEYSTROKE). It sat
+           one element OUT, as a sibling of this div, and the listener walking
+           up from the input never reached it: a broker mistyped a carrier, was
+           refused, retyped "Zurich", and the red "no market matching 'Zzzz
+           Mutual'" stayed under the box (found 2026-08-25). The comment at the
+           top of this macro claimed the opposite. It takes the whole flex line
+           (app.css) so it still reads under the fields rather than beside the
+           save button. #}
+        {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+      </div>
+      {# CARRIER OR VIA, NOT BOTH REQUIRED — said here, before the refusal, so
+         nobody discovers it by being refused. A wholesaler whose paper is not
+         named yet is a real approach and reads "RT Specialty — carrier TBD". #}
+      <p class="marketing-add-hint">A carrier or an intermediary — one of the
+        two is enough. Leave the carrier blank while a wholesaler has not named
+        the paper.</p>
+    </td>
+  </tr>
+{% endmacro %}
+
+
+{% macro provisional_block(b, columns) %}
+  {# THE MARKETING THAT HAS NO LINE OF COVERAGE YET.
+
+     A submission with no response rows is REAL MARKETING THAT HAPPENED — it
+     went to a market on a day and it may carry a quote — and the one thing
+     nobody has recorded is which line of coverage the answer is about. The
+     panel used to print "No line of coverage on this placement is being
+     marketed yet" straight over fourteen seeded placements, four of them live
+     and two quoted at $1.4M, and the workbook downloaded one header row
+     (Grant, 2026-08-26).
+
+     IT MUST NEVER READ AS A LINE OF COVERAGE. No fact header, no expiring
+     comparison, no clearance strip, no premium bridge and no add-a-market
+     row: not one of them is knowable here, and a header of nine "not set"
+     cells beside a real quote invites somebody to fill figures in against a
+     line nobody chose. What it has instead is a sentence saying what these
+     rows are, and one control per row that makes them ordinary. #}
+  <article class="marketing-block marketing-provisional" id="{{ b.id }}">
+    <header class="marketing-block-head">
+      <span class="marketing-line">Line of coverage not recorded</span>
+      <p class="marketing-provisional-note" role="status">These markets were
+        approached on this placement and nothing says which line of coverage
+        each answer covers. The figures below are what the submission itself
+        recorded. Give a row its line of coverage and it moves up into that
+        line’s grid, where every figure on it can be corrected where it
+        prints.</p>
+    </header>
+    <div class="table-scroll">
+      <table class="rows rows-fit marketing-grid">
+        <thead>
+          <tr>
+            {% for column in columns %}
+              <th{% if column.numeric %} class="num"{% endif %}>{{ column.header }}</th>
+            {% endfor %}
+            <th class="row-tail"><span class="visually-hidden">row actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in b.rows %}
+            <tr id="mprovrow-{{ r.id }}" class="marketing-row">
+              {% for cell in r.cells %}
+                {# PRINTED, NEVER A CELL. These figures live on the submission,
+                   which is a CACHE of the response rows everywhere else in
+                   this app — a cell that wrote to a cache would be the second
+                   home for the fact that the roll-up exists to close. #}
+                <td class="{{ cell.class }}">
+                  {% if cell.pill %}
+                    <span class="market-pill {{ cell.tone }}">{{ cell.text }}</span>
+                  {% else %}
+                    {{ cell.text }}
+                  {% endif %}
+                </td>
+              {% endfor %}
+              <td class="row-tail">
+                {# ONE SCOPE FOR THE CONTROL AND FOR ANY REFUSAL IT RAISED, and
+                   it wraps EVERY branch. The message used to sit inside the
+                   picker branch, so a POST refused on a WITHDRAWN row — which
+                   renders no picker — came back with nothing on the page at
+                   all: the write was correctly refused and the browser was
+                   told in silence, which is the bug class "a refusal says
+                   something" is named after (found by driving it, 2026-08-26).
+                   The markup constrains a mouse and nothing else, so that POST
+                   is reachable from a stale tab and from anything that can
+                   post. `.marketing-assign` is one of inline-cell.js's
+                   ERROR_SCOPEs, which is what clears the message on the first
+                   change of the picker where there is one. #}
+                <div class="marketing-assign">
+                {% if not r.can_assign %}
+                  {# The package was WITHDRAWN. Its marketing stays reported —
+                     it happened — and the control is withheld rather than left
+                     to refuse, the way a retired line's add-market row is:
+                     `roll_up_submission` never writes over `withdrawn`, so a
+                     response created here would hang off a parent that can
+                     never be recomputed from it. #}
+                  <span class="detail-label">withdrawn — not assigned to a line</span>
+                {% elif b.line_options %}
+                  <label class="inline-field"><span class="pair-k">assign a line of coverage</span>
+                    {# NO `form=` and no <form> element: this control lives
+                       inside a table, where a form is illegal, so the button
+                       below carries the POST and `hx-include="closest tr"`
+                       gathers this select — the same shape the add-market row
+                       uses one block up. #}
+                    <select name="line_id"
+                            aria-label="line of coverage this answer is about">
+                      {# THE BLANK OPTION, for the reason it is everywhere:
+                         without one the browser answers the question, and the
+                         answer it picks here files a market's quote against
+                         whichever line of coverage sorted first. #}
+                      <option value=""></option>
+                      {% for label, val in b.line_options %}
+                        <option value="{{ val }}">{{ label }}</option>
+                      {% endfor %}
+                    </select></label>
+                  <button type="button" class="row-action-btn"
+                          hx-post="{{ r.assign_url }}"
+                          hx-include="closest tr"
+                          title="record this package's answer against a line of coverage — one undo unit">assign</button>
+
+                {% else %}
+                  {# A REFUSAL NAMES A FIX REACHABLE FROM HERE, and an empty
+                     picker is not one. The add-a-line control at the head of
+                     this section is the fix, and it is on the same screen. #}
+                  <span class="detail-label">this book carries no lines of
+                    coverage yet — add one at the top of this section first</span>
+                {% endif %}
+                {# THE REFUSAL, BESIDE THE ROW IT WAS RAISED ON, and OUTSIDE
+                   the branches above. An assign answers with the whole section
+                   because the row moves out of this block into a line of
+                   coverage's — so the message has to say which row it is
+                   about, or it lands at the top of a section holding a dozen
+                   of them. #}
+                {% if b.error and b.error_row == r.id %}
+                  <span class="cell-error-msg" role="alert">{{ b.error }}</span>
+                {% endif %}
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+{% endmacro %}
+
+
+{% macro block(b, columns, add_fields, add_values, keep_add_row=True) %}
+  {# ONE LINE OF COVERAGE. A macro, not markup inlined in the section, because
+     there are two callers: the section's first render and a HEADER CELL SAVE.
+     A header cell is not a cell that only changes itself — filling in the
+     expiring rate turns every Rate Δ in the rows below from a sentence into a
+     number, which is the whole reason the header exists — so a save answers
+     with this whole block, retargeted onto its own id. Same shape as
+     `_row_response` one level down and `_panel` one level up: ONE top-level
+     element, and it says where it goes. #}
+  <article class="marketing-block" id="{{ b.id }}"{% if b.refocus %} data-refocus="{{ b.refocus }}"{% endif %}>
+    <header class="marketing-block-head">
+      <span class="marketing-line">{{ b.line_name }}</span>
+      {% if b.retired %}
+        {# SURFACED, NOT HIDDEN. The line of coverage was retired (or merged
+           away) after this marketing was recorded. Reading the vocabulary
+           through the LIVING list dropped the whole block — a bound quote,
+           the expectations row and all — from this tab and from the client's
+           workbook, and the panel then said nothing on the placement was
+           being marketed. The rows are still true; what changed is that the
+           book will not take new work on this line, which is why the
+           add-a-market row below is gone and this says so. #}
+        <span class="marketing-retired" role="status">line of coverage retired
+          — kept here because the marketing below it happened</span>
+      {% endif %}
+      {# THE SEND DATE IS A CELL IN THE GRID BELOW, not a line here. It could
+         only be printed here when every package on the line went out on the
+         same day, which is a coincidence of values rather than a fact about
+         the block — and printing it in both places would state one thing
+         twice. The sheet still collapses it into its own block heading
+         (marketing_report._block_head): a reader only reads it. #}
+      {# WHAT THIS LINE IS EXPECTED TO DO, edited where it prints — the same
+         rule the grid below follows, because the alternative is a second form
+         stating facts this header already shows. GROUPED into what we are
+         asking for and what expired: they are two kinds of fact, and running
+         nine of them together is the undifferentiated density the layer
+         details row was regrouped to fix.
+
+         A figure nobody has recorded says so IN WORDS ("not set"). A blank in
+         a header reads as a rendering fault, and a broker cannot tell it from
+         a zero. #}
+      <div class="marketing-facts">
+        {% for group in b.groups %}
+          <section class="marketing-fact-group">
+            <h5 class="marketing-fact-group-label">{{ group.label }}</h5>
+            <dl class="marketing-fact-list">
+              {% for fact in group.facts %}
+                <div class="marketing-fact">
+                  <dt class="detail-label">{{ fact.label }}</dt>
+                  {% if fact.html %}
+                    {{ fact.html | safe }}
+                  {% else %}
+                    {# DERIVED, so printed and never a cell — you cannot type
+                       a percentage change between two figures that each have
+                       a cell of their own three inches away. #}
+                    <dd class="marketing-fact-value marketing-fact-delta">{{ fact.value }}</dd>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </dl>
+          </section>
+        {% endfor %}
+      </div>
+    </header>
+
+    {% if b.clearance %}
+      {# REPORTED, NEVER REFUSED — the same rule `line-gap` follows, and the
+         same markup towerkit's own diagnostics get. The double approach is
+         sometimes deliberate (a wholesaler and a direct relationship on one
+         carrier), so the row is written and this stands beside it; a hard
+         block would make a legitimate entry impossible. #}
+      <div class="program-diagnostics" role="status"
+           aria-label="clearance conflicts on this line of coverage">
+        {% for warning in b.clearance %}
+          <p class="diagnostic diagnostic-warning">
+            <span class="diagnostic-mark" aria-hidden="true">⚠</span>
+            <span class="diagnostic-said">{{ warning }}</span>
+            <span class="detail-label">clearance</span>
+          </p>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <div class="table-scroll">
+      <table class="rows rows-fit marketing-grid">
+        <thead>
+          <tr>
+            {% for column in columns %}
+              <th{% if column.numeric %} class="num"{% endif %}>{{ column.header }}</th>
+            {% endfor %}
+            <th class="row-tail"><span class="visually-hidden">row actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in b.rows %}
+            {{ row(r, columns) }}
+          {% else %}
+            {# IN WORDS. An empty table cannot be told from a rendering bug,
+               and "nobody has gone to market on this line" is a real and
+               ordinary state of a placement three weeks out. It stays a ROW
+               rather than replacing the table, because the add row below it is
+               how that state stops being true. #}
+            <tr class="marketing-none-row">
+              <td colspan="{{ columns | length + 1 }}" class="marketing-none">
+                No markets approached on this line yet.</td>
+            </tr>
+          {% endfor %}
+          {% if not b.retired %}
+            {# NO NEW APPROACHES ON A RETIRED LINE. The control is withdrawn
+               rather than left to refuse, because the header above already
+               says why and an affordance that only ever answers "no" is worse
+               than none. Every cell in the rows above stays editable: a quote
+               already in hand is corrected wherever it is. #}
+            {# KEPT BY DEFAULT, because a block answer is nearly always a write
+               somewhere ELSE in the block — a premium, a rate, a status, a
+               header expectation — and none of those is a reason to throw away
+               what a broker has half-typed here. The one caller that passes
+               False is the add row's own successful save, where a cleared row
+               is the right answer. #}
+            {{ add_row(b, add_fields, add_values, columns, preserve=keep_add_row) }}
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+    {% if b.bridge %}
+      {# Why the premium moved: rate against the client's own growth. The
+         composer only builds it when both sides of both facts are recorded, so
+         its absence is not an empty state. #}
+      <dl class="marketing-bridge">
+        {% for line in b.bridge %}
+          <div class="marketing-bridge-line">
+            <dt>{{ line.label }}</dt>
+            <dd class="mono">{{ line.value }}</dd>
+          </div>
+        {% endfor %}
+      </dl>
+    {% endif %}
+  </article>
+{% endmacro %}

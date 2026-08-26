@@ -1,0 +1,163 @@
+{# The marketing grid — THE PANEL IS THE REPORT (Grant, 2026-08-25).
+
+   One block per line of coverage, the same columns in the same order as
+   /export/marketing.xlsx, because two renderings of one thing is the second
+   copy that quietly differs — and here the copy that differs is the one a
+   client is sent. Every figure and every word below came from
+   web/marketing_grid.panel(), which reads services.marketing_report.compose:
+   nothing is composed in this file.
+
+   IT RENDERS WITHOUT A PROGRAM FILE. Marketing happens before a tower
+   exists, so this section sits OUTSIDE the linked/load_error branches above
+   it and beneath the workbench, not inside it.
+
+   EDITABLE WHERE IT SITS, header and rows alike. Every value a market gave us
+   and every expectation the line carries is an inline cell where it prints —
+   no second entry form, because two ways to state one fact is the same second
+   copy in another costume. The blocks come from macros/marketing.html, which
+   a header cell save also renders, so the grid a broker looks at and the block
+   a save answers with cannot drift. #}
+{% from "macros/marketing.html" import block as marketing_block, provisional_block %}
+{# `data-refocus` rides a SECTION answer: correcting the date a submission
+   went out moves rows in every block that package carried, so that one write
+   answers with the whole section and the cell the caret was in is gone.
+   inline-cell.js resolves "<response_id>:<field>" against `data-layer-row`,
+   the same token a layer cell save uses when the program section comes back. #}
+<section class="marketing" id="{{ marketing.id }}"{% if marketing.refocus %} data-refocus="{{ marketing.refocus }}"{% endif %}>
+  <header class="marketing-head">
+    <h3 class="marketing-title">Marketing</h3>
+    <span class="marketing-caption">What each market has said, by line of
+      coverage — the same grid the marketing workbook downloads.</span>
+
+    {# A LINE NOBODY HAS STARTED YET, and a line THE BOOK HAS NEVER CARRIED.
+       Without the first the add-market row is unreachable on a fresh
+       placement — every block below exists because something is already
+       recorded against it. Without the second a broker meets a vocabulary
+       that cannot grow, on a screen where the next real line of coverage is
+       exactly what they are trying to record; a picker is only right where
+       the valid set is knowable, and lines of coverage are not (the same
+       reading `NEED_FIELDS` gives).
+
+       ALWAYS RENDERED, even when the picker has nothing left to offer: the
+       typed half still works, and a control that disappears once every known
+       line is on the placement is a control nobody can find when they need
+       it most. #}
+    {# AND NEVER LOSE TYPING TO SOMEBODY ELSE'S WRITE — the add-market row's
+       rule, on the control three inches above it. Correcting a Sent cell
+       answers with this whole SECTION, and that swap rebuilt this form from
+       its defaults: a half-typed line name gone, with no message (D5, found
+       2026-08-26). `hx-preserve` keeps THIS element and everything in it when
+       an ancestor is swapped and the new markup carries the same id — so the
+       id is load-bearing and the attribute rides on the server's answer, which
+       is what lets this control's OWN two answers (its refusal, and the
+       section after a line is added) render without it. #}
+    <form class="marketing-line-add" id="{{ marketing.id }}-line-add"
+          {% if marketing.line_add_preserve %}hx-preserve="true"{% endif %}
+          hx-post="{{ marketing.line_url }}"
+          hx-target="#{{ marketing.id }}" hx-swap="outerHTML">
+      <label class="inline-field"><span class="pair-k">add a line of coverage</span>
+        <select name="line_id" aria-label="line of coverage to market">
+          {# The blank option, for the reason it is everywhere: without it the
+             browser answers the question. It is FIRST and it is selected,
+             because the other half of this control is the text box beside
+             it — a pre-picked line would silently win over a typed name. #}
+          <option value=""></option>
+          {% for label, val in marketing.line_options %}
+            <option value="{{ val }}"{% if marketing.line_values.get('line_id') == val %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select></label>
+      <label class="inline-field"><span class="pair-k">or name a new one</span>
+        {# COMMIT IN PLACE: a refusal re-renders this control with the message
+           AND everything typed still in it. It came back empty on both halves,
+           so the one refusal this control gives most often — "pick from the
+           list or type a new name, not both" — could only be answered by
+           typing the whole thing again. #}
+        <input type="text" name="line_name" aria-label="name a line of coverage the book does not have"
+               value="{{ marketing.line_values.get('line_name', '') }}"
+               list="{{ marketing.id }}-lines" autocomplete="off">
+        {# Completion over the book's OWN vocabulary, so the easiest thing to
+           type is the spelling that already exists. That is the cheap half of
+           the anti-duplicate rule; the near-match question below is the half
+           that catches a spelling completion could not. #}
+        <datalist id="{{ marketing.id }}-lines">
+          {% for label, val in marketing.line_options %}<option value="{{ label }}"></option>{% endfor %}
+        </datalist></label>
+      <button type="submit" class="row-action-btn">add</button>
+      {# The refusal lives INSIDE the form, so inline-cell.js's first-keystroke
+         clear reaches it (.marketing-line-add is one of its ERROR_SCOPEs). A
+         message that survives its own correction makes a valid entry read as
+         still broken. #}
+      {% if marketing.error %}
+        <span class="cell-error-msg" role="alert">{{ marketing.error }}</span>
+      {% endif %}
+    </form>
+
+    {% if marketing.pending %}
+      {# THE NEAR-MATCH QUESTION — ADVISORY, NEVER A VETO.
+         `Excess Liability` and `Employers Liability` share most of their
+         letters and are not the same thing, so a refusal nobody can override
+         makes a correct entry impossible (repo/lines.py says this in its own
+         words). Both answers are offered as buttons: use the one that exists,
+         or create the one that was typed. The scores are printed because "82%
+         like Employers Liability" is a fact a broker can judge and "did you
+         mean…" is not. #}
+      <div class="marketing-clash" role="status"
+           aria-label="lines of coverage that look like the one you typed">
+        <p class="marketing-clash-head">{{ marketing.pending.head }}</p>
+        <ul class="marketing-clash-list">
+          {% for match in marketing.pending.matches %}
+            <li class="marketing-clash-match">
+              <span class="marketing-clash-name">{{ match.name }}</span>
+              <span class="detail-label">{{ match.score }}% alike</span>
+              {% if match.here %}
+                <span class="detail-label">already on this placement</span>
+              {% else %}
+                <button type="button" class="row-action-btn"
+                        hx-post="{{ marketing.line_url }}"
+                        hx-vals='{{ match.use_vals }}'
+                        hx-target="#{{ marketing.id }}" hx-swap="outerHTML">use {{ match.name }}</button>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+        {% if marketing.pending.create_vals %}
+          <button type="button" class="row-action-btn"
+                  hx-post="{{ marketing.line_url }}"
+                  hx-vals='{{ marketing.pending.create_vals }}'
+                  hx-target="#{{ marketing.id }}" hx-swap="outerHTML">create “{{ marketing.pending.name }}” anyway</button>
+        {% endif %}
+      </div>
+    {% endif %}
+  </header>
+
+  {% if marketing.blocks or marketing.provisional %}
+    {% for b in marketing.blocks %}
+      {{ marketing_block(b, marketing.columns, marketing.add_fields, marketing.add_values) }}
+    {% endfor %}
+    {# LAST, BELOW THE LINES OF COVERAGE. These are the packages nobody has
+       finished recording, and leading the section with the least certain rows
+       would put them above the lines a client is actually choosing between —
+       the same ordering the workbook takes (`to_sections`).
+
+       AND IT IS WHAT MAKES THE EMPTY STATE BELOW HONEST. The condition on this
+       branch used to be `marketing.blocks` alone, so fourteen seeded
+       placements carrying live submissions — four of them live, two quoted at
+       $1.4M — were told nothing on them was being marketed (Grant,
+       2026-08-26). A submission with no response rows is real marketing that
+       happened, and it renders here. #}
+    {% if marketing.provisional %}
+      {{ provisional_block(marketing.provisional, marketing.columns) }}
+    {% endif %}
+  {% else %}
+    {# NOT `.panel-empty`, whose 2.5rem of air is right for a tab body that
+       has nothing in it at all. This section is a secondary one on a page
+       that usually has plenty above it, and most placements in a book are
+       not being marketed at any given moment — an empty state that shouts
+       would be repeated once per placement down the tab. #}
+    <div class="marketing-empty">
+      <p class="marketing-empty-head">No line of coverage on this placement is
+        being marketed yet.</p>
+      <p>Pick one above and the grid opens on it — no program file needed.</p>
+    </div>
+  {% endif %}
+</section>

@@ -253,8 +253,15 @@ def test_the_migration_is_additive_and_snapshots_the_book_first(
         " (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
     )
     pending = sorted(db.pending_migrations(conn))
-    assert pending[-1][0] == 13, "013 is not the newest migration any more"
-    for version, sql_path in pending[:-1]:
+    # 013 STOPPED BEING THE NEWEST MIGRATION on 2026-08-25, when 014/015 added
+    # the marketing tables. This test is about 013's OWN additivity and about
+    # the backup db.connect takes before it touches a book that already holds
+    # rows — neither of which is a statement about what happens to be last. So
+    # it hand-applies everything BEFORE 013 and lets db.connect apply the rest,
+    # rather than pinning a number that every future migration would break.
+    through_013 = [entry for entry in pending if entry[0] <= 13]
+    assert through_013[-1][0] == 13, "013 is missing from the migration set"
+    for version, sql_path in through_013[:-1]:
         conn.executescript(sql_path.read_text())
         conn.execute(
             "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
@@ -267,7 +274,9 @@ def test_the_migration_is_additive_and_snapshots_the_book_first(
     assert not (tmp_path / "backups").exists()
     migrated = db.connect(path)
     try:
-        assert db.schema_version(migrated) == 13
+        assert db.schema_version(migrated) >= 13
+        # ONE snapshot, however many migrations were pending: the backup is
+        # taken before the first one touches the book, not per file.
         backups = list((tmp_path / "backups").glob("*.bak"))
         assert len(backups) == 1, backups
 

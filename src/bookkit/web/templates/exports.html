@@ -16,7 +16,7 @@
     {% if rows %}
       <div class="table-scroll">
         <table class="rows rows-fit">
-          <thead><tr><th>Account</th><th>Open items</th><th>Work</th><th>Programs</th></tr></thead>
+          <thead><tr><th>Account</th><th>Open items</th><th>Work</th><th>Marketing</th><th>Programs</th></tr></thead>
           <tbody>
             {% for row in rows %}
               <tr>
@@ -32,6 +32,17 @@
                    disagree about what an open item is. #}
                 <td class="prose">
                   <a class="row-action-btn" href="/accounts/{{ row.ref }}/export/work.xlsx">Work XLSX</a>
+                </td>
+                {# The marketing report: every placement, linked or not. See
+                   routes/exports.py for why this is its own column and not
+                   another anchor in the file-drawn artifacts beside it. #}
+                <td class="prose">
+                  {% for placement in row.placements %}
+                    <span class="export-program">{{ placement.name }} <span class="mono muted">{{ placement.ref }}</span> —
+                      <a class="row-action-btn" href="/accounts/{{ row.ref }}/program/{{ placement.id }}/export/marketing.xlsx">Marketing</a></span>{% if not loop.last %}<br>{% endif %}
+                  {% else %}
+                    <span class="muted">no placements</span>
+                  {% endfor %}
                 </td>
                 <td class="prose">
                   {% for program in row.programs %}

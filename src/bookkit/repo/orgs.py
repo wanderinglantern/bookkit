@@ -108,6 +108,31 @@ def names_for(conn: sqlite3.Connection, org_ids: set[str]) -> dict[str, str]:
     return {org_id: label.name for org_id, label in labels_for(conn, org_ids).items()}
 
 
+def names_for_any(conn: sqlite3.Connection, org_ids: set[str]) -> dict[str, str]:
+    """id → name, LIVING OR NOT, ONE query.
+
+    FOR NAMING SOMETHING THAT ALREADY HAPPENED. A market response points at
+    the carrier that quoted it, and deleting or merging that org away does not
+    unmake the quote — but `names_for` misses the id, and the marketing grid
+    rendered the row with its premium, its status and its A.M. Best rating and
+    a COMPLETELY EMPTY Market cell, which is the one column identifying whose
+    answer it was (2026-08-25). The same silence one column over from the
+    retired line of coverage, and the same answer: name it.
+
+    NOT THE DEFAULT, and deliberately not a flag on `names_for`. Anything that
+    offers something to DO — a picker, a link, an assignment — keeps using
+    `labels_for`/`names_for`, because "living" is exactly what those need to
+    mean. This is for reports.
+    """
+    if not org_ids:
+        return {}
+    marks = ",".join("?" * len(org_ids))
+    rows = conn.execute(
+        f"SELECT id, name FROM org WHERE id IN ({marks})", tuple(org_ids)
+    ).fetchall()
+    return {r["id"]: r["name"] for r in rows}
+
+
 def find(conn: sqlite3.Connection, ref_or_id: str) -> Org | None:
     row = conn.execute(
         f"SELECT * FROM org WHERE (id = ? OR ref = ?) AND {base.alive()}",
@@ -172,6 +197,24 @@ def set_market_profile(conn: sqlite3.Connection, org_id: str, **fields: Any) -> 
             f"UPDATE market_profile SET {sets} WHERE org_id = ?", (*fields.values(), org_id)
         )
     return get_market_profile(conn, org_id)  # type: ignore[return-value]
+
+
+def best_ratings_for(
+    conn: sqlite3.Connection, org_ids: set[str]
+) -> dict[str, str]:
+    """{org_id: A.M. Best rating} for many markets at once.
+
+    Bulk because the marketing report prints a rating beside every market on
+    every line, and `get_market_profile` per row is a query per cell. Shaped
+    on `names_for` above, which exists for the same reason."""
+    if not org_ids:
+        return {}
+    marks = ",".join("?" * len(org_ids))
+    rows = conn.execute(
+        f"SELECT org_id, am_best_rating FROM market_profile WHERE org_id IN ({marks})",
+        tuple(org_ids),
+    ).fetchall()
+    return {str(r["org_id"]): str(r["am_best_rating"]) for r in rows if r["am_best_rating"]}
 
 
 def get_market_profile(conn: sqlite3.Connection, org_id: str) -> MarketProfile | None:

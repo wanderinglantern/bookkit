@@ -37,6 +37,22 @@ MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 # --- fixtures ----------------------------------------------------------------
 
 
+_GL = "general-liability"
+
+
+def _marketing(conn: sqlite3.Connection, placement_id: str, line_id: str = _GL) -> str:
+    """This placement is marketing that line of coverage.
+
+    The Response form asks WHICH line an answer is about — a market answers a
+    line, not a package — and offers only the lines the placement says it is
+    marketing, so a test that records an answer opens one first, exactly as
+    the Marketing panel's `+ line of coverage` control does."""
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(conn, placement_id, line_id)
+    return line_id
+
+
 def _book(conn: sqlite3.Connection) -> tuple[str, str, str]:
     """One client, one market, one placement. Returns (org, market, placement)."""
     client = orgs.create(conn, name="Atomic Industries", kind="client")
@@ -572,6 +588,9 @@ def test_the_response_form_asks_for_the_expiry_and_the_underwriter(
     keys = [f.key for f in ef.response_form(sub, conn).fields]
     assert "quote_expires_on" in keys
     assert "underwriter_contact_id" in keys
+    # …and WHICH LINE OF COVERAGE the answer is about, never guessed: a market
+    # answers a line and not a package (2026-08-26).
+    assert keys[0] == "line_id"
 
 
 def test_the_expiry_goes_through_the_date_parser(conn: sqlite3.Connection) -> None:
@@ -579,10 +598,14 @@ def test_the_expiry_goes_through_the_date_parser(conn: sqlite3.Connection) -> No
     "5" as a MONTH and future-biases it. The expiry is not routed around it.
     """
     _, market, placement = _book(conn)
+    _marketing(conn, placement)
     sub = submissions.create(conn, market, "2026-07-01", placement_id=placement)
     spec = ef.response_form(sub, conn)
     with pytest.raises(Exception) as refused:
-        parse_values(spec, {"status": "quoted", "quote_expires_on": "5"})
+        parse_values(
+            spec,
+            {"line_id": _GL, "status": "quoted", "quote_expires_on": "5"},
+        )
     assert "not a date" in str(refused.value)
 
 
@@ -591,13 +614,17 @@ def test_recording_a_quote_puts_it_in_the_queue(conn: sqlite3.Connection) -> Non
     actually taken, not merely present (CLAUDE.md — a green suite proves
     nothing broke, not that the new path is used)."""
     client, market, placement = _book(conn)
+    _marketing(conn, placement)
     sub = submissions.create(conn, market, "2026-07-01", placement_id=placement)
     assert quotes_svc.expiring(conn, TODAY) == []
     spec = ef.response_form(sub, conn)
     values = parse_values(spec, {
+        # THE ANSWER IS ABOUT A LINE OF COVERAGE, and the whole queue below is
+        # rolled up from the row it lands on (2026-08-26).
+        "line_id": _GL,
         "status": "quoted",
-        "response_on": "2026-08-12",
-        "quoted_premium": "125,000.00",
+        "responded_on": "2026-08-12",
+        "premium": "125,000.00",
         "quote_expires_on": "2026-08-19",
     })
     ef.apply_response(conn, sub.id, values)

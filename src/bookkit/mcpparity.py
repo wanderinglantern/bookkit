@@ -191,6 +191,140 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "'Travelers', which you cannot email. "
         "submission.underwriter_contact_id is declared and used by nothing.",
     ),
+    # --- submission ---
+    #
+    # These two arrived as a CONSEQUENCE of market_approach, not as a
+    # submission tool: this cell moved out of DEFERRED because a tool now
+    # writes the row, which is the ledger's own READ/WRITE semantics. The AE
+    # review's "no submission tool exists at all" is no longer true, and
+    # leaving the old wording would have made the ledger lie in the direction
+    # it exists to prevent.
+    ("submission", "create"): (
+        ("market_approach",),
+        "A SIDE EFFECT WITH A REASON, and still thin. market_approach files "
+        "the submission when there is none out to that market on the "
+        "placement, addressed to the intermediary where there is one, with a "
+        "sent_on and nothing else — no underwriter contact, no quote terms, "
+        "no subjectivities. What it is NOT is a submission verb: there is no "
+        "way to file a package to a market without recording a line-level "
+        "approach at the same time, which is right for a marketing cycle and "
+        "wrong for anything else.",
+    ),
+    ("submission", "update"): (
+        (
+            "market_approach", "market_responded", "submission_sent_on",
+            "submission_withdraw", "submission_reinstate",
+        ),
+        "status ONLY, and never typed: repo/marketing.roll_up_submission "
+        "recomputes it from the response rows after every response write, "
+        "because two hand-maintained copies of one fact disagree. "
+        "`withdrawn` is the ONE STATUS THE ROLL-UP NEVER WRITES and never "
+        "writes over — pulling a package is a decision about the submission, "
+        "not a summary of what a market said — so it needs a verb of its own, "
+        "and submission_withdraw / submission_reinstate are it. They arrived "
+        "on 2026-08-26 because the capability had just lost its only door: the "
+        "Pipeline's Response form used to offer the SUBMISSION statuses and "
+        "was the one writer of `withdrawn` anywhere in the app, and pointing "
+        "that form at market_response (whose vocabulary rightly has no such "
+        "word) left three code paths refusing on a state nothing could enter. "
+        "Both take an exact submission id, from marketing_report's "
+        "`responses[].submission_id` or `submissions_with_no_line`. Reinstate "
+        "puts the package back at what its ROWS say — quoted, not out, where a "
+        "market had already answered. "
+        "THE ONE TYPED COLUMN IS `sent_on`, and it is here because a refusal "
+        "named a fix that did not exist: repo/marketing._reply_guard tells "
+        "the caller to correct the date the submission went out, the web "
+        "grew that as the grid's Sent cell on 2026-08-26, and MCP had no "
+        "submission verb at all — so one transposed digit in market_approach "
+        "wedged the reply date on every row of that package, permanently. "
+        "submission_sent_on is addressed by the RESPONSE (the row a report "
+        "hands back) and names every row it moved, because one package "
+        "carries every line of coverage it was sent on. Everything else on a "
+        "submission — quoted premium, quote expiry, the underwriter — is "
+        "still unreachable.",
+    ),
+    # --- lines of coverage and marketing (migrations 014/015) ---
+    ("line_of_coverage", "create"): (
+        ("line_add",),
+        "behind the SAME RapidFuzz near-match warning the vocabulary was "
+        "designed around, and the warning reaches the reply rather than only "
+        "the refusal: an assistant that cannot see 'this scores 94 against "
+        "General Liability' is exactly how a fifth spelling gets in. It "
+        "advises and never blocks, because Excess Liability and Employers "
+        "Liability are four letters apart and are not the same line. An "
+        "exact duplicate IS refused, by repo/lines.py, and the refusal names "
+        "the existing line so the caller can use it.",
+    ),
+    ("line_of_coverage", "read"): (
+        ("lines_list",),
+        "the whole vocabulary in reading order, with abbr and ACORD code. "
+        "Every marketing tool resolves a line through it by exact name, "
+        "abbreviation or id — never fuzzily — and a miss names the nearest "
+        "candidates instead of minting a sixth spelling.",
+    ),
+    ("market_response", "create"): (
+        ("market_approach", "market_assign_line"),
+        "who we went to, on which line, through whom. Carrier OR intermediary "
+        "(repo/marketing refuses neither-of-the-two with a sentence, the DB "
+        "CHECK holds it underneath), so 'out to RT Specialty, carrier TBD' is "
+        "a row rather than a gap. Clearance collisions come back as "
+        "`clearance_warnings` and NEVER refuse — the `line-gap` rule again: a "
+        "block nobody can override makes a legitimate double approach "
+        "impossible. market_assign_line is the SECOND door and writes no new "
+        "marketing at all: it gives an EXISTING package the line of coverage "
+        "nobody recorded, carrying that submission's own status, premium, "
+        "limit, reply date, expiry and decline reason onto the row that states "
+        "them from then on. It exists because a submission with no response "
+        "rows is real marketing that happened — fourteen placements on the "
+        "seeded book and every one of Grant\'s — and until 2026-08-26 nothing "
+        "on any surface could do anything about it. The ids come from "
+        "marketing_report\'s `submissions_with_no_line` index.",
+    ),
+    ("market_response", "read"): (
+        ("marketing_report",),
+        "through the same composer the browser download renders, so the two "
+        "cannot disagree — one block per line of coverage, live options "
+        "first, as text. audience='client' WITHHOLDS the internal decline "
+        "reason, the commission and the notes; 'internal' adds them and the "
+        "clearance column. A composed row carries no id, so the reply also "
+        "returns a `responses` index — without it market_responded would "
+        "have nothing to name. A `submissions_with_no_line` index sits beside "
+        "it for the packages that carry no response row at all: they print in "
+        "the report\'s own \'Line of coverage not recorded\' block, and "
+        "market_assign_line takes their ids.",
+    ),
+    ("market_response", "update"): (
+        ("market_responded",),
+        "status, date, rate, premium, fees and both decline reasons in one "
+        "act, over an exact id. A rate goes in as a rate ('1.42' per unit of "
+        "exposure, stored x1e6) and not through the money parser. The "
+        "submission's status is rolled up afterwards by repo/marketing and "
+        "returned, never typed. NOT reachable: the exposure and commission "
+        "overrides, and the slab (attach/lim), which is stated once at the "
+        "approach.",
+    ),
+    ("placement_line", "create"): (
+        ("set_placement_line",),
+        "folded into the same verb as update, because 'this line expects X' "
+        "has no meaningful difference between the first statement and the "
+        "second; repo/marketing owns the one-row-per-(placement, line) rule "
+        "so the upsert cannot write a second.",
+    ),
+    ("placement_line", "read"): (
+        ("marketing_report", "set_placement_line"),
+        "the expiring premium, exposure, rate and basis reach a caller in "
+        "each block header of the report, and set_placement_line echoes the "
+        "whole stored row back. THIN in one direction: there is no way to "
+        "list every placement_line on the book, which nothing has needed.",
+    ),
+    ("placement_line", "update"): (
+        ("set_placement_line",),
+        "the expiring figures a client's comparison is built on. An exposure "
+        "is refused unless its rating basis is stored or given in the same "
+        "call — models.RatingBasis.monetary decides whether the figure is "
+        "cents or a whole count, and 42 power units and $0.42 are the same "
+        "digits.",
+    ),
     # --- team_member ---
     ("team_member", "create"): (
         ("member_create",),
@@ -318,6 +452,38 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
 # (entity, verb) -> why it is not on the surface. Nothing here is a promise to
 # build it; several are decisions to leave it alone.
 DEFERRED: dict[tuple[str, str], str] = {
+    # --- marketing, added with migrations 014/015 (2026-08-25) ---
+    #
+    # Twelve cells appeared the moment `line_of_coverage`, `market_response`
+    # and `placement_line` were registered in base.ENTITY_TABLES. Eight of
+    # them landed with the marketing tools (see IMPLEMENTED); these four are
+    # what is left, and three of them are decisions rather than gaps.
+    ("line_of_coverage", "update"): (
+        "REAL GAP, and the only one of the twelve that is. Renaming is "
+        "`edit_field`-shaped and inherits repo/lines.py's duplicate guard — "
+        "but mcpsurface derives its editable kinds from the FormSpec builders "
+        "in forms/entities.py, and a line of coverage has no form yet. The "
+        "kind arrives free with that form; minting a hand-written second "
+        "table to get there early is the duplication mcpsurface exists to "
+        "have removed."
+    ),
+    ("line_of_coverage", "delete"): (
+        "DECISION, not a gap. Retiring a line strands every appetite, need, "
+        "opportunity and response pointing at it. The honest verb is MERGE, "
+        "which moves the references first and is not undoable in one press — "
+        "not something a tool should do in one call."
+    ),
+    ("market_response", "delete"): (
+        "DECISION. A market we approached and then removed is history being "
+        "rewritten; the honest record is a status, and `non_response` and "
+        "`withdrawn` already say what happened."
+    ),
+    ("placement_line", "delete"): (
+        "DECISION. Removing a line's expectations silently drops the "
+        "comparison every market row on it is measured against; blanking the "
+        "fields through set_placement_line says the same thing and leaves the "
+        "row to point at."
+    ),
     # --- deliberate: the assistant should not do this ---
     ("org", "delete"): (
         "DECISION, not a gap. Removing an account cascades through "
@@ -376,17 +542,6 @@ DEFERRED: dict[tuple[str, str], str] = {
         "adds an item to a request that already exists — so an underwriter's "
         "follow-up question cannot be filed against the request it belongs "
         "to. The TUI has this ('a' on the items table)."
-    ),
-    ("submission", "create"): (
-        "REAL GAP, and the AE review's top-ranked one. Nothing on this "
-        "surface records a submission going out, a market answering, a quote, "
-        "an expiry or a subjectivity. The in-flight placement view is being "
-        "built; MCP should follow it, not lead it."
-    ),
-    ("submission", "update"): (
-        "Same as submission/create: no submission tool exists at all, so a "
-        "quote landing, an expiry lapsing and a subjectivity being cleared "
-        "are all invisible here."
     ),
     ("submission", "delete"): (
         "Same as submission/create. A submission that went out is a fact "

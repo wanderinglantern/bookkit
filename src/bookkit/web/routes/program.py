@@ -29,7 +29,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ... import db, sync, towerfields
-from ...forms.entities import apply_placement, apply_submission, placement_form, submission_form
+from ...forms.entities import apply_placement, placement_form
 from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS, PLACEMENT_FIELDS
 from ...forms.spec import Field, checked_option, initial_text, parse_value
 from ...money import format_cents, format_cents_compact
@@ -163,6 +163,27 @@ def _tower_for(linked: sync.LinkedProgram) -> dict[str, Any] | None:
         return panel(linked.program)
     except Exception:
         return None
+
+
+def _marketing(
+    request: Request, conn: sqlite3.Connection, placement: Any, ref: str
+) -> dict[str, Any]:
+    """The marketing grid for this placement.
+
+    NOT gated on `program_path`. Marketing happens BEFORE a tower exists and
+    every figure in the grid lives in SQLite, which is the same reasoning that
+    put the "Marketing XLSX" anchor in the band rather than in the
+    linked-only export strip: gating it would put the section out of reach on
+    exactly the placements it is for.
+
+    `date.today()` is read here rather than inside the view model, so the one
+    module that formats the report keeps its "today is a parameter" rule.
+    """
+    from datetime import date as _date
+
+    from ..marketing_grid import panel
+
+    return panel(request, conn, placement.id, today=_date.today(), ref=ref)
 
 
 def _last_synced(conn: sqlite3.Connection, placement_id: str) -> dict[str, Any] | None:
@@ -698,6 +719,11 @@ def _section_html(
             else {}
         ),
         has_layers=bool(layers),
+        # THE PANEL IS THE REPORT: rendered for every placement, linked or
+        # not, and part of THIS one context list — the whole reason
+        # `_section_html` exists is that a key added to one caller's list and
+        # not another's went missing on writes (see this function's docstring).
+        marketing=_marketing(request, conn, placement, ref),
         band=_band_stats(layers),
         file_name=Path(placement.program_path).name if placement.program_path else None,
         index=index,
@@ -3573,57 +3599,30 @@ async def new_program_page(request: Request, ref: str) -> Any:
     return TEMPLATES.TemplateResponse(request, "account/new_program.html", context)
 
 
-@router.get(
-    "/accounts/{ref}/program/{placement_id}/submissions/new",
-    response_class=HTMLResponse,
-)
-def submission_new_form(request: Request, ref: str, placement_id: str) -> HTMLResponse:
-    """The TUI's `s`, webside: send this program to a market. The whole-record
-    submission_form (market select, optional underwriter, sent date, notes)
-    renders into the section's form host."""
-    org = _org(request, ref)
-    conn = _conn(request)
-    _owned(conn, org, "placement", placement_id, placements_repo.get)
-    from ...repo import orgs as orgs_repo
-
-    if not orgs_repo.list_orgs(conn, kind="market"):
-        return _panel_refusal(
-            request, ref, org, placement_id,
-            "no markets on file — create one in the terminal app "
-            "(m, then a) before sending a submission",
-        )
-    spec = submission_form(conn)
-    action = f"/accounts/{ref}/program/{placement_id}/submissions"
-    return HTMLResponse(render_form(request, spec, action))
-
-
-@router.post(
-    "/accounts/{ref}/program/{placement_id}/submissions", response_class=HTMLResponse
-)
-async def submission_create(
-    request: Request, ref: str, placement_id: str
-) -> HTMLResponse:
-    """Success answers HX-Redirect to the PIPELINE tab, where the submission
-    is actually visible — landing back on a tab that shows no trace of what
-    was just made is the dishonest option. Refusals re-render the form with
-    the input intact via the shared _save seam."""
-    from fastapi.responses import Response
-
-    org = _org(request, ref)
-    conn = _conn(request)
-    _owned(conn, org, "placement", placement_id, placements_repo.get)
-    spec = submission_form(conn)
-    raw = {k: str(v) for k, v in (await request.form()).items()}
-    action = f"/accounts/{ref}/program/{placement_id}/submissions"
-    refused = _save(
-        request, org, spec, action, raw,
-        lambda values: apply_submission(conn, values, placement_id=placement_id),
-    )
-    if refused is not None:
-        return refused
-    return Response(
-        status_code=204, headers={"HX-Redirect": f"/accounts/{ref}/pipeline"}
-    )  # type: ignore[return-value]
+# NO WEB ROUTE CREATES A SUBMISSION WITH NO LINE OF COVERAGE ANY MORE
+# (A4, Grant 2026-08-26).
+#
+# `GET/POST .../submissions` rendered `submission_form` into this section's form
+# host and wrote a bare `submission` row — a package addressed to a market, with
+# no `market_response` under it and therefore no line of coverage anywhere. That
+# is the second of the two controls that both meant "we sent this market a
+# submission", and it is the one that manufactured the defect the Marketing
+# panel then had to survive: fourteen seeded placements whose panel said "No
+# line of coverage on this placement is being marketed yet" over live
+# submissions, two of them quoted at $1.4M, and a client workbook with one
+# header row in it.
+#
+# The band's Submission button is an anchor to the Marketing section now, where
+# the add-market row records the same approach against the line of coverage it
+# is about, through the one home for that write
+# (`services.marketing_entry.approach`, shared with MCP's `market_approach`).
+# Marketing already recorded with no line of coverage is not stranded: it
+# renders in the report's provisional block and each row can be given its line
+# there (`marketing_assign_line`).
+#
+# `forms.entities.submission_form` / `apply_submission` are NOT deleted: the TUI
+# is retired but still green and `s` is still bound to them. web/parity.py's
+# `new_submission` entry says what the web does instead.
 
 
 @router.get(
@@ -4322,6 +4321,65 @@ def export_schematic(request: Request, ref: str, placement_id: str) -> Any:
     )
 
 
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/export/marketing.xlsx",
+    response_class=HTMLResponse,
+)
+def export_marketing_report(
+    request: Request, ref: str, placement_id: str, audience: str = "client"
+) -> Any:
+    """The marketing report — which markets we are approaching, what they said,
+    at what rate — by line of coverage.
+
+    NOT a second composition path, for the reason `export_work_workbook` gives
+    about its own: `services.marketing_report.write` composes through the same
+    `compose()` the MCP tool reads, so the file a client is sent and the answer
+    the assistant gives cannot disagree about what a market said.
+
+    TWO AUDIENCES, ONE QUERY. `?audience=internal` adds the underwriter's own
+    words, the commission, the clearance warnings and our notes. The default is
+    the CLIENT sheet, because this is a document that leaves the building and
+    the safe rendering is the one you get by not thinking about it. The
+    composer withholds per audience; this route only names which.
+
+    It needs NO program file: marketing happens before a tower exists, and
+    every figure on this sheet lives in SQLite. That is why it is here rather
+    than behind the `program_path` guard the schematic download carries.
+    """
+    import tempfile
+    from datetime import date as _date
+    from pathlib import Path as _Path
+
+    from ...services import marketing_report as report_svc
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    if audience not in (report_svc.CLIENT, report_svc.INTERNAL):
+        # A typo'd audience must not silently fall through to the client sheet
+        # in one direction or leak in the other. Refuse and say so.
+        return _refusal_page(
+            request,
+            f"unknown audience {audience!r} — it is 'client' or 'internal'",
+            f"/accounts/{ref}/program",
+        )
+    suffix = "marketing" if audience == report_svc.CLIENT else "marketing-internal"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = report_svc.write(
+            conn,
+            placement.id,
+            _Path(tmp) / f"{placement.ref}-{suffix}.xlsx",
+            _date.today(),
+            audience=audience,
+        )
+        content = out.read_bytes()
+    return _attachment(
+        content,
+        f"{placement.ref}-{suffix}.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 @router.get("/accounts/{ref}/export/open-items.xlsx", response_class=HTMLResponse)
 def export_open_items_workbook(request: Request, ref: str) -> Any:
     """The TUI's `x`, webside — the same services.export_open_items.write the
@@ -4352,7 +4410,11 @@ def export_open_items_workbook(request: Request, ref: str) -> Any:
 # REGISTERED LAST ON PURPOSE: Starlette matches /program/{placement_id}/{kind}
 # before FastAPI validates the enum, so EVERY literal sibling — today:
 # /renew, /merge, /scaffold, /compare, /layers, /lines, /submissions, /cell,
-# /worksheet, /remove, /export/... — must be registered FIRST to win. This list is the invariant's
+# /worksheet, /remove, /export/..., and routes/marketing.py's whole
+# /marketing/... family — must be registered FIRST to win. That last one is
+# not hypothetical: marketing.router was included AFTER this one, so
+# `POST /program/<id>/marketing/lines` matched {kind}/{index} and answered 422
+# rather than adding a line of coverage (2026-08-25). This list is the invariant's
 # one home: when you add a /program/{placement_id}/<one-segment> route, add
 # it ABOVE this block AND name it here, or a future reorder will shadow it
 # into 422s.

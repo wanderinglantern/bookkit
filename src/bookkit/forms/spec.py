@@ -15,11 +15,17 @@ from typing import Any
 from ..dates import parse_human_date
 from ..money import (
     BPS_SCALE,
+    COUNT_FORMS,
     ENTRY_FORMS,
+    RATE_FORMS,
     MoneyParseError,
     format_cents,
+    format_count,
+    format_rate_micros,
     format_share_pct,
+    parse_count,
     parse_money_cents,
+    parse_rate_micros,
     parse_share_bps,
 )
 from ..normalize import (
@@ -37,7 +43,7 @@ from ..normalize import (
 class Field:
     key: str
     label: str
-    # text | textarea | select | date | money | int | share
+    # text | textarea | select | date | money | rate | count | int | share
     # + normalised kinds: email | phone | url | domain | linkedin | naics
     kind: str = "text"
     options: tuple[tuple[str, str], ...] = ()  # (label, value) for select
@@ -68,11 +74,40 @@ class Field:
                 object.__setattr__(self, "max_value", bounds[1])
 
 
+@dataclass(frozen=True)
+class FormNote:
+    """WHAT THE RECORD ALREADY SAYS, shown above the fields and typed into
+    none of them.
+
+    A form that can CORRECT something has to show what it would be correcting,
+    or the only way to find out is to save and look. The Pipeline's Response
+    form re-opened completely blank on a package two markets had already
+    answered — no selected option, no value, nothing naming the lines — so
+    re-picking the line of coverage was compulsory on every re-open, and one
+    wrong pick printed a premium no market quoted onto the client's workbook
+    (r6 blocker 3, 2026-08-26).
+
+    IT IS NOT A PREFILL, and the distinction is the whole reason it is a
+    separate thing from `initial`. data-entry-integrity §8 refuses to pre-fill
+    a figure that comes off a document, because people do not check prefills —
+    and it refuses that by making the field visibly EMPTY, not by hiding what
+    the book already holds. Read-only text cannot be saved by being ignored.
+
+    `items` are one line each and are already prose; nothing here is a field,
+    a value or a control.
+    """
+
+    title: str
+    items: tuple[str, ...] = ()
+
+
 @dataclass
 class FormSpec:
     title: str
     fields: list[Field]
     initial: dict[str, Any] = dc_field(default_factory=dict)
+    # Read-only context, rendered above the fields. See FormNote.
+    note: FormNote | None = None
 
 
 @dataclass
@@ -122,6 +157,15 @@ PLACEHOLDERS = {
     # and a refusal that recommend different things are how a user learns to
     # trust neither.
     "money": " · ".join(ENTRY_FORMS),
+    # A RATE IS NOT MONEY: the hint says so by showing forms no money field
+    # would accept and no currency symbol at all (money.RATE_FORMS, named once
+    # so the hint and money.rate_refusal cannot recommend different things).
+    "rate": " · ".join(RATE_FORMS) + " · per unit of exposure",
+    # A COUNT IS NOT MONEY: the hint shows whole numbers and no currency
+    # symbol, because the value people mistype into a count field is an
+    # amount (money.COUNT_FORMS, named once so the hint and money.count_refusal
+    # cannot recommend different things).
+    "count": " · ".join(COUNT_FORMS) + " · whole units, no decimals",
     "phone": "312 555 0142 · +44 …",
     "email": "name@company.com",
     "linkedin": "profile URL or handle",
@@ -173,7 +217,10 @@ def date_refusal(text: str) -> str:
 
 # what a number IS on each numeric kind, so one refusal covers all three
 # without three copies of the sentence.
-_NOUNS = {"money": "an amount", "share": "a share", "int": "a whole number"}
+_NOUNS = {
+    "money": "an amount", "share": "a share", "rate": "a rate",
+    "count": "a whole count", "int": "a whole number",
+}
 
 # how many of a picker's own options a refusal spells out before it counts
 # the rest — every market in the book is a wall of text, not a remedy.
@@ -318,6 +365,26 @@ def parse_value(field: Field, raw: str | None) -> Any:
             return bounded(field, parse_money_cents(text), text)
         except MoneyParseError as exc:
             raise ValueError(str(exc)) from exc
+    if field.kind == "rate":
+        # ONE rate parser, and it is money.py's — the ×1,000,000 scale is
+        # written down once (money.RATE_SCALE) or the same 1.42 becomes
+        # 1_420_000 on one surface and 1.42 on another.
+        try:
+            return bounded(field, parse_rate_micros(text), text)
+        except MoneyParseError as exc:
+            raise ValueError(str(exc)) from exc
+    if field.kind == "count":
+        # A NON-MONETARY EXPOSURE IS COUNTED, NOT MEASURED IN MONEY, and the
+        # parser is money.py's for the same reason the rate parser is: one
+        # home for the refusal, so a fraction typed into a count is refused
+        # with the same sentence on the web, in a tool argument and anywhere
+        # a count field is grown next. Which of `money` and `count` an
+        # exposure IS remains models.RatingBasis.monetary's decision, made by
+        # whoever builds the Field — never re-judged here.
+        try:
+            return bounded(field, parse_count(text), text)
+        except MoneyParseError as exc:
+            raise ValueError(str(exc)) from exc
     if field.kind == "share":
         # ONE percent→bps rule, and it is towerkit's (CLAUDE.md). money.py
         # delegates; nothing here multiplies by 100 itself. A second
@@ -358,6 +425,15 @@ def initial_text(field: Field, initial: Any) -> str:
         return ""
     if field.kind == "money":
         return format_cents(int(initial)).lstrip("$")
+    if field.kind == "count":
+        # Grouped and whole — exactly what parse_count accepts back, so
+        # opening a count cell and saving it unchanged is a no-op.
+        return format_count(int(initial))
+    if field.kind == "rate":
+        # Two decimals, no symbol — exactly what parse_rate_micros accepts
+        # back, so opening a rate cell and saving it unchanged is a no-op
+        # rather than a silent hundredfold move.
+        return format_rate_micros(int(initial))
     if field.kind == "share":
         # PERCENT, not bps: the editor pre-fills from here and the parser
         # reads what it is given as a percent, so handing back bps would

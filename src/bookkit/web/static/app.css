@@ -1400,6 +1400,35 @@ table.rows tr.is-waived td {
   font-size: var(--body-size);
 }
 
+/* WHAT THE RECORD ALREADY SAYS — read-only context above the fields
+   (forms.spec.FormNote). It must NOT read as an error and must not read as an
+   input: no danger colour, no border box competing with .form-error one
+   element up, and no control in it. One quiet rule and a label, which is the
+   same treatment .detail-label gives a stated fact everywhere else. */
+.form-note {
+  margin: 0 0 1rem;
+  padding: 0.5rem 0 0.5rem 0.75rem;
+  border-left: 3px solid var(--border);
+}
+
+.form-note-title {
+  margin: 0 0 0.25rem;
+  color: var(--muted);
+  font-size: var(--hint-size);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.form-note-items {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: var(--body-size);
+}
+
+.form-note-items li {
+  margin: 0.15rem 0;
+}
+
 .entity-form .field {
   display: flex;
   flex-direction: column;
@@ -2797,6 +2826,29 @@ a.btn-pill {
   color: var(--muted);
 }
 
+/* THE PACKAGES WE PULLED, under "Out at market" on the Pipeline tab. Same
+   shape as the team panel's Retired list two rules up and for the same reason
+   — a settled state has to stay readable or it cannot be undone — but its own
+   class names rather than that panel's: `.team-member-row.is-retired` is
+   scoped to a div grid and would have styled nothing here, which is a dead
+   rule wearing the same smell as a dead affordance. */
+.pipeline-withdrawn-label {
+  margin: 1.25rem 0 0.25rem;
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--hint-size);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+/* Muted, never struck through or hidden: what these markets said is still
+   true and still prints on the client's workbook. */
+.pipeline-withdrawn-row > td {
+  color: var(--muted);
+}
+
 .team-filter {
   display: flex;
   gap: 0.375rem;
@@ -3110,6 +3162,365 @@ tr:hover .market .chip-remove {
 .line-add .row-action-btn,
 .terms-strip .term-add .row-action-btn {
   color: var(--accent);
+}
+
+/* --- the marketing grid: the report, on the tab (2026-08-25) -------------
+   THE PANEL IS THE REPORT, so this reuses `table.rows.rows-fit` rather than
+   growing a table of its own: the grid a broker reads on screen and the grid
+   a client is sent are the same grid, and a second set of table rules is the
+   second copy that quietly differs.
+
+   It sits beneath the workbench, separated by a rule, because it is about a
+   different thing from the tower above it — what markets have SAID, not what
+   has been placed — and it renders whether or not there is a program file. */
+
+.marketing {
+  margin-top: 1.4rem;
+  border-top: 1px solid var(--hairline);
+  padding-top: 0.9rem;
+}
+
+.marketing-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.marketing-title {
+  margin: 0;
+  font-size: var(--body-size);
+  font-weight: 700;
+}
+
+.marketing-caption {
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+.marketing-block {
+  margin-top: 1rem;
+}
+
+.marketing-block-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.7rem;
+  padding-bottom: 0.35rem;
+}
+
+.marketing-line {
+  font-weight: 700;
+}
+
+/* THE LINE OF COVERAGE IS RETIRED, said beside its name. Not `--muted`: this
+   is the one thing on the block a broker has to notice, because it explains
+   why the add-a-market row below is missing. `--warn` is the same signal the
+   clearance strip and towerkit's own diagnostics use, and the words carry it
+   too — colour is signal, never the only signal. */
+.marketing-retired {
+  font-size: var(--hint-size);
+  color: var(--warn);
+}
+
+/* The header facts are a GROUP, one kind of fact, so they sit on their own
+   line under the line-of-coverage name rather than running on from it —
+   proximity is what tells a reader where one kind of fact ends (the layer
+   details row, 2026-08-20).
+
+   TWO GROUPS, because there are two kinds: what this line is asking the
+   market for, and what it did last year. Nine editable facts run together is
+   the undifferentiated density that regrouping fixed on the layer details
+   row; the rule is not "show less", it is "say which is which". */
+.marketing-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.6rem;
+  width: 100%;
+  margin: 0;
+}
+
+.marketing-fact-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.9rem;
+}
+
+.marketing-fact-group-label {
+  margin: 0;
+  font-size: var(--hint-size);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.marketing-fact-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.9rem;
+  margin: 0;
+}
+
+.marketing-fact {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+/* The exposure change is DERIVED from the two exposures either side of it, so
+   it carries none of the editable affordance the cells around it do — no
+   dashed underline, no pointer, and it is muted so the eye reads it as a
+   consequence rather than as another figure to fill in. */
+.marketing-fact-delta {
+  color: var(--muted);
+}
+
+/* .detail-label carries its own margins for the inline runs it was written
+   for; here the flex gap owns the spacing. */
+.marketing-fact .detail-label {
+  margin: 0;
+}
+
+.marketing-fact-value {
+  margin: 0;
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* "not set" is a WORD, not a figure: it drops the mono face so it cannot be
+   misread as a value, and greys so the eye skips it while scanning figures. */
+.marketing-fact-value.is-unset {
+  font-family: var(--sans);
+  color: var(--muted);
+}
+
+/* The one place this grid departs from the tab's other tables. Every other
+   `table.rows` is read across a row; this one is read DOWN a column — six
+   markets' premiums against each other is the entire reason it exists — and
+   figures compare only when their digits line up. The header takes the same
+   gutter as the cell or the label stops sitting over its own column. */
+.marketing-grid th.num,
+.marketing-grid td.num {
+  text-align: right;
+}
+
+.marketing-grid td.is-good { color: var(--good); }
+.marketing-grid td.is-warn { color: var(--warn); }
+
+/* The rate-move column's SENTENCE ("basis changed", "no expiring rate
+   recorded"). It is prose in a numeric column, so it gives back the mono face
+   and the right edge it would otherwise inherit and reads as what it is. */
+.marketing-grid td.is-note {
+  font-family: var(--sans);
+  font-variant-numeric: normal;
+  text-align: left;
+  white-space: normal;
+  color: var(--muted);
+}
+
+/* Colour is signal, never decoration: the pill prints the status WORD, and
+   the tint only sorts the live states from the closed ones at a glance. */
+.market-pill {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: 3px;
+  font-size: var(--hint-size);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.market-pill.is-good { background: var(--good-wash); color: var(--good); }
+.market-pill.is-accent { background: var(--accent-wash); color: var(--accent); }
+.market-pill.is-slate { background: var(--slate-wash); color: var(--slate); }
+.market-pill.is-warn { background: var(--warn-wash); color: var(--warn); }
+.market-pill.is-danger { background: var(--danger-wash); color: var(--danger); }
+.market-pill.is-muted { background: var(--stone); color: var(--muted); }
+
+/* THE STATUS PILL, WORN BY AN EDITABLE CELL. Status is corrected where it
+   prints (2026-08-25), so the pill is now `macros/cell.html`'s own value span
+   — the dashed is-editable underline and the tint are the same element. The
+   tone class sits on the <td> (web/marketing_grid._column_class), which is
+   why these selectors reach through it rather than sitting on the span.
+
+   The declarations are the same ones .market-pill carries above; the selectors
+   are joined to that rule rather than restated, so a pill cannot come to look
+   two ways depending on whether its column happens to be editable. */
+.marketing-grid td.pill-cell .is-editable {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: 3px;
+  font-size: var(--hint-size);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.marketing-grid td.pill-cell.is-good .is-editable { background: var(--good-wash); color: var(--good); }
+.marketing-grid td.pill-cell.is-accent .is-editable { background: var(--accent-wash); color: var(--accent); }
+.marketing-grid td.pill-cell.is-slate .is-editable { background: var(--slate-wash); color: var(--slate); }
+.marketing-grid td.pill-cell.is-warn .is-editable { background: var(--warn-wash); color: var(--warn); }
+.marketing-grid td.pill-cell.is-danger .is-editable { background: var(--danger-wash); color: var(--danger); }
+.marketing-grid td.pill-cell.is-muted .is-editable { background: var(--stone); color: var(--muted); }
+
+/* The add row: one full-width row at the foot of each block. Its fields run
+   horizontally and WRAP rather than scrolling the table sideways — a Save
+   button off the right-hand edge is a Save button nobody presses. */
+.marketing-add-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.35rem 0.9rem;
+  padding: 0.2rem 0;
+}
+
+.marketing-add-fields input,
+.marketing-add-fields select {
+  min-width: 7rem;
+}
+
+/* The add row's refusal lives INSIDE `.market-add-form` so inline-cell.js's
+   clear-on-keystroke can reach it (it walks up from the input to an ERROR_SCOPE
+   and clears what is inside). As a flex item it would otherwise sit on the
+   baseline beside the save button; taking the whole line puts it back under the
+   fields, which is where a message about them belongs. */
+.marketing-add-fields > .cell-error-msg {
+  flex: 1 0 100%;
+}
+
+.marketing-add-hint {
+  margin: 0.15rem 0 0;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+/* Opening a line of coverage that has not been marketed yet. It sits in the
+   section header rather than at the foot, because it is about the SECTION and
+   not about any one block in it. */
+.marketing-line-add {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+/* THE NEAR-MATCH QUESTION, not a refusal: it takes the neutral surface an
+   empty state gets, never the danger outline, because both answers it offers
+   are legitimate. `Excess Liability` and `Employers Liability` are 82% alike
+   and are different cover; the score is printed so a broker can judge that
+   rather than be told. */
+.marketing-clash {
+  width: 100%;
+  margin-top: 0.4rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--stone);
+}
+
+.marketing-clash-head {
+  margin: 0 0 0.35rem;
+  font-size: var(--body-size);
+}
+
+.marketing-clash-list {
+  list-style: none;
+  margin: 0 0 0.4rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.marketing-clash-match {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.marketing-clash-name {
+  font-weight: 600;
+}
+
+/* A line nobody has gone to market on. Not error styling — an empty state is
+   a neutral fact, and reserving red for actual errors is what keeps red
+   meaning something. */
+.marketing-none {
+  margin: 0;
+  padding: 0.4rem 0;
+  font-size: var(--body-size);
+  color: var(--muted);
+}
+
+/* THE MARKETING WITH NO LINE OF COVERAGE YET. Set apart from the blocks above
+   it so nobody reads it as one more line of coverage: a dashed rule rather than
+   a tint, because a tint would make it read as a state (warn, danger) when what
+   it is is a block of a DIFFERENT KIND. Its heading and note say the rest — and
+   the note is prose, so it keeps a reading measure rather than stretching the
+   width of a sixteen-column grid. */
+.marketing-provisional {
+  border-top: 1px dashed var(--border);
+  padding-top: 0.6rem;
+}
+
+.marketing-provisional-note {
+  flex-basis: 100%;
+  max-width: 62ch;
+  margin: 0.15rem 0 0;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+/* The assign control and, under it, any refusal it raised. `column`, so the
+   message reads beneath the picker rather than beside it — the same correction
+   `.market-add-form`'s error needed on the add-market row. */
+.marketing-assign {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: flex-start;
+}
+
+.marketing-empty {
+  padding: 0.5rem 0;
+  color: var(--muted);
+}
+
+.marketing-empty p {
+  margin: 0;
+  font-size: var(--body-size);
+}
+
+.marketing-empty-head {
+  color: var(--ink);
+}
+
+.marketing-bridge {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 1.1rem;
+  margin: 0.4rem 0 0;
+  font-size: var(--hint-size);
+}
+
+.marketing-bridge-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.marketing-bridge dt {
+  color: var(--muted);
+}
+
+.marketing-bridge dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 /* --- export: navigation, below the data, not a fourth strip ------------- */

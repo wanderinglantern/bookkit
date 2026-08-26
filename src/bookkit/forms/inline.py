@@ -17,9 +17,16 @@ from dataclasses import replace
 
 from ..models import (
     CONTACT_ROLES,
+    MARKET_RESPONSE_STATUS_LABELS,
+    MARKET_RESPONSE_STATUSES,
     NEED_STATUSES,
     PROJECT_STATUSES,
+    PUBLIC_DECLINE_REASON_LABELS,
+    PUBLIC_DECLINE_REASONS,
+    RATE_PER_CHOICES,
+    RATING_BASES,
     PlacementStatus,
+    rating_basis,
 )
 from ..repo import assignees, vocab
 from .spec import Field
@@ -286,3 +293,226 @@ def rfi_item_fields(conn: sqlite3.Connection) -> tuple[Field, ...]:
         replace(f, suggestions=categories) if f.key == "category" else f
         for f in RFI_ITEM_FIELDS
     )
+
+
+# --- marketing: what a market said, edited where it is printed --------------
+
+MARKET_RESPONSE_FIELDS: tuple[Field, ...] = (
+    # ATTACH AND LIMIT ARE TWO CELLS, not the one "Layer" column the workbook
+    # prints. Same reason the grid splits the workbook's single "Total est.
+    # cost" into TRIA / Fees / SL tax: "$5M xs $5M" is DERIVED from these two
+    # and nobody can type it. Blank attach reads as primary / the whole line,
+    # which is the ordinary case — so neither is required.
+    #
+    # This is NOT the layer-attachment rule (`_LAYER_CELLS` drops
+    # `attach_cents` because a slab's attachment comes from its POSITION in a
+    # tower). A market response is not a slab: it is what one carrier said
+    # about one band, quoted before any tower exists, and the band it answered
+    # on is a fact off their email.
+    Field("attach", "attaches at", "money"),
+    Field("lim", "limit", "money"),
+    # REQUIRED, and rendered with a blank option anyway (macros/cell.html) —
+    # `required` refuses the empty submit, and the blank stops the browser
+    # answering the question. A response left untouched filing itself as
+    # "quoted" is the exact bug that rule exists for, on this exact field.
+    Field(
+        "status", "status", "select",
+        tuple((MARKET_RESPONSE_STATUS_LABELS[s], s) for s in MARKET_RESPONSE_STATUSES),
+        required=True,
+    ),
+    Field("responded_on", "replied", "date"),
+    # WHEN THESE TERMS DIE, on the row that stated them. A LOOKING-FORWARD
+    # date, unlike every other one on this row: a quote expires next month, so
+    # `check_not_future` is deliberately not applied to it (the declaration
+    # lives in tests/test_marketing_gates.py's FORWARD_LOOKING). The ordering
+    # against the reply and the send date IS checked, in
+    # repo.marketing._expiry_guard, where every surface inherits it.
+    #
+    # THE CELL IS THE POINT. `services.quotes` keys the whole chase queue on
+    # this date and the panel had nowhere to put it, so a quote recorded here
+    # — premium, limit, terms and all — never reached the queue whose own
+    # module header calls that gap "the only one that loses money rather than
+    # time" (Grant, 2026-08-26).
+    Field("quote_expires_on", "quote expires", "date"),
+    # The one "rate" kind in the book. NOT money: 1.42 is 1.42 per unit of
+    # exposure, and money's parser would read "$1.42" as 142 cents.
+    Field("rate_micros", "rate", "rate"),
+    Field("premium", "premium", "money"),
+    # THE THREE THAT DECIDE A TOTAL. NULL is "nobody has told us" and 0 is "we
+    # asked, there is none" — only 0 contributes, so all three have to be able
+    # to hold a typed zero, and clearing one back to blank has to put the
+    # total back to unknown. Neither is a default.
+    Field("tria_premium", "TRIA", "money"),
+    Field("policy_fees", "policy fees", "money"),
+    Field("surplus_lines_tax", "surplus lines tax", "money"),
+    # TWO DECLINE REASONS, NEVER ONE FIELD WITH A "SAFE TO SHARE" TICK.
+    # Real decline reasons are routinely unusable verbatim ("underwriter
+    # doesn't like the loss runs, off the record"), and a single field guarded
+    # by a checkbox fails the first time somebody forgets to tick it — a
+    # failure whose consequence is a client reading an underwriter's private
+    # opinion. The LABELS are the marking, and they are what the cell editor
+    # announces (aria-label) and what the column header repeats.
+    Field(
+        "decline_reason_public", "reason sent to the client", "select",
+        tuple((PUBLIC_DECLINE_REASON_LABELS[r], r) for r in PUBLIC_DECLINE_REASONS),
+        optional_select=True,
+    ),
+    Field("decline_reason", "internal note, never sent to a client", "textarea"),
+)
+"""What a market said, as inline cells. KEYS ARE `market_response` COLUMN NAMES,
+so a cell route hands `{key: value}` straight to repo.marketing.edit_response —
+which rolls the submission's status up after every write, because two
+hand-maintained copies of one fact disagree and then nobody knows which is right.
+
+WHAT IS DELIBERATELY ABSENT, and why each one would read as broken:
+
+* `market_org_id` / `via_org_id` — retyping the carrier is not correcting a
+  figure, it is RE-SCOPING the approach onto a different market. Same rule
+  team assignments follow (CLAUDE.md: corrected in place, never re-scoped).
+* the Total — derived from premium + TRIA + fees + tax, and blank while any of
+  them is unknown. You cannot type a total.
+* the rate movement — derived from the line's expiring rate.
+* Best — the carrier's A.M. Best rating, which belongs to the market, not to
+  what it said about this placement.
+* Subj. — a COUNT of open subjectivity rows on the submission. A cell over it
+  would accept "3" and write nothing, which is the `signed_pct` mistake
+  LAYER_FIELDS already refuses to repeat.
+"""
+
+
+MARKET_APPROACH_FIELDS: tuple[Field, ...] = (
+    # AT LEAST ONE OF THESE TWO, not both required — a submission out to a
+    # wholesaler whose carrier is not yet known is a real row, and a row
+    # addressed to nobody is not. The cross-field rule is enforced in
+    # services.marketing_entry and again in repo.marketing.create_response (and
+    # under both, a DB CHECK), never only in a route.
+    Field("market", "carrier"),
+    Field("via", "via (wholesaler or MGA)"),
+    Field("attach", "attaches at", "money", placeholder="blank = primary"),
+    Field("lim", "limit", "money"),
+    Field("sent_on", "sent", "date"),
+    Field(
+        "status", "status", "select",
+        tuple((MARKET_RESPONSE_STATUS_LABELS[s], s) for s in MARKET_RESPONSE_STATUSES),
+        required=True,
+    ),
+)
+"""The in-row add form: recording that we went to a market on a line.
+
+AN EXPLICIT SAVE, not inline cells (CLAUDE.md: "NOT the rule for whole forms").
+Six fields are filled in one go and tabbing between them must not commit half a
+row — a half-written approach is a market this book claims to have gone to.
+
+`market` and `via` are NAMES here, not ids, because the route resolves them the
+way the MCP tool does. Both complete from the book's existing markets
+(`market_approach_fields`), which is the same vocabulary rule the participation
+add row follows: freehand carrier spelling is how 'Zurich Insurance Group' vs
+'Zurich' drift starts.
+
+NO PREMIUM, NO RATE, NO FEES. Every one of those comes off a quote letter that
+does not exist yet when an approach is recorded, and the data-entry rule is
+that a figure off a document is never pre-filled and never asked for early —
+they are cells on the row the moment it exists.
+"""
+
+
+def market_approach_fields(conn: sqlite3.Connection) -> tuple[Field, ...]:
+    """MARKET_APPROACH_FIELDS with both market cells completing from the book's
+    own markets — the mirror of `contact_fields` and `task_fields`.
+
+    SUGGESTIONS, not options: the carrier on a submission may be a market this
+    book has never carried, and a select would refuse the next real one. The
+    route still resolves what is typed against the book and refuses a name it
+    cannot find, naming the nearest — advisory here, authoritative there."""
+    markets = tuple(vocab.market_names(conn))
+    return tuple(
+        replace(f, suggestions=markets) if f.key in {"market", "via"} else f
+        for f in MARKET_APPROACH_FIELDS
+    )
+
+
+# --- what a LINE OF COVERAGE on a placement is expected to do ---------------
+
+_BASIS_OPTIONS: tuple[tuple[str, str], ...] = tuple(
+    (b.label, b.key) for b in RATING_BASES
+)
+"""The rating-basis picker, off models.RATING_BASES — never a hand-written
+list. A basis added to the model appears in every picker without a second
+edit, and a basis NOT in the model cannot be stored, which is what keeps
+`rating_basis()` from having to guess whether an exposure is money."""
+
+_RATE_PER_OPTIONS: tuple[tuple[str, str], ...] = tuple(
+    (label, str(value)) for value, label in RATE_PER_CHOICES
+)
+"""A PICKER, NOT A NUMBER. `rate_per` is the denominator that makes a rate
+mean anything — 1.42 per $100 of payroll and 1.42 per $1,000 of sales are ten
+times apart — and the three conventions in use are a knowable set, which is
+exactly when the constrained-input rule says a picker. Free text there would
+accept 10000, and every rate on the line would then be printed against a
+denominator no market quoted."""
+
+
+def placement_line_fields(
+    rating_basis_key: str | None = None,
+    expiring_basis_key: str | None = None,
+) -> tuple[Field, ...]:
+    """The block header's cells: what this line is being rated on, what it is
+    asking for, and what it did last year.
+
+    KEYS ARE `placement_line` COLUMN NAMES, so a cell route hands
+    `{key: value}` straight to repo.marketing.set_placement_line — the same
+    rule LAYER_FIELDS and MARKET_RESPONSE_FIELDS follow.
+
+    A FUNCTION, NOT A CONSTANT, because two of the nine change KIND with the
+    data. An exposure is integer CENTS on a monetary basis and a whole COUNT
+    on any other, and models.RatingBasis.monetary is the one place that
+    decides which — read here, never re-judged. A fleet is 42 power units, and
+    42 cannot be cents; the same digits rendered the wrong way put $0.42 in
+    front of a client where 42 units belonged (found on the client sheet,
+    2026-08-25).
+
+    THE BASIS MUST BE KNOWN BEFORE THE FIGURE. With no basis stored the
+    exposure field stays `count`, which refuses an amount rather than
+    accepting one and filing it as cents — the same refusal MCP's
+    `set_placement_line` gives, and the route says which basis to set first.
+    Guessing is the bug; refusing is the feature.
+
+    `expiring_rate_micros` is a rate and NOT money: 1.42 is 1.42 per unit of
+    exposure, and money's parser would read '$1.42' as 142 cents. It is stored
+    rather than derived because deriving it needs the expiring exposure, which
+    is a fact nobody may have recorded — and the report then leaves the
+    comparison blank instead of assuming exposure was flat.
+    """
+
+    def exposure_kind(basis_key: str | None) -> str:
+        if basis_key is None:
+            return "count"
+        return "money" if rating_basis(basis_key).monetary else "count"
+
+    return (
+        Field("rating_basis", "rating basis", "select", _BASIS_OPTIONS,
+              optional_select=True),
+        Field("rate_per", "rate per", "select", _RATE_PER_OPTIONS,
+              optional_select=True),
+        Field("expected_exposure", "expected exposure",
+              exposure_kind(rating_basis_key)),
+        # BLANK IS PRIMARY, and that is the ordinary answer rather than a gap
+        # — the same reading `MarketResponse.attach` gets. Stated only for an
+        # excess layer.
+        Field("attach_sought", "attach sought", "money"),
+        Field("limit_sought", "limit sought", "money"),
+        Field("expiring_basis", "expiring basis", "select", _BASIS_OPTIONS,
+              optional_select=True),
+        Field("expiring_exposure", "expiring exposure",
+              exposure_kind(expiring_basis_key)),
+        Field("expiring_premium", "expiring premium", "money"),
+        Field("expiring_rate_micros", "expiring rate", "rate"),
+    )
+
+
+PLACEMENT_LINE_KEYS: tuple[str, ...] = tuple(
+    f.key for f in placement_line_fields()
+)
+"""The editable set, for a server-side check on a URL segment. Derived from
+the builder rather than re-listed, so a field added above cannot be reachable
+in the markup and refused by the route (or the reverse)."""

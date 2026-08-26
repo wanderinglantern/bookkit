@@ -54,6 +54,21 @@
        class name IS the contract: the listener clears `.form-error`, so
        renaming it here silently un-clears the message. #}
     {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+    {# WHAT THE RECORD ALREADY SAYS — read-only, above the fields, never in
+       one of them. A form that can correct something has to show what it is
+       correcting; the Response form re-opened blank on a package two markets
+       had already answered, so the only way to see the state was to save and
+       look (forms.spec.FormNote carries the whole story). NOT a prefill: no
+       figure here is typed into an input, so none of it can be saved by being
+       ignored, which is the exact risk data-entry-integrity §8 is about. #}
+    {% if spec.note %}
+      <div class="form-note" role="status">
+        <p class="form-note-title">{{ spec.note.title }}</p>
+        <ul class="form-note-items">
+          {% for item in spec.note.items %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+      </div>
+    {% endif %}
     {% for row in rows %}{{ render_field(row.field, row.value, row.placeholder) }}{% endfor %}
     <div class="form-actions">
       <button type="submit">Save</button>

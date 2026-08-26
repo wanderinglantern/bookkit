@@ -214,3 +214,61 @@ def _get_routes(app) -> list[tuple[str, set[str]]]:
 
     walk(app.routes)
     return found
+
+
+# --- the marketing report --------------------------------------------------
+
+
+def test_the_marketing_workbook_downloads_without_a_program_file(client_and_org):
+    """NO `_linked` here, deliberately. Marketing happens BEFORE a tower
+    exists — every figure on this sheet lives in SQLite — so a download gated
+    on a linked file would be unreachable on exactly the placements it is for.
+    The same built-but-not-accessible class the open-items anchor hit."""
+    from bookkit.repo import placements as placements_repo
+
+    client, org = client_and_org
+    placement = placements_repo.create(
+        client.app.state.conn,
+        org_id=org.id,
+        program_name="unlinked, being marketed",
+        period_from="2027-01-01",
+        period_to="2028-01-01",
+    )
+    assert placement.program_path is None
+
+    got = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/export/marketing.xlsx"
+    )
+
+    assert got.status_code == 200
+    assert got.content[:2] == b"PK", "not an xlsx archive"
+    assert "attachment" in got.headers["content-disposition"]
+    assert placement.ref in got.headers["content-disposition"]
+
+
+def test_the_internal_marketing_workbook_is_named_as_such(client_and_org):
+    client, org = client_and_org
+    placement = _linked(client, org)
+
+    got = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/export/marketing.xlsx"
+        "?audience=internal"
+    )
+
+    assert got.status_code == 200
+    assert "marketing-internal.xlsx" in got.headers["content-disposition"]
+
+
+def test_an_unknown_audience_is_refused_not_defaulted(client_and_org):
+    """A typo must not fall through to the client sheet in one direction or
+    leak the underwriter's own words in the other."""
+    client, org = client_and_org
+    placement = _linked(client, org)
+
+    got = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/export/marketing.xlsx"
+        "?audience=internl"
+    )
+
+    assert got.content[:2] != b"PK"
+    assert "audience" in got.text

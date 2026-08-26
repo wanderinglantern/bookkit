@@ -72,6 +72,29 @@ _ALIVE_EXEMPT = {
         "the cycle walk must follow soft-deleted ancestors: a deleted org can "
         "be undeleted, and stopping at one would let a cycle through it pass"
     ),
+    ("orgs.py", "names_for_any"): (
+        "it NAMES SOMETHING THAT ALREADY HAPPENED. A market response points at "
+        "the carrier that quoted it, and deleting that org does not unmake the "
+        "quote — read through the living lookup, the marketing grid rendered a "
+        "row with its premium, its status and its A.M. Best rating and an "
+        "EMPTY Market cell. Everything that offers something to DO keeps using "
+        "labels_for/names_for, which is what the rule is for"
+    ),
+    ("marketing.py", "roll_up_for_responses"): (
+        "it names the PARENT OF A ROW A REVERT HAS JUST SOFT-DELETED. The one "
+        "caller is services.batches.revert, which undoes a batch that created "
+        "a market response and then has to recompute the submission it just "
+        "left; through the living lookup that response names nothing and the "
+        "cache keeps stating a quote that is gone. Only the LOOKUP is "
+        "dead-or-alive — roll_up_submission derives from "
+        "responses_for_submission, which is alive-filtered, so the answer is "
+        "computed from the surviving rows and never from the deleted one"
+    ),
+    ("lines.py", "_free_slug"): (
+        "the slug is a PRIMARY KEY and soft-delete leaves it occupying the "
+        "table, so a retired line's id must still count as taken — filtering "
+        "it out would mint an id the table already holds and raise on INSERT"
+    ),
 }
 
 

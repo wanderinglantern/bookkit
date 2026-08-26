@@ -1025,6 +1025,43 @@ def _an_assignment(rw):
     return mcpserver._team_assign(rw, "Dana Okafor", client="Acme")
 
 
+def _a_marketed_placement(rw):
+    """A client with a placement and a market on the book — what the four
+    marketing writes need. No towerkit file: a program nobody has drawn yet is
+    still a placement being marketed."""
+    org = _acme(rw)
+    placement = placements.create(
+        rw, org_id=org.id, program_name="2027 casualty",
+        period_from="2027-01-01", period_to="2028-01-01",
+    )
+    orgs.create(rw, kind="market", name="Travelers", status="active")
+    return placement
+
+
+def _an_approach(rw):
+    # A SEND DATE IN THE PAST, explicitly. Left to default it takes TODAY, and
+    # the two cases that record a reply against it then hit
+    # repo.marketing._reply_guard — a market cannot answer a package it has
+    # not been sent, and every plausible reply date is before today.
+    return mcpserver._market_approach(
+        rw, _a_marketed_placement(rw).ref, "General Liability",
+        market="Travelers", sent_on="2026-07-07",
+    )
+
+
+def _a_bare_package(rw) -> str:
+    """A submission with NO response rows — the state `market_assign_line` is
+    the only verb for. Written through the repo rather than through a tool,
+    because no MCP tool creates one and that is deliberate: the web control
+    that did was removed on 2026-08-26, and what remains of this state on a
+    real book is history plus the retired TUI's `s`."""
+    placement = _a_marketed_placement(rw)
+    market = orgs.find_by_name(rw, "Travelers")
+    return submissions.create(
+        rw, market_org_id=market.id, sent_on="2026-07-07", placement_id=placement.id,
+    ).id
+
+
 def _linked_placement(rw, tmp_path):
     """A placement backed by a real towerkit program file — what the four
     program_* writes need. Same shape as tests/test_mcp_program.py's fixture."""
@@ -1135,6 +1172,27 @@ _BATCHED_WRITES = {
         rw, _a_request_item(rw)),
     "request_item_waive": lambda rw, tmp: mcpserver._request_item_waive(
         rw, _a_request_item(rw)),
+    "line_add": lambda rw, tmp: mcpserver._line_add(rw, "Kidnap & Ransom"),
+    "market_approach": lambda rw, tmp: _an_approach(rw),
+    "market_assign_line": lambda rw, tmp: mcpserver._market_assign_line(
+        rw, _a_bare_package(rw), "General Liability"),
+    "market_responded": lambda rw, tmp: mcpserver._market_responded(
+        rw, _an_approach(rw)["response_id"], status="quoted",
+        responded_on="2026-07-20", premium="120,000"),
+    "submission_sent_on": lambda rw, tmp: mcpserver._submission_sent_on(
+        rw, _an_approach(rw)["response_id"], "2026-07-01"),
+    "submission_withdraw": lambda rw, tmp: mcpserver._submission_withdraw(
+        rw, _an_approach(rw)["submission_id"]),
+    "submission_reinstate": lambda rw, tmp: (
+        lambda sub: (
+            mcpserver._submission_withdraw(rw, sub),
+            mcpserver._submission_reinstate(rw, sub),
+        )[1]
+    )(_an_approach(rw)["submission_id"]),
+    "set_placement_line": lambda rw, tmp: mcpserver._set_placement_line(
+        rw, _a_marketed_placement(rw).ref, "GL",
+        expiring_premium="100,000", rating_basis="gross_sales",
+        expected_exposure="48,500,000"),
     "program_layer_add": lambda rw, tmp: mcpserver._program_layer_add(
         rw, _linked_placement(rw, tmp).ref, "Excess GL", line_ids=["gl"],
         attach="2m", limit="5m"),
@@ -1184,6 +1242,34 @@ _TOUCHES = {
     "request_remove": {"rfi_request", "rfi_item"},
     "request_item_remove": {"rfi_item"},
     "request_item_waive": {"rfi_item"},
+    "line_add": {"line_of_coverage"},
+    # the submission is filed by the same call — see mcpparity's submission
+    # cells, which say why that is a consequence and not a submission verb
+    "market_approach": {"submission", "market_response"},
+    # THE RESPONSE ALONE, and the absence of a submission event IS the
+    # invariant rather than a gap in the coverage. The roll-up runs inside this
+    # batch and recomputes the package from the row it just created — and every
+    # status maps to one that derives back to itself, so it computes exactly
+    # what the columns already held and `base.update` logs nothing. A
+    # submission event appearing here would mean assigning a line silently
+    # restated what the Pipeline says about the package.
+    "market_assign_line": {"market_response"},
+    # the roll-up moves the submission from 'out' to 'quoted' in the same unit
+    "market_responded": {"market_response", "submission"},
+    # the package alone: the responses hanging off it are untouched, which is
+    # exactly why the reply names the rows it moved rather than rewriting them
+    "submission_sent_on": {"submission"},
+    # ONE COLUMN ON THE PACKAGE, and the absence of a market_response event is
+    # the invariant rather than a coverage gap: what each market said stays
+    # exactly where it is when we pull a package, which is what makes
+    # withdrawing a decision about the SUBMISSION rather than a summary of
+    # anything a market said.
+    "submission_withdraw": {"submission"},
+    # Likewise on the way back. The status is re-derived from the rows and the
+    # five figures beside it are recomputed, all on the submission — the rows
+    # themselves never move.
+    "submission_reinstate": {"submission"},
+    "set_placement_line": {"placement_line"},
     "program_layer_add": {"placement"},
     "program_bind": {"placement"},
     "program_market_premium": {"placement"},
@@ -1443,6 +1529,46 @@ def test_revert_batch_refuses_and_explains_a_conflict(server_db):
     assert got["refused"][0]["field"] == "website"
     assert got["refused"][0]["current"] == "https://grant-typed.example"
     assert orgs.get(rw, org.id).website == "https://grant-typed.example"
+
+
+def test_revert_batch_names_what_still_hangs_off_a_shared_row(server_db):
+    """`market_approach` on a second line JOINS the submission the first one
+    opened, so reverting the first would soft-delete a package two live
+    responses still hang off. The refusal has to reach the ASSISTANT too, and
+    entity/field/current describe it wrongly on their own — they say "the
+    submission was created", which is not the blocker. `why` is the planner's
+    own sentence, the same one the browser toast prints (2026-08-26)."""
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import placements as placements_repo
+
+    conn = db.connect(server_db)
+    org = orgs_repo.create(conn, name="Acme", kind="client")
+    orgs_repo.create(conn, name="Chubb", kind="market")
+    placement = placements_repo.create(
+        conn, org_id=org.id, program_name="2027 casualty",
+        period_from="2027-01-01", period_to="2028-01-01",
+    )
+    conn.close()
+    rw = db.connect(server_db)
+
+    first = mcpserver._market_approach(
+        rw, placement.ref, "general liability", market="Chubb",
+        sent_on="2026-08-12",
+    )
+    mcpserver._market_approach(
+        rw, placement.ref, "auto", market="Chubb", sent_on="2026-08-12",
+    )
+
+    got = mcpserver._revert_batch(rw, first["batch"], now="2026-08-26T18:00:00Z")
+    assert got["applied"] is False
+    assert [row["why"] for row in got["refused"]] == [
+        "submission still has 1 market response(s) recorded against it since "
+        "— undo those first"
+    ]
+    alive = rw.execute(
+        "SELECT COUNT(*) FROM market_response WHERE deleted_at IS NULL"
+    ).fetchone()[0]
+    assert alive == 2
 
 
 def test_batch_tools_are_registered(server_db):

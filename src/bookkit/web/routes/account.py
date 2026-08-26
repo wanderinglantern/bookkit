@@ -265,6 +265,7 @@ def _save(
     action: str,
     raw: dict[str, str],
     write: Any,
+    batch: BatchSpec | None = None,
 ) -> HTMLResponse | None:
     """Parse, then run `write` inside ONE batch. Returns a re-rendered form
     fragment on refusal (input intact, nothing written), or None on success.
@@ -272,13 +273,24 @@ def _save(
     Shared by every tab module's whole-record forms (contacts' `new`, and
     later tasks' own). The exception propagates out of open_batch so the
     transaction rolls back: a refused save leaves nothing behind and costs
-    nothing retyped."""
+    nothing retyped.
+
+    `batch` OVERRIDES the sentence the title would have produced, and exists
+    for the one case where WHAT HAPPENED is not knowable until the values are
+    in: the Pipeline's Response form either records a market's first answer on
+    a line or corrects the one already there, and only `line_id` says which.
+    Both entries used to read `record market response`, same market, same
+    minute, on the rail that is the only way to undo the wrong one
+    (forms.entities.response_batch carries the whole story). Defaulting to
+    `for_title` keeps every other caller exactly as it was — a caller that
+    does not pass one has a title that already says what it did.
+    """
     try:
         values = parse_values(spec, raw)
     except FieldError as exc:
         return HTMLResponse(render_form(request, spec, action, exc.message, raw))
 
-    batch = BatchSpec.for_title(spec.title, org_id=org.id)
+    batch = batch or BatchSpec.for_title(spec.title, org_id=org.id)
     try:
         with batches_svc.open_batch(
             _conn(request), source="web", tool=batch.tool,

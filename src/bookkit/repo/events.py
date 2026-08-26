@@ -85,6 +85,11 @@ NON_MUTATION_FIELDS = (
     "import",
     "carrier_alias",
     "merged_from",
+    # A line merge moves rows in opportunity_line / team_assignment_line,
+    # which are pure link tables with no id and no soft-delete. The move is
+    # recorded so the history is honest; it is NOT undoable in one press,
+    # and the merge confirm says so before it happens rather than after.
+    "line_link",
 )
 
 

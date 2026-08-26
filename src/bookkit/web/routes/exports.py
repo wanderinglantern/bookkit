@@ -39,15 +39,26 @@ def exports_page(request: Request) -> HTMLResponse:
     accounts = orgs_repo.labels_for(conn, {org.id for org in clients})
     rows: list[dict[str, Any]] = []
     for org in clients:
-        linked = [
-            p for p in placements_repo.for_org(conn, org.id) if p.program_path
-        ]
+        placements = placements_repo.for_org(conn, org.id)
+        # TWO LISTS, because two kinds of download live on a placement and
+        # they do not need the same thing. The tower and schematic artifacts
+        # are DRAWN FROM THE PROGRAM FILE and are meaningless without one; the
+        # marketing report is composed entirely from SQLite and is for exactly
+        # the placements that have no file yet, because marketing happens
+        # before a tower exists. Offering it only under `linked` would put it
+        # out of reach on the placements it is for — the
+        # built-but-not-accessible class this drawer exists to prevent.
+        linked = [p for p in placements if p.program_path]
         rows.append({
             "org_id": org.id,
             "ref": org.ref,
             "programs": [
                 {"id": p.id, "name": p.program_name, "ref": p.ref}
                 for p in linked
+            ],
+            "placements": [
+                {"id": p.id, "name": p.program_name, "ref": p.ref}
+                for p in placements
             ],
         })
     return TEMPLATES.TemplateResponse(
