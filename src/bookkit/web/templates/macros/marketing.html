@@ -190,7 +190,7 @@
                 <li class="marketing-clash-match">
                   <span class="marketing-clash-name">{{ match.name }}</span>
                   <span class="detail-label">{{ match.score }}% alike</span>
-                  <button type="button" class="row-action-btn"
+                  <button type="button" class="btn"
                           hx-post="{{ block.add_url }}" hx-include="closest tr"
                           hx-vals='{{ match.vals }}'
                           hx-target="closest tr" hx-swap="outerHTML">use {{ match.name }}</button>
@@ -198,7 +198,19 @@
               {% endfor %}
             </ul>
           {% endif %}
-          <button type="button" class="row-action-btn"
+          {# EVERY OPTION IS A REAL BUTTON AND NO OPTION IS LOUDER — until there
+             is only one (Grant, 2026-08-26; they were `.row-action-btn`, which
+             is the quiet borderless treatment a table's row actions take, and
+             on this card the buttons ARE the point).
+
+             Filling one of several would be PICKING, and this card's whole
+             rule is that it does not pick: 'Zurich' and 'Zurich American' are
+             two real markets and nothing here knows which was meant. So the
+             matches and the create are all plain `.btn` while there is a
+             choice to make. With NO near matches there is nothing to choose
+             between — the create is simply the action — and it takes
+             `.btn-primary`. #}
+          <button type="button" class="btn{% if not pending.matches %} btn-primary{% endif %}"
                   hx-post="{{ block.add_url }}" hx-include="closest tr"
                   hx-vals='{{ pending.create_vals }}'
                   hx-target="closest tr" hx-swap="outerHTML">add “{{ pending.name }}” to the book</button>

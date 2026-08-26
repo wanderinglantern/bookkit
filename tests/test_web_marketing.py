@@ -2072,6 +2072,101 @@ def test_a_carrier_cannot_be_reached_through_itself(client_and_org):
 # the attachment, the limit and the status are all gone when you come back.
 
 
+def _clash_cards(html: str) -> list[str]:
+    """Every near-match card in the markup, as its own slice.
+
+    The card holds only `p`, `ul`, `li`, `span` and `button`, so the first
+    `</div>` after it closes it. Sliced rather than parsed because what this
+    asks about is the CLASS ATTRIBUTES on the buttons inside, which is the
+    thing a parser would throw away.
+    """
+    cards = []
+    start = 0
+    while True:
+        found = html.find('class="marketing-clash"', start)
+        if found == -1:
+            return cards
+        end = html.index("</div>", found)
+        cards.append(html[found:end])
+        start = end
+
+
+def _clash_buttons(card: str) -> list[str]:
+    import re
+
+    return [
+        m.group(1)
+        for m in re.finditer(r'<button[^>]*class="([^"]*)"', card)
+    ]
+
+
+def test_every_option_on_a_near_match_card_is_a_real_button(client_and_org):
+    """AN OPTION HAS TO LOOK LIKE ONE (Grant, 2026-08-26). Both cards shipped
+    with `.row-action-btn`, which is the deliberately quiet borderless
+    treatment a table's ROW actions take — right for "take off" sitting in a
+    grid, wrong here, where the buttons are the entire reason the card exists.
+
+    AND NO OPTION IS LOUDER THAN THE OTHERS while there is a choice to make.
+    Filling one would be picking, and neither card picks: 'Zurich' and 'Zurich
+    American' are two real markets, 'Excess Liability' and 'Employers
+    Liability' are genuinely different cover. `.btn-primary` is allowed only
+    where the create is the ONLY action on the card — then there is nothing to
+    choose between and it is simply the action.
+
+    WHERE THIS LOOKS: both cards, driven for real — the market card in the add
+    row and the line-of-coverage card in the header. They are two templates and
+    they have to agree, because they appear on one screen.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    _market(conn, "Travelers")
+
+    with_match = client.post(
+        _approaches_url(org, placement),
+        data={"market": "Travellers", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending"},
+    ).text
+    alone = client.post(
+        _approaches_url(org, placement),
+        data={"market": "Quibdoxen", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending"},
+    ).text
+    line_card = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/marketing/lines",
+        data={"line_id": "", "line_name": "Employer Liability"},
+    ).text
+
+    for label, html in (
+        ("market card, near match", with_match),
+        ("market card, none close", alone),
+        ("line-of-coverage card", line_card),
+    ):
+        cards = _clash_cards(html)
+        assert cards, f"{label}: no near-match card in the answer"
+        for card in cards:
+            classes = _clash_buttons(card)
+            assert classes, f"{label}: a card with no option to press"
+            for cls in classes:
+                names = cls.split()
+                assert "btn" in names, f"{label}: option is not a button ({cls!r})"
+                assert "row-action-btn" not in names, (
+                    f"{label}: option wears the quiet row-action treatment ({cls!r})"
+                )
+            loud = [c for c in classes if "btn-primary" in c.split()]
+            uses = [c for c in card.split("<button") if ">use " in c]
+            if uses:
+                assert not loud, (
+                    f"{label}: one option is filled while there is still a "
+                    f"choice to make — the card does not pick"
+                )
+            else:
+                assert len(loud) == 1, (
+                    f"{label}: the only action on the card is not the primary "
+                    f"one ({classes})"
+                )
+
+
 def test_a_market_new_to_the_book_is_offered_rather_than_refused(client_and_org):
     """The question, not the wall — and NOTHING is written while it is open."""
     client, org = client_and_org

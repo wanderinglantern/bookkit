@@ -3420,6 +3420,20 @@ tr:hover .market .chip-remove {
   border: 1px solid var(--hairline);
   border-radius: 6px;
   background: var(--stone);
+  /* A COLUMN WITH A GAP, so the card's own children space themselves rather
+     than each carrying a margin the next one has to know about. It became
+     load-bearing when the options turned into real `.btn`s: a bordered button
+     as a bare block sibling had nothing between it and the sentence above. */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+
+.marketing-clash-head,
+.marketing-clash-list,
+.marketing-clash .marketing-add-hint {
+  margin: 0;
 }
 
 /* THE QUESTION HAS TO BE WHERE THE READER IS. The marketing grid is
@@ -3441,22 +3455,24 @@ tr:hover .market .chip-remove {
 }
 
 .marketing-clash-head {
-  margin: 0 0 0.35rem;
   font-size: var(--body-size);
 }
 
 .marketing-clash-list {
   list-style: none;
-  margin: 0 0 0.4rem;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.35rem;
 }
 
 .marketing-clash-match {
   display: flex;
-  align-items: baseline;
+  /* CENTRE, not baseline: baseline aligns the button's TEXT with the market
+     name beside it and hangs its border a few pixels low, which reads as a
+     misaligned control rather than a considered one. It was right while the
+     option was borderless text. */
+  align-items: center;
   flex-wrap: wrap;
   gap: 0.45rem;
 }

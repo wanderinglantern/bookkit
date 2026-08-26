@@ -112,7 +112,7 @@
               {% if match.here %}
                 <span class="detail-label">already on this placement</span>
               {% else %}
-                <button type="button" class="row-action-btn"
+                <button type="button" class="btn"
                         hx-post="{{ marketing.line_url }}"
                         hx-vals='{{ match.use_vals }}'
                         hx-target="#{{ marketing.id }}" hx-swap="outerHTML">use {{ match.name }}</button>
@@ -121,7 +121,13 @@
           {% endfor %}
         </ul>
         {% if marketing.pending.create_vals %}
-          <button type="button" class="row-action-btn"
+          {# THE SAME BUTTON RULE THE MARKET CARD TAKES, and it has to be the
+             same or the two cards on one screen disagree about what a choice
+             looks like. Real buttons, none of them louder than the others,
+             because filling one would be picking — and this card exists
+             precisely because 'Excess Liability' and 'Employers Liability'
+             cannot be told apart by anything but a person. #}
+          <button type="button" class="btn"
                   hx-post="{{ marketing.line_url }}"
                   hx-vals='{{ marketing.pending.create_vals }}'
                   hx-target="#{{ marketing.id }}" hx-swap="outerHTML">create “{{ marketing.pending.name }}” anyway</button>
