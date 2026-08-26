@@ -548,6 +548,35 @@ DEFERRED: dict[tuple[str, str], str] = {
         "which moves the references first and is not undoable in one press — "
         "not something a tool should do in one call."
     ),
+    # --- the editable vocabularies (phase 1 of 5, landed 2026-08-26) ---
+    #
+    # The tables exist and are seeded from the code; nothing reads them to make
+    # a decision yet and no surface edits them, so there is nothing for a tool
+    # to reach. Phase 5 adds `lists`, `list_value_add`, `list_value_edit` and
+    # `list_value_retire` — and it has to, by this book's own rule: a
+    # vocabulary an assistant can NAME needs one it can MAKE, which is the
+    # argument that got `market_create` written. Declared here now rather than
+    # left to appear as an unexplained gap.
+    ("list_value", "create"): (
+        "PHASE 5. A word a broker adds to a vocabulary. Deferred with the rest "
+        "of the surface, not because an assistant should not do it — it "
+        "should, for the same reason it can create a market."
+    ),
+    ("list_value", "read"): (
+        "PHASE 5. Reading the list is what makes every OTHER tool's status "
+        "argument answerable: today an assistant learns the vocabulary from a "
+        "refusal, which is the shape that sent one looking for the wrong door."
+    ),
+    ("list_value", "update"): (
+        "PHASE 5. Relabelling, recolouring and reordering a value. The stored "
+        "`value` is immutable on every surface — renaming a key would be a "
+        "data migration across every row that holds it."
+    ),
+    ("list_value", "delete"): (
+        "PHASE 5, and it will be RETIRE rather than delete — the rule "
+        "repo/lines.py already follows: rows recorded against a word do not "
+        "stop being true because the book will not take new work under it."
+    ),
     ("placement_line", "delete"): (
         "DECISION. Removing a line's expectations silently drops the "
         "comparison every market row on it is measured against; blanking the "

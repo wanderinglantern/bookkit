@@ -282,7 +282,42 @@ def connect(
     if migrate:
         snapshot_before_migrations(conn, db_path)
         apply_migrations(conn)
+        seed_builtin_lists(conn)
     return conn
+
+
+def seed_builtin_lists(conn: sqlite3.Connection) -> int:
+    """The built-in half of every editable vocabulary, brought up to date.
+
+    HERE, BESIDE `apply_migrations`, AND NOT IN A MIGRATION. A migration writes
+    the words that existed the day it was written; this reads
+    `bookkit.lists.SPECS`, which reads models.py — so a word added to a tuple
+    appears in its list on the next open with no second edit and no twelfth
+    table rebuild, which is the entire point of the change. It is idempotent
+    and writes nothing when nothing differs, so an ordinary open of an
+    up-to-date book pays one SELECT per list and no writes at all.
+
+    Every caller that migrates gets it: the TUI's, the CLI's, the web layer's
+    and the MCP server's first connection alike — the same reasoning that put
+    the snapshot on this function rather than in any one of them.
+
+    A BOOK OLDER THAN MIGRATION 020 cannot have the tables yet, and this runs
+    after `apply_migrations` so it always does. Guarded anyway rather than
+    assumed: `connect(migrate=False)` is a real caller, and so is a test that
+    builds a connection by hand.
+    """
+    from . import lists as lists_registry
+
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'list_value'"
+    ).fetchone()
+    if row is None:
+        return 0
+    # ONE TRANSACTION. Eighty-eight values across seventeen lists, and a
+    # half-seeded vocabulary is worse than either outcome — the same rule
+    # `seed()` states about itself.
+    with transaction(conn):
+        return lists_registry.sync_builtins(conn)
 
 
 def snapshot_before_migrations(
