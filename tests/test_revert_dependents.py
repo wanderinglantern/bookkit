@@ -340,7 +340,27 @@ def test_the_planner_asks_every_link_a_valid_question(snapshot_db: Path):
     market profiles — what changed is that the planner can finally see them. The marketing case at
     the top of this file is the worked end-to-end proof for the link that
     matters most (market_response.submission_id), which seed.py does not
-    write."""
+    write.
+
+    AND FROM 11 TO 13 ON 2026-08-26, both from ONE composite foreign key.
+    `list_value` (migration 020, the editable vocabularies) declares
+    `FOREIGN KEY (list_id, behaves_as) REFERENCES list_value (list_id, value)`
+    — the self-reference that lets a word a broker adds say which built-in it
+    behaves as, and that stops anything pulling a built-in out from under a
+    value inheriting from it. `PRAGMA foreign_key_list` reports a composite key
+    as one row PER COLUMN, so the planner sees two links where there is one
+    constraint:
+
+      * `list_value.behaves_as -> list_value` is the real one, and the planner
+        asking it is right: a revert must not orphan a value whose behaviour
+        came from the row it would take back.
+      * `list_value.list_id -> list_value` is the artefact. It is harmless —
+        the parent id it is asked about is a ULID and `list_id` holds
+        '<table>.<column>', so it can never match — and it is named here
+        rather than special-cased, because the alternative is teaching
+        `child_links` about composite keys for one caller's cosmetics.
+
+    Both are exercised because the vocabularies are seeded on every connect."""
     conn = db.connect(snapshot_db)
     try:
         links = base.child_links(conn)
@@ -367,9 +387,10 @@ def test_the_planner_asks_every_link_a_valid_question(snapshot_db: Path):
                     f"{table}.{column} -> {parent_entity} is in the map but "
                     f"live_dependents does not find the row through it"
                 )
-        assert exercised == 11, (
+        assert exercised == 13, (
             f"{exercised} of the planner's links are exercised by seeded data, "
-            f"not 10 — seed.py started or stopped writing a kind of row. Say "
+            f"not 13 — seed.py started or stopped writing a kind of row, or a "
+            f"migration added a foreign key between two entity tables. Say "
             f"which in the docstring above rather than moving the number."
         )
     finally:

@@ -38,6 +38,12 @@ ENTITY_TABLES = {
     # 1:1 with its market and has no identity of its own.
     "market_profile": "market_profile",
     "placement_line": "placement_line",
+    # THE WORDS A BROKER CHOSE, edited revertibly like everything else. A
+    # vocabulary whose edits `u` could not take back would be the one place in
+    # this book where a wrong click is permanent — and it is also how
+    # `lists.sync_builtins` knows a built-in has been renamed and must not be
+    # written back over on the next open.
+    "list_value": "list_value",
 }
 
 
