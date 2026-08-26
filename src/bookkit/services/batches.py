@@ -4,7 +4,13 @@ book back the way it was — or refuses and says exactly what stops it.
 The revert never guesses: if anything in the batch was changed afterwards by
 someone else, the whole revert is refused and the conflicts are reported.
 That is the house 'surface, don't guess' rule; a half-reverted record is
-neither the before nor the after of any single action."""
+neither the before nor the after of any single action.
+
+A REVERT RESTORES WHAT WAS TYPED AND RE-DERIVES WHAT WAS COMPUTED. Replaying
+a derived column backwards restores the value the cache held at that moment,
+which is not what it would say about the rows now standing — `_rederive_caches`
+carries the case that shipped and why the fix is a recompute after the replay
+rather than a column that stops being logged."""
 
 from __future__ import annotations
 
@@ -20,6 +26,7 @@ from ..repo import aliases as aliases_repo
 from ..repo import base
 from ..repo import batches as batches_repo
 from ..repo import events as events_repo
+from ..repo import marketing as marketing_repo
 
 # Provenance, not a mutation — derived from the one skip-list in repo/events
 # ('created' is not skipped here: the planner handles it as its own kind).
@@ -472,6 +479,40 @@ def program_file_refusal(ref: str) -> str:
     )
 
 
+def _rederive_caches(conn: sqlite3.Connection, reverted: list[Change]) -> None:
+    """A REVERT PUTS THE AUTHORITY BACK; EVERY CACHE OVER IT IS RECOMPUTED.
+
+    Everything above this line replays a batch's events backwards, field by
+    field, and that is right for a fact somebody TYPED: the old value is what
+    the book said before, and `plan_revert` refuses when anything moved since.
+    It is wrong for a DERIVED column. A cache is not a fact about the past, it
+    is a statement about the present, and replaying it backwards restores what
+    it happened to hold at that moment — which is a different thing from what
+    it would say about the rows now standing.
+
+    `submission`'s six marketing columns are the one such cache in the event
+    log today. They are event-logged on purpose and must stay that way: their
+    old values are the ONLY record of figures typed before responses existed
+    (`repo.marketing.roll_up_submission`'s "open edge"), so a revert has to be
+    able to put those back. So the answer is not to stop logging them, the way
+    proj_* is not logged — it is to re-derive AFTER the replay, on top of it.
+    Where responses survive, the derivation wins and the restored value is
+    overwritten in the same act; where none do, the roll-up writes nothing at
+    all and the restored figures stand, which is exactly the case the logging
+    exists for.
+
+    Only rows this revert actually MOVED are re-derived — never every
+    submission the batch mentions. A batch that typed on a submission and
+    touched no response has nothing derived to fix, and recomputing it would
+    let this function overwrite the very value the replay just restored.
+    """
+    marketing_repo.roll_up_for_responses(
+        conn,
+        [c.entity_id for c in reverted if c.entity_type == "market_response"],
+        note="revert",
+    )
+
+
 @dataclass(frozen=True)
 class RevertResult:
     batch: EventBatch
@@ -490,7 +531,11 @@ def revert(
     reported untouched. `now` is a parameter, never the wall clock.
 
     The revert's own writes carry note='revert' and NO batch_id, so a revert
-    cannot itself be batch-reverted and `u` skips it the way it skips undo."""
+    cannot itself be batch-reverted and `u` skips it the way it skips undo.
+
+    Replaying the events is not the whole job: a column DERIVED from rows this
+    batch moved has to be recomputed from the rows that survive, never
+    restored. `_rederive_caches` below carries why."""
     from .. import db
 
     batch = batches_repo.get_by_ref(conn, ref)     # KeyError on unknown
@@ -552,6 +597,9 @@ def revert(
                 aliases_repo.remove(conn, str(change.new_value))
             else:
                 aliases_repo.set_alias(conn, str(change.new_value), change.old_value)
+        # LAST, and inside the same transaction: the caches derived from the
+        # rows this revert just moved are recomputed on top of the replay.
+        _rederive_caches(conn, reverted)
         batches_repo.mark_reverted(conn, batch.id, now)
 
     return RevertResult(

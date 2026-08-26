@@ -145,6 +145,13 @@ COLUMNS: tuple[Column, ...] = (
     # it, so nothing is stated twice.
     Column("sent_on", "Sent", field="sent_on", record="submission"),
     Column("responded_on", "Replied", field="responded_on"),
+    # AND WHEN THE TERMS DIE, beside the day they arrived — the two dates are
+    # read together and a broker types them from the same quote letter. It is
+    # the BROKER's clock rather than the client's (GRID_ONLY in the gates says
+    # so): the workbook is a point-in-time comparison, and putting an expiry
+    # on what leaves the building is a decision about the client report that
+    # nobody has made.
+    Column("quote_expires_on", "Expires", field="quote_expires_on"),
     Column("rate", "Rate", numeric=True, field="rate_micros"),
     # WHAT THE ROW'S RATE IS STATED PER, where the block heading's denominator
     # is not it. PRINTED, never a cell: `market_response.rate_per` is stamped
@@ -249,6 +256,15 @@ def _cells(
         "responded_on": _cell(
             marketing_report.fmt_date(row.responded_on, window) or DASH
         ),
+        # THE HOUSE DASH, not a countdown. `services.quotes.expiry_word` owns
+        # the "5d left" / "expired 3d ago" vocabulary and every surface that
+        # prints it reads a submission's rolled-up date; this cell is the ROW's
+        # own figure, printed the way the composer prints every other date on
+        # the grid. A second countdown here would be a second copy of that
+        # judgment, taken off a different object — the "70d over" defect.
+        "quote_expires_on": _cell(
+            marketing_report.fmt_date(row.quote_expires_on, window) or DASH
+        ),
         "rate": _cell(marketing_report.fmt_rate(row.rate_micros) or DASH),
         # THE COMPOSER'S OWN STRING. Deciding here whether this row's
         # denominator differs from its block's would be a second copy of that
@@ -270,6 +286,32 @@ def _cells(
         "exposure_override": _cell(row.exposure_override or DASH),
         "internal_reason": _cell(row.internal_reason or DASH),
     }
+
+
+# THE PACKAGE's STATUS, TINTED. Its vocabulary is not the response's
+# (models.SUBMISSION_STATUS_LABELS says why), so it needs its own map — and the
+# three words the two share take the SAME tint, because one word must not read
+# two ways four inches apart on one screen. `out` takes the warn tint `pending`
+# takes: both mean asked, nothing back. `withdrawn` is muted, like
+# `non_response`: it is closed and there is nothing left to chase.
+_SUBMISSION_TONE = {
+    "bound": "is-good",
+    "quoted": "is-accent",
+    "declined": "is-danger",
+    "out": "is-warn",
+    "withdrawn": "is-muted",
+}
+
+# The one status a package cannot gain a line of coverage under. Withdrawing is
+# a decision about the SUBMISSION (we pulled it) and `roll_up_submission` never
+# writes it and never writes over it — so a response created under a withdrawn
+# package would hang off a parent that can never be recomputed from it, which
+# is the same permanently-mis-stated row `marketing_entry.approach` refuses to
+# create when it declines to reuse a withdrawn submission. The control is
+# WITHDRAWN rather than left to refuse, the way the retired line's add-market
+# row is: an affordance that only ever answers no is worse than none, and the
+# row says why where the control would have been.
+WITHDRAWN = "withdrawn"
 
 
 def _column_class(column: Column, cell: dict[str, Any]) -> str:
@@ -424,6 +466,171 @@ def row_view(
             f"/accounts/{ref}/program/{placement_id}"
             f"/marketing/responses/{row.response_id}/no-charges"
         ),
+    }
+
+
+# --- the marketing with no line of coverage yet ----------------------------
+#
+# A SUBMISSION WITH NO RESPONSE ROWS IS REAL MARKETING THAT HAPPENED, and the
+# panel used to print "No line of coverage on this placement is being marketed
+# yet" straight over it — on fourteen seeded placements, four of them live and
+# two quoted at $1.4M (Grant, 2026-08-26). These rows end that sentence.
+#
+# EVERY CELL IS PRINTED AND NONE IS EDITABLE, and that is the design. The
+# figures live on `submission`, which is a CACHE of the response rows
+# everywhere else in this app (repo.marketing.roll_up_submission), and a cell
+# that wrote to a cache is a second home for the fact — the very defect the
+# roll-up exists to close. The one thing that can be done to one of these rows
+# is to give it the line of coverage it is missing, after which it is an
+# ordinary row in an ordinary block and every cell on it is editable.
+
+
+def _provisional_cells(
+    row: marketing_report.ProvisionalRow,
+    window: marketing_report.DateWindow | None,
+) -> dict[str, dict[str, Any]]:
+    """One provisional row's cells, keyed by the SAME COLUMNS the grid above
+    it walks — so the two tables line up column for column, and a column added
+    to `COLUMNS` raises here rather than shifting these cells one place left.
+
+    WHAT PRINTS THE HOUSE DASH IS WHAT IS NOT KNOWN; what prints nothing at
+    all is what could not be known of a package with no line of coverage. Rate,
+    denominator, rate movement, basis and exposure are all facts stated per
+    unit of exposure ON A LINE, and a dash there would read as a figure
+    somebody could go and fetch. They are left EMPTY, and the block's own
+    heading says in words why.
+    """
+    return {
+        "market": _cell(row.market),
+        "best": _cell(row.best or DASH),
+        # NO ATTACHMENT AND NO "PRIMARY". A submission states a limit, never a
+        # band, and `PRIMARY` in this cell would claim the quote sits at the
+        # bottom of a tower nobody has drawn.
+        "attach": _cell(DASH),
+        "lim": _cell(_money(row.lim)),
+        "status": _cell(
+            row.status, tone=_SUBMISSION_TONE.get(row.status_key, ""), pill=True
+        ),
+        "sent_on": _cell(marketing_report.fmt_date(row.submitted_on, window) or DASH),
+        "responded_on": _cell(
+            marketing_report.fmt_date(row.responded_on, window) or DASH
+        ),
+        "quote_expires_on": _cell(
+            marketing_report.fmt_date(row.quote_expires_on, window) or DASH
+        ),
+        "rate": _cell(""),
+        "rate_per": _cell(""),
+        "rate_move": _cell(""),
+        "premium": _cell(_money(row.premium)),
+        "tria": _cell(DASH),
+        "fees": _cell(DASH),
+        "sl_tax": _cell(DASH),
+        "total_cost": _cell(DASH),
+        "subjectivities": _cell(
+            str(row.open_subjectivities) if row.open_subjectivities else DASH,
+            tone="is-warn" if row.open_subjectivities else "",
+        ),
+        "reason": _cell(DASH),
+        "basis_override": _cell(""),
+        "exposure_override": _cell(""),
+        "internal_reason": _cell(row.internal_reason or DASH),
+    }
+
+
+def assign_action(ref: str, placement_id: str, submission_id: str) -> str:
+    return (
+        f"/accounts/{ref}/program/{placement_id}"
+        f"/marketing/submissions/{submission_id}/line"
+    )
+
+
+def assign_line_options(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    """The lines of coverage the ASSIGN control offers, in ONE place — the
+    panel renders these as its options and the POST re-queries the same list so
+    `checked_option` is authoritative rather than decorative.
+
+    THE BOOK'S LIVING VOCABULARY, and NOT `line_add_options`. That control
+    drops every line already on the placement, because it is for opening a
+    block that does not exist; this one is for putting a package INTO a block,
+    and the ordinary case is the block that is already there. Nothing is
+    dropped, for one more reason worth stating: not one `placement_line` row
+    exists on the seeded book, so a picker built from what the placement has
+    DECLARED would be empty on every placement this feature exists to rescue —
+    built and not accessible, which is a bug class here.
+
+    RETIRED LINES ARE NOT OFFERED (`all_lines` is the living list). Assigning
+    is starting to market a line, and the book's own rule is that you may
+    correct what a market already said on a retired line and may not start
+    there.
+    """
+    return [(line.name, line.id) for line in lines_repo.all_lines(conn)]
+
+
+def provisional_row_view(
+    row: marketing_report.ProvisionalRow,
+    *,
+    ref: str,
+    placement_id: str,
+    window: marketing_report.DateWindow | None = None,
+) -> dict[str, Any]:
+    """One row of the provisional block, built by walking COLUMNS."""
+    cells = _provisional_cells(row, window)
+    built = []
+    for column in COLUMNS:
+        cell = dict(cells[column.key])
+        cell["class"] = _column_class(column, cell)
+        built.append(cell)
+    return {
+        "id": row.submission_id,
+        "cells": built,
+        # WITHDRAWN PACKAGES KEEP THEIR ROW AND LOSE THEIR CONTROL. The
+        # marketing happened and stays reported; what is withheld is a write
+        # that would leave the row permanently mis-stated (see `WITHDRAWN`).
+        "can_assign": row.status_key != WITHDRAWN,
+        "assign_url": assign_action(ref, placement_id, row.submission_id),
+    }
+
+
+def provisional_view(
+    conn: sqlite3.Connection,
+    report: marketing_report.MarketingReport,
+    *,
+    ref: str,
+    placement_id: str,
+    error: str | None = None,
+    error_row: str | None = None,
+) -> dict[str, Any] | None:
+    """The provisional block, or None when there is nothing in it.
+
+    NOT a `block_view`. It carries no line id, no header facts, no clearance
+    strip, no bridge and no add-a-market row — none of them is knowable of a
+    package whose line of coverage nobody has recorded, and a header of nine
+    "not set" cells beside a $1.4M quote is an invitation to type figures
+    against a line nobody chose.
+    """
+    if not report.provisional:
+        return None
+    return {
+        "id": f"mprov-{placement_id}",
+        "label": marketing_report.PROVISIONAL_LABEL,
+        "rows": [
+            provisional_row_view(
+                row, ref=ref, placement_id=placement_id, window=report.window
+            )
+            for row in report.provisional
+        ],
+        # THE SAME LIST THE POST CHECKS AGAINST. Empty is a real state — a book
+        # with no lines of coverage at all — and the template says so in words
+        # and names the control that fixes it, rather than rendering a picker
+        # with nothing in it.
+        "line_options": assign_line_options(conn),
+        # A REFUSAL BESIDE THE CONTROL THAT RAISED IT, and beside the ROW it
+        # was raised on. An assign answers with the whole section (the row
+        # moves between blocks, so nothing smaller describes the change), and a
+        # message dropped at the top of that section would sit inside the
+        # add-a-line control three feet from the picker it is about.
+        "error": error,
+        "error_row": error_row,
     }
 
 
@@ -750,6 +957,8 @@ def panel(
     refocus: str | None = None,
     line_values: dict[str, str] | None = None,
     line_add_preserve: bool = True,
+    provisional_error: str | None = None,
+    provisional_row: str | None = None,
 ) -> dict[str, Any]:
     """The whole Marketing section for one placement.
 
@@ -786,6 +995,13 @@ def panel(
     ]
     return {
         "id": f"marketing-{placement_id}",
+        # THE MARKETING WITH NO LINE OF COVERAGE YET, in its own block below
+        # the lines. None when every package on the placement has been answered
+        # by line — which is what the assign control below each row is for.
+        "provisional": provisional_view(
+            conn, report, ref=ref, placement_id=placement_id,
+            error=provisional_error, error_row=provisional_row,
+        ),
         # The caret's way home when a write answers with the WHOLE section.
         # One submission carries every line of coverage, so correcting the date
         # it went out moves rows in blocks this one does not contain — and the

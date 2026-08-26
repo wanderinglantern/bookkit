@@ -17,7 +17,7 @@
    copy in another costume. The blocks come from macros/marketing.html, which
    a header cell save also renders, so the grid a broker looks at and the block
    a save answers with cannot drift. #}
-{% from "macros/marketing.html" import block as marketing_block %}
+{% from "macros/marketing.html" import block as marketing_block, provisional_block %}
 {# `data-refocus` rides a SECTION answer: correcting the date a submission
    went out moves rows in every block that package carried, so that one write
    answers with the whole section and the cell the caret was in is gone.
@@ -130,10 +130,24 @@
     {% endif %}
   </header>
 
-  {% if marketing.blocks %}
+  {% if marketing.blocks or marketing.provisional %}
     {% for b in marketing.blocks %}
       {{ marketing_block(b, marketing.columns, marketing.add_fields, marketing.add_values) }}
     {% endfor %}
+    {# LAST, BELOW THE LINES OF COVERAGE. These are the packages nobody has
+       finished recording, and leading the section with the least certain rows
+       would put them above the lines a client is actually choosing between —
+       the same ordering the workbook takes (`to_sections`).
+
+       AND IT IS WHAT MAKES THE EMPTY STATE BELOW HONEST. The condition on this
+       branch used to be `marketing.blocks` alone, so fourteen seeded
+       placements carrying live submissions — four of them live, two quoted at
+       $1.4M — were told nothing on them was being marketed (Grant,
+       2026-08-26). A submission with no response rows is real marketing that
+       happened, and it renders here. #}
+    {% if marketing.provisional %}
+      {{ provisional_block(marketing.provisional, marketing.columns) }}
+    {% endif %}
   {% else %}
     {# NOT `.panel-empty`, whose 2.5rem of air is right for a tab body that
        has nothing in it at all. This section is a secondary one on a page

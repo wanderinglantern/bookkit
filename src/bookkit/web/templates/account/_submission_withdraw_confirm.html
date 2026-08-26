@@ -1,0 +1,38 @@
+{# The confirm step for withdrawing a package. A STEP, not an hx-confirm —
+   the browser's own confirm() shows no plan, the objection web/parity.py
+   already records against using it for revert, and the plan is the whole
+   point here: what stays reported, where the row goes, and how it comes back.
+   The GET rendered this and wrote NOTHING.
+
+   It renders into #pipeline-form-host, so Cancel is the delegated
+   [data-form-cancel] listener inline-cell.js already owns. Withdraw posts to
+   the same URL this was fetched from and answers with the whole panel, which
+   is the only honest unit: the row leaves "Out at market" and appears under
+   "Withdrawn" in the same swap. #}
+<div class="confirm-remove" role="alertdialog"
+     aria-label="Withdraw the package to {{ market }}">
+  <p class="confirm-remove-title">
+    Withdraw the package to <strong>{{ market }}</strong>, sent {{ sent_on }}?
+  </p>
+  <ul class="confirm-remove-notes">
+    <li>It leaves <strong>Out at market</strong> and its SLA clock stops.</li>
+    {% if answers %}
+      {# MARKETING THAT HAPPENED STAYS REPORTED. Withdrawing says we stopped
+         pursuing the package, not that it never went out — the rows keep
+         printing on the Marketing panel and in the client's workbook. #}
+      <li>What {{ market }} already said stays exactly where it is —
+        {{ answers }} answer{{ '' if answers == 1 else 's' }} on the Marketing
+        panel, and in the client’s workbook.</li>
+    {% endif %}
+    <li>Going back to {{ market }} later is a <strong>new approach</strong>,
+      recorded on the line you want — this package is not reused.</li>
+    <li>Reversible: it appears under <strong>Withdrawn</strong> on this tab
+      with a Reinstate button, and the change list can revert it.</li>
+  </ul>
+  <div class="form-actions">
+    <button type="button" class="btn-danger"
+            hx-post="{{ action }}"
+            hx-target="#pipeline-form-host" hx-swap="innerHTML">Withdraw package</button>
+    <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
+  </div>
+</div>

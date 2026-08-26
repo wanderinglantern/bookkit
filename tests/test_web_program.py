@@ -979,55 +979,65 @@ def test_the_scaffold_confirm_offers_the_path_as_an_input(app_and_org, tmp_path)
     assert 'name="path"' in confirm
 
 
-def _submission_url(org, placement):
-    return f"/accounts/{org.ref}/program/{placement.id}/submissions"
+def test_the_band_sends_a_submission_through_the_marketing_panel(app_and_org):
+    """A4 — the Program band's Submission control no longer writes a package
+    with no line of coverage, and no web route does.
 
+    TWO CONTROLS MEANT "we sent this market a submission" and they wrote to two
+    different homes (Grant, 2026-08-26). This one rendered `submission_form`
+    into the section's form host and created a bare `submission` row: no
+    `market_response`, and therefore no line of coverage anywhere. That is what
+    put fourteen seeded placements into the state where the Marketing panel
+    printed "No line of coverage on this placement is being marketed yet" over
+    live submissions — two of them quoted at $1.4M — and `/export/
+    marketing.xlsx` downloaded one header row.
 
-def test_a_submission_is_sent_from_the_program_section(app_and_org):
+    The affordance stays where a broker looks for it and points at the
+    Marketing section, where the add-market row records the approach against
+    the line of coverage it is about. `submission_form` itself is NOT deleted:
+    the retired TUI's `s` still uses it.
+    """
     client, org = app_and_org
     conn = client.app.state.conn
     placement = _linked(conn, org)[0]
-    from bookkit.repo import orgs as orgs_repo
-    from bookkit.repo import submissions as submissions_repo
-
-    market = orgs_repo.list_orgs(conn, kind="market")[0]
 
     page = client.get(f"/accounts/{org.ref}/program").text
-    assert f'hx-get="{_submission_url(org, placement)}/new"' in page
 
-    form = client.get(f"{_submission_url(org, placement)}/new").text
-    assert "<select" in form and market.name in form
-
-    sent = client.post(
-        _submission_url(org, placement),
-        data={"market_org_id": market.id, "underwriter_contact_id": "",
-              "sent_on": "2026-08-19", "notes": ""},
+    assert f'href="#marketing-{placement.id}"' in page, (
+        "the band's Submission control does not point at the Marketing section"
     )
+    assert f'/program/{placement.id}/submissions/new' not in page
 
-    # 204 + HX-Redirect, the same shape the revert POST uses: htmx follows
-    # the header; there is no body to swap
-    assert sent.status_code == 204
-    subs = [
-        sub for sub in submissions_repo.for_placement(conn, placement.id)
-        if sub.market_org_id == market.id
-    ]
-    assert subs, "no submission landed on the placement"
-    # success redirects to where the submission is VISIBLE — the pipeline tab
-    assert sent.headers.get("HX-Redirect", "").endswith(f"/accounts/{org.ref}/pipeline")
+    # AND THE ROUTES ARE GONE, not merely unlinked. A live write path with no
+    # affordance still accepts a POST and still manufactures the defect.
+    served = _served_paths(client.app)
+    # THE WALK IS PROVED TO LOOK SOMEWHERE FIRST. `app.routes` holds
+    # `_IncludedRouter` wrappers rather than the routes themselves, so a naive
+    # read returns four entries and every check against it passes by finding
+    # nothing — the shape of a gate that looks nowhere
+    # (tests/test_marketing_gates.py `_web_paths` says the same).
+    assert "/accounts/{ref}/program/{placement_id}/renew" in served
+    assert not [p for p in served if p.endswith("/submissions")
+                or p.endswith("/submissions/new")]
 
 
-def test_a_refused_submission_keeps_the_typed_notes(app_and_org):
-    client, org = app_and_org
-    placement = _linked(client.app.state.conn, org)[0]
+def _served_paths(app) -> set[str]:
+    found: set[str] = set()
 
-    refused = client.post(
-        _submission_url(org, placement),
-        data={"market_org_id": "", "underwriter_contact_id": "",
-              "sent_on": "2026-08-19", "notes": "half-typed context"},
-    ).text
+    def walk(routes) -> None:
+        for route in routes:
+            inner = getattr(route, "original_router", None)
+            if inner is not None:
+                walk(inner.routes)
+            sub = getattr(route, "routes", None)
+            if sub is not None and inner is None:
+                walk(sub)
+            path = getattr(route, "path", None)
+            if isinstance(path, str) and path:
+                found.add(path)
 
-    assert "half-typed context" in refused
-    assert "required" in refused
+    walk(app.routes)
+    return found
 
 
 def _terms_base(org, placement, kind):

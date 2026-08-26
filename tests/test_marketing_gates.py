@@ -628,6 +628,13 @@ WORKBOOK_TO_GRID: dict[str, tuple[str, ...]] = {
 # Grid columns with no workbook counterpart, each with the reason it is the
 # broker's own and not the client's.
 GRID_ONLY: dict[str, str] = {
+    "quote_expires_on": (
+        "the broker's chase clock, not a term of the quote. The workbook is a "
+        "point-in-time comparison of what the markets said; when the terms "
+        "lapse is what `services.quotes` queues internally, and putting a "
+        "lapse date on the sheet that leaves the building is a decision about "
+        "the CLIENT report that nobody has made"
+    ),
     "internal_reason": (
         "the underwriter's private opinion; INTERNAL only, and the workbook's "
         "own 'Decline reason' column carries it on the internal audience"
@@ -1141,6 +1148,20 @@ NAMED_FIX: dict[str, dict[str, str]] = {
         ),
         "mcp": "submission_sent_on",
     },
+    # Either date is retyped where it sits: the Expires and Replied cells are
+    # a column apart on the panel, and `market_responded` takes both.
+    "terms cannot lapse before the market quoted them": {
+        "field": "quote_expires_on"
+    },
+    "terms cannot lapse before the package went out": {
+        # "…or correct the date the submission went out if that is the one
+        # that is wrong" — the same two doors `_reply_guard` names.
+        "web": (
+            "/accounts/{ref}/program/{placement_id}/marketing"
+            "/responses/{response_id}/sent"
+        ),
+        "mcp": "submission_sent_on",
+    },
     "the same digits over a different denominator": {"field": "expiring_rate_micros"},
     "unknown market response status": {"field": "status"},
     "the carrier and the intermediary are the same market": {
@@ -1152,6 +1173,41 @@ NAMED_FIX: dict[str, dict[str, str]] = {
     },
     # --- services/marketing_entry.py --------------------------------------
     "an approach needs a carrier or an intermediary": {"field": "via"},
+    # Both `assign_line` refusals name the SAME fix — the add-market row in the
+    # line's own grid, which is where an approach is recorded against a line of
+    # coverage on either surface. Neither is a retype: the caller is being sent
+    # to a different control, so both surfaces have to be named.
+    "this package was withdrawn": {
+        "web": (
+            "/accounts/{ref}/program/{placement_id}/marketing"
+            "/lines/{line_id}/approaches"
+        ),
+        "mcp": "market_approach",
+    },
+    "this package already has an answer recorded": {
+        "web": (
+            "/accounts/{ref}/program/{placement_id}/marketing"
+            "/lines/{line_id}/approaches"
+        ),
+        "mcp": "market_approach",
+    },
+    # Withdrawing and putting back are each other's fix, and each refusal names
+    # the OTHER one — neither is a retype, so both surfaces have to carry it.
+    # These exist at all because the capability lost its only door when the
+    # Response form stopped writing submission statuses (r6 blocker 2).
+    "this package was already withdrawn": {
+        "web": "/accounts/{ref}/pipeline/submissions/{submission_id}/reinstate",
+        "mcp": "submission_reinstate",
+    },
+    "this package is not withdrawn, so there is nothing to put back": {
+        # What a market said is corrected where it prints, on the Marketing
+        # panel's own cell — the same fix the assign refusals name one table up.
+        "web": (
+            "/accounts/{ref}/program/{placement_id}/marketing"
+            "/responses/{response_id}/cell/{key}"
+        ),
+        "mcp": "market_responded",
+    },
     # --- services/consistency.py ------------------------------------------
     "has not happened yet": {"field": "sent_on"},
     "or correct the": {"field": "either date"},
@@ -1166,6 +1222,12 @@ NAMED_FIX: dict[str, dict[str, str]] = {
     "no such market response": {"field": "response_id"},
     "no such line on this placement": {"field": "line_id"},
     "no line of coverage": {"field": "line_id"},
+    # The assign control on the provisional block. A picker with a blank option
+    # is the only thing that reaches it, and the fix is to pick — the same
+    # `field` reading every "you must choose" refusal here takes.
+    "pick the line of coverage this market's answer is about": {
+        "field": "line_id"
+    },
     "a submission has a date it went out on": {"field": "sent_on"},
     "42 power units and $0.42 are the same digits": {"field": "rating_basis"},
     "pick a line of coverage from the list or type a new name, not both": {
@@ -1409,7 +1471,16 @@ WITNESS_DATES: dict[tuple[str, str], str] = {
 # next month, a policy period runs a year out, a task is due next week. None on
 # these three tuples today; the table exists so the next one is DECLARED rather
 # than silently exempted by nobody noticing it.
-FORWARD_LOOKING: dict[tuple[str, str], str] = {}
+FORWARD_LOOKING: dict[tuple[str, str], str] = {
+    ("market_response", "quote_expires_on"): (
+        "a quote lapses NEXT month — the date is a deadline, not a witness, "
+        "and refusing it in the future would refuse every live quote there "
+        "is. What IS held over it is the ordering against the two dates that "
+        "do witness acts (repo.marketing._expiry_guard: terms cannot lapse "
+        "before the package went out or before the market quoted them), which "
+        "is where a year typed from last year's diary is actually caught"
+    ),
+}
 
 
 def _date_sites() -> set[tuple[str, str]]:
@@ -1447,11 +1518,11 @@ def test_g6_a_date_that_witnesses_an_act_is_refused_in_the_future(
 
     WHERE IT CANNOT LOOK: (a) an importer — the same gap G1 names, and the
     same one to widen when a marketing import lands; (b) a date stored on a
-    marketing table with no editable Field behind it (`quote_expires_on` is
-    reached through the pipeline's own form, is FORWARD-looking, and is held
-    by `consistency.check_quote_dates`); (c) the wall clock itself — every
-    door here reads `date.today()`, so this drives a date a year out rather
-    than trying to move time.
+    marketing table with no editable Field behind it — `market_response
+    .quote_expires_on` was that case until 2026-08-26 and is now a cell on the
+    panel, declared FORWARD_LOOKING and held by `repo.marketing._expiry_guard`
+    instead; (c) the wall clock itself — every door here reads `date.today()`,
+    so this drives a date a year out rather than trying to move time.
     """
     client, org = client_and_org
     placement = _linked(client, org)

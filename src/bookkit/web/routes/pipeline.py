@@ -14,11 +14,35 @@ shared seams so the surfaces cannot drift:
   the same builder the TUI's `e` on a submission uses — saved through
   account._save, so it is one batch (tool `record_market_response`, the same
   slug FormModal derives from the same title) and a refusal keeps the typed
-  input. When the recorded outcome is BOUND and the placement is file-linked,
-  the response to the save is the bind-to-layer offer instead of a bare panel
-  refresh: layer select labeled the way the TUI's Picker labels them, share
-  input, Cancel skips — the write goes through services.program_files.write
-  with tool="program_bind", the exact seam the Program tab's + market uses.
+  input. IT WRITES A `market_response`, not the submission's own columns:
+  five of those columns had a second home on that row, and the submission is
+  now derived from its rows the way its status already was (Grant,
+  2026-08-26). So the form asks WHICH LINE OF COVERAGE the answer is about —
+  never guessed, and never a reason the answer cannot be recorded: where the
+  placement has declared none, the picker is the book's own vocabulary and
+  saving declares the line it is given (`_no_line_here` carries the whole
+  story, and what is left of the refusal). When the recorded outcome is
+  BOUND and the placement is file-linked, the response to the save is the
+  bind-to-layer offer instead of a bare panel refresh: layer select labeled
+  the way the TUI's Picker labels them, share input, Cancel skips — the
+  write goes through services.program_files.write with tool="program_bind",
+  the exact seam the Program tab's + market uses.
+  RE-OPENED, IT SHOWS WHAT THE PACKAGE HAS ALREADY ANSWERED (read-only prose,
+  never a prefill), the picker says which lines saving would CORRECT, and one
+  answered line arrives selected — it used to re-open completely blank with
+  re-picking compulsory, which is how a mis-pick wrote a SECOND answer and
+  printed a premium no market quoted onto a client's workbook. The change
+  list's sentence names the market and the line and says whether the save
+  recorded or corrected (forms.entities.response_batch), because that rail is
+  the way back from a wrong pick.
+- Withdrawing a package: a control on the submission's own row, confirm-gated
+  (a STEP, not an hx-confirm — the plan is what stays reported and where the
+  row reappears), with a Withdrawn list carrying Reinstate. It is a decision
+  about the SUBMISSION rather than a summary of what a market said, which is
+  why it is not an outcome on the Response form — it was one until 2026-08-26,
+  and pointing that form at `market_response` left `withdrawn` with no writer
+  on any surface. Rules in services.marketing_entry, shared with MCP's
+  submission_withdraw / submission_reinstate.
 - Opportunities: create/edit are forms.entities.opportunity_form; stage moves
   call services.pipeline.move_stage, which OWNS the rules (forward one gate,
   won/lost from any open stage, won → probability 100 / lost → 0 per
@@ -62,19 +86,22 @@ from ...forms.entities import (
     apply_response,
     apply_subjectivity,
     opportunity_form,
+    response_batch,
     response_form,
+    response_line_options,
     subjectivity_form,
 )
 from ...forms.spec import Field, FieldError, FormSpec, parse_values
 from ...models import Opportunity, Org, Subjectivity, Submission
 from ...money import format_cents_compact
+from ...repo import marketing as marketing_repo
 from ...repo import opportunities as opportunities_repo
 from ...repo import orgs as orgs_repo
 from ...repo import placements as placements_repo
 from ...repo import submissions as submissions_repo
 from ...services import batches as batches_svc
+from ...services import marketing_entry, program_files
 from ...services import pipeline as pipeline_svc
-from ...services import program_files
 from ...services import quotes as quotes_svc
 from ..app import TEMPLATES
 from ..forms_render import render_form
@@ -192,11 +219,36 @@ def _opportunity_rows(request: Request, org: Org) -> list[dict[str, object]]:
     return rows
 
 
+def _withdrawn_rows(request: Request, org: Org) -> list[dict[str, object]]:
+    """The packages we PULLED — the state that had no surface at all.
+
+    A withdrawn submission is in no Pipeline queue: "out at market" is
+    `status = 'out'` and "quotes in hand" is `status = 'quoted'`, so before
+    this it left the tab entirely the moment it was withdrawn, taking the only
+    control that could put it back with it. Same shape and same reason as the
+    team panel's Retired list, and it carries Reinstate the way that one
+    carries Reactivate.
+
+    `days_out` is deliberately NOT printed here: it counts a clock that has
+    stopped, and a package we pulled six weeks ago is not "42d out".
+    """
+    rows: list[dict[str, object]] = []
+    for row in submissions_repo.withdrawn_for_org(_conn(request), org.id):
+        rows.append({
+            "id": row["id"],
+            "market": row["market_name"],
+            "about": row["about"],
+            "sent_on": row["sent_on"],
+        })
+    return rows
+
+
 def _rows_context(request: Request, org: Org) -> dict[str, Any]:
     return {
         "quote_rows": _quote_rows(request, org),
         "subjectivity_rows": _subjectivity_rows(request, org),
         "submission_rows": _submission_rows(request, org),
+        "withdrawn_rows": _withdrawn_rows(request, org),
         "opportunity_rows": _opportunity_rows(request, org),
     }
 
@@ -317,6 +369,46 @@ def _response_action(ref: str, submission_id: str) -> str:
     return f"/accounts/{ref}/pipeline/submissions/{submission_id}/response"
 
 
+def _no_line_here(conn: sqlite3.Connection, ref: str, sub: Submission) -> str | None:
+    """The refusal to render INSTEAD of this form when THE BOOK carries no
+    line of coverage to answer on, or None when it does — which, on any book
+    with a vocabulary, is always.
+
+    A REFUSAL SAYS SOMETHING, and it must be raised BEFORE the form: a select
+    with no options is a required field nobody can satisfy, which reads as a
+    broken app rather than as a thing to go and do.
+
+    AND ITS WORDS HAVE TO BE TRUE, which the first version's were not. It read
+    "nothing on this placement is being marketed yet" and fired wherever the
+    placement had no `placement_line` row — which is EVERY placement on the
+    seeded book and every one of Grant's own: forty submissions across fourteen
+    placements, four markets approached and two quoting $1.4M on the very
+    placement the sentence called unmarketed, printed four inches up the same
+    screen. Worse, it refused a form that had recorded those answers before the
+    responses moved onto their own rows. `response_line_options` now offers the
+    book's vocabulary where the placement has said nothing, and the answer
+    declares the line as it records it, so what is left here is the one state
+    that is genuinely unrecordable: a book with no line of coverage in it at
+    all. The fix it names creates one — the Marketing section's add-a-line
+    control takes a name the book has never carried — and the sentence carries
+    the link because the Pipeline tab is not where that control lives.
+    """
+    if response_line_options(conn, sub):
+        return None
+    where = (
+        f"Open one under Marketing on the Program tab "
+        f"(/accounts/{ref}/program) — the add-a-line control there takes a "
+        f"name this book has never carried — then record the response."
+        if sub.placement_id
+        else "Open one under Marketing on any placement's Program tab first."
+    )
+    return (
+        "a market answers a LINE OF COVERAGE, and this book has no line of "
+        "coverage recorded yet — so there is nothing to record this answer "
+        f"against. {where}"
+    )
+
+
 @router.get(
     "/accounts/{ref}/pipeline/submissions/{submission_id}/response",
     response_class=HTMLResponse,
@@ -325,6 +417,9 @@ def response_form_route(request: Request, ref: str, submission_id: str) -> HTMLR
     org = _org(request, ref)
     conn = _conn(request)
     sub = _owned_submission(conn, org, submission_id)
+    nothing_to_answer = _no_line_here(conn, ref, sub)
+    if nothing_to_answer:
+        return _refusal(request, nothing_to_answer)
     spec = response_form(sub, conn)
     return HTMLResponse(render_form(request, spec, _response_action(ref, submission_id)))
 
@@ -344,12 +439,26 @@ async def response_save(request: Request, ref: str, submission_id: str) -> HTMLR
     org = _org(request, ref)
     conn = _conn(request)
     sub = _owned_submission(conn, org, submission_id)
+    nothing_to_answer = _no_line_here(conn, ref, sub)
+    if nothing_to_answer:
+        # The line was there when the page rendered and is not now (retired,
+        # or removed by another session). The POST is refused with the same
+        # sentence the GET gives rather than with an empty picker.
+        return _refusal(request, nothing_to_answer)
+    # REBUILT SERVER-SIDE from the same arguments that built it for the GET,
+    # so `checked_option` on `line_id` is the account-scope check as well as
+    # the vocabulary one (forms.spec.checked_option says why).
     spec = response_form(sub, conn)
     raw = {k: str(v) for k, v in (await request.form()).items()}
     action = _response_action(ref, submission_id)
     refused = _save(
         request, org, spec, action, raw,
         lambda values: apply_response(conn, sub.id, values),
+        # THE SENTENCE THE CHANGE LIST PRINTS, and it names what happened:
+        # "corrected what Chubb said about General Liability" rather than a
+        # second `record market response` indistinguishable from the first.
+        # The rail is on this tab, and it is the way back from a wrong pick.
+        batch=response_batch(conn, sub),
     )
     if refused:
         return refused
@@ -362,6 +471,97 @@ async def response_save(request: Request, ref: str, submission_id: str) -> HTMLR
             # which lives OUTSIDE the panel); the panel refresh rides along
             # out of band, so the row already reads "bound" behind the offer.
             return HTMLResponse(offer + _text(_panel(request, ref, org)))
+    return _panel(request, ref, org)
+
+
+# --- pulling a package, and putting it back ----------------------------------
+#
+# WITHDRAWING IS A DECISION ABOUT THE SUBMISSION, so it is a control on the
+# submission and not an outcome on the Response form. It was one, until
+# 2026-08-26: that form's picker offered the SUBMISSION statuses and was the
+# only writer of `withdrawn` anywhere in the app, so re-pointing the form at
+# `market_response` — which has no such word, and rightly, because no market
+# said it — left three code paths refusing on a state nobody could enter
+# (r6 blocker 2). The rules are services.marketing_entry's, shared with MCP's
+# `submission_withdraw` / `submission_reinstate`.
+
+
+def _withdraw_action(ref: str, submission_id: str) -> str:
+    return f"/accounts/{ref}/pipeline/submissions/{submission_id}/withdraw"
+
+
+@router.get(
+    "/accounts/{ref}/pipeline/submissions/{submission_id}/withdraw",
+    response_class=HTMLResponse,
+)
+def withdraw_confirm(request: Request, ref: str, submission_id: str) -> HTMLResponse:
+    """The confirm STEP, which writes nothing — not an `hx-confirm`, for the
+    reason web/parity.py records against the browser's own confirm(): it shows
+    no plan, and the plan here is the whole point (what goes, what stays, and
+    where the package reappears)."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    sub = _owned_submission(conn, org, submission_id)
+    market = orgs_repo.names_for_any(conn, {sub.market_org_id or ""}).get(
+        sub.market_org_id or "", "this market"
+    )
+    return TEMPLATES.TemplateResponse(
+        request,
+        "account/_submission_withdraw_confirm.html",
+        {
+            "ref": ref,
+            "market": market,
+            "sent_on": sub.sent_on,
+            "action": _withdraw_action(ref, submission_id),
+            "answers": len(marketing_repo.responses_for_submission(conn, sub.id)),
+        },
+    )
+
+
+@router.post(
+    "/accounts/{ref}/pipeline/submissions/{submission_id}/withdraw",
+    response_class=HTMLResponse,
+)
+def withdraw_save(request: Request, ref: str, submission_id: str) -> HTMLResponse:
+    org = _org(request, ref)
+    conn = _conn(request)
+    sub = _owned_submission(conn, org, submission_id)
+    market = orgs_repo.names_for_any(conn, {sub.market_org_id or ""}).get(
+        sub.market_org_id or "", "this market"
+    )
+    try:
+        with batches_svc.open_batch(
+            conn, source="web", tool="submission_withdraw",
+            summary=f"withdrew the package to {market}", org_id=org.id,
+        ):
+            marketing_entry.withdraw(conn, sub.id)
+    except Exception as exc:  # a refused write is a message, never a 500
+        return _refusal(request, str(exc))
+    return _panel(request, ref, org)
+
+
+@router.post(
+    "/accounts/{ref}/pipeline/submissions/{submission_id}/reinstate",
+    response_class=HTMLResponse,
+)
+def reinstate_save(request: Request, ref: str, submission_id: str) -> HTMLResponse:
+    """No confirm step: one column goes back to what the rows say, nothing
+    cascades, and the change list reverts it — the same reading the team
+    panel's Reactivate takes beside its confirm-gated Retire."""
+    org = _org(request, ref)
+    conn = _conn(request)
+    sub = _owned_submission(conn, org, submission_id)
+    market = orgs_repo.names_for_any(conn, {sub.market_org_id or ""}).get(
+        sub.market_org_id or "", "this market"
+    )
+    try:
+        with batches_svc.open_batch(
+            conn, source="web", tool="submission_reinstate",
+            summary=f"put the package to {market} back at market", org_id=org.id,
+        ):
+            marketing_entry.reinstate(conn, sub.id)
+    except Exception as exc:
+        return _refusal(request, str(exc))
     return _panel(request, ref, org)
 
 

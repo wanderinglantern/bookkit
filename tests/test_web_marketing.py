@@ -15,12 +15,14 @@ legitimate entry, and an underwriter's private opinion reaching a client.
 from __future__ import annotations
 
 import re
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from bookkit.models import MARKET_RESPONSE_STATUSES
+from bookkit.money import format_cents
 from bookkit.web.app import create_app
 
 GL = "general-liability"
@@ -128,7 +130,15 @@ def test_the_grid_renders_beneath_the_workbench_on_a_linked_placement(client_and
     assert "$3,900" in html, "fees are not their own cell"
     assert "$404,600" in html, "the total is not printed"
     # And the section is BELOW the workbench, not above it.
-    assert html.index("program-workbench") < html.index(f"marketing-{placement.id}")
+    #
+    # `id="marketing-…"` and not the bare id: the program band above the
+    # workbench carries an ANCHOR to this section (its Submission control, which
+    # stopped writing a line-less submission on 2026-08-26), so the bare string
+    # now appears earlier on the page and would find the link rather than the
+    # section it points at.
+    assert (
+        html.index("program-workbench") < html.index(f'id="marketing-{placement.id}"')
+    )
 
 
 def test_it_renders_on_a_placement_with_no_program_file(client_and_org):
@@ -225,7 +235,26 @@ def test_every_status_renders_as_its_own_pill(client_and_org):
     # The pill is the EDITABLE cell's own value span now (status is corrected
     # where it prints), so what is counted is the pill-carrying cell — one per
     # response, tinted by the cell's tone class and still printing its word.
-    assert html.count("pill-cell") == len(MARKET_RESPONSE_STATUSES)
+    #
+    # PLUS ONE PER PROVISIONAL ROW, ON EVERY PLACEMENT THE TAB RENDERS. The
+    # seeded book carries submissions with no response rows at all, and those
+    # render in their own block with the PACKAGE's status pill
+    # (models.SUBMISSION_STATUS_LABELS is a different vocabulary from this one).
+    # Counted over every placement on the account because the Program tab
+    # renders a marketing section for each — the same reason `_marketing_section`
+    # in the gates file scopes its walk — and off the composer rather than
+    # hard-coded, so the number cannot go stale with the seed.
+    from bookkit.repo import placements as placements_repo
+
+    provisional = sum(
+        len(
+            marketing_report.compose(
+                conn, other.id, __import__("datetime").date(2026, 8, 14)
+            ).provisional
+        )
+        for other in placements_repo.for_org(conn, org.id)
+    )
+    assert html.count("pill-cell") == len(MARKET_RESPONSE_STATUSES) + provisional
 
 
 def test_a_rate_movement_with_no_number_prints_the_reason(client_and_org):
@@ -331,6 +360,76 @@ def test_a_cell_commits_and_an_unchanged_value_writes_nothing(client_and_org):
     assert _events(conn, response.id) == before, (
         "re-saving the value the editor itself pre-filled wrote to the event log"
     )
+
+
+def test_an_expiry_typed_on_the_panel_reaches_the_chase_queue(client_and_org):
+    """THE MONEY-LOSING HALF OF THE SECOND-HOME DEFECT (Grant, 2026-08-26).
+
+    `services.quotes` is the queue whose own module header calls this gap "the
+    only one that loses money rather than time", and it is keyed on
+    `submission.quote_expires_on`. A quote recorded on this panel — premium,
+    terms and all — could not reach it, because the panel had no expiry cell
+    at all and the submission's column was written by one form on another tab.
+
+    This drives the whole chain in one act: the cell writes the RESPONSE, the
+    response rolls up onto the submission, and the submission is what the
+    book-wide queue reads.
+    """
+    from datetime import date
+
+    from bookkit.repo import submissions
+    from bookkit.services import quotes
+
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    response = _approach(
+        conn, placement.id, _market(conn, "Travelers"),
+        status="quoted", premium=1_400_000_00,
+    )
+    today = date(2026, 8, 14)
+    queued = {q.submission.id for q in quotes.expiring(conn, today=today)}
+    assert response.submission_id not in queued, (
+        "the fixture is wrong: this quote has no expiry yet and cannot be on a "
+        "clock"
+    )
+
+    assert ">Expires<" in _tab(client, org)
+    saved = client.post(
+        _cell_url(org, placement, response, "quote_expires_on"),
+        data={"quote_expires_on": "2026-09-04"},
+    )
+    assert saved.status_code == 200
+
+    rolled = submissions.get(conn, response.submission_id)
+    assert rolled.quote_expires_on == "2026-09-04"
+    assert rolled.quoted_premium == 1_400_000_00
+
+    chased = {q.submission.id for q in quotes.expiring(conn, today=today)}
+    assert response.submission_id in chased
+
+
+def test_an_expiry_before_the_reply_is_refused_where_it_was_typed(client_and_org):
+    """A REFUSAL SAYS SOMETHING, and keeps what was typed. The year is the
+    failure — 2025 for 2026 is one keystroke, and it files a live quote in the
+    expired bucket where it reads as terms already lost."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    response = _approach(
+        conn, placement.id, _market(conn, "Berkley"),
+        status="quoted", responded_on="2026-08-10",
+    )
+    refused = client.post(
+        _cell_url(org, placement, response, "quote_expires_on"),
+        data={"quote_expires_on": "2025-09-04"},
+    )
+    assert refused.status_code == 200
+    assert "cannot lapse before the market quoted them" in refused.text
+    assert "2025-09-04" in refused.text, "the refusal threw away what was typed"
+    from bookkit.repo import marketing
+
+    assert marketing.get_response(conn, response.id).quote_expires_on is None
 
 
 def test_a_status_cell_offers_nothing_chosen_first(client_and_org):
@@ -1972,3 +2071,387 @@ def test_a_market_new_to_the_book_is_told_where_to_put_it(client_and_org):
     assert refused.status_code == 200
     assert "no market matching" in refused.text
     assert "/markets/new" in refused.text, refused.text[:1200]
+
+
+# ===========================================================================
+# THE MARKETING THAT HAS NO LINE OF COVERAGE YET
+# ===========================================================================
+#
+# A submission with no `market_response` row is REAL MARKETING THAT HAPPENED,
+# and the panel printed "No line of coverage on this placement is being
+# marketed yet" straight over it — on fourteen seeded placements, four of them
+# live and two quoted at $1.4M — while the workbook downloaded one header row
+# and nothing under it (Grant, 2026-08-26). A broker could send that to a
+# client.
+#
+# THESE RUN AGAINST THE SEEDED BOOK ON PURPOSE. Every check below could be
+# written against a fixture built for it and would then prove nothing about the
+# state the book is actually in: the defect survived a full suite for a week
+# because no test asked what the real data renders as. `snapshot_db` is what
+# the whole file already uses, and finding the placement by QUERY rather than
+# by name is what keeps these honest as the seed changes.
+
+
+def _bare_placement(conn):
+    """A seeded placement carrying submissions and NOT ONE response row.
+
+    Found by query, never named: a hard-coded ULID changes every seed and a
+    hard-coded account name makes the test a statement about the fixture rather
+    than about the book.
+    """
+    from bookkit.repo import placements
+
+    row = conn.execute(
+        "SELECT s.placement_id AS pid FROM submission s"
+        " WHERE s.placement_id IS NOT NULL AND s.deleted_at IS NULL"
+        "   AND s.quoted_premium IS NOT NULL"
+        "   AND NOT EXISTS (SELECT 1 FROM market_response mr"
+        "                   WHERE mr.submission_id = s.id AND mr.deleted_at IS NULL)"
+        " LIMIT 1"
+    ).fetchone()
+    assert row is not None, (
+        "the seeded book no longer carries a quoted submission with no response "
+        "rows — this whole block is about that state and now asks nothing"
+    )
+    return placements.get(conn, row["pid"])
+
+
+def _section_of(html: str, placement_id: str) -> str:
+    """Just this placement's marketing section.
+
+    NOT sliced at the first `</section>`: the section holds nested `<section>`
+    elements (the block header's fact groups), so that cut lands inside the
+    first block header and every check downstream of it passes or fails on the
+    wrong text. The next `id="marketing-` is the next placement's section — the
+    Program tab renders one per placement — and the band's link to this one is
+    an `href="#marketing-…"`, which this token does not match.
+    """
+    start = html.index(f'id="marketing-{placement_id}"')
+    # The SECTION's own id and not the controls inside it: the add-a-line form
+    # is `marketing-<placement>-line-add` and its datalist `…-lines`, both of
+    # which a plain `id="marketing-` search finds first and truncates the
+    # section at.
+    nxt = next(
+        (
+            m.start()
+            for m in re.finditer(r'id="marketing-[0-9A-Za-z]+"', html)
+            if m.start() > start
+        ),
+        len(html),
+    )
+    return html[start:nxt]
+
+
+@pytest.fixture
+def seeded(snapshot_db: Path):
+    """The whole seeded book, and a placement in the state this block is
+    about — not the `client_and_org` fixture, which picks the one account with
+    a linked program file and would silently stop covering this the day that
+    account's marketing gets answered."""
+    app = create_app(snapshot_db)
+    from bookkit.repo import orgs
+
+    conn = app.state.conn
+    placement = _bare_placement(conn)
+    org = orgs.get(conn, placement.org_id)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        yield client, org, placement
+
+
+def test_a_seeded_placement_with_no_responses_renders_its_markets(seeded):
+    """THE TEST THAT WOULD HAVE CAUGHT THIS A WEEK AGO.
+
+    Four live submissions on the seeded book, and the panel said nothing on the
+    placement was being marketed.
+    """
+    client, org, placement = seeded
+    conn = client.app.state.conn
+    from bookkit.repo import orgs, submissions
+
+    packages = submissions.for_placement(conn, placement.id)
+    # NAMED DEAD OR ALIVE, the reading the composer takes: a market deleted
+    # from the book after it was sent a submission is still the market it went
+    # to.
+    named = orgs.names_for_any(conn, {p.market_org_id for p in packages})
+    markets = {named[p.market_org_id] for p in packages}
+    assert markets, "the fixture found a placement with no submissions"
+
+    section = _section_of(_tab(client, org), placement.id)
+
+    assert "No line of coverage on this placement is being marketed yet" not in section
+    assert "Line of coverage not recorded" in section
+    for market in markets:
+        assert market in section, f"{market} was approached and is not on the panel"
+    # The figures the submission itself recorded, printed rather than lost.
+    quoted = next(p for p in packages if p.quoted_premium is not None)
+    assert format_cents(quoted.quoted_premium) in section
+
+
+def test_the_seeded_workbook_carries_the_marketing_that_has_no_line(seeded):
+    """AN EMPTY WORKBOOK OVER LIVE MARKETING is the failure this exists to end.
+
+    Driven through the DOWNLOAD ROUTE and read back out of the rendered .xlsx,
+    not off `to_sections`: the composer producing rows proves nothing about
+    what a client opens, and the file is what leaves the building.
+    """
+    import openpyxl
+
+    client, org, placement = seeded
+    conn = client.app.state.conn
+    from bookkit.repo import submissions
+
+    got = client.get(f"/accounts/{org.ref}/program/{placement.id}/export/marketing.xlsx")
+    assert got.status_code == 200
+
+    book = openpyxl.load_workbook(BytesIO(got.content))
+    sheet = book.active
+    rows = [
+        [c for c in row if c is not None]
+        for row in sheet.iter_rows(values_only=True)
+        if any(row)
+    ]
+    printed = " | ".join(str(c) for row in rows for c in row)
+
+    assert "Line of coverage not recorded" in printed
+    quoted = next(
+        p for p in submissions.for_placement(conn, placement.id)
+        if p.quoted_premium is not None
+    )
+    assert format_cents(quoted.quoted_premium) in printed, (
+        "the client workbook carries no row for a submission quoted at "
+        f"{format_cents(quoted.quoted_premium)}"
+    )
+
+
+def test_assigning_a_line_moves_the_row_and_leaves_the_pipeline_reading_the_same(
+    seeded,
+):
+    """The write, end to end — and the invariant that makes it safe.
+
+    ASSIGNING IS A NO-OP DRESSED AS A WRITE. Every submission status maps to a
+    response status that rolls back up to itself, the premium is the only
+    priced response so it sums to itself, and the reply date is the max of one
+    date — so the Pipeline reads exactly what it read before while the
+    Marketing panel gains a row it can edit.
+    """
+    client, org, placement = seeded
+    conn = client.app.state.conn
+    from bookkit.repo import marketing, submissions
+
+    package = next(
+        p for p in submissions.for_placement(conn, placement.id)
+        if p.quoted_premium is not None
+    )
+    before = submissions.get(conn, package.id)
+
+    saved = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/marketing/submissions/{package.id}/line",
+        data={"line_id": GL},
+    )
+
+    assert saved.status_code == 200
+    assert saved.headers.get("HX-Retarget") == f"#marketing-{placement.id}"
+
+    rows = marketing.responses_for_submission(conn, package.id)
+    assert len(rows) == 1
+    assert rows[0].line_id == GL
+    assert rows[0].premium == before.quoted_premium
+    assert rows[0].lim == before.quoted_limit
+    assert rows[0].responded_on == before.response_on
+    # The market the package was addressed to, recorded as the carrier — no
+    # second org, and nothing guessed.
+    assert rows[0].market_org_id == before.market_org_id
+
+    after = submissions.get(conn, package.id)
+    for field in ("status", "quoted_premium", "quoted_limit", "response_on"):
+        assert getattr(after, field) == getattr(before, field), (
+            f"assigning a line restated the package's {field}"
+        )
+
+    # THE ROW MOVED. It is in the line's own grid now and out of the
+    # provisional block, which is the whole point of the control.
+    section = _section_of(saved.text, placement.id)
+    provisional_at = section.index("Line of coverage not recorded")
+    lines_grid, provisional = section[:provisional_at], section[provisional_at:]
+    assert "General Liability" in lines_grid
+    assert f"mrow-{rows[0].id}" in lines_grid, "the row did not move into its line"
+    assert package.id not in provisional, (
+        "the package is still listed as having no line of coverage"
+    )
+
+
+def test_a_line_is_never_guessed_for_a_package(seeded):
+    """EVERY SELECT RENDERS A BLANK OPTION, and picking nothing is refused in
+    words rather than filed against whichever line sorted first."""
+    client, org, placement = seeded
+    conn = client.app.state.conn
+    from bookkit.repo import marketing, submissions
+
+    package = submissions.for_placement(conn, placement.id)[0]
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/marketing/submissions/{package.id}/line",
+        data={"line_id": ""},
+    )
+
+    assert refused.status_code == 200
+    # The fragment stops before the apostrophe: Jinja escapes it to `&#39;`,
+    # and a test that asserts against the raw sentence fails on the punctuation
+    # rather than on the behaviour.
+    assert "pick the line of coverage this market" in refused.text
+    assert "never guessed" in refused.text
+    assert not marketing.responses_for_submission(conn, package.id)
+
+
+def test_the_assign_picker_offers_only_what_it_can_store(seeded):
+    """The markup constrains a mouse and nothing else. A line of coverage this
+    book does not carry is refused server-side, by the picker's OWN options —
+    re-queried on the POST from the one function that rendered them."""
+    client, org, placement = seeded
+    conn = client.app.state.conn
+    from bookkit.repo import marketing, submissions
+
+    package = submissions.for_placement(conn, placement.id)[0]
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/marketing/submissions/{package.id}/line",
+        data={"line_id": "not-a-line-this-book-carries"},
+    )
+
+    assert refused.status_code == 200
+    assert not marketing.responses_for_placement(conn, placement.id)
+    # THE PICKER'S OWN REFUSAL, not a foreign key crashing into the house
+    # fallback. Without `checked_option` the write still fails — the FK holds
+    # underneath — and the broker is told "that could not be saved and nothing
+    # was written", which is the sentence `_house` exists as a LAST resort. A
+    # guard whose only effect is the message is still the guard: the message is
+    # what a person can act on.
+    assert "is not one of the choices offered" in refused.text
+    assert "General Liability" in refused.text, (
+        "the refusal does not name what the picker offers"
+    )
+
+
+def test_a_withdrawn_package_is_refused_in_words_and_not_in_silence(seeded):
+    """A REFUSAL SAYS SOMETHING, on the row that has no control.
+
+    The withdrawn row renders no picker — an affordance that only ever answers
+    no is worse than none — but the POST behind it is still reachable from a
+    stale tab and from anything that can post, and the message used to be
+    rendered INSIDE the picker branch. So the write was correctly refused and
+    the browser was told nothing at all, which reads as a broken app (found by
+    driving it, 2026-08-26).
+    """
+    client, org, placement = seeded
+    conn = client.app.state.conn
+    from bookkit.repo import marketing, submissions
+
+    package = submissions.for_placement(conn, placement.id)[0]
+    submissions.update(conn, package.id, status="withdrawn")
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/marketing/submissions/{package.id}/line",
+        data={"line_id": GL},
+    )
+
+    assert refused.status_code == 200
+    assert "this package was withdrawn" in refused.text
+    assert not marketing.responses_for_submission(conn, package.id)
+    # And the row keeps its place in the report: the marketing happened.
+    section = _section_of(refused.text, placement.id)
+    assert "withdrawn — not assigned to a line" in section
+
+
+def test_a_provisional_row_offers_no_cell_to_edit(seeded):
+    """PRINTED, NEVER EDITABLE. These figures live on `submission`, which is a
+    CACHE of the response rows everywhere else in this app — a cell writing to
+    a cache is the second home the roll-up exists to close. The one thing that
+    can be done to one of these rows is to give it its line of coverage."""
+    client, org, placement = seeded
+
+    section = _section_of(_tab(client, org), placement.id)
+    provisional = section[section.index("Line of coverage not recorded") :]
+
+    assert "assign a line of coverage" in provisional
+    assert "/marketing/responses/" not in provisional, (
+        "a provisional row offers a cell that would post to a market response "
+        "that does not exist"
+    )
+
+
+# --- and the Undo button on the rail beside it ------------------------------
+
+
+def test_undo_on_the_rail_leaves_the_panel_and_the_pipeline_saying_the_same_thing(
+    client_and_org,
+):
+    """THE BROWSER'S OWN UNDO, end to end — no force, no conflict, no stale
+    tab.
+
+    A revert replays a batch's events backwards, and the submission's six
+    marketing columns were logged like any other field, so it restored the
+    figure the cache HELD rather than recomputing it from the rows that
+    survive. Recording the second market's answer moves no cached column (the
+    package already rolled up to 'quoted'), so `plan_revert`'s guard is happy
+    and the revert applies — leaving the Pipeline counting "quotes in hand 0"
+    beside a Marketing panel printing the same market as Quoted, four inches
+    apart (Grant, 2026-08-26).
+
+    Driven through the ROUTES on both ends deliberately: the fix lives in
+    services/batches.py, and a green service test says nothing about whether
+    the browser's Revert link reaches it."""
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import marketing, submissions
+
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    market = _market(conn, "Chubb", best="A++")
+
+    gl = _approach(conn, placement.id, market, GL)
+    prop = marketing.create_response(
+        conn, gl.submission_id, "property", market_org_id=market.id
+    )
+
+    def save_status(response) -> str:
+        posted = client.post(
+            _cell_url(org, placement, response, "status"), data={"status": "quoted"}
+        )
+        assert posted.status_code == 200, posted.text
+        return batches_repo.recent(conn, since="", limit=1)[0].ref
+
+    first = save_status(prop)
+    save_status(gl)
+
+    undone = client.post(
+        f"/accounts/{org.ref}/changes/{first}/revert?tab=program"
+    )
+    assert undone.status_code == 204
+    assert "outcome=reverted" in undone.headers["HX-Redirect"], undone.headers
+
+    rows = {
+        r.line_id: r.status
+        for r in marketing.responses_for_submission(conn, gl.submission_id)
+    }
+    assert rows == {GL: "quoted", "property": "pending"}, rows
+
+    fresh = submissions.get(conn, gl.submission_id)
+    assert str(fresh.status) == "quoted", (
+        "the Pipeline would say 'out at market' about a package with a live quote"
+    )
+
+    # the rule itself: re-deriving changes nothing, over all six columns
+    derived = ("status", "quoted_premium", "quoted_limit", "response_on",
+               "quote_expires_on", "decline_reason")
+    before = conn.execute(
+        "SELECT * FROM submission WHERE id = ?", (gl.submission_id,)
+    ).fetchone()
+    marketing.roll_up_submission(conn, gl.submission_id)
+    after = conn.execute(
+        "SELECT * FROM submission WHERE id = ?", (gl.submission_id,)
+    ).fetchone()
+    assert {f: before[f] for f in derived} == {f: after[f] for f in derived}

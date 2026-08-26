@@ -200,7 +200,7 @@
   // <td>, OUTSIDE the .market-add-form whose input is being corrected
   // (_layer_details.html). Clearing only the nearest scope would leave that
   // one on screen — the exact failure this listener exists to end.
-  var ERROR_SCOPE = ".cell-editing, .entity-form, .market-add-form, .marketing-line-add, .layer-details";
+  var ERROR_SCOPE = ".cell-editing, .entity-form, .market-add-form, .marketing-line-add, .marketing-assign, .layer-details";
 
   function clearError(scope) {
     scope.classList.remove("cell-error");

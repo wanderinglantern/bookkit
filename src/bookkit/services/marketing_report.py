@@ -28,9 +28,11 @@ from ..models import (
     MARKET_RESPONSE_STATUS_LABELS,
     PUBLIC_DECLINE_REASON_LABELS,
     RATE_PER_LABELS,
+    SUBMISSION_STATUS_LABELS,
     LineOfCoverage,
     MarketResponse,
     PlacementLine,
+    Submission,
     rating_basis,
 )
 from ..money import RATE_SCALE, format_cents, format_rate_micros
@@ -58,6 +60,33 @@ _STATUS_ORDER = {
 # words this report prints (CLAUDE.md, DRY — one rule, one home).
 _STATUS_LABEL = MARKET_RESPONSE_STATUS_LABELS
 _PUBLIC_REASON_LABEL = PUBLIC_DECLINE_REASON_LABELS
+# The PACKAGE's own vocabulary, which is not the response's — see the docstring
+# on models.SUBMISSION_STATUS_LABELS. Read, never declared here.
+_SUBMISSION_STATUS_LABEL = SUBMISSION_STATUS_LABELS
+
+# WHAT THE PROVISIONAL BLOCK IS CALLED, in words, on the panel AND on the
+# client's workbook — one string, because a client reading the sheet and a
+# broker reading the screen must be told the same thing.
+#
+# A SUBMISSION WITH NO RESPONSE ROWS IS REAL MARKETING THAT HAPPENED. It went
+# to a market on a day, it may carry a quote, and the one thing nobody has
+# recorded is WHICH LINE OF COVERAGE the answer is about — which is not
+# knowable from the data and must never be guessed. Fourteen placements on the
+# seeded book were in exactly that state and the panel printed "No line of
+# coverage on this placement is being marketed yet" over four live submissions,
+# two of them quoted at $1.4M, while `/export/marketing.xlsx` downloaded a
+# workbook with one header row and nothing under it (Grant, 2026-08-26).
+#
+# It is DELIBERATELY NOT PHRASED AS A LINE OF COVERAGE. There is no rating
+# basis here, no expiring side, no bridge and no add-a-market row — not because
+# they were left out but because not one of them is knowable, and a header full
+# of "not set" beside a real quote invites somebody to fill figures in against a
+# line nobody chose.
+PROVISIONAL_LABEL = (
+    "Line of coverage not recorded — these markets were approached on this "
+    "placement and which line of coverage each answer covers has not been "
+    "recorded"
+)
 
 _MICROS = RATE_SCALE
 
@@ -296,6 +325,13 @@ class ReportRow:
     # differ the first time a word is reworded.
     status_key: str
     responded_on: str | None
+    # WHEN THESE TERMS DIE. Composed, and on the panel it is a CELL: a quote
+    # recorded on the Marketing panel could not reach `services.quotes` at all
+    # until this column existed, because the queue is keyed on a date the
+    # panel had nowhere to put — the money-losing half of the second-home
+    # defect (Grant, 2026-08-26). NULL is "nobody has asked the underwriter
+    # yet", which is its own piece of work, never "no expiry".
+    quote_expires_on: str | None
     submitted_on: str
     rate_micros: int | None
     rate_move: Move
@@ -407,6 +443,54 @@ class ReportBlock:
 
 
 @dataclass(frozen=True)
+class ProvisionalRow:
+    """ONE SUBMISSION NOBODY HAS ASSIGNED A LINE OF COVERAGE TO.
+
+    A SEPARATE SHAPE FROM `ReportRow`, and that is the design rather than an
+    accident of typing. A ReportRow carries a `line_id`, a rate, a rating
+    basis, a comparison against expiring and a `response_id` every cell on the
+    panel posts to; not one of those exists here, and a row that carried them
+    as empty strings would render as a line of coverage with everything
+    missing — which is the reading this block must never invite. What cannot
+    be said is absent from the type, so no renderer can print it.
+
+    The figures are the SUBMISSION's own columns. They are a cache of the
+    response rows everywhere else (`repo.marketing.roll_up_submission`), and
+    when there are no rows the cache is the only record there is — which is
+    exactly why that function refuses to blank them.
+
+    `decline_reason` is INTERNAL. `submission.decline_reason` is free text with
+    no public counterpart, unlike `market_response`, which carries the
+    broker's private note and the client-safe wording in two separate fields
+    for the reason models.PUBLIC_DECLINE_REASONS gives: a single field guarded
+    by nothing at all cannot be shown to a client. So it prints in the
+    internal sheet's own Decline reason column and the client workbook's
+    Reason column stays empty on these rows.
+    """
+
+    submission_id: str
+    market: str
+    best: str
+    # The PACKAGE's status vocabulary, not the response's (models
+    # .SUBMISSION_STATUS_LABELS says why they are two). `status_key` is what a
+    # surface colours off; the label is what a person reads.
+    status: str
+    status_key: str
+    submitted_on: str
+    responded_on: str | None
+    quote_expires_on: str | None
+    premium: int | None
+    # THE LIMIT QUOTED, and NOT a layer. `_layer_label` would print
+    # "$5,000,000 primary" from a lim with no attach, and primary is a claim
+    # about where in a tower this sits that nobody has made about this
+    # package. The figure alone states the limit and asserts nothing else.
+    lim: int | None
+    open_subjectivities: int
+    # internal only, never composed into a client sheet
+    internal_reason: str = ""
+
+
+@dataclass(frozen=True)
 class MarketingReport:
     account: str
     program: str
@@ -420,6 +504,13 @@ class MarketingReport:
     # rebuilt at each renderer is the second copy that differs, and the way it
     # differs is a year silently dropped off a client-facing date.
     window: DateWindow
+    # THE MARKETING THAT HAS NO LINE OF COVERAGE YET. Its own field rather than
+    # a thirteenth `ReportBlock`, so that every renderer of blocks — the sheet,
+    # the panel, the header cells, the bridge — carries on describing lines of
+    # coverage and nothing else, and reaching these rows is a deliberate act.
+    # Empty on a placement whose every submission has been answered by line,
+    # which is the state the whole feature is trying to reach.
+    provisional: tuple[ProvisionalRow, ...] = ()
 
 
 # --- composition -----------------------------------------------------------
@@ -624,10 +715,18 @@ def compose(
     vocabulary = {line.id: line for line in lines_repo.all_lines(conn)}
 
     responses = marketing.responses_for_placement(conn, placement_id)
+    # EVERY SUBMISSION ON THE PLACEMENT, not only the answered ones. The ones
+    # with no response row are what `_provisional` is built from, and reading
+    # them here rather than in a second pass keeps the org lookup below a
+    # SINGLE bulk read over every name this report prints.
+    packages = submissions.for_placement(conn, placement_id)
+    answered = {r.submission_id for r in responses}
     # One bulk read each, not a query per printed cell.
     org_ids = {placement.org_id}
     for response in responses:
         org_ids |= {response.market_org_id or "", response.via_org_id or ""}
+    for package in packages:
+        org_ids.add(package.market_org_id or "")
     org_ids.discard("")
     # NAMED DEAD OR ALIVE (`names_for_any`). These rows are a record of what
     # happened: a carrier deleted from the book after it quoted is still the
@@ -688,6 +787,62 @@ def compose(
         audience=audience,
         blocks=tuple(blocks),
         window=window_for(placement.period_from, placement.period_to),
+        provisional=_provisional(
+            [p for p in packages if p.id not in answered],
+            names=names,
+            best=best,
+            subjectivities=subjectivities,
+            audience=audience,
+        ),
+    )
+
+
+def _provisional(
+    packages: list[Submission],
+    *,
+    names: dict[str, str],
+    best: dict[str, str],
+    subjectivities: dict[str, int],
+    audience: str,
+) -> tuple[ProvisionalRow, ...]:
+    """The submissions on this placement that no response row speaks for.
+
+    THE GATE IS THE ROW SET, THE SAME ONE `roll_up_submission` USES. Once a
+    submission has one response the rows are the authority for all six of its
+    quote columns and its markets are reported under the lines they answered;
+    while it has none, these columns are the only record of that marketing
+    there is, and this block is the only place they are shown. Two functions,
+    one gate — a package cannot be counted twice or fall between them.
+
+    SORTED OLDEST FIRST, by the day the package went out. The line blocks sort
+    by status because a client is choosing between live options; there is
+    nothing to choose between here, and what a broker needs is the order the
+    approaches happened in so the one that has been waiting longest is at the
+    top. The id breaks a tie so the order cannot depend on SQL.
+    """
+    internal = audience == INTERNAL
+    return tuple(
+        ProvisionalRow(
+            submission_id=package.id,
+            # A submission's market is NOT NULL, so a blank here means the org
+            # is not in the org table at all — `market_cell` says the same
+            # thing one class up, and for the same reason: a row of figures
+            # beside an empty first cell reads as a rendering fault.
+            market=names.get(package.market_org_id or "", "") or "market not on file",
+            best=best.get(package.market_org_id or "", ""),
+            status=_SUBMISSION_STATUS_LABEL.get(
+                str(package.status), str(package.status)
+            ),
+            status_key=str(package.status),
+            submitted_on=str(package.sent_on),
+            responded_on=package.response_on,
+            quote_expires_on=package.quote_expires_on,
+            premium=package.quoted_premium,
+            lim=package.quoted_limit,
+            open_subjectivities=subjectivities.get(package.id, 0),
+            internal_reason=(package.decline_reason or "") if internal else "",
+        )
+        for package in sorted(packages, key=lambda p: (str(p.sent_on), p.id))
     )
 
 
@@ -731,6 +886,7 @@ def _row(
         status=_STATUS_LABEL.get(response.status, response.status),
         status_key=response.status,
         responded_on=response.responded_on,
+        quote_expires_on=response.quote_expires_on,
         submitted_on=submitted.get(response.submission_id, ""),
         rate_micros=response.rate_micros,
         rate_move=_rate_move(response, expectation),
@@ -919,6 +1075,54 @@ def _row_cells(
     )
 
 
+def _provisional_cells(row: ProvisionalRow, internal: bool) -> tuple[str, ...]:
+    """One provisional row, in the SAME columns as every other row.
+
+    WHAT IS BLANK IS BLANK BECAUSE IT IS NOT KNOWN, and every one of them is a
+    fact that belongs to a LINE OF COVERAGE this package has not been given:
+    the rate and its denominator are stated per unit of exposure on a line, the
+    rate movement compares against that line's expiring rate, and the basis and
+    exposure overrides are overrides OF A BLOCK HEADING that does not exist
+    here. A figure invented for any of them would be a claim about cover
+    nobody has chosen.
+
+    The Total is blank for the reason it is blank everywhere: it is premium
+    plus TRIA plus fees plus tax and no submission column carries the last
+    three, so a total printed here would be a premium wearing a total's name
+    on the one column a client compares two quotes on.
+
+    THE REASON COLUMN IS EMPTY ON THE CLIENT SHEET even where a reason was
+    recorded. `submission.decline_reason` is free text and has no client-safe
+    counterpart — models.PUBLIC_DECLINE_REASONS explains why a single
+    unguarded field may never reach a client — so it prints in the INTERNAL
+    audience's own Decline reason column and nowhere else.
+    """
+    cells = (
+        row.market,
+        row.best,
+        # THE LIMIT QUOTED, printed as money and as nothing else. `_layer_label`
+        # would read a limit with no attachment as "primary", which is a claim
+        # about where in a tower this sits that no one has made.
+        format_cents(row.lim) if row.lim is not None else "",
+        row.status,
+        fmt_date(row.submitted_on),
+        fmt_date(row.responded_on),
+        "",  # rate — stated per unit of exposure on a line
+        "",  # rate per — the denominator that rate would be stated against
+        "",  # rate Δ — nothing to compare, and no expiring side to compare to
+        format_cents(row.premium) if row.premium is not None else "",
+        "",  # TRIA — no submission column carries it
+        "",  # total est. cost — three of its four parts are unknown
+        str(row.open_subjectivities) if row.open_subjectivities else "",
+        "",  # reason — see the docstring: internal only on these rows
+        "",  # basis — an override of a block heading there isn't one of
+        "",  # exposure — the same
+    )
+    if not internal:
+        return cells
+    return cells + (row.internal_reason, "", "", "")
+
+
 def to_sections(report: MarketingReport) -> list[SheetSection]:
     """One section per line of coverage. A line with no approaches says so IN
     WORDS: an empty table is ambiguous, and a client cannot tell a line nobody
@@ -945,6 +1149,22 @@ def to_sections(report: MarketingReport) -> list[SheetSection]:
             rows.append(("Exposure effect", "", format_cents(bridge.exposure_effect)) + blank)
             rows.append((f"{bridge.market}", "", format_cents(bridge.quoted_premium)) + blank)
         sections.append(SheetSection(_block_label(block), tuple(rows)))
+    if report.provisional:
+        # LAST, and it is the one ordering decision this block gets. The line
+        # blocks are what the client is choosing between; this is the marketing
+        # nobody has finished recording, and putting it above a line of
+        # coverage would lead the sheet with its least certain rows.
+        #
+        # ITS DATES CARRY THEIR YEAR (`fmt_date` with no window): a submission
+        # with no line of coverage has nothing tying it to this placement's
+        # marketing window, and these are precisely the rows where a mistyped
+        # year has had nowhere to show itself.
+        sections.append(
+            SheetSection(
+                PROVISIONAL_LABEL,
+                tuple(_provisional_cells(row, internal) for row in report.provisional),
+            )
+        )
     return sections
 
 

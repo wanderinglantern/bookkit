@@ -99,6 +99,27 @@ class SubmissionStatus(StrEnum):
     WITHDRAWN = "withdrawn"
 
 
+SUBMISSION_STATUS_LABELS: dict[str, str] = {
+    "out": "Out",
+    "quoted": "Quoted",
+    "declined": "Declined",
+    "bound": "Bound",
+    "withdrawn": "Withdrawn",
+}
+"""What a person READS for each SUBMISSION status — the same rule, and the
+same home, as MARKET_RESPONSE_STATUS_LABELS one screen down.
+
+THESE ARE NOT THOSE. A submission is a PACKAGE and its status is a summary
+rolled up from its rows (`repo.marketing.roll_up_submission`); a market
+response is what ONE market said about ONE line, and its vocabulary carries
+`pending` and `non_response`, which a package has no use for, while this one
+carries `withdrawn`, which is a decision about the package and never a summary
+of what a market said. Two vocabularies because they answer two questions —
+the marketing report prints both, in blocks that must never be mistaken for
+each other, and it reads each one's words from here rather than title-casing a
+raw column at the point of printing."""
+
+
 # Controlled but extensible contact-role vocabulary (§3.2).
 CONTACT_ROLES = (
     "risk_manager",
@@ -744,6 +765,14 @@ class MarketResponse(Row):
     lim: int | None = None
     status: str = "pending"
     responded_on: str | None = None
+    # WHEN THESE TERMS DIE, on the row that stated them. A market quotes a
+    # LINE and its quote lapses on its own date; two carriers answering one
+    # package routinely die on two different days, so this cannot live only on
+    # the submission. `submission.quote_expires_on` is the MIN of these
+    # (repo.marketing.roll_up_submission) and is what services.quotes keys the
+    # chase queue on. NULL is "nobody has asked the underwriter yet", which is
+    # its own piece of work (`quotes.undated`), never "no expiry".
+    quote_expires_on: str | None = None
     rating_basis: str | None = None
     rate_per: int | None = None
     exposure_amount: int | None = None

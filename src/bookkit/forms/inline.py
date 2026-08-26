@@ -321,6 +321,19 @@ MARKET_RESPONSE_FIELDS: tuple[Field, ...] = (
         required=True,
     ),
     Field("responded_on", "replied", "date"),
+    # WHEN THESE TERMS DIE, on the row that stated them. A LOOKING-FORWARD
+    # date, unlike every other one on this row: a quote expires next month, so
+    # `check_not_future` is deliberately not applied to it (the declaration
+    # lives in tests/test_marketing_gates.py's FORWARD_LOOKING). The ordering
+    # against the reply and the send date IS checked, in
+    # repo.marketing._expiry_guard, where every surface inherits it.
+    #
+    # THE CELL IS THE POINT. `services.quotes` keys the whole chase queue on
+    # this date and the panel had nowhere to put it, so a quote recorded here
+    # — premium, limit, terms and all — never reached the queue whose own
+    # module header calls that gap "the only one that loses money rather than
+    # time" (Grant, 2026-08-26).
+    Field("quote_expires_on", "quote expires", "date"),
     # The one "rate" kind in the book. NOT money: 1.42 is 1.42 per unit of
     # exposure, and money's parser would read "$1.42" as 142 cents.
     Field("rate_micros", "rate", "rate"),

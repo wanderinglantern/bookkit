@@ -144,10 +144,19 @@ async def test_new_market_and_appetite(empty_db: Path) -> None:
 
 
 async def test_record_market_response(seeded_db: Path) -> None:
-    """e on a submission records the quote — the core daily mutation."""
+    """e on a submission records the quote — the core daily mutation.
+
+    IT WRITES A `market_response` NOW (2026-08-26). The five quote facts had a
+    second home on `submission`, so the shared form both surfaces push was
+    repointed at the row that states them; the submission is the roll-up. The
+    line of coverage is asked and never guessed, which is why the fixture
+    opens one first."""
+    from bookkit.repo import marketing as marketing_repo
+
     conn = db.connect(seeded_db)
     out = [s for s in submissions.outstanding(conn)][0]
     placement = placements.get(conn, out.placement_id)
+    marketing_repo.set_placement_line(conn, placement.id, "general-liability")
     conn.close()
 
     app = BookkitApp(seeded_db)
@@ -172,12 +181,18 @@ async def test_record_market_response(seeded_db: Path) -> None:
         await pilot.press("e")
         await pilot.pause()
         assert isinstance(app.screen, FormModal)
+        await _pick(pilot, app, "line_id", "general-liability")
         await _pick(pilot, app, "status", "quoted")
-        await _fill(pilot, app, "quoted_premium", "800k")
+        await _fill(pilot, app, "premium", "800k")
         await pilot.press("ctrl+s")
         await pilot.pause()
         updated = submissions.get(app.conn, out.id)
         assert updated.status == "quoted"
+        # the row it landed on, and the submission rolled up from it
+        rows = marketing_repo.responses_for_submission(app.conn, out.id)
+        assert [(r.line_id, r.premium) for r in rows] == [
+            ("general-liability", 80_000_000)
+        ]
         assert updated.quoted_premium == 80_000_000
 
 

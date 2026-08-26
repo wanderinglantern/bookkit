@@ -179,6 +179,38 @@ def outstanding_for_org(conn: sqlite3.Connection, org_id: str) -> list[sqlite3.R
     ).fetchall()
 
 
+def withdrawn_for_org(conn: sqlite3.Connection, org_id: str) -> list[sqlite3.Row]:
+    """The packages this client PULLED, joined for display exactly as
+    `outstanding_for_org` joins the live ones.
+
+    IT HAS TO BE READABLE SOMEWHERE OR IT CANNOT BE UNDONE. A withdrawn
+    submission drops out of every Pipeline queue — `outstanding_for_org` is
+    `status = 'out'` and the quotes queue is `status = 'quoted'` — so before
+    this there was no surface on which a pulled package appeared at all, and
+    "we withdrew the wrong one" had nowhere to be corrected from. Same shape
+    as the team panel's Retired list, which exists for the same reason and
+    carries the same Reactivate.
+
+    The aliveness of both possible subjects sits in the ON clause, the rule
+    `outstanding_for_org` states: a submission whose only tie to the client is
+    a soft-deleted placement drops out, one with a live subject keeps it.
+    """
+    return conn.execute(
+        f"""
+        SELECT s.*, m.name AS market_name,
+               COALESCE(p.program_name, o.title) AS about
+        FROM submission s
+        JOIN org m ON m.id = s.market_org_id
+        LEFT JOIN placement p ON p.id = s.placement_id AND {base.alive('p')}
+        LEFT JOIN opportunity o ON o.id = s.opportunity_id AND {base.alive('o')}
+        WHERE s.status = 'withdrawn' AND {base.alive('s')}
+          AND (p.org_id = ? OR o.org_id = ?)
+        ORDER BY s.sent_on
+        """,
+        (org_id, org_id),
+    ).fetchall()
+
+
 def market_counts(
     conn: sqlite3.Connection, since: str | None = None, until: str | None = None
 ) -> list[sqlite3.Row]:

@@ -157,6 +157,131 @@
 {% endmacro %}
 
 
+{% macro provisional_block(b, columns) %}
+  {# THE MARKETING THAT HAS NO LINE OF COVERAGE YET.
+
+     A submission with no response rows is REAL MARKETING THAT HAPPENED — it
+     went to a market on a day and it may carry a quote — and the one thing
+     nobody has recorded is which line of coverage the answer is about. The
+     panel used to print "No line of coverage on this placement is being
+     marketed yet" straight over fourteen seeded placements, four of them live
+     and two quoted at $1.4M, and the workbook downloaded one header row
+     (Grant, 2026-08-26).
+
+     IT MUST NEVER READ AS A LINE OF COVERAGE. No fact header, no expiring
+     comparison, no clearance strip, no premium bridge and no add-a-market
+     row: not one of them is knowable here, and a header of nine "not set"
+     cells beside a real quote invites somebody to fill figures in against a
+     line nobody chose. What it has instead is a sentence saying what these
+     rows are, and one control per row that makes them ordinary. #}
+  <article class="marketing-block marketing-provisional" id="{{ b.id }}">
+    <header class="marketing-block-head">
+      <span class="marketing-line">Line of coverage not recorded</span>
+      <p class="marketing-provisional-note" role="status">These markets were
+        approached on this placement and nothing says which line of coverage
+        each answer covers. The figures below are what the submission itself
+        recorded. Give a row its line of coverage and it moves up into that
+        line’s grid, where every figure on it can be corrected where it
+        prints.</p>
+    </header>
+    <div class="table-scroll">
+      <table class="rows rows-fit marketing-grid">
+        <thead>
+          <tr>
+            {% for column in columns %}
+              <th{% if column.numeric %} class="num"{% endif %}>{{ column.header }}</th>
+            {% endfor %}
+            <th class="row-tail"><span class="visually-hidden">row actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in b.rows %}
+            <tr id="mprovrow-{{ r.id }}" class="marketing-row">
+              {% for cell in r.cells %}
+                {# PRINTED, NEVER A CELL. These figures live on the submission,
+                   which is a CACHE of the response rows everywhere else in
+                   this app — a cell that wrote to a cache would be the second
+                   home for the fact that the roll-up exists to close. #}
+                <td class="{{ cell.class }}">
+                  {% if cell.pill %}
+                    <span class="market-pill {{ cell.tone }}">{{ cell.text }}</span>
+                  {% else %}
+                    {{ cell.text }}
+                  {% endif %}
+                </td>
+              {% endfor %}
+              <td class="row-tail">
+                {# ONE SCOPE FOR THE CONTROL AND FOR ANY REFUSAL IT RAISED, and
+                   it wraps EVERY branch. The message used to sit inside the
+                   picker branch, so a POST refused on a WITHDRAWN row — which
+                   renders no picker — came back with nothing on the page at
+                   all: the write was correctly refused and the browser was
+                   told in silence, which is the bug class "a refusal says
+                   something" is named after (found by driving it, 2026-08-26).
+                   The markup constrains a mouse and nothing else, so that POST
+                   is reachable from a stale tab and from anything that can
+                   post. `.marketing-assign` is one of inline-cell.js's
+                   ERROR_SCOPEs, which is what clears the message on the first
+                   change of the picker where there is one. #}
+                <div class="marketing-assign">
+                {% if not r.can_assign %}
+                  {# The package was WITHDRAWN. Its marketing stays reported —
+                     it happened — and the control is withheld rather than left
+                     to refuse, the way a retired line's add-market row is:
+                     `roll_up_submission` never writes over `withdrawn`, so a
+                     response created here would hang off a parent that can
+                     never be recomputed from it. #}
+                  <span class="detail-label">withdrawn — not assigned to a line</span>
+                {% elif b.line_options %}
+                  <label class="inline-field"><span class="pair-k">assign a line of coverage</span>
+                    {# NO `form=` and no <form> element: this control lives
+                       inside a table, where a form is illegal, so the button
+                       below carries the POST and `hx-include="closest tr"`
+                       gathers this select — the same shape the add-market row
+                       uses one block up. #}
+                    <select name="line_id"
+                            aria-label="line of coverage this answer is about">
+                      {# THE BLANK OPTION, for the reason it is everywhere:
+                         without one the browser answers the question, and the
+                         answer it picks here files a market's quote against
+                         whichever line of coverage sorted first. #}
+                      <option value=""></option>
+                      {% for label, val in b.line_options %}
+                        <option value="{{ val }}">{{ label }}</option>
+                      {% endfor %}
+                    </select></label>
+                  <button type="button" class="row-action-btn"
+                          hx-post="{{ r.assign_url }}"
+                          hx-include="closest tr"
+                          title="record this package's answer against a line of coverage — one undo unit">assign</button>
+
+                {% else %}
+                  {# A REFUSAL NAMES A FIX REACHABLE FROM HERE, and an empty
+                     picker is not one. The add-a-line control at the head of
+                     this section is the fix, and it is on the same screen. #}
+                  <span class="detail-label">this book carries no lines of
+                    coverage yet — add one at the top of this section first</span>
+                {% endif %}
+                {# THE REFUSAL, BESIDE THE ROW IT WAS RAISED ON, and OUTSIDE
+                   the branches above. An assign answers with the whole section
+                   because the row moves out of this block into a line of
+                   coverage's — so the message has to say which row it is
+                   about, or it lands at the top of a section holding a dozen
+                   of them. #}
+                {% if b.error and b.error_row == r.id %}
+                  <span class="cell-error-msg" role="alert">{{ b.error }}</span>
+                {% endif %}
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+{% endmacro %}
+
+
 {% macro block(b, columns, add_fields, add_values, keep_add_row=True) %}
   {# ONE LINE OF COVERAGE. A macro, not markup inlined in the section, because
      there are two callers: the section's first render and a HEADER CELL SAVE.

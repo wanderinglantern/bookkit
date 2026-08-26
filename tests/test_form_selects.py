@@ -287,9 +287,21 @@ def test_the_pipeline_bind_offer_tells_two_to_be_placed_layers_apart(app):
             "has nothing to catch"
         )
 
+        # THE ANSWER IS ABOUT A LINE OF COVERAGE (2026-08-26): the Response
+        # form writes a `market_response` now, so the placement has to be
+        # marketing the line the answer names — the state the panel's
+        # `+ line of coverage` control produces.
+        from bookkit.repo import marketing as marketing_repo
+
+        line_id = "general-liability"
+        marketing_repo.set_placement_line(conn, placement.id, line_id)
         offer = client.post(
             f"/accounts/{org.ref}/pipeline/submissions/{submission.id}/response",
-            data={"status": "bound", "response_on": "2026-08-24"},
+            data={
+                "line_id": line_id,
+                "status": "bound",
+                "responded_on": "2026-08-24",
+            },
         ).text
 
     selects = _select_labels(offer)

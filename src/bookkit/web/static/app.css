@@ -1400,6 +1400,35 @@ table.rows tr.is-waived td {
   font-size: var(--body-size);
 }
 
+/* WHAT THE RECORD ALREADY SAYS — read-only context above the fields
+   (forms.spec.FormNote). It must NOT read as an error and must not read as an
+   input: no danger colour, no border box competing with .form-error one
+   element up, and no control in it. One quiet rule and a label, which is the
+   same treatment .detail-label gives a stated fact everywhere else. */
+.form-note {
+  margin: 0 0 1rem;
+  padding: 0.5rem 0 0.5rem 0.75rem;
+  border-left: 3px solid var(--border);
+}
+
+.form-note-title {
+  margin: 0 0 0.25rem;
+  color: var(--muted);
+  font-size: var(--hint-size);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.form-note-items {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: var(--body-size);
+}
+
+.form-note-items li {
+  margin: 0.15rem 0;
+}
+
 .entity-form .field {
   display: flex;
   flex-direction: column;
@@ -2797,6 +2826,29 @@ a.btn-pill {
   color: var(--muted);
 }
 
+/* THE PACKAGES WE PULLED, under "Out at market" on the Pipeline tab. Same
+   shape as the team panel's Retired list two rules up and for the same reason
+   — a settled state has to stay readable or it cannot be undone — but its own
+   class names rather than that panel's: `.team-member-row.is-retired` is
+   scoped to a div grid and would have styled nothing here, which is a dead
+   rule wearing the same smell as a dead affordance. */
+.pipeline-withdrawn-label {
+  margin: 1.25rem 0 0.25rem;
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--hint-size);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+/* Muted, never struck through or hidden: what these markets said is still
+   true and still prints on the client's workbook. */
+.pipeline-withdrawn-row > td {
+  color: var(--muted);
+}
+
 .team-filter {
   display: flex;
   gap: 0.375rem;
@@ -3403,6 +3455,35 @@ tr:hover .market .chip-remove {
   padding: 0.4rem 0;
   font-size: var(--body-size);
   color: var(--muted);
+}
+
+/* THE MARKETING WITH NO LINE OF COVERAGE YET. Set apart from the blocks above
+   it so nobody reads it as one more line of coverage: a dashed rule rather than
+   a tint, because a tint would make it read as a state (warn, danger) when what
+   it is is a block of a DIFFERENT KIND. Its heading and note say the rest — and
+   the note is prose, so it keeps a reading measure rather than stretching the
+   width of a sixteen-column grid. */
+.marketing-provisional {
+  border-top: 1px dashed var(--border);
+  padding-top: 0.6rem;
+}
+
+.marketing-provisional-note {
+  flex-basis: 100%;
+  max-width: 62ch;
+  margin: 0.15rem 0 0;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+/* The assign control and, under it, any refusal it raised. `column`, so the
+   message reads beneath the picker rather than beside it — the same correction
+   `.market-add-form`'s error needed on the add-market row. */
+.marketing-assign {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: flex-start;
 }
 
 .marketing-empty {

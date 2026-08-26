@@ -574,6 +574,8 @@ def _section(
     refocus: str | None = None,
     line_values: dict[str, str] | None = None,
     its_own: bool = False,
+    provisional_error: str | None = None,
+    provisional_row: str | None = None,
 ) -> HTMLResponse:
     """The whole Marketing section, retargeted onto itself.
 
@@ -600,6 +602,7 @@ def _section(
         request, conn, placement_id, today=date.today(), ref=ref,
         error=error, pending=pending, refocus=refocus,
         line_values=line_values, line_add_preserve=not its_own,
+        provisional_error=provisional_error, provisional_row=provisional_row,
     )
     html = TEMPLATES.env.get_template("account/_marketing_panel.html").render(
         placement=placement, marketing=context
@@ -657,6 +660,110 @@ def _block_response(
     response.headers["HX-Retarget"] = f"#{block['id']}"
     response.headers["HX-Reswap"] = "outerHTML"
     return response
+
+
+# --- giving a package the line of coverage nobody recorded -------------------
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/marketing/submissions"
+    "/{submission_id}/line",
+    response_class=HTMLResponse,
+)
+async def marketing_assign_line(
+    request: Request, ref: str, placement_id: str, submission_id: str
+) -> HTMLResponse:
+    """Record which line of coverage this package's answer is about.
+
+    A SUBMISSION WITH NO RESPONSE ROWS IS REAL MARKETING THAT HAPPENED, and
+    this is the only thing that can be done to one. The rule is
+    `services.marketing_entry.assign_line`'s — nothing is invented, the six
+    facts the submission recorded move onto the row that will state them, and
+    from that moment `repo.marketing.roll_up_submission` owns the submission's
+    columns exactly as it owns every other answered package's.
+
+    ONE BATCH, so `u` takes it back in one act: the response, and the roll-up
+    the response triggers, are one writer action.
+
+    IT ANSWERS WITH THE WHOLE SECTION, and that is the smallest honest unit
+    here — the only write on this panel of which that is true. The row LEAVES
+    the provisional block and appears in a line-of-coverage block that may not
+    have existed a moment ago, so neither block alone describes what changed;
+    a block answer would swap in one of them and leave the other on the page
+    stating what it stated before.
+    """
+    org, _ = _placement(request, ref, placement_id)
+    conn = _conn(request)
+    submission = _owned_submission(conn, org, placement_id, submission_id)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    # THE PICKER'S OWN OPTIONS ARE THE AUTHORITY, re-queried on the POST from
+    # the one function that also rendered them (`assign_line_options`). Markup
+    # constrains a mouse and nothing else, and a line of coverage that has been
+    # retired since this page rendered must not be storable from a stale tab.
+    field = Field(
+        "line_id", "line of coverage", "select",
+        tuple(marketing_grid.assign_line_options(conn)), required=True,
+    )
+
+    def refused(message: str) -> HTMLResponse:
+        """The section again, with the message BESIDE THE ROW that raised it.
+
+        Named `refused` for the reason `marketing_approach_add`'s is:
+        tests/test_marketing_gates.py G5 walks every literal handed to a
+        `refuse`/`refused` call in this module and fails until somebody says
+        what fix its words name. A refusal passed straight into `_section` as a
+        keyword would be invisible to that walk — which is the gap the D-round
+        already noted about routes/pipeline.py.
+        """
+        return _section(
+            request, ref, org, placement_id,
+            provisional_error=message, provisional_row=submission_id,
+        )
+
+    try:
+        line_id = parse_value(field, raw.get("line_id"))
+    except ValueError as exc:
+        return refused(f"{field.label}: {exc}")
+    if not line_id:
+        return refused(
+            "pick the line of coverage this market's answer is about — it is "
+            "never guessed, because an answer filed against the wrong line is a "
+            "quote attributed to cover nobody quoted"
+        )
+    try:
+        with batches_svc.open_batch(
+            conn, source="web", tool="market_responded",
+            summary=f"line of coverage for {_market_name(conn, submission)}",
+            org_id=org.id,
+        ):
+            marketing_entry.assign_line(conn, submission_id, line_id)
+    except Exception as exc:  # a refused save is a message, never a 500
+        return refused(_house(exc))
+    return _section(request, ref, org, placement_id)
+
+
+def _owned_submission(
+    conn: sqlite3.Connection, org: Any, placement_id: str, submission_id: str
+) -> Any:
+    """BOTH ids in the URL are claims, and both are checked — the same shape
+    `_owned_response` settles for a response id. The same 404 for "no such id"
+    and for "someone else's id", deliberately: telling them apart is how a
+    guessable id becomes a membership oracle."""
+    try:
+        submission = submissions_repo.get(conn, submission_id)
+    except KeyError:
+        raise _not_here("submission", submission_id, org) from None
+    if submission.placement_id != placement_id:
+        raise _not_here("submission", submission_id, org)
+    return submission
+
+
+def _market_name(conn: sqlite3.Connection, submission: Any) -> str:
+    """Who the package went to, for the undo toast. `names_for_any`, because a
+    market deleted from the book after we sent it a submission is still the
+    market we sent it to — the same reading the composer takes."""
+    names = orgs_repo.names_for_any(conn, {submission.market_org_id or ""})
+    return names.get(submission.market_org_id or "", "this market")
 
 
 # --- the line's own expectations, as cells ----------------------------------

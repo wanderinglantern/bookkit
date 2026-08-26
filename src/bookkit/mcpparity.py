@@ -211,11 +211,26 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "wrong for anything else.",
     ),
     ("submission", "update"): (
-        ("market_approach", "market_responded", "submission_sent_on"),
+        (
+            "market_approach", "market_responded", "submission_sent_on",
+            "submission_withdraw", "submission_reinstate",
+        ),
         "status ONLY, and never typed: repo/marketing.roll_up_submission "
         "recomputes it from the response rows after every response write, "
         "because two hand-maintained copies of one fact disagree. "
-        "`withdrawn` is never written and never overwritten by the roll-up. "
+        "`withdrawn` is the ONE STATUS THE ROLL-UP NEVER WRITES and never "
+        "writes over — pulling a package is a decision about the submission, "
+        "not a summary of what a market said — so it needs a verb of its own, "
+        "and submission_withdraw / submission_reinstate are it. They arrived "
+        "on 2026-08-26 because the capability had just lost its only door: the "
+        "Pipeline's Response form used to offer the SUBMISSION statuses and "
+        "was the one writer of `withdrawn` anywhere in the app, and pointing "
+        "that form at market_response (whose vocabulary rightly has no such "
+        "word) left three code paths refusing on a state nothing could enter. "
+        "Both take an exact submission id, from marketing_report's "
+        "`responses[].submission_id` or `submissions_with_no_line`. Reinstate "
+        "puts the package back at what its ROWS say — quoted, not out, where a "
+        "market had already answered. "
         "THE ONE TYPED COLUMN IS `sent_on`, and it is here because a refusal "
         "named a fix that did not exist: repo/marketing._reply_guard tells "
         "the caller to correct the date the submission went out, the web "
@@ -248,14 +263,22 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "candidates instead of minting a sixth spelling.",
     ),
     ("market_response", "create"): (
-        ("market_approach",),
+        ("market_approach", "market_assign_line"),
         "who we went to, on which line, through whom. Carrier OR intermediary "
         "(repo/marketing refuses neither-of-the-two with a sentence, the DB "
         "CHECK holds it underneath), so 'out to RT Specialty, carrier TBD' is "
         "a row rather than a gap. Clearance collisions come back as "
         "`clearance_warnings` and NEVER refuse — the `line-gap` rule again: a "
         "block nobody can override makes a legitimate double approach "
-        "impossible.",
+        "impossible. market_assign_line is the SECOND door and writes no new "
+        "marketing at all: it gives an EXISTING package the line of coverage "
+        "nobody recorded, carrying that submission's own status, premium, "
+        "limit, reply date, expiry and decline reason onto the row that states "
+        "them from then on. It exists because a submission with no response "
+        "rows is real marketing that happened — fourteen placements on the "
+        "seeded book and every one of Grant\'s — and until 2026-08-26 nothing "
+        "on any surface could do anything about it. The ids come from "
+        "marketing_report\'s `submissions_with_no_line` index.",
     ),
     ("market_response", "read"): (
         ("marketing_report",),
@@ -265,7 +288,10 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "reason, the commission and the notes; 'internal' adds them and the "
         "clearance column. A composed row carries no id, so the reply also "
         "returns a `responses` index — without it market_responded would "
-        "have nothing to name.",
+        "have nothing to name. A `submissions_with_no_line` index sits beside "
+        "it for the packages that carry no response row at all: they print in "
+        "the report\'s own \'Line of coverage not recorded\' block, and "
+        "market_assign_line takes their ids.",
     ),
     ("market_response", "update"): (
         ("market_responded",),

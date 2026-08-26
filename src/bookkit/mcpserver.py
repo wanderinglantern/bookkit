@@ -703,6 +703,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         response_ref: str,
         status: str | None = None,
         responded_on: str | None = None,
+        quote_expires_on: str | None = None,
         rate: str | None = None,
         premium: str | None = None,
         fees: str | None = None,
@@ -720,15 +721,38 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         client; `decline_reason_public` takes the controlled public wording and
         is what a client-facing report prints — leave it blank to say nothing,
         which is safer than a sentence anyone will wish they had not written.
-        The submission's own status is a roll-up of its response rows and is
-        never typed: the recomputed value comes back as
-        `submission_status`."""
+        `quote_expires_on` is the day THESE terms die — the date the whole
+        chase queue is keyed on, so a quote recorded without one is on no
+        clock at all; it is refused if it falls before the reply or before the
+        package went out. The submission's own status is a roll-up of its
+        response rows, and so now are its premium, limit, response date,
+        expiry and decline reason: none of them is typed, and the recomputed
+        status comes back as `submission_status`."""
         return _market_responded(
             rw, response_ref, status=status, responded_on=responded_on,
+            quote_expires_on=quote_expires_on,
             rate=rate, premium=premium, fees=fees,
             decline_reason=decline_reason,
             decline_reason_public=decline_reason_public,
         )
+
+    @server.tool()
+    async def market_assign_line(submission_ref: str, line: str) -> dict[str, Any]:
+        """Say which line of coverage a package's answer is about, for a
+        submission that has none recorded. `submission_ref` MUST be an exact id
+        from marketing_report's `submissions_with_no_line` list — those are the
+        packages that went to a market with no response row under them, and
+        they print in the report's own "Line of coverage not recorded" block.
+        `line` is the exact name, abbreviation or id from lines_list; a miss
+        names the nearest lines and writes nothing. NOTHING IS INVENTED: the
+        package's own status, premium, limit, reply date, expiry and decline
+        reason move onto the response row, and from then on the submission's
+        columns are recomputed from its rows like every other package's — which
+        is why `submission_status` comes back, and why it should read the same
+        as it did before. A withdrawn package is refused (going back to that
+        market is a new approach), and so is one that already has an answer on
+        some line — use market_approach to add another line to that one."""
+        return _market_assign_line(rw, submission_ref, line)
 
     @server.tool()
     async def submission_sent_on(response_ref: str, sent_on: str) -> dict[str, Any]:
@@ -744,6 +768,34 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         date that has not happened yet is refused, and so is one later than an
         answer already recorded against the package."""
         return _submission_sent_on(rw, response_ref, sent_on)
+
+    @server.tool()
+    async def submission_withdraw(submission_ref: str) -> dict[str, Any]:
+        """WE PULLED THIS PACKAGE. `submission_ref` is an exact submission id —
+        marketing_report hands them back in `responses[].submission_id` and in
+        `submissions_with_no_line[].submission_id`. It writes ONE column and
+        touches nothing else: what each market already said stays exactly where
+        it is, on its own rows, in the report and in the client's workbook.
+        Withdrawing is a decision about the SUBMISSION rather than a summary of
+        what a market said, which is why no response status says it and why the
+        roll-up never writes it or writes over it. Going back to that market
+        afterwards is a NEW approach (market_approach opens a fresh package;
+        this one is never reused), and `submission_reinstate` puts a package
+        pulled by mistake straight back. Refused on one already withdrawn."""
+        return _submission_withdraw(rw, submission_ref)
+
+    @server.tool()
+    async def submission_reinstate(submission_ref: str) -> dict[str, Any]:
+        """Put a withdrawn package BACK at market, at whatever its response
+        rows say it is — a package pulled while two markets were quoting comes
+        back `quoted`, not `out`, and its premium, limit, reply date, expiry
+        and decline reason are recomputed from those rows in the same act. A
+        package with no rows comes back `out`: asked, nothing back yet.
+        `submission_ref` is an exact submission id (marketing_report's
+        `responses[].submission_id` / `submissions_with_no_line[]`). Refused on
+        a package that is not withdrawn — there is nothing to put back, and
+        what a market said is corrected with market_responded."""
+        return _submission_reinstate(rw, submission_ref)
 
     @server.tool()
     async def set_placement_line(
@@ -2893,7 +2945,7 @@ def serve(db_path: Path | str | None = None) -> None:
 
 # --- marketing: who we went to, and what they said ---------------------------
 #
-# Six tools over repo/lines.py, repo/marketing.py and
+# Seven tools over repo/lines.py, repo/marketing.py and
 # services/marketing_report.py. NO RULE OF THEIR OWN lives here: the near-match
 # warning, the duplicate refusal, the carrier-or-intermediary CHECK, the
 # submission roll-up and the clearance warning are all in repo/, where the web
@@ -3190,6 +3242,7 @@ def _market_responded(
     response_ref: str,
     status: str | None = None,
     responded_on: str | None = None,
+    quote_expires_on: str | None = None,
     rate: str | None = None,
     premium: str | None = None,
     fees: str | None = None,
@@ -3220,6 +3273,15 @@ def _market_responded(
         changes["status"] = status  # repo._validate_status refuses with the list
     if responded_on is not None:
         changes["responded_on"] = _clean_typed("date", "responded_on", responded_on)
+    if quote_expires_on is not None:
+        # THE DATE THE CHASE QUEUE IS KEYED ON. It lived only on the
+        # submission and only the Pipeline's form could write it, so the
+        # assistant could record a quote and had no way to say when it dies —
+        # "built but not accessible", on the field whose absence loses money
+        # rather than time (2026-08-26).
+        changes["quote_expires_on"] = _clean_typed(
+            "date", "quote_expires_on", quote_expires_on
+        )
     if rate is not None:
         changes["rate_micros"] = _rate_micros("rate", rate)
     if premium is not None:
@@ -3235,7 +3297,8 @@ def _market_responded(
     if not changes:
         raise ValueError(
             "market_responded was given nothing to record — pass at least one "
-            "of status, responded_on, rate, premium, fees or a decline reason"
+            "of status, responded_on, quote_expires_on, rate, premium, fees or "
+            "a decline reason"
         )
 
     submission = submissions_repo.get(conn, response.submission_id)
@@ -3275,6 +3338,7 @@ def _market_responded(
         "market": market_name,
         "status": fresh.status,
         "responded_on": fresh.responded_on,
+        "quote_expires_on": fresh.quote_expires_on,
         "submission_id": rolled.id,
         "submission_status": str(
             rolled.status.value if hasattr(rolled.status, "value") else rolled.status
@@ -3353,6 +3417,130 @@ def _submission_sent_on(
         "responses_affected": [r.id for r in moved],
         "batch": batch.ref,
     }
+
+
+def _resolve_submission(conn: sqlite3.Connection, submission_ref: str) -> Any:
+    """A submission by its exact id, with the refusal naming where an id comes
+    from — the shape `_market_assign_line` settled on, lifted out because two
+    verbs now take one.
+
+    A submission has no REF of its own (no `SUB-0004`): it is an internal row a
+    report hands back, which is why every tool that addresses one says "exact
+    id" and names the index it came from rather than pretending there is a
+    human-typable handle.
+    """
+    from .repo import submissions as submissions_repo
+
+    try:
+        return submissions_repo.get(conn, submission_ref)
+    except KeyError:
+        raise ValueError(
+            f"no submission {submission_ref!r} — read marketing_report for that "
+            f"placement and use an id from its `responses` list "
+            f"(`submission_id`) or from `submissions_with_no_line`"
+        ) from None
+
+
+def _submission_org_and_market(
+    conn: sqlite3.Connection, submission: Any
+) -> tuple[str | None, str]:
+    """(the account this package belongs to, the market it went to).
+
+    NAMED DEAD OR ALIVE, so the undo sentence says who the package went to even
+    where that market has since been merged away — the reading the composer
+    takes about the same fact.
+    """
+    from .repo import orgs, placements
+
+    org_id = (
+        placements.get(conn, submission.placement_id).org_id
+        if submission.placement_id
+        else None
+    )
+    named = orgs.names_for_any(conn, {submission.market_org_id or ""})
+    return org_id, named.get(submission.market_org_id or "", "this market")
+
+
+def _submission_withdraw(
+    conn: sqlite3.Connection, submission_ref: str
+) -> dict[str, Any]:
+    """We pulled the package. One column, one batch, nothing cascading.
+
+    IT EXISTS BECAUSE THE CAPABILITY LOST ITS ONLY DOOR. The Pipeline's
+    Response form used to offer the SUBMISSION statuses and was the one writer
+    of `withdrawn` anywhere in the app; pointing that form at `market_response`
+    on 2026-08-26 correctly gave it the response vocabulary, which has no such
+    word — and MCP never had one at all (`_edit_field` refuses kind
+    'submission'). A state three code paths refuse on, that nothing can enter,
+    is a rule with no subject; and a control the browser gets and the assistant
+    does not has shipped to two thirds of its users (CLAUDE.md).
+
+    The rule is `services.marketing_entry.withdraw`'s, shared with the web, so
+    the refusal on an already-withdrawn package is the same sentence on both.
+    """
+    from .services import marketing_entry
+
+    submission = _resolve_submission(conn, submission_ref)
+    org_id, market_name = _submission_org_and_market(conn, submission)
+    with _open_batch(
+        conn,
+        tool="submission_withdraw",
+        org_id=org_id,
+        summary=f"withdrew the package to {market_name}",
+    ) as batch:
+        marketing_entry.withdraw(conn, submission.id)
+    return {
+        "submission_id": submission.id,
+        "market": market_name,
+        "status": "withdrawn",
+        # WHAT STAYS. Naming the count is how a caller can see that pulling a
+        # package did not remove the marketing it recorded.
+        "responses_kept": len(
+            _responses_for(conn, submission.id)
+        ),
+        "batch": batch.ref,
+    }
+
+
+def _submission_reinstate(
+    conn: sqlite3.Connection, submission_ref: str
+) -> dict[str, Any]:
+    """Put a withdrawn package back, at whatever its rows say it is.
+
+    NOT 'out' BY DEFAULT — see `services.marketing_entry.reinstate`, which owns
+    that rule and shares it with the web's Reinstate button. Handing the
+    recomputed status back is how a caller can see which one it took.
+    """
+    from .repo import submissions as submissions_repo
+    from .services import marketing_entry
+
+    submission = _resolve_submission(conn, submission_ref)
+    org_id, market_name = _submission_org_and_market(conn, submission)
+    with _open_batch(
+        conn,
+        tool="submission_reinstate",
+        org_id=org_id,
+        summary=f"put the package to {market_name} back at market",
+    ) as batch:
+        marketing_entry.reinstate(conn, submission.id)
+    fresh = submissions_repo.get(conn, submission.id)
+    return {
+        "submission_id": fresh.id,
+        "market": market_name,
+        "status": str(
+            fresh.status.value if hasattr(fresh.status, "value") else fresh.status
+        ),
+        "quoted_premium": fresh.quoted_premium,
+        "quoted_limit": fresh.quoted_limit,
+        "quote_expires_on": fresh.quote_expires_on,
+        "batch": batch.ref,
+    }
+
+
+def _responses_for(conn: sqlite3.Connection, submission_id: str) -> list[Any]:
+    from .repo import marketing
+
+    return marketing.responses_for_submission(conn, submission_id)
 
 
 def _set_placement_line(
@@ -3556,11 +3744,115 @@ def _marketing_report(
         "responses": [
             {
                 "response_id": r.id,
+                # THE PACKAGE THIS ANSWER HANGS OFF, so a verb addressed to the
+                # SUBMISSION has a ref to take. `submission_withdraw` and
+                # `submission_reinstate` are about the package rather than
+                # about one line's answer, and a submission has no ref of its
+                # own — before this the only submission ids the assistant could
+                # see were the ones with NO answers at all
+                # (`submissions_with_no_line`), so a package could be pulled
+                # only while nobody had replied to it.
+                "submission_id": r.submission_id,
                 "line": vocabulary.get(r.line_id, r.line_id),
                 "market": who.get(r.market_org_id or ""),
                 "via": who.get(r.via_org_id or ""),
                 "status": r.status,
+                # WHEN THESE TERMS DIE. The rendered report above is the
+                # CLIENT's columns and deliberately does not carry it (the
+                # expiry is the broker's chase clock), so without it here the
+                # assistant could WRITE an expiry through `market_responded`
+                # and never read one back — half a link in the chain CLAUDE.md
+                # says a schema change is not done without.
+                "quote_expires_on": r.quote_expires_on,
             }
             for r in responses
         ],
+        # THE PACKAGES WITH NO LINE OF COVERAGE RECORDED, and the ids
+        # `market_assign_line` takes. The rendered report above prints these
+        # rows in their own block (services.marketing_report's provisional
+        # block), and without this index the assistant could READ that a market
+        # was approached and had no way to name the row it would fix — the same
+        # half-a-link the `responses` index exists to close one table up.
+        "submissions_with_no_line": [
+            {
+                "submission_id": row.submission_id,
+                "market": row.market,
+                "status": row.status_key,
+                "sent_on": row.submitted_on,
+                "responded_on": row.responded_on,
+                "quoted_premium": row.premium,
+                "quoted_limit": row.lim,
+                "quote_expires_on": row.quote_expires_on,
+            }
+            for row in report.provisional
+        ],
+    }
+
+
+def _market_assign_line(
+    conn: sqlite3.Connection, submission_ref: str, line: str
+) -> dict[str, Any]:
+    """Give a package the line of coverage nobody recorded.
+
+    NOTHING IS INVENTED: the six facts the submission itself recorded move onto
+    the response row that will state them from now on, and the line is the one
+    thing the caller supplies because it is the one thing not in the data. The
+    rule is services.marketing_entry.assign_line's — the same one the web's
+    assign control uses — so the refusals a withdrawn or already-answered
+    package raises are the same words on both surfaces.
+
+    Exact submission id only, and the refusal names where one comes from:
+    marketing_report's `submissions_with_no_line` index exists so this tool has
+    a ref to take, the way `responses` exists for market_responded.
+    """
+    from .repo import orgs as orgs_repo
+    from .repo import submissions as submissions_repo
+    from .services import marketing_entry
+
+    try:
+        submission = submissions_repo.get(conn, submission_ref)
+    except KeyError:
+        raise ValueError(
+            f"no submission {submission_ref!r} — read marketing_report for that "
+            f"placement and use an id from its `submissions_with_no_line` list"
+        ) from None
+    coverage = _resolve_line(conn, line)
+    placement_id = submission.placement_id
+    if placement_id is None:
+        # An OPPORTUNITY's submission. There is no placement behind it, so
+        # there is no marketing panel and no `placement_line` — and the
+        # Pipeline's own Response form is where an opportunity's answer is
+        # recorded, line and all.
+        raise ValueError(
+            f"submission {submission_ref!r} is on an opportunity rather than a "
+            f"placement — record what the market said on the opportunity's own "
+            f"Response form, which asks for the line of coverage"
+        )
+    placement = _resolve_placement(conn, placement_id)
+    # NAMED DEAD OR ALIVE, so the undo toast says who the package went to even
+    # where that market has since been deleted from the book — the reading the
+    # composer takes about the same fact.
+    named = orgs_repo.names_for_any(conn, {submission.market_org_id or ""})
+    market_name = named.get(submission.market_org_id or "", "this market")
+    with _open_batch(
+        conn,
+        tool="market_assign_line",
+        org_id=placement.org_id,
+        summary=f"{coverage.name} for the package to {market_name}",
+    ) as batch:
+        response = marketing_entry.assign_line(conn, submission.id, coverage.id)
+        _provenance(conn, "market_response", response.id)
+    rolled = submissions_repo.get(conn, submission.id)
+    return {
+        "response_id": response.id,
+        "submission_id": submission.id,
+        "line": coverage.name,
+        "status": response.status,
+        # THE PACKAGE, RECOMPUTED FROM ITS ONE ROW. It should read exactly as
+        # it read before — every status maps to one that rolls back up to
+        # itself — and handing it back is how a caller can see that it did.
+        "submission_status": str(rolled.status),
+        "quoted_premium": rolled.quoted_premium,
+        "quoted_limit": rolled.quoted_limit,
+        "batch": batch.ref,
     }

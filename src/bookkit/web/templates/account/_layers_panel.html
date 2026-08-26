@@ -22,10 +22,29 @@
       <span class="program-ref mono">{{ placement.ref }}{% if file_name %} · {{ file_name }}{% endif %}</span>
       {{ placement_cells.status | safe }}
       <div class="program-actions">
-        <button type="button" class="btn"
-                hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/submissions/new"
-                hx-target="#program-{{ placement.id }} .form-host"
-                hx-swap="innerHTML">Submission</button>
+        {# TWO CONTROLS MEANT "WE SENT THIS MARKET A SUBMISSION" and they wrote
+           to two different homes (A4, Grant 2026-08-26). This one opened
+           `submission_form` and created a package with NO LINE OF COVERAGE and
+           no market response — which is exactly the state that made the
+           Marketing panel print "No line of coverage on this placement is
+           being marketed yet" over fourteen seeded placements and download an
+           empty workbook. It was the machine that manufactured the defect.
+
+           It is an ANCHOR to the Marketing section now, where the add-market
+           row records the same approach against the line of coverage it is
+           about — the one home for that write
+           (`services.marketing_entry.approach`, shared with MCP's
+           `market_approach`). The affordance stays where a broker looks for
+           it; what is gone is the second write.
+
+           WHAT THAT COSTS, named rather than discovered: the old form also
+           took the underwriter and a note about the package, and the
+           add-market row has no field for either. They are the submission's
+           facts, not the answer's, and they want to land on that row — which
+           is a decision about that control, not a reason to keep a second one
+           that files marketing under no line of coverage. #}
+        <a class="btn" href="#marketing-{{ placement.id }}"
+           title="record an approach where it is reported — on the line of coverage it is about">Submission</a>
         {# NOT in the export strip below, and the comment on the open-items
            anchor in _programs_panel.html says why: that strip is gated on a
            linked program file, and an account with no file could never reach

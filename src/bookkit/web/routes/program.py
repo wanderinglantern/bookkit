@@ -29,7 +29,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ... import db, sync, towerfields
-from ...forms.entities import apply_placement, apply_submission, placement_form, submission_form
+from ...forms.entities import apply_placement, placement_form
 from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS, PLACEMENT_FIELDS
 from ...forms.spec import Field, checked_option, initial_text, parse_value
 from ...money import format_cents, format_cents_compact
@@ -3599,57 +3599,30 @@ async def new_program_page(request: Request, ref: str) -> Any:
     return TEMPLATES.TemplateResponse(request, "account/new_program.html", context)
 
 
-@router.get(
-    "/accounts/{ref}/program/{placement_id}/submissions/new",
-    response_class=HTMLResponse,
-)
-def submission_new_form(request: Request, ref: str, placement_id: str) -> HTMLResponse:
-    """The TUI's `s`, webside: send this program to a market. The whole-record
-    submission_form (market select, optional underwriter, sent date, notes)
-    renders into the section's form host."""
-    org = _org(request, ref)
-    conn = _conn(request)
-    _owned(conn, org, "placement", placement_id, placements_repo.get)
-    from ...repo import orgs as orgs_repo
-
-    if not orgs_repo.list_orgs(conn, kind="market"):
-        return _panel_refusal(
-            request, ref, org, placement_id,
-            "no markets on file — create one in the terminal app "
-            "(m, then a) before sending a submission",
-        )
-    spec = submission_form(conn)
-    action = f"/accounts/{ref}/program/{placement_id}/submissions"
-    return HTMLResponse(render_form(request, spec, action))
-
-
-@router.post(
-    "/accounts/{ref}/program/{placement_id}/submissions", response_class=HTMLResponse
-)
-async def submission_create(
-    request: Request, ref: str, placement_id: str
-) -> HTMLResponse:
-    """Success answers HX-Redirect to the PIPELINE tab, where the submission
-    is actually visible — landing back on a tab that shows no trace of what
-    was just made is the dishonest option. Refusals re-render the form with
-    the input intact via the shared _save seam."""
-    from fastapi.responses import Response
-
-    org = _org(request, ref)
-    conn = _conn(request)
-    _owned(conn, org, "placement", placement_id, placements_repo.get)
-    spec = submission_form(conn)
-    raw = {k: str(v) for k, v in (await request.form()).items()}
-    action = f"/accounts/{ref}/program/{placement_id}/submissions"
-    refused = _save(
-        request, org, spec, action, raw,
-        lambda values: apply_submission(conn, values, placement_id=placement_id),
-    )
-    if refused is not None:
-        return refused
-    return Response(
-        status_code=204, headers={"HX-Redirect": f"/accounts/{ref}/pipeline"}
-    )  # type: ignore[return-value]
+# NO WEB ROUTE CREATES A SUBMISSION WITH NO LINE OF COVERAGE ANY MORE
+# (A4, Grant 2026-08-26).
+#
+# `GET/POST .../submissions` rendered `submission_form` into this section's form
+# host and wrote a bare `submission` row — a package addressed to a market, with
+# no `market_response` under it and therefore no line of coverage anywhere. That
+# is the second of the two controls that both meant "we sent this market a
+# submission", and it is the one that manufactured the defect the Marketing
+# panel then had to survive: fourteen seeded placements whose panel said "No
+# line of coverage on this placement is being marketed yet" over live
+# submissions, two of them quoted at $1.4M, and a client workbook with one
+# header row in it.
+#
+# The band's Submission button is an anchor to the Marketing section now, where
+# the add-market row records the same approach against the line of coverage it
+# is about, through the one home for that write
+# (`services.marketing_entry.approach`, shared with MCP's `market_approach`).
+# Marketing already recorded with no line of coverage is not stranded: it
+# renders in the report's provisional block and each row can be given its line
+# there (`marketing_assign_line`).
+#
+# `forms.entities.submission_form` / `apply_submission` are NOT deleted: the TUI
+# is retired but still green and `s` is still bound to them. web/parity.py's
+# `new_submission` entry says what the web does instead.
 
 
 @router.get(

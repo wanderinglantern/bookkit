@@ -61,13 +61,28 @@
                 <td>
                   {# Response re-opens the same form the row was recorded
                      with — a quote becomes bound (which offers the layers)
-                     or declined from here, exactly the TUI's `e`. #}
+                     or declined from here, exactly the TUI's `e`. It asks
+                     WHICH LINE OF COVERAGE the answer is about and writes a
+                     `market_response`: the premium, limit, dates and reason
+                     on this row are rolled up from those rows, not typed
+                     here a second time (2026-08-26). #}
                   <button type="button" class="row-action-btn"
                           hx-get="/accounts/{{ header.org.ref }}/pipeline/submissions/{{ row.submission_id }}/response"
                           hx-target="#pipeline-form-host" hx-swap="innerHTML">Response</button>
                   <button type="button" class="row-action-btn"
                           hx-get="/accounts/{{ header.org.ref }}/pipeline/submissions/{{ row.submission_id }}/subjectivities/new"
                           hx-target="#pipeline-form-host" hx-swap="innerHTML">+ Subjectivity</button>
+                  {# WITHDRAW IS ON BOTH ROWS, and this is the one it is most
+                     often wanted on: a quote we decided not to pursue is a
+                     package we pulled, and the control has to be where the
+                     broker is looking at it. The other queue's row carries the
+                     same button — a package is seen in exactly two places on
+                     this tab, "quotes in hand" (status='quoted') and "out at
+                     market" (status='out'), and a control on only one of them
+                     is the affordance-left-behind shape CLAUDE.md names. #}
+                  <button type="button" class="row-action-btn"
+                          hx-get="/accounts/{{ header.org.ref }}/pipeline/submissions/{{ row.submission_id }}/withdraw"
+                          hx-target="#pipeline-form-host" hx-swap="innerHTML">Withdraw</button>
                 </td>
               </tr>
             {% endfor %}
@@ -156,6 +171,21 @@
                   <button type="button" class="row-action-btn"
                           hx-get="/accounts/{{ header.org.ref }}/pipeline/submissions/{{ row.id }}/response"
                           hx-target="#pipeline-form-host" hx-swap="innerHTML">Response</button>
+                  {# WE PULLED THIS PACKAGE — a decision about the SUBMISSION,
+                     which is why it is a control of its own and not an outcome
+                     on the Response form beside it. It was one until
+                     2026-08-26: that form's picker offered the submission
+                     statuses and was the only writer of `withdrawn` on any
+                     surface, so pointing the form at `market_response` (which
+                     has no such word, because no market said it) left the
+                     capability with no door at all.
+
+                     A confirm STEP, not an hx-confirm: the browser's confirm()
+                     shows no plan, and the plan is what stays reported and
+                     where the row reappears. #}
+                  <button type="button" class="row-action-btn"
+                          hx-get="/accounts/{{ header.org.ref }}/pipeline/submissions/{{ row.id }}/withdraw"
+                          hx-target="#pipeline-form-host" hx-swap="innerHTML">Withdraw</button>
                 </td>
               </tr>
             {% endfor %}
@@ -165,6 +195,41 @@
     {% else %}
       <div class="panel-empty">
         <p>nothing out at market</p>
+      </div>
+    {% endif %}
+
+    {% if withdrawn_rows %}
+      {# THE PACKAGES WE PULLED. They are in no queue on this tab — "out at
+         market" is status='out' and "quotes in hand" is status='quoted' — so
+         without this a withdrawn package left the Pipeline entirely and took
+         the only control that could put it back with it. Same shape and same
+         reason as the team panel's Retired list, and Reinstate is its
+         Reactivate: one column back to whatever the response rows say, no
+         confirm, revertible from Recent changes.
+
+         Rendered only when there are any: an empty "Withdrawn" heading on
+         every account would be chrome describing a state nobody is in. #}
+      <h3 class="pipeline-withdrawn-label">Withdrawn</h3>
+      <div class="table-scroll">
+        <table class="rows">
+          <thead>
+            <tr><th>Sent</th><th>Market</th><th>Program</th><th></th></tr>
+          </thead>
+          <tbody>
+            {% for row in withdrawn_rows %}
+              <tr class="pipeline-withdrawn-row">
+                <td class="num">{{ row.sent_on }}</td>
+                <td>{{ row.market }}</td>
+                <td>{{ row.about }}</td>
+                <td>
+                  <button type="button" class="row-action-btn"
+                          hx-post="/accounts/{{ header.org.ref }}/pipeline/submissions/{{ row.id }}/reinstate"
+                          hx-target="#pipeline-form-host" hx-swap="innerHTML">Reinstate</button>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </div>
     {% endif %}
   </div>

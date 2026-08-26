@@ -12,6 +12,7 @@ from typing import Any
 
 from ..models import (
     CONTACT_ROLES,
+    MARKET_RESPONSE_STATUS_LABELS,
     NEED_STATUSES,
     PROJECT_STATUSES,
     RFI_ITEM_KINDS,
@@ -24,6 +25,7 @@ from ..models import (
     Contact,
     Interaction,
     InteractionType,
+    MarketResponse,
     MarketType,
     Opportunity,
     Org,
@@ -42,6 +44,7 @@ from ..models import (
     TeamAssignment,
     TeamMember,
 )
+from ..money import format_cents
 from ..repo import (
     assignees,
     contacts,
@@ -53,11 +56,14 @@ from ..repo import (
     team,
     vocab,
 )
+from ..repo import lines as lines_repo
+from ..repo import marketing as marketing_repo
 from ..repo import projects as projects_repo
 from ..repo import rfi as rfi_repo
 from ..repo import tasks as tasks_repo
-from ..services import consistency
-from .spec import Field, FormSpec, dropped
+from ..services import consistency, marketing_entry
+from .inline import MARKET_RESPONSE_FIELDS
+from .spec import BatchSpec, Field, FormNote, FormSpec, dropped
 
 # SELECT OPTIONS ARE READ FROM THE ENUM, NEVER RESTATED (DRY, CLAUDE.md).
 # These five were hand-typed copies of StrEnums that models.py already
@@ -435,21 +441,218 @@ def apply_submission(
     )
 
 
+_RESPONSE_CELLS: dict[str, Field] = {f.key: f for f in MARKET_RESPONSE_FIELDS}
+"""The response's own fields, BORROWED rather than re-declared.
+
+DRY at its plainest: `status` here and `status` on the Marketing panel are one
+question with one vocabulary, one label and one parser. They were two — this
+form offered the SUBMISSION statuses and the panel the response's — and the
+two pickers answered the same question with different words.
+"""
+
+# What the Pipeline's Response form asks, in the order a quote letter is read.
+# Every key is a `market_response` COLUMN NAME, so the parsed values pass
+# straight to the writer with no translation table to drift.
+_RESPONSE_KEYS: tuple[str, ...] = (
+    "status", "responded_on", "quote_expires_on", "premium", "lim",
+    "decline_reason",
+)
+
+
+def response_line_options(
+    conn: sqlite3.Connection, existing: Submission
+) -> tuple[tuple[str, str], ...]:
+    """WHICH LINES OF COVERAGE THIS PACKAGE CAN BE ANSWERED ON.
+
+    A market is approached ONCE with a whole package and answers LINE BY LINE
+    (migration 015's header), so the answer being recorded has to say which
+    line it is about. NEVER GUESSED, even where there is only one: a response
+    silently filed against whichever line sorted first is a quote attributed
+    to cover nobody quoted.
+
+    The sources are different on purpose:
+
+    * A PLACEMENT THAT HAS SAID WHAT IT IS MARKETING is answered on those
+      lines (`placement_line`, plus any line a response already named — a line
+      marketed without an expectation row is still being marketed, which is
+      the same union `marketing_report.compose` builds its blocks from).
+      Offering a line outside that set would open a block the placement never
+      said it was placing, and the Marketing panel has its own control for
+      that, behind a near-match guard this form has no business repeating.
+    * A PLACEMENT THAT HAS SAID NOTHING gets the book's living vocabulary, and
+      recording the answer starts marketing the line picked (`apply_response`
+      → `marketing_entry.start_marketing`, in the same batch). NOT a
+      refinement: the fallback IS the ordinary case. Not one `placement_line`
+      row exists on the seeded book, so the declared-set rule alone refused
+      every one of the forty submissions in it — a capability that worked
+      before the responses moved onto their own rows, refused on the daily
+      driver with a sentence that also contradicted the four live markets
+      printed above it (2026-08-26). A broker saying "this quote is for the
+      GL" is declaring the line, which is the same move the panel's own assign
+      control makes from the same vocabulary (`assign_line_options`).
+    * AN OPPORTUNITY has declared nothing and has nowhere to declare it —
+      there is no `placement_line` table for it and no marketing panel — so
+      the book's living vocabulary is the only knowable set.
+
+    Constrained either way: every option is storable, and the wide list
+    narrows to what the placement is marketing the moment it is marketing
+    anything. Empty now means the BOOK carries no line of coverage at all, and
+    the caller must say so in words: an empty picker is a form nobody can save.
+    """
+    named = {line.id: line.name for line in lines_repo.all_lines(conn)}
+    answered = [r.line_id for r in marketing_repo.responses_for_submission(conn, existing.id)]
+    if existing.placement_id is None:
+        offered = list(named)
+    else:
+        offered = [
+            pl.line_id
+            for pl in marketing_repo.placement_lines(conn, existing.placement_id)
+        ]
+        if not offered and not answered:
+            offered = list(named)
+    ordered: list[str] = []
+    for line_id in [*offered, *answered]:
+        if line_id not in ordered:
+            ordered.append(line_id)
+    def label(line_id: str) -> str:
+        # A RETIRED LINE STILL HAS A NAME. `all_lines` is the living
+        # vocabulary; a line this package was already answered on may have
+        # been retired since, and the option has to be nameable or the row
+        # becomes uneditable from here. Falling back to the id keeps the
+        # option pickable rather than crashing the form on a row a foreign key
+        # says cannot exist.
+        retired = lines_repo.get_any(conn, line_id)
+        return named.get(line_id) or (retired.name if retired else line_id)
+
+    return tuple((label(line_id), line_id) for line_id in ordered)
+
+
+# What a line already answered is called in the picker, so choosing it cannot
+# read as recording something new. One string, because the label and the note
+# below have to agree about what saving over an answered line DOES.
+_CORRECTS = "answered — saving corrects it"
+
+
+def response_already_said(
+    conn: sqlite3.Connection, existing: Submission
+) -> tuple[dict[str, str], FormNote | None]:
+    """({line_id: one line of prose}, the note the form shows above its fields)
+    — WHAT THIS PACKAGE HAS ALREADY ANSWERED.
+
+    THE FORM RE-OPENED COMPLETELY BLANK, and that is what made one wrong pick
+    expensive. Nothing on it named the lines this package had answered, no
+    option was selected, no value was shown, and `line_id` carried no initial —
+    so re-picking was compulsory on every re-open, and picking Property while
+    correcting a Chubb GL premium wrote a SECOND response: the client's
+    workbook then said Chubb quoted both lines at $1.2M, which is impossible on
+    a form that overwrites (r6 blocker 3, 2026-08-26). What was missing was not
+    a guard. It was the state.
+
+    READ-ONLY PROSE, never a prefill (`FormNote` says why the distinction is
+    the point): every amount below is shown as text and typed into nothing, so
+    the form still asks for each figure empty. data-entry-integrity §8 refuses
+    a pre-filled figure BECAUSE people wave prefills through; text that cannot
+    be saved has no such failure mode, and hiding what the book already holds
+    is not what that rule asks for.
+
+    A RETIRED LINE STILL HAS A NAME (`lines_repo.get_any`, the same reading
+    `response_line_options` takes): a package answered on a line retired since
+    must still be describable here, or the one screen that could correct it
+    prints an id.
+    """
+    responses = marketing_repo.responses_for_submission(conn, existing.id)
+    if not responses:
+        return {}, None
+    named = {line.id: line.name for line in lines_repo.all_lines(conn)}
+    said: dict[str, str] = {}
+    for r in responses:
+        retired = lines_repo.get_any(conn, r.line_id)
+        line_name = named.get(r.line_id) or (retired.name if retired else r.line_id)
+        parts = [MARKET_RESPONSE_STATUS_LABELS.get(r.status, r.status)]
+        if r.responded_on:
+            parts.append(f"replied {r.responded_on}")
+        # NULL IS NOT ZERO and is not printed as one: a figure nobody has
+        # given says nothing here rather than "$0", which is a price.
+        if r.premium is not None:
+            parts.append(f"premium {format_cents(r.premium)}")
+        if r.lim is not None:
+            parts.append(f"limit {format_cents(r.lim)}")
+        if r.quote_expires_on:
+            parts.append(f"expires {r.quote_expires_on}")
+        # A SECOND ANSWER ON ONE LINE is a real row shape (two bands of one
+        # tower) and `apply_response` refuses to guess between them. Joining
+        # rather than overwriting keeps the note honest about that.
+        line = f"{line_name} — {' · '.join(parts)}"
+        said[r.line_id] = f"{said[r.line_id]}; {line}" if r.line_id in said else line
+    return said, FormNote(
+        "What this package has already answered",
+        tuple(said.values()),
+    )
+
+
 def response_form(existing: Submission, conn: sqlite3.Connection) -> FormSpec:
-    # NB: no `status` initial — the current value is 'out', which is not a
-    # legal *outcome*, and Select rejects a value missing from its options.
+    """What a market said, recorded where the Pipeline shows it — onto a
+    `market_response` row, which is the ONE home for it.
+
+    IT USED TO WRITE THE SUBMISSION'S OWN COLUMNS, and that was the defect:
+    `quoted_premium`, `quoted_limit`, `response_on`, `quote_expires_on` and
+    `decline_reason` had a second home on `market_response`, so a premium
+    entered here was invisible to the Marketing panel and one entered on both
+    disagreed four inches apart with nothing saying the other existed (Grant,
+    2026-08-26). The submission is now DERIVED from its rows
+    (`repo.marketing.roll_up_submission`), exactly as its status already was,
+    and the columns are a cache of them.
+
+    NOTHING IS PRE-FILLED, and that is the rule rather than an omission: every
+    figure on this form comes off a quote letter, and people do not check
+    prefills (data-entry-integrity §8). What is left blank is not written, so
+    re-opening the form to correct one figure cannot silently restate the
+    others — and `line of coverage` carries no initial either, because a
+    pre-selected line is how an answer about the Auto lands on the GL.
+
+    `underwriter_contact_id` and `notes` stay the SUBMISSION's: they are facts
+    about the package and about who handled it, not about what one line was
+    quoted at, so they are not a second copy of anything.
+
+    WHAT THE MOVE DROPPED, named here so it is not discovered as a mystery:
+    `withdrawn`. The outcome picker used to offer the SUBMISSION statuses and
+    was the only control on any surface that could withdraw a package; it now
+    offers the market-response vocabulary, which has no such word — and
+    rightly, because withdrawing is a decision about the submission (we pulled
+    it) rather than a summary of what a market said, which is exactly why
+    `roll_up_submission` never writes it and never writes over it. It has a
+    control of its own now, on the submission's own row on this tab, and
+    `submission_withdraw` / `submission_reinstate` on MCP.
+
+    AND WHAT IT SHOWS, which is the other half of "nothing is pre-filled".
+    Re-opened, this form used to be BLANK on a package two markets had already
+    answered — nothing naming the lines, no option selected, and `line_id`
+    carrying no initial, so re-picking was compulsory every time and one wrong
+    pick wrote a SECOND response rather than correcting the first. It now shows
+    what the package has answered (`response_already_said`, read-only prose,
+    never an input), the picker says which lines saving would CORRECT, and
+    where exactly one line has been answered that line arrives SELECTED — a
+    default the reader can see, on the choice whose default is the safe one,
+    because correcting the only answer this package has is what re-opening this
+    form nearly always means. Every FIGURE is still empty, which is the rule
+    data-entry-integrity §8 actually states.
+    """
+    said, note = response_already_said(conn, existing)
+    options = tuple(
+        (f"{label} ({_CORRECTS})" if line_id in said else label, line_id)
+        for label, line_id in response_line_options(conn, existing)
+    )
+    # ONE ANSWERED LINE, AND ONLY ONE. Two answered lines cannot be guessed
+    # between, and none means there is nothing to correct — in both cases the
+    # question is genuinely open and the blank option is the honest answer.
+    initial = {"line_id": next(iter(said))} if len(said) == 1 else {}
     return FormSpec(
         "record market response",
         [
-            Field("status", "outcome", "select", _RESPONSE, required=True),
-            Field("response_on", "response date", "date"),
-            Field("quoted_premium", "quoted premium", "money"),
-            Field("quoted_limit", "quoted limit", "money"),
-            # THE point of this whole field: a quote lapses. Without it the
-            # row leaves the past-SLA queue on the day it is answered and
-            # enters no queue anywhere, and the three weeks of comparing
-            # terms happen off the tool entirely.
-            Field("quote_expires_on", "quote expires", "date"),
+            Field(
+                "line_id", "line of coverage", "select", options, required=True,
+            ),
+            *(_RESPONSE_CELLS[key] for key in _RESPONSE_KEYS),
             # asked here as well as on the submission because this is usually
             # the first moment you know it: the answer arrives from a person,
             # not from the inbox you sent it to.
@@ -457,38 +660,192 @@ def response_form(existing: Submission, conn: sqlite3.Connection) -> FormSpec:
                 "underwriter_contact_id", "underwriter", "select",
                 underwriter_options(conn), optional_select=True,
             ),
-            Field("decline_reason", "decline reason"),
-            Field("notes", "notes", "textarea"),
+            Field("notes", "notes about the package", "textarea"),
         ],
-        initial={
-            "response_on": existing.response_on or "today",
-            "quoted_premium": existing.quoted_premium,
-            "quoted_limit": existing.quoted_limit,
-            "quote_expires_on": existing.quote_expires_on,
-            "underwriter_contact_id": existing.underwriter_contact_id,
-            "decline_reason": existing.decline_reason,
-            "notes": existing.notes,
-        },
+        initial=initial,
+        note=note,
     )
+
+
+def response_batch(conn: sqlite3.Connection, existing: Submission) -> BatchSpec:
+    """The undo unit this save belongs to, and THE SENTENCE THE CHANGE LIST
+    PRINTS FOR IT.
+
+    EVERY OTHER WRITE ON THIS FEATURE NAMES ITS SUBJECT — "started marketing
+    General Liability", "set Premium on Travelers", "line of coverage for
+    Chubb" — and this one did not. Recording Chubb on the GL and then filing a
+    second answer against Property by mistake left two entries in the account's
+    Recent changes rail both reading `record market response`, same market,
+    same minute: nothing on the one surface that can undo the mistake said
+    which of them to undo (r6 blocker 3, 2026-08-26).
+
+    THIS IS THE WAY BACK, and it is deliberately the way back rather than a
+    delete. The erroneous act is not "a response exists" — it is "we started
+    marketing Property AND recorded an answer on it", both in one batch. A
+    delete on the response row would reverse half of it and leave the placement
+    still declaring it markets Property; Revert reverses the act. It also
+    honours the decision this book already recorded against a market_response
+    delete verb (`mcpparity`: "a market we approached and then removed is
+    history being rewritten"), which a new delete control would have quietly
+    reversed. What was missing was never the control — the account's Recent
+    changes rail sits on this very tab — it was the name.
+
+    THE TOOL SLUG IS UNCHANGED (`record_market_response`, what
+    `BatchSpec.for_title` derives from this form's title on the retired TUI):
+    the changes list GROUPS by tool, and correcting a quote is the same control
+    as recording one. What differs is what happened, which is the sentence's
+    job — and it can only be known once the line is picked, which is why this
+    is computed from the posted values rather than from the title.
+    """
+    named = orgs.names_for_any(conn, {existing.market_org_id or ""})
+    market = named.get(existing.market_org_id or "", "a market")
+
+    def sentence(posted: dict[str, Any]) -> str:
+        line_id = str(posted.get("line_id") or "")
+        if not line_id:
+            # apply_response is about to refuse and nothing will be written;
+            # the batch still needs a sentence, and a guessed line is worse
+            # than none.
+            return f"recorded what {market} said"
+        line = lines_repo.get_any(conn, line_id)
+        answered = any(
+            r.line_id == line_id
+            for r in marketing_repo.responses_for_submission(conn, existing.id)
+        )
+        verb = "corrected" if answered else "recorded"
+        return f"{verb} what {market} said about {line.name if line else line_id}"
+
+    return BatchSpec(tool="record_market_response", summary=sentence)
+
+
+# The two fields on that form that belong to the SUBMISSION rather than to the
+# line's answer. Named once, so the split cannot be spelled differently in the
+# two places it is made.
+_SUBMISSION_OWNED: tuple[str, ...] = ("underwriter_contact_id", "notes")
+
+
+def _who_was_asked(
+    conn: sqlite3.Connection, submission: Submission
+) -> dict[str, str | None]:
+    """WHOSE PAPER, OR WHO CARRIED THE PACKAGE — `marketing_entry`'s rule, read
+    from where it lives.
+
+    It was written here, and then a second writer needed it: `assign_line`
+    creates the first response on a line for a package that was never given
+    one, and the question "was this addressed to the carrier or to the
+    wholesaler" is exactly the same question with exactly the same answer. A
+    rule stated beside one of two writers is the rule the other writes past
+    (CLAUDE.md, DRY), and the way this one would have differed is a wholesaler
+    landing in the Market column of a client's workbook as the carrier.
+    """
+    return marketing_entry.who_was_asked(conn, submission)
+
+
+def _carried_here(
+    submission: Submission,
+    already: list[MarketResponse],
+    typed: dict[str, Any],
+) -> dict[str, Any]:
+    """The submission's own figures, carried onto the FIRST response this
+    package gets — and nothing carried onto any later one.
+
+    THE SAME ACT THROUGH TWO DOORS MUST NOT HAVE TWO OUTCOMES. The panel's
+    `assign a line` and this form both turn "a package that recorded a $1.4M
+    quote" into "a row that states it", and only one of them was carrying the
+    figures: recording a corrected reply date here made the rows the authority
+    for all six columns while the row said nothing about a premium, so a
+    $1.4M quote and its $10M limit both went to NULL — on the daily driver's
+    Response button, on 30 of the 40 seeded submissions and on every one of
+    Grant's, with nothing on the form saying so (r6 A/B, 2026-08-26). The rule
+    itself is `marketing_entry.carried_figures`, stated once beside the door
+    that already held it.
+
+    ONLY WHILE THIS PACKAGE HAS NO ROWS AT ALL. Once one response exists the
+    submission's columns ARE a cache of the rows (`roll_up_submission`), and
+    copying a cache forward onto a second row would re-open the second home the
+    roll-up was built to close — it would put the GL's premium on the Property
+    row. That is the same precondition `assign_line` refuses outside of, read
+    from the other side.
+
+    WHAT THE BROKER TYPED WINS, always: `typed` is what the market has just
+    said about this line, and a stored figure written over the top of it would
+    be this function inventing a disagreement.
+    """
+    if already:
+        return {}
+    return marketing_entry.carried_figures(submission, restated=typed)
 
 
 def apply_response(
     conn: sqlite3.Connection, submission_id: str, values: dict[str, Any]
 ) -> Submission:
+    """Create or correct the ONE response this package has on that line, and
+    let the submission be recomputed from its rows.
+
+    `services.marketing_entry.responded` is the home an EDIT goes through —
+    the same one the Marketing panel's cells and MCP's `market_responded`
+    use — so a date that witnesses an act is judged against a today here too.
+    A CREATE goes to `repo.marketing.create_response`, which owns the reply
+    guard, the expiry guard and the roll-up.
+
+    The market is the SUBMISSION's, never asked again: the package went to
+    that market and this is its answer. Re-scoping an approach onto a
+    different carrier is not a correction (CLAUDE.md's team-assignment rule),
+    which is why the panel's cells leave the carrier alone as well.
+
+    A FIRST ANSWER ON A LINE THE PLACEMENT HAD NOT DECLARED DECLARES IT
+    (`marketing_entry.start_marketing`). The line is still ASKED and never
+    guessed — `response_line_options` says where the offered set comes from —
+    but a broker who has just said which line a $1.4M quote is for has told
+    the placement what it is marketing, and making them go and say it again on
+    another tab before the answer can be recorded is how forty live
+    submissions ended up with no way to record one at all.
+
+    Two refusals, and each names a fix that exists. There is nothing here to
+    guess with.
+    """
     core = dropped(values)
-    # sent_on is not on this form and cannot be — it belongs to the submission
-    # already out — so the stored row is the only place to read it from, and
-    # the two dates that ARE on the form have to be compared against it. A
-    # quote expiry typed with last year's year is the failure this catches:
-    # nothing objected, and the row landed straight in the expired bucket
-    # while the quote was live.
-    existing = submissions.get(conn, submission_id)
-    consistency.check_submission_dates(
-        existing.sent_on,
-        core.get("response_on", existing.response_on),
-        core.get("quote_expires_on", existing.quote_expires_on),
-    )
-    return submissions.update(conn, submission_id, **core)
+    line_id = core.pop("line_id", None)
+    sub_fields = {k: core.pop(k) for k in _SUBMISSION_OWNED if k in core}
+    if not line_id:
+        raise ValueError(
+            "a market answers a LINE OF COVERAGE, not a package — pick the one "
+            "this answer is about. If the line is not on the list, open it "
+            "under Marketing on the Program tab first."
+        )
+    submission = submissions.get(conn, submission_id)
+    already = marketing_repo.responses_for_submission(conn, submission_id)
+    on_this_line = [r for r in already if r.line_id == line_id]
+    if len(on_this_line) > 1:
+        # A TOWER MARKETED AT TWO ATTACHMENTS. The same carrier answering one
+        # line twice is a real row shape (`market_response.attach`), and this
+        # form has no attachment field to tell them apart — so it refuses
+        # rather than picking one, and names the surface where each is edited
+        # where it sits.
+        raise ValueError(
+            "this package has more than one answer recorded on that line of "
+            "coverage — they are different bands of the same tower and this "
+            "form cannot say which you mean. Correct them where they sit, "
+            "under Marketing on the Program tab."
+        )
+    if core:
+        if on_this_line:
+            marketing_entry.responded(conn, on_this_line[0].id, core)
+        else:
+            # ANSWERING A LINE IS MARKETING IT, and the declaration is part of
+            # the same act — one batch, reverted as one thing.
+            marketing_entry.start_marketing(conn, submission.placement_id, line_id)
+            marketing_repo.create_response(
+                conn, submission_id, line_id,
+                **_who_was_asked(conn, submission),
+                **_carried_here(submission, already, core),
+                **core,
+            )
+    if sub_fields:
+        submissions.update(conn, submission_id, **sub_fields)
+    # The rolled-up parent: status, premium, limit, response date, expiry and
+    # decline reason all recomputed from the rows by the writers above.
+    return submissions.get(conn, submission_id)
 
 
 # --- subjectivities -----------------------------------------------------------

@@ -161,9 +161,14 @@ UNMAPPED_BUILDERS: dict[str, str] = {
         "something a derivation should make on its own."
     ),
     "response_form": (
-        "Recording a market's answer writes status, response_on, premium and "
-        "limit together — a transition, not a field edit. Same missing "
-        "resolver as submission_form."
+        "Recording a market's answer is `market_responded`, which reaches the "
+        "same row this form now writes (a `market_response`, since "
+        "2026-08-26 — the submission's own quote columns are a roll-up of "
+        "those rows and are typed by nobody). What this FORM adds on top is "
+        "choosing the line of coverage for a package that has no response on "
+        "it yet, which on MCP is `market_approach`; the two submission-owned "
+        "fields it also carries — the underwriter and the package notes — "
+        "have no tool, for the same missing resolver as submission_form."
     ),
     "document_form": (
         "A document is a path on Grant's disk. The assistant cannot verify "

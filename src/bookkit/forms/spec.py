@@ -74,11 +74,40 @@ class Field:
                 object.__setattr__(self, "max_value", bounds[1])
 
 
+@dataclass(frozen=True)
+class FormNote:
+    """WHAT THE RECORD ALREADY SAYS, shown above the fields and typed into
+    none of them.
+
+    A form that can CORRECT something has to show what it would be correcting,
+    or the only way to find out is to save and look. The Pipeline's Response
+    form re-opened completely blank on a package two markets had already
+    answered — no selected option, no value, nothing naming the lines — so
+    re-picking the line of coverage was compulsory on every re-open, and one
+    wrong pick printed a premium no market quoted onto the client's workbook
+    (r6 blocker 3, 2026-08-26).
+
+    IT IS NOT A PREFILL, and the distinction is the whole reason it is a
+    separate thing from `initial`. data-entry-integrity §8 refuses to pre-fill
+    a figure that comes off a document, because people do not check prefills —
+    and it refuses that by making the field visibly EMPTY, not by hiding what
+    the book already holds. Read-only text cannot be saved by being ignored.
+
+    `items` are one line each and are already prose; nothing here is a field,
+    a value or a control.
+    """
+
+    title: str
+    items: tuple[str, ...] = ()
+
+
 @dataclass
 class FormSpec:
     title: str
     fields: list[Field]
     initial: dict[str, Any] = dc_field(default_factory=dict)
+    # Read-only context, rendered above the fields. See FormNote.
+    note: FormNote | None = None
 
 
 @dataclass

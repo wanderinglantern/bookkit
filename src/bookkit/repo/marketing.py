@@ -11,6 +11,7 @@ were rated on different bases.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 from typing import Any
 
 from ..models import (
@@ -79,6 +80,61 @@ def _reply_guard(
         f"{sent} — a market cannot answer a package it has not been sent. "
         f"Check the year on the reply, or correct the date the submission went "
         f"out if that is the one that is wrong."
+    )
+
+
+def _expiry_guard(
+    conn: sqlite3.Connection,
+    submission_id: str,
+    fields: dict[str, Any],
+    existing: MarketResponse | None = None,
+) -> None:
+    """TERMS CANNOT LAPSE BEFORE THEY WERE QUOTED.
+
+    `_reply_guard`'s rule one column to the right, and it is here for the same
+    reason: `quote_expires_on` moved onto the response on 2026-08-26, so the
+    ordering `services.consistency.check_submission_dates` held over the
+    submission's three dates now has to hold over the row that states two of
+    them — or the guard would live only on the form the Pipeline renders and
+    every panel cell would write straight past it (repo/team.py's duplicate
+    guard, again).
+
+    THE FAILURE IS A YEAR, not a date anybody chose. `parse_human_date`
+    future-biases a bare month and day, and its opposite — a year typed from
+    last year's diary — puts a live quote straight into the EXPIRED bucket of
+    the chase queue, where it reads as terms already lost.
+
+    An expiry in the past relative to TODAY is legal and must stay so: quotes
+    lapse, and recording the lapse is the whole point of the field. Only the
+    relationship between the row's own dates is checked.
+
+    The two branches name two different fixes because the likely typo differs:
+    against a reply the other date is on this row, and against the send date
+    the correction is the submission's, which is a cell of its own.
+    """
+    expires = fields.get("quote_expires_on")
+    if not expires:
+        return
+    replied = fields.get(
+        "responded_on", existing.responded_on if existing is not None else None
+    )
+    if replied:
+        if str(expires) >= str(replied):
+            return
+        raise ValueError(
+            f"the quote expires {expires} and the market did not answer until "
+            f"{replied} — terms cannot lapse before the market quoted them. "
+            f"Check the year on the expiry, or correct the reply date on this "
+            f"row if that is the one that is wrong."
+        )
+    sent = _sent_on(conn, submission_id)
+    if sent is None or str(expires) >= sent:
+        return
+    raise ValueError(
+        f"the quote expires {expires} and the submission did not go out until "
+        f"{sent} — terms cannot lapse before the package went out. Check the "
+        f"year on the expiry, or correct the date the submission went out if "
+        f"that is the one that is wrong."
     )
 
 
@@ -193,6 +249,7 @@ def create_response(
     _one_market_twice(fields.get("market_org_id"), fields.get("via_org_id"))
     _validate_status(str(fields.get("status", "pending")))
     _reply_guard(conn, submission_id, fields)
+    _expiry_guard(conn, submission_id, fields)
     _stamp_rate_per(conn, submission_id, line_id, fields)
     response_id = base.insert(
         conn, _RESPONSE, {"submission_id": submission_id, "line_id": line_id, **fields}
@@ -215,6 +272,17 @@ def edit_response(
         _validate_status(str(changes["status"]))
     if "responded_on" in changes:
         _reply_guard(conn, get_response(conn, response_id).submission_id, changes)
+    if "quote_expires_on" in changes or "responded_on" in changes:
+        # BOTH KEYS, because either half of the pair can be the one moving:
+        # typing an expiry before a stored reply and typing a reply after a
+        # stored expiry produce the same contradiction, and a guard that
+        # watched only the field it is named after would let the second one
+        # through (repo.submissions._sent_guard is the same rule read from the
+        # other side).
+        was = get_response(conn, response_id)
+        _expiry_guard(
+            conn, was.submission_id, {**was.model_dump(), **changes}, existing=was
+        )
     if "rate_micros" in changes:
         existing = get_response(conn, response_id)
         _stamp_rate_per(conn, existing.submission_id, existing.line_id, changes)
@@ -267,36 +335,227 @@ def responses_for_placement(
 _WITHDRAWN = "withdrawn"
 
 
-def roll_up_submission(conn: sqlite3.Connection, submission_id: str) -> str | None:
-    """Recompute `submission.status` from its response rows.
+_DECLINED = "declined"
+
+
+# THE REST OF `models.SUBMISSION_STATUSES` AS THIS MODULE READS IT. Named, not
+# inline, so `status_from_rows` can hand one back without G5 reading a status
+# as a refusal sentence — see its docstring. `_OUT` is "asked, and nothing back
+# yet", which is both what a package with no rows says and what one whose rows
+# say nothing stronger says.
+_OUT = "out"
+_BOUND = "bound"
+_QUOTED = "quoted"
+_INDICATED = "indicated"
+_NON_RESPONSE = "non_response"
+
+
+def _rolled_figures(responses: list[MarketResponse]) -> dict[str, Any]:
+    """The five quote facts on `submission`, derived from the rows that state
+    them. Each rule below is a claim about WHAT ADDS AND WHAT DOES NOT.
+
+    `quoted_premium` — MONEY ADDS. A package quoted at $100k of GL and $40k of
+    Auto costs the client $140k, and that is the figure the Pipeline's premium
+    column has always meant. Summed over the responses that carry a figure
+    only: NULL is "nobody has told us" and 0 is "there is none" (models
+    .MarketResponse.total_cost states the same rule one table down), so a
+    market that has not priced yet contributes nothing rather than zero — and
+    the sum is therefore a PARTIAL one while any line is unpriced. The panel
+    shows which, row by row, which is why the honest total lives there and the
+    cache here.
+
+    `quoted_limit` — LIMITS DO NOT ADD ACROSS LINES. $1M of GL and $5M of
+    property is not $6M of anything, and a summed figure on the Pipeline would
+    be a number no market ever quoted. So it is filled only from a submission
+    with exactly ONE PRICED response, and the pairing is the point: the limit
+    and the premium sit side by side on the Pipeline as the terms quoted, so
+    they must come off ONE answer or not at all. A limit taken from a response
+    that did not supply the premium is a row describing two different markets.
+    The cost is stated plainly: a limit typed before a premium is not cached
+    here, and is read where it was typed.
+
+    `response_on` — MAX. The question the column answers is "when was this
+    package fully answered", and it is not answered until the last market has
+    spoken.
+
+    `quote_expires_on` — MIN of the responses that carry one. THE EARLIEST
+    LAPSE IS THE DEADLINE: a chase queue that took the latest would let the
+    first quote die quietly, which is the whole failure `services.quotes`
+    exists to stop.
+
+    `decline_reason` — only when EVERY response declined AND they agree. A
+    submission part-declined is NOT a declined submission: one carrier saying
+    "class appetite" while another quotes says nothing about the package, and
+    a reason printed on the parent would attribute one market's words to all
+    of them. Blank when they disagree, because there is no one sentence to
+    print — the reasons stay on the rows that said them.
+    """
+    premiums = [r.premium for r in responses if r.premium is not None]
+    priced = [r for r in responses if r.premium is not None]
+    replied = [r.responded_on for r in responses if r.responded_on]
+    expiries = [r.quote_expires_on for r in responses if r.quote_expires_on]
+    reasons = {(r.decline_reason or "").strip() for r in responses}
+    all_declined = all(r.status == _DECLINED for r in responses)
+    reason = reasons.pop() if len(reasons) == 1 else ""
+    return {
+        "quoted_premium": sum(premiums) if premiums else None,
+        "quoted_limit": priced[0].lim if len(priced) == 1 else None,
+        "response_on": max(replied) if replied else None,
+        "quote_expires_on": min(expiries) if expiries else None,
+        "decline_reason": reason if (all_declined and reason) else None,
+    }
+
+
+def status_from_rows(responses: list[MarketResponse]) -> str:
+    """WHAT A PACKAGE'S STATUS IS, READ OFF THE ROWS UNDER IT — the vocabulary
+    translation `roll_up_submission` applies, named so a second reader can
+    apply it too.
+
+    `services.marketing_entry.reinstate` is that second reader: putting a
+    withdrawn package back has to say what it becomes, and the only honest
+    answer is what the rows say — a package pulled while two markets were
+    quoting comes back quoted, not 'out'. A copy of this ladder there would be
+    the copy that eventually differs, and the way it would differ is a bound
+    package coming back as still out at market.
+
+    NOT `roll_up_submission` itself, which refuses to speak about a withdrawn
+    row at all (that refusal is the point of it) and which writes.
+
+    EVERY BRANCH RETURNS A NAMED CONSTANT, and that is not decoration.
+    tests/test_marketing_gates G5 walks every string literal RETURNED from this
+    module and demands that somebody declare what fix its words name, because
+    the returned sentences here are refusals a broker reads. A status
+    vocabulary is not prose and has no fix to name — so it is spelled as
+    constants, which is what tells the walk (and the next reader) that these
+    five words are not sentences. `roll_up_submission` used to hold this ladder
+    inline for exactly that reason, with a comment saying a helper could not.
+    """
+    statuses = {r.status for r in responses}
+    if not responses:
+        return _OUT
+    if _BOUND in statuses:
+        return _BOUND
+    if _QUOTED in statuses or _INDICATED in statuses:
+        return _QUOTED
+    if statuses <= {_DECLINED, _NON_RESPONSE}:
+        return _DECLINED
+    return _OUT
+
+
+def roll_up_submission(
+    conn: sqlite3.Connection, submission_id: str, *, note: str = "roll-up"
+) -> str | None:
+    """Recompute the submission from its response rows: `status`, and the five
+    quote facts beside it.
 
     TWO HAND-MAINTAINED COPIES OF ONE FACT DISAGREE, and then nobody knows
-    which is right — so the submission's status is derived here after every
-    response write rather than typed on its own form.
+    which is right — so the submission is derived here after every response
+    write rather than typed on its own form. That was already true of `status`
+    and of nothing else, which left `quoted_premium`, `quoted_limit`,
+    `response_on`, `quote_expires_on` and `decline_reason` with a SECOND HOME:
+    a premium entered on the Marketing panel was invisible to the Pipeline,
+    and one entered on both disagreed four inches apart with nothing saying
+    the other existed (Grant, 2026-08-26). The columns stay as a CACHE of the
+    rows — the standing this book already gives proj_* against the towerkit
+    files: rebuildable, never the authority.
 
     `withdrawn` is NEVER written by this function and never overwritten by
     it: withdrawing is a decision about the SUBMISSION (we pulled it), not a
     summary of what markets said back, and a roll-up that clobbered it would
-    quietly un-withdraw a submission the moment a stale response was edited."""
+    quietly un-withdraw a submission the moment a stale response was edited.
+
+    A SUBMISSION WITH NO RESPONSES IS NOT BLANKED, and this is the
+    load-bearing rule of the whole change. Its stored figures are the only
+    record of that marketing until somebody assigns lines to it — 23 quotes on
+    the seeded book and every one on Grant's, worth $1.4M apiece — and a
+    roll-up that wrote NULL over them because it found nothing to derive from
+    would destroy the very data it exists to make trustworthy. THE GATE IS THE
+    ROW SET, NOT THE FIELD: once one response exists the rows are the
+    authority for all six columns, so a fact the responses do not state is a
+    fact this submission no longer claims. Anything else leaves half a
+    submission derived from the new world and half typed in the old one, which
+    is the defect wearing a different hat.
+
+    THE OPEN EDGE, AND IT IS THE FIRST RESPONSE (say so before merging this).
+    A submission carrying figures typed in the old world loses whichever of
+    them its first response does not restate — record an expiry on a $1.4M
+    quote through the Pipeline and the premium goes, because the rows are the
+    authority from that moment and the rows say nothing about a premium. It is
+    the same destruction the rule above refuses, one step later, and the thing
+    that closes it is the LINE-OF-COVERAGE BACKFILL Grant staged after this
+    (option (a), 2026-08-26): the figures move onto the rows that state them,
+    once, deliberately, rather than being carried by a guess about which line
+    a package's premium belonged to. Until it lands, the write is inside the
+    caller's batch and the old values are in the event log, so `u` and the
+    changes list can put them back — visible and revertible, which is the
+    difference between an edge and a silent loss."""
     row = conn.execute(
         f"SELECT status FROM submission WHERE id = ? AND {base.alive()}",
         (submission_id,),
     ).fetchone()
     if row is None or row["status"] == _WITHDRAWN:
         return None
-    statuses = {r.status for r in responses_for_submission(conn, submission_id)}
-    if not statuses:
+    responses = responses_for_submission(conn, submission_id)
+    if not responses:
         return None
-    if "bound" in statuses:
-        rolled = "bound"
-    elif "quoted" in statuses or "indicated" in statuses:
-        rolled = "quoted"
-    elif statuses <= {"declined", "non_response"}:
-        rolled = "declined"
-    else:
-        rolled = "out"
-    base.update(conn, "submission", submission_id, {"status": rolled}, note="roll-up")
+    rolled = status_from_rows(responses)
+    base.update(
+        conn,
+        "submission",
+        submission_id,
+        {"status": rolled, **_rolled_figures(responses)},
+        note=note,
+    )
     return rolled
+
+
+def roll_up_for_responses(
+    conn: sqlite3.Connection, response_ids: Iterable[str], *, note: str = "roll-up"
+) -> list[str]:
+    """The same roll-up, reached from the RESPONSE side — for the one caller
+    that moves response rows without going through `create_response` /
+    `edit_response`, and would otherwise leave the cache stating what the rows
+    no longer say. Returns the submission ids it recomputed.
+
+    THAT CALLER IS `services.batches.revert`, and it is not an exception to
+    the derive rule — it was the one writer of `market_response` that had never
+    been told about it. A revert replays the batch's events BACKWARDS: it puts
+    the response rows back, and it puts the SUBMISSION columns back to the
+    literal values they held at that moment, because they were event-logged
+    like any other field. Those two are not the same thing. Any write that
+    landed after the batch and moved the rows WITHOUT moving the cached column
+    — a second market answering a package already rolled up to 'quoted', an
+    expiry later than the one already cached as the MIN — makes the restored
+    figure a fact about a world that no longer exists, and `plan_revert`'s
+    guard passes precisely BECAUSE that column never moved (Grant, 2026-08-26).
+    What it cost, before this: the Pipeline said "quotes in hand 0" beside a
+    panel showing the same market Quoted, and a chase clock ran ten days past
+    the expiry the market actually gave.
+
+    DEAD OR ALIVE on the way in, deliberately. A revert that soft-deletes a
+    response has to recompute the parent it just left, and the response row is
+    dead by the time this runs; `roll_up_submission` reads the SURVIVING rows
+    through `responses_for_submission`, so the answer is derived from the world
+    the revert has just made, which is the whole point.
+
+    `note` is the caller's, so a revert's own re-derive is stamped 'revert' and
+    is skipped by `repo.batches.external_change_count` and
+    `repo.events.last_mutation` like every other write a revert makes — it is
+    revert bookkeeping, not a user's edit, and counting it as one would refuse
+    the NEXT revert on the same submission.
+    """
+    ids = list(dict.fromkeys(response_ids))
+    if not ids:
+        return []
+    marks = ", ".join("?" * len(ids))
+    rows = conn.execute(
+        f"SELECT DISTINCT submission_id FROM market_response WHERE id IN ({marks})",
+        ids,
+    ).fetchall()
+    touched = [str(row["submission_id"]) for row in rows]
+    for submission_id in touched:
+        roll_up_submission(conn, submission_id, note=note)
+    return touched
 
 
 # --- clearance -------------------------------------------------------------
