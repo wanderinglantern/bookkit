@@ -165,6 +165,27 @@ def _tower_for(linked: sync.LinkedProgram) -> dict[str, Any] | None:
         return None
 
 
+def _marketing(
+    request: Request, conn: sqlite3.Connection, placement: Any, ref: str
+) -> dict[str, Any]:
+    """The marketing grid for this placement.
+
+    NOT gated on `program_path`. Marketing happens BEFORE a tower exists and
+    every figure in the grid lives in SQLite, which is the same reasoning that
+    put the "Marketing XLSX" anchor in the band rather than in the
+    linked-only export strip: gating it would put the section out of reach on
+    exactly the placements it is for.
+
+    `date.today()` is read here rather than inside the view model, so the one
+    module that formats the report keeps its "today is a parameter" rule.
+    """
+    from datetime import date as _date
+
+    from ..marketing_grid import panel
+
+    return panel(request, conn, placement.id, today=_date.today(), ref=ref)
+
+
 def _last_synced(conn: sqlite3.Connection, placement_id: str) -> dict[str, Any] | None:
     """What the LAST SUCCESSFUL SYNC recorded for a placement whose file will
     not open right now — read-only, and labelled as such.
@@ -698,6 +719,11 @@ def _section_html(
             else {}
         ),
         has_layers=bool(layers),
+        # THE PANEL IS THE REPORT: rendered for every placement, linked or
+        # not, and part of THIS one context list — the whole reason
+        # `_section_html` exists is that a key added to one caller's list and
+        # not another's went missing on writes (see this function's docstring).
+        marketing=_marketing(request, conn, placement, ref),
         band=_band_stats(layers),
         file_name=Path(placement.program_path).name if placement.program_path else None,
         index=index,
@@ -4411,7 +4437,11 @@ def export_open_items_workbook(request: Request, ref: str) -> Any:
 # REGISTERED LAST ON PURPOSE: Starlette matches /program/{placement_id}/{kind}
 # before FastAPI validates the enum, so EVERY literal sibling — today:
 # /renew, /merge, /scaffold, /compare, /layers, /lines, /submissions, /cell,
-# /worksheet, /remove, /export/... — must be registered FIRST to win. This list is the invariant's
+# /worksheet, /remove, /export/..., and routes/marketing.py's whole
+# /marketing/... family — must be registered FIRST to win. That last one is
+# not hypothetical: marketing.router was included AFTER this one, so
+# `POST /program/<id>/marketing/lines` matched {kind}/{index} and answered 422
+# rather than adding a line of coverage (2026-08-25). This list is the invariant's
 # one home: when you add a /program/{placement_id}/<one-segment> route, add
 # it ABOVE this block AND name it here, or a future reorder will shadow it
 # into 422s.

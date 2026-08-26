@@ -68,6 +68,27 @@ def get(conn: sqlite3.Connection, line_id: str) -> LineOfCoverage | None:
     return LineOfCoverage.from_row(row) if row else None
 
 
+def get_any(conn: sqlite3.Connection, line_id: str) -> LineOfCoverage | None:
+    """The line, ALIVE OR RETIRED.
+
+    RETIRING A LINE OF COVERAGE MUST NOT DELETE A CLIENT'S MARKETING FROM THE
+    SURFACE THAT REPORTS IT. `market_response` and `placement_line` are not
+    soft-deleted with it, so the rows are all still there; the marketing
+    composer read the vocabulary through `all_lines`, found no name for the
+    id, and dropped the whole block — a bound quote at $392,850 vanished from
+    the Program tab AND from the client's own workbook, and the panel then
+    said nothing on the placement was being marketed (2026-08-25).
+
+    So the block is composed off THIS, and says the line is retired where it
+    prints its name. Surface it, do not hide it. Callers that decide what may
+    be STARTED — the add-a-line picker, `by_name`, `near_matches` — keep using
+    the living vocabulary: a retired line is a line the book will not take
+    new work on, not a line whose history is deniable.
+    """
+    row = base.raw_row(conn, _ENTITY, line_id)
+    return LineOfCoverage.from_row(row) if row else None
+
+
 def by_name(conn: sqlite3.Connection, name: str) -> LineOfCoverage | None:
     """Exact match, case- and whitespace-insensitive. The lookup a backfill or
     an import uses before deciding it has found something new."""
@@ -174,11 +195,13 @@ def rename(conn: sqlite3.Connection, line_id: str, name: str) -> None:
 
 # --- merging ---------------------------------------------------------------
 #
-# The four places a line is referenced. Two are entity tables whose rewrites
-# go through base.update and are therefore event-logged and revertible; two
-# are pure link tables with no id and no soft-delete, whose moves are recorded
-# as provenance but cannot be un-pressed. `usage` exists so the confirm can
-# say exactly what will move BEFORE it moves — surface, don't guess.
+# The SIX places a line is referenced. Two are entity tables the merge
+# rewrites through base.update, so those moves are event-logged and
+# revertible; two are pure link tables with no id and no soft-delete, whose
+# moves are recorded as provenance but cannot be un-pressed. The last two are
+# MARKETING, and the merge does not move them — see `_MARKETING_REFS`.
+# `usage` exists so the confirm can say exactly what points at this line
+# BEFORE anything happens to it — surface, don't guess.
 
 _ENTITY_REFS = (("appetite", "appetite"), ("project_need", "project_need"))
 _LINK_REFS = (
@@ -186,10 +209,27 @@ _LINK_REFS = (
     ("team_assignment_line", "team_assignment_id"),
 )
 
+# COUNTED, NOT MOVED. A market response and a placement's expectations are a
+# record of what happened on a named line of coverage, and rewriting them onto
+# another line would re-file a carrier's quote under cover it was never asked
+# about. `placement_line` cannot be moved anyway without deciding something
+# nobody has asked: its unique index is (placement_id, line_id), so a
+# placement carrying both lines has two sets of expiring figures and only one
+# can survive — that is a data decision, not a rewrite.
+#
+# `usage` counted neither of them and reported all zeros while a bound quote
+# at $392,850 hung off the line about to be retired (2026-08-25). It counts
+# them now, so a confirm can say what will be left pointing at a retired line
+# — and the marketing composer keeps rendering that block, marked retired, so
+# what is left behind is visible rather than silently deleted from the panel
+# and from the client's own workbook.
+_MARKETING_REFS = ("market_response", "placement_line")
+
 
 def usage(conn: sqlite3.Connection, line_id: str) -> dict[str, int]:
     """How many rows in each table point at this line. The merge preview and
-    the retire guard both read it."""
+    the retire guard both read it — including the two tables a merge will NOT
+    move, because those are exactly the ones a confirm has to mention."""
     counts: dict[str, int] = {}
     for table, _entity in _ENTITY_REFS:
         counts[table] = int(
@@ -204,6 +244,13 @@ def usage(conn: sqlite3.Connection, line_id: str) -> dict[str, int]:
                 f"SELECT COUNT(*) FROM {table} WHERE line_id = ?", (line_id,)
             ).fetchone()[0]
         )
+    for table in _MARKETING_REFS:
+        counts[table] = int(
+            conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE line_id = ? AND {base.alive()}",
+                (line_id,),
+            ).fetchone()[0]
+        )
     return counts
 
 
@@ -215,7 +262,12 @@ def merge(conn: sqlite3.Connection, source_id: str, target_id: str) -> dict[str,
     rewrites revert cleanly; the link rows do not, because a link table has no
     identity to revert to and re-splitting a merged set is guesswork. A
     merge is therefore a decision, presented with its consequences, rather
-    than something to try and take back."""
+    than something to try and take back.
+
+    WHAT IT RETURNS IS WHAT IT MOVED, which is not everything `usage` counts:
+    the marketing rows stay on the source line (`_MARKETING_REFS` says why).
+    Returning `usage` whole would have this function claim it had moved a
+    carrier's quote it never touched."""
     if source_id == target_id:
         raise ValueError("a line cannot be merged into itself")
     if get(conn, target_id) is None:
@@ -224,7 +276,11 @@ def merge(conn: sqlite3.Connection, source_id: str, target_id: str) -> dict[str,
     if source is None:
         raise KeyError(f"no line of coverage {source_id!r} to merge")
 
-    moved = usage(conn, source_id)
+    counted = usage(conn, source_id)
+    moved = {
+        table: counted[table]
+        for table, _ in _ENTITY_REFS + _LINK_REFS
+    }
     for table, entity in _ENTITY_REFS:
         rows = conn.execute(
             f"SELECT id FROM {table} WHERE line_id = ? AND {base.alive()}", (source_id,)

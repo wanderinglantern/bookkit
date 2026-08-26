@@ -11,6 +11,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import date
 
+import pytest
+
 from bookkit.repo import marketing, orgs, placements, submissions
 from bookkit.services import marketing_report
 
@@ -137,8 +139,8 @@ def test_the_rate_change_is_what_the_broker_achieved(conn) -> None:
     assert travelers.rate_move.pct is not None
     assert round(travelers.rate_move.pct, 1) == -19.4
     assert travelers.rate_move.cell == "-19.4%"
-    assert block.exposure_change_pct is not None
-    assert round(block.exposure_change_pct, 1) == 18.3
+    assert block.exposure_move.pct is not None
+    assert round(block.exposure_move.pct, 1) == 18.3
 
 
 def test_the_bridge_splits_rate_from_growth_and_reconciles(conn) -> None:
@@ -383,3 +385,418 @@ def test_a_count_never_reaches_the_workbook_as_money(conn, tmp_path) -> None:
     text = _sheet_text(out)
     assert "350 power units" in text
     assert "$3.50" not in text
+
+
+# --- what may NOT be printed ----------------------------------------------
+
+
+def test_an_exposure_change_across_two_bases_is_refused_in_words(conn) -> None:
+    """THE THIRD COMPARISON, and the one that shipped without the guard.
+
+    Gross sales last term, power units this. `_rate_move` refuses this exact
+    pair in words and `_bridge` returns None for it — while the exposure
+    comparison divided 350 power units by $41,000,000 and printed "exposure
+    down 100%" on the sheet a CLIENT is sent.
+    """
+    _, placement = _book(conn)
+    # Basis and figure in ONE call, which is the ordinary correction and the
+    # only way past `repo.marketing._basis_guard`.
+    marketing.set_placement_line(
+        conn, placement.id, "general-liability",
+        rating_basis="power_units", expected_exposure=350,
+    )
+    report = marketing_report.compose(conn, placement.id, TODAY)
+    block = report.blocks[0]
+
+    assert block.exposure_move.pct is None
+    assert block.exposure_move.cell == "basis changed"
+    label = marketing_report.to_sections(report)[0].label
+    assert "basis changed" in label
+    assert "-100.0%" not in label, "a comparison across two bases reached the sheet"
+
+
+def test_an_exposure_change_within_one_basis_is_still_printed(conn) -> None:
+    """The other half: the refusal must not swallow the ordinary case. Same
+    basis both terms, $41.0M to $48.5M."""
+    _, placement = _book(conn)
+    report = marketing_report.compose(conn, placement.id, TODAY)
+    assert report.blocks[0].exposure_move.cell == "+18.3%"
+
+
+def test_a_bridge_that_does_not_add_up_is_not_printed(conn) -> None:
+    """`Bridge` PROMISES it reconciles — expiring + rate + exposure = quoted —
+    and nothing checked that it still did. Four lines that do not add up are
+    worse than no bridge: the client reads them as the explanation of the
+    number above them.
+
+    A premium typed with a digit adrift is the ordinary way to reach it, and a
+    denominator or basis relabelled under a stored rate is the dangerous one.
+    """
+    _, placement = _book(conn)
+    market = _market(conn, "Travelers")
+    response = _approach(
+        conn, placement.id, market, status="quoted", rate_micros=8_100_000,
+        premium=39_285_000,
+    )
+    assert marketing_report.compose(conn, placement.id, TODAY).blocks[0].bridge
+
+    marketing.edit_response(conn, response.id, {"premium": 50_000_000})
+
+    block = marketing_report.compose(conn, placement.id, TODAY).blocks[0]
+    assert block.bridge is None, "a bridge that misses by $107,000 was printed"
+
+
+def test_a_date_outside_the_placement_s_own_window_prints_its_year(
+    conn, tmp_path
+) -> None:
+    """"12 Aug" was every date this report printed, so 2001, 2027 and 2099 all
+    rendered identically — on the grid AND in the client's workbook. The year
+    prints where it is news: outside the window this placement's marketing can
+    honestly fall in.
+    """
+    _, placement = _book(conn)  # 2027-09-01 to 2028-09-01
+    ordinary = _approach(
+        conn, placement.id, _market(conn, "Travelers"),
+        status="quoted", responded_on="2027-07-21", premium=39_285_000,
+    )
+    _approach(
+        conn, placement.id, _market(conn, "Zurich"),
+        status="quoted", responded_on="2099-08-12", premium=41_000_000,
+    )
+    report = marketing_report.compose(conn, placement.id, TODAY)
+
+    assert report.window.holds(ordinary.responded_on)
+    text = _sheet_text(
+        marketing_report.write(conn, placement.id, tmp_path / "dates.xlsx", TODAY)
+    )
+    assert "21 Jul" in text and "21 Jul 2027" not in text
+    assert "12 Aug 2099" in text, "a mistyped year is invisible on the client sheet"
+
+
+def test_a_reply_cannot_predate_the_submission_it_answers(conn) -> None:
+    """CONSISTENCY IS THE THIN CATEGORY. A market cannot answer a package it
+    has not been sent, and a mistyped year is the ordinary way to record one
+    that did — the guard is in repo/ so every surface inherits it."""
+    _, placement = _book(conn)
+    sub = submissions.create(
+        conn, market_org_id=_market(conn, "Travelers").id,
+        sent_on="2027-07-07", placement_id=placement.id,
+    )
+    with pytest.raises(ValueError, match="cannot answer"):
+        marketing.create_response(
+            conn, sub.id, "general-liability",
+            market_org_id=_market(conn, "Travelers").id,
+            status="declined", responded_on="2026-07-08",
+        )
+    response = marketing.create_response(
+        conn, sub.id, "general-liability",
+        market_org_id=_market(conn, "Travelers").id, status="pending",
+    )
+    with pytest.raises(ValueError, match="cannot answer"):
+        marketing.edit_response(conn, response.id, {"responded_on": "2027-07-06"})
+    # The day the submission went out is an answer, not a contradiction.
+    marketing.edit_response(conn, response.id, {"responded_on": "2027-07-07"})
+    assert marketing.get_response(conn, response.id).responded_on == "2027-07-07"
+
+
+def test_a_retired_line_of_coverage_keeps_its_block(conn, tmp_path) -> None:
+    """A SOFT-DELETED VOCABULARY ROW IS NOT A LICENCE TO DELETE HISTORY.
+    Retiring a line of coverage touches neither the responses nor the
+    expectations recorded against it, but the composer read the LIVING
+    vocabulary, found no name for the id and dropped the whole block — a bound
+    quote at $392,850 gone from the Program tab AND from the client's own
+    workbook, which then showed one line where three had been.
+    """
+    from bookkit.repo import base
+
+    _, placement = _book(conn)
+    _approach(
+        conn, placement.id, _market(conn, "Chubb", "A++ XV"),
+        status="bound", responded_on="2027-07-21", premium=39_285_000,
+    )
+    base.soft_delete(conn, "line_of_coverage", "general-liability")
+
+    blocks = marketing_report.compose(conn, placement.id, TODAY).blocks
+    assert [b.line_name for b in blocks] == ["General Liability"]
+    assert blocks[0].line_retired
+    assert [r.market for r in blocks[0].rows] == ["Chubb"]
+    assert blocks[0].rows[0].premium == 39_285_000
+
+    text = _sheet_text(
+        marketing_report.write(conn, placement.id, tmp_path / "retired.xlsx", TODAY)
+    )
+    assert "Chubb" in text and "General Liability" in text
+    # THE CLIENT SHEET DOES NOT SAY IT. "Property (retired)" on a sheet a
+    # client reads is a sentence about their COVER, and that would be a lie —
+    # the retirement is a fact about this book's own vocabulary. What the
+    # client sheet needed was the rows, which is what it had lost.
+    assert "retired" not in text.lower()
+
+
+def test_marketing_counts_as_a_reference_to_a_line_of_coverage(conn) -> None:
+    """SURFACE, DON'T GUESS — `repo/lines.usage` exists so a confirm can say
+    what points at a line BEFORE anything happens to it, and it was blind to
+    both marketing tables: all zeros while a bound quote hung off the line
+    about to be merged away. A merge still does not MOVE them (a quote is
+    filed under the cover it was asked about), so what it returns is what it
+    moved, and the block it leaves behind is visible rather than deleted.
+    """
+    from bookkit.repo import lines
+
+    client, placement = _book(conn)
+    duplicate = lines.create(conn, "Gen Liability")
+    marketing.set_placement_line(conn, placement.id, duplicate, expiring_premium=41_200_000)
+    submission = submissions.create(
+        conn, market_org_id=_market(conn, "Chubb").id,
+        sent_on="2027-07-07", placement_id=placement.id,
+    )
+    marketing.create_response(
+        conn, submission.id, duplicate,
+        market_org_id=orgs.find_by_name(conn, "Chubb").id,
+        status="bound", premium=39_285_000,
+    )
+
+    counts = lines.usage(conn, duplicate)
+    assert counts["market_response"] == 1
+    assert counts["placement_line"] == 1
+
+    moved = lines.merge(conn, duplicate, "general-liability")
+    assert "market_response" not in moved, "merge claimed to move a quote it left"
+
+    blocks = marketing_report.compose(conn, placement.id, TODAY).blocks
+    retired = next(b for b in blocks if b.line_id == duplicate)
+    assert retired.line_retired and retired.rows[0].premium == 39_285_000
+
+
+def test_a_row_can_always_name_the_market_that_answered(conn) -> None:
+    """THE COLUMN THAT SAYS WHOSE ANSWER IT IS. Deleting the carrier org left
+    `market_cell` empty — a row carrying a premium, a status and an A.M. Best
+    rating with nothing identifying it, which reads as a rendering fault.
+    Deleting the org does not unmake the quote, so the name it had is what the
+    report prints; the floor under that is a sentence, never a blank."""
+    from dataclasses import replace
+
+    _, placement = _book(conn)
+    chubb = _market(conn, "Chubb", "A++ XV")
+    _approach(
+        conn, placement.id, chubb, status="quoted", responded_on="2027-07-21",
+        premium=39_285_000,
+    )
+    orgs.delete(conn, chubb.id)
+
+    row = marketing_report.compose(conn, placement.id, TODAY).blocks[0].rows[0]
+    assert row.market_cell == "Chubb"
+    assert replace(row, market="", via=None).market_cell == "market not on file"
+
+
+def test_the_agent_can_name_a_retired_line_and_a_deleted_market(conn) -> None:
+    """THE THIRD SURFACE IS AN AGENT. `marketing_report`'s `responses` index is
+    what names a row to the assistant — it is the only place a `response_id`
+    comes from, and `market_responded` writes against it. Read through the
+    LIVING lookups it printed a raw slug for a retired line of coverage and
+    `null` for a market whose org had been deleted, so the one thing the index
+    exists to do — say WHICH row — stopped working on exactly the rows the
+    panel had already stopped showing."""
+    from bookkit import mcpserver
+    from bookkit.repo import base
+
+    _, placement = _book(conn)
+    chubb = _market(conn, "Chubb", "A++ XV")
+    _approach(
+        conn, placement.id, chubb, status="bound", responded_on="2027-07-21",
+        premium=39_285_000,
+    )
+    base.soft_delete(conn, "line_of_coverage", "general-liability")
+    orgs.delete(conn, chubb.id)
+
+    index = mcpserver._marketing_report(
+        conn, placement.id, audience="internal", as_of=TODAY.isoformat()
+    )["responses"]
+
+    assert [r["line"] for r in index] == ["General Liability"]
+    assert [r["market"] for r in index] == ["Chubb"]
+
+
+# Two responses tied on layer and premium, with the SQL order (attach, id)
+# deliberately opposite the report's own order (status, premium, reply date).
+# The ids are stated rather than minted because a ULID's low bits are random:
+# two rows written in the same millisecond come back in either order, and a
+# test that only fails half the time is not a test.
+_TIED_FIRST = "01" + "A" * 24
+_TIED_SECOND = "01" + "B" * 24
+# Chubb's 9.00 against the expiring 10.05 walks to this, to two cents.
+TIED_PREMIUM = 43_650_000
+CHUBB_RATE_EFFECT = -4_299_998
+TRAVELERS_RATE_EFFECT = 8_000_002
+
+
+def test_two_quotes_tied_on_layer_and_premium_bridge_the_right_one(conn) -> None:
+    """A ROW IS IDENTIFIED BY ITS ID, never re-found by matching two of its
+    values.
+
+    The bridge took its leading row out of the SORTED rows and then went
+    looking for it again in the SQL-ordered responses by `layer ==` and
+    `premium ==`. Two markets quoting the same band at the same figure — the
+    ordinary end of a competitive marketing exercise — satisfy that pair
+    twice, and the two orderings then disagree: the bridge printed under
+    "Chubb" on the CLIENT's workbook was decomposed from Travelers' rate.
+    `_reconciles` cannot catch it, because the walk it checks adds up
+    perfectly and simply belongs to somebody else.
+    """
+    _, placement = _book(conn)
+    travelers = _market(conn, "Travelers", "A++ XV")
+    chubb = _market(conn, "Chubb", "A++ XV")
+    # First in the SQL order, last in the report's: it replied a week later.
+    _approach(
+        conn, placement.id, travelers, id=_TIED_FIRST, status="quoted",
+        responded_on="2027-07-21", rate_micros=12_000_000, premium=TIED_PREMIUM,
+    )
+    _approach(
+        conn, placement.id, chubb, id=_TIED_SECOND, status="quoted",
+        responded_on="2027-07-12", rate_micros=9_000_000, premium=TIED_PREMIUM,
+    )
+
+    block = marketing_report.compose(conn, placement.id, TODAY).blocks[0]
+    assert [row.market for row in block.rows] == ["Chubb", "Travelers"]
+    assert block.rows[0].layer == block.rows[1].layer
+    assert block.rows[0].premium == block.rows[1].premium
+
+    bridge = block.bridge
+    assert bridge is not None
+    assert bridge.market.startswith("Chubb")
+    assert bridge.rate_effect == CHUBB_RATE_EFFECT, (
+        "the bridge named one market and decomposed the other's rate"
+    )
+    assert bridge.rate_effect != TRAVELERS_RATE_EFFECT
+
+    # The other half, and the reported shape: the leading row's OWN walk does
+    # not add up, so there must be no bridge at all — not the tied row's walk
+    # printed under the leading row's name.
+    marketing.edit_response(conn, block.rows[0].response_id, {"rate_micros": 12_000_000})
+    marketing.edit_response(conn, block.rows[1].response_id, {"rate_micros": 9_000_000})
+    block = marketing_report.compose(conn, placement.id, TODAY).blocks[0]
+    assert block.rows[0].market == "Chubb"
+    assert block.bridge is None, "a walk belonging to the row below was printed"
+
+
+def test_a_rate_across_two_denominators_is_refused_in_words(conn) -> None:
+    """RATES COMPARE ONLY WITHIN ONE BASIS **AND** ONE DENOMINATOR.
+
+    `_rate_move` checked the basis and never the `rate_per`, and the route
+    into it is the very sequence `repo.marketing._rate_per_guard`'s refusal
+    names: clear the expiring rate, move the denominator, enter the rate
+    again. The response rate stored against per-$1,000 was then divided by an
+    expiring rate stated per-$100 and printed as an 88% reduction nobody
+    achieved — on the client's workbook (found 2026-08-26).
+    """
+    _, placement = _book(conn)          # per $1,000, expiring 10.05
+    market = _market(conn, "Travelers")
+    _approach(
+        conn, placement.id, market, status="quoted", responded_on="2027-07-21",
+        rate_micros=11_880_000, premium=39_285_000,
+    )
+    block = marketing_report.compose(conn, placement.id, TODAY).blocks[0]
+    assert block.rows[0].rate_move.cell == "+18.2%"
+
+    # The three clicks the guard tells the broker to make.
+    marketing.set_placement_line(
+        conn, placement.id, "general-liability", expiring_rate_micros=None
+    )
+    marketing.set_placement_line(conn, placement.id, "general-liability", rate_per=100)
+    marketing.set_placement_line(
+        conn, placement.id, "general-liability", expiring_rate_micros=100_500_000
+    )
+
+    block = marketing_report.compose(conn, placement.id, TODAY).blocks[0]
+    assert block.rows[0].rate_move.pct is None
+    assert block.rows[0].rate_move.cell == "denominator changed"
+    assert "-88.2%" not in marketing_report.to_sections(
+        marketing_report.compose(conn, placement.id, TODAY)
+    )[0].rows[0], "a comparison across two denominators reached the sheet"
+    assert block.bridge is None
+
+
+def test_a_stored_rate_carries_the_denominator_it_was_typed_against(conn) -> None:
+    """The write half of the rule above. Nothing was writing
+    `market_response.rate_per`, so every quoted rate inherited the LINE's
+    denominator live at read time and moved with it — which is what made the
+    comparison above unable to see that the two sides had parted company.
+    A rate CLEARED takes its denominator with it: a denominator with no rate
+    under it marks nothing."""
+    _, placement = _book(conn)          # per $1,000
+    market = _market(conn, "Travelers")
+    response = _approach(
+        conn, placement.id, market, status="quoted", rate_micros=8_100_000,
+    )
+    assert response.rate_per == 1000
+
+    # Both halves in one act — the ordinary correction `_rate_per_guard` allows.
+    marketing.set_placement_line(
+        conn, placement.id, "general-liability",
+        rate_per=100, expiring_rate_micros=100_500_000,
+    )
+    fresh = marketing.edit_response(conn, response.id, {"rate_micros": 7_000_000})
+    assert fresh.rate_per == 100, "the rate did not carry the denominator it was typed against"
+
+    cleared = marketing.edit_response(conn, response.id, {"rate_micros": None})
+    assert cleared.rate_per is None
+
+
+def test_an_exposure_with_no_basis_is_never_rendered_as_money(conn) -> None:
+    """THE HUNDREDFOLD MISTAKE, ONE BRANCH AWAY. `fmt_exposure` fell back to
+    `format_cents` whenever the basis was None — the same default that printed
+    350 power units to a client as "$3.50", still sitting under the one input
+    nobody can currently reach. Both refusals hold today (the exposure cell
+    refuses while the basis is unknown, and `_basis_guard` refuses clearing a
+    basis out from under a figure), so this branch is unreachable; it is the
+    NEXT surface that composes an exposure that this is for. Nothing in the
+    integer says whether it is money or a count, so the honest rendering says
+    the digits and says the unit is unknown."""
+    rendered = marketing_report.fmt_exposure(4_850_000_000, None)
+    assert "$" not in rendered, "an unmarked integer was printed as money"
+    assert "4,850,000,000" in rendered
+    assert "basis not set" in rendered
+
+
+def test_a_bridge_across_two_denominators_is_not_printed(conn) -> None:
+    """`rate_effect` SUBTRACTS the expiring rate from the quoted one, which is
+    arithmetic only while both are stated per the same unit — and `_reconciles`
+    cannot be the thing that catches it, because the premium is free: a walk
+    built from two denominators adds up to whatever it adds up to, and the
+    client reads those four lines as the explanation of the figure above them.
+
+    The rate here was typed per $1,000 (and stamped so) and the line now
+    states its expiring rate per $100. The walk lands EXACTLY on the quote, so
+    the reconcile guard waves it through; the only thing that can refuse it is
+    knowing the two rates are not on the same denominator.
+    """
+    _, placement = _book(conn)              # per $1,000
+    market = _market(conn, "Travelers")
+    _approach(
+        conn, placement.id, market, status="quoted", responded_on="2027-07-21",
+        rate_micros=11_880_000, premium=94_697_500,
+    )
+    # Denominator and expiring rate restated together — the one correction
+    # `_rate_per_guard` allows. The RESPONSE rate is left where it was, which
+    # is the door the guard deliberately leaves open.
+    marketing.set_placement_line(
+        conn, placement.id, "general-liability",
+        rate_per=100, expiring_rate_micros=1_005_000,
+    )
+
+    block = marketing_report.compose(conn, placement.id, TODAY).blocks[0]
+    assert block.bridge is None, "a walk built from two denominators reconciled and printed"
+
+
+def test_the_rate_column_is_wide_enough_for_the_words_it_prints() -> None:
+    """A REFUSAL SAYS SOMETHING — and a sentence clipped by the populated cell
+    beside it says half of it. The Rate Δ column prints a percentage most of
+    the time and one of `REFUSAL_NOTES` the rest of it, and those are the rows
+    where the words ARE the answer. Its width is derived from them so a new
+    refusal cannot be added without the column growing to hold it."""
+    width = next(
+        w for header, w, _ in marketing_report.columns(marketing_report.CLIENT)
+        if header == "Rate Δ"
+    )
+    longest = max(len(note) for note in marketing_report.REFUSAL_NOTES)
+    assert width >= longest, "the column clips the sentence it exists to print"

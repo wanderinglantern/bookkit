@@ -597,6 +597,23 @@ There is no `not_approached`. In a grid of one row per (line, market), the
 ABSENCE of a row carries it — provided the report renders that absence in
 words rather than as a blank cell a reader has to interpret."""
 
+MARKET_RESPONSE_STATUS_LABELS: dict[str, str] = {
+    "pending": "Pending",
+    "indicated": "Indicated",
+    "quoted": "Quoted",
+    "declined": "Declined",
+    "non_response": "Non-response",
+    "bound": "Bound",
+}
+"""What a person READS for each status, beside the tuple that declares them.
+
+Here rather than on the report that first needed it, because the report is no
+longer the only reader: the Program tab's status picker has to offer the very
+words the grid beside it prints, and a picker whose labels are a second copy of
+a vocabulary is the copy that quietly differs (CLAUDE.md, DRY). Keyed by the
+raw status, so a surface colours and labels off the KEY and never reverse-maps
+a label back."""
+
 MARKET_RESPONSE_OPEN_STATUSES = ("pending", "indicated", "quoted")
 """Still live: worth chasing, and what a clearance collision is checked over."""
 
@@ -619,6 +636,19 @@ an underwriter's private opinion. `market_response.decline_reason` is internal
 free text and is never rendered to a client; this tuple fills
 `decline_reason_public`, which is OPTIONAL: blank there says nothing, which is
 safer than a sentence anyone will wish they had not written."""
+
+
+PUBLIC_DECLINE_REASON_LABELS: dict[str, str] = {
+    "class_appetite": "Class / appetite",
+    "loss_history": "Loss history",
+    "capacity": "Capacity",
+    "pricing": "Pricing",
+    "incumbent_relationship": "Incumbent relationship",
+    "no_reason_given": "No reason given",
+}
+"""The client-safe wording, beside the tuple that declares it — same rule as
+MARKET_RESPONSE_STATUS_LABELS. The picker a broker chooses from and the words
+the client's workbook prints are the same words, out of one dict."""
 
 
 class RatingBasis(NamedTuple):
@@ -654,6 +684,24 @@ RATING_BASES: tuple[RatingBasis, ...] = (
 )
 
 RATING_BASIS_KEYS = tuple(b.key for b in RATING_BASES)
+
+RATE_PER_CHOICES: tuple[tuple[int, str], ...] = (
+    (100, "$100"),
+    (1000, "$1,000"),
+    (1, "unit"),
+)
+"""The denominator a rate may be quoted against, and how each one READS.
+
+A CONTROLLED SET, not a free number. `rate_per` is what makes a rate
+interpretable at all — 1.42 per $100 of payroll and 1.42 per $1,000 of sales
+differ by a factor of ten — and the conventions in use are these three. It is
+declared here beside RATING_BASES (whose `default_rate_per` names the same
+three values) so the picker a broker chooses from and the words a header
+prints come out of ONE list: a second copy in a template is the fourth copy of
+an enum that no test and no type checker would see go stale (CLAUDE.md, DRY).
+"""
+
+RATE_PER_LABELS: dict[int, str] = dict(RATE_PER_CHOICES)
 
 _RATING_BASIS_BY_KEY = {b.key: b for b in RATING_BASES}
 

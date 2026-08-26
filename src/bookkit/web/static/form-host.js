@@ -75,7 +75,10 @@
     if (evt.key !== "Enter") return;
     var row = evt.target.closest && evt.target.closest(".market-add-row");
     if (!row) return;
-    var bind = row.querySelector(".bind-btn");
+    // `.bind-btn` is the participation table's; `.row-save-btn` is the
+    // marketing grid's add row, which is the same shape (no <form>, because a
+    // form is not a legal child of tbody) and needs the same key.
+    var bind = row.querySelector(".bind-btn, .row-save-btn");
     if (bind) {
       evt.preventDefault();
       bind.click();

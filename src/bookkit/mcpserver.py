@@ -742,6 +742,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         rating_basis: str | None = None,
         rate_per: str | None = None,
         limit_sought: str | None = None,
+        attach_sought: str | None = None,
     ) -> dict[str, Any]:
         """State what one line of coverage on one placement is expected to do —
         the expiring figures the client's comparison is measured against, and
@@ -757,7 +758,9 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         1000, or 1 per unit). `expiring_rate` is stored rather than derived:
         deriving it needs the expiring exposure, which is a separate fact
         nobody may have recorded, and the report leaves the comparison blank
-        instead of assuming exposure was flat."""
+        instead of assuming exposure was flat. `attach_sought` is where the
+        cover being asked for starts — blank means primary, which is the
+        ordinary case, so state it only for an excess layer."""
         return _set_placement_line(
             rw, placement_ref, line,
             expiring_premium=expiring_premium,
@@ -768,6 +771,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
             rating_basis=rating_basis,
             rate_per=rate_per,
             limit_sought=limit_sought,
+            attach_sought=attach_sought,
         )
 
     @server.tool()
@@ -2924,21 +2928,25 @@ def _resolve_response(conn: sqlite3.Connection, response_ref: str) -> Any:
 
 
 def _rate_micros(field: str, value: str | None) -> int | None:
-    """A RATE IS NOT MONEY, so it does not go through parse_money_cents: '1.42'
-    is 1.42 per unit of exposure and is stored x1,000,000 because a rate
-    rounded to cents lies at the fourth decimal, which is where casualty rates
-    actually differ. Anything that is not a plain number is refused rather
-    than coerced — a stored zero rate reads as 'they quoted nothing'."""
+    """A RATE IS NOT MONEY, so it does not go through parse_money_cents.
+
+    The parser, the ×1,000,000 scale and the refusal all live in money.py —
+    this is the tool-argument wrapper over them, and it exists only to name
+    which argument was refused. There were three copies of that scale before
+    2026-08-25 and the web needed a fourth; a rate parsed one way here and
+    another way in a cell editor is the same 1.42 stored a millionfold
+    apart."""
+    from .money import MoneyParseError, parse_rate_micros
+
     if value is None:
         return None
-    text = str(value).strip().replace(",", "")
     try:
-        return round(float(text) * 1_000_000)
-    except ValueError:
-        raise ValueError(
-            f"{field!r} must be a rate like '1.42' — per unit of exposure, no "
-            f"currency symbol and no percent sign — not {value!r}"
-        ) from None
+        return parse_rate_micros(value)
+    except MoneyParseError as exc:
+        # money.py owns the parser AND the sentence; this adds only the
+        # argument name, which is the one thing a tool caller needs and the
+        # parser cannot know.
+        raise ValueError(f"{field!r}: {exc}") from None
 
 
 def _exposure(basis_key: str | None, field: str, value: str | None) -> int | None:
@@ -2963,13 +2971,17 @@ def _exposure(basis_key: str | None, field: str, value: str | None) -> int | Non
         from .money import parse_money_cents
 
         return int(parse_money_cents(value))
+    # money.py owns the count parser and its refusal, exactly as it owns the
+    # money and rate ones. This branch used to hold its own `int(...)`, and
+    # the web needed the same rule for its exposure cells — a second copy that
+    # floored or refused differently would file a fraction as a count on one
+    # surface and refuse it on the other.
+    from .money import MoneyParseError, parse_count
+
     try:
-        return int(str(value).replace(",", "").strip())
-    except ValueError:
-        raise ValueError(
-            f"{field!r} on a {basis_key!r} basis is a whole count, not money — "
-            f"got {value!r}"
-        ) from None
+        return parse_count(value)
+    except MoneyParseError as exc:
+        raise ValueError(f"{field!r} on a {basis_key!r} basis: {exc}") from None
 
 
 def _check_basis(field: str, key: str | None) -> str | None:
@@ -3080,7 +3092,7 @@ def _market_approach(
     reports them: the double approach is sometimes deliberate and a hard block
     would make a legitimate entry impossible (the `line-gap` rule again)."""
     from .repo import marketing, orgs
-    from .repo import submissions as submissions_repo
+    from .services import marketing_entry
 
     if not (market or via):
         raise ValueError(
@@ -3101,10 +3113,6 @@ def _market_approach(
         else date.today().isoformat()
     )
     fields: dict[str, Any] = {}
-    if carrier is not None:
-        fields["market_org_id"] = carrier.id
-    if intermediary is not None:
-        fields["via_org_id"] = intermediary.id
     if attach:
         fields["attach"] = _clean_typed("money", "attach", attach)
     if limit:
@@ -3112,34 +3120,25 @@ def _market_approach(
     if notes:
         fields["notes"] = notes
 
-    # A WITHDRAWN SUBMISSION IS NOT REUSED. We pulled that package; hanging a
-    # new approach off it would leave the row permanently mis-stated, because
-    # repo/marketing.roll_up_submission never writes over `withdrawn` and
-    # never un-withdraws one. Going back to a market we withdrew from is a
-    # NEW submission, which is also what happened in the world.
-    existing = next(
-        (
-            sub
-            for sub in submissions_repo.for_placement(conn, placement.id)
-            if sub.market_org_id == addressed.id and sub.status != "withdrawn"
-        ),
-        None,
-    )
     with _open_batch(
         conn,
         tool="market_approach",
         org_id=placement.org_id,
         summary=f"approached {addressed.name} on {coverage.name}",
     ) as batch:
-        submission = existing or submissions_repo.create(
+        # THE SUBMISSION RULE IS THE SERVICE'S, not this tool's — the web's
+        # add-market row records the same act and must reuse the same live
+        # submission (services/marketing_entry.py).
+        recorded = marketing_entry.approach(
             conn,
-            market_org_id=addressed.id,
+            placement.id,
+            coverage.id,
             sent_on=when,
-            placement_id=placement.id,
+            market_org_id=carrier.id if carrier is not None else None,
+            via_org_id=intermediary.id if intermediary is not None else None,
+            **fields,
         )
-        response = marketing.create_response(
-            conn, submission.id, coverage.id, **fields
-        )
+        response, submission = recorded.response, recorded.submission
         _provenance(conn, "market_response", response.id)
 
     conflicts = marketing.clearance_conflicts(conn, response)
@@ -3153,7 +3152,7 @@ def _market_approach(
         "via": intermediary.name if intermediary else None,
         "status": response.status,
         "submission_id": submission.id,
-        "submission_is_new": existing is None,
+        "submission_is_new": recorded.submission_is_new,
         "sent_on": submission.sent_on,
         "clearance_warnings": [
             f"{carrier.name if carrier else 'this carrier'} is already being "
@@ -3269,6 +3268,7 @@ def _set_placement_line(
     rating_basis: str | None = None,
     rate_per: str | None = None,
     limit_sought: str | None = None,
+    attach_sought: str | None = None,
 ) -> dict[str, Any]:
     """What ONE line of coverage on ONE placement is expected to do: the
     expiring figures a client's comparison is built on, and the exposure and
@@ -3317,11 +3317,13 @@ def _set_placement_line(
         fields["rate_per"] = _clean_typed("int", "rate_per", rate_per)
     if limit_sought is not None:
         fields["limit_sought"] = _clean_typed("money", "limit_sought", limit_sought)
+    if attach_sought is not None:
+        fields["attach_sought"] = _clean_typed("money", "attach_sought", attach_sought)
     if not fields:
         raise ValueError(
             "set_placement_line was given nothing to set — pass at least one "
-            "expiring figure, an expected exposure, a basis, a rate_per or a "
-            "limit sought"
+            "expiring figure, an expected exposure, a basis, a rate_per, a "
+            "limit sought or an attach sought"
         )
 
     with _open_batch(
@@ -3346,6 +3348,7 @@ def _set_placement_line(
         "rating_basis": row.rating_basis,
         "rate_per": row.rate_per,
         "limit_sought": row.limit_sought,
+        "attach_sought": row.attach_sought,
         "batch": batch.ref,
     }
 
@@ -3428,7 +3431,18 @@ def _marketing_report(
 
     responses = marketing.responses_for_placement(conn, placement.id)
     vocabulary = {line.id: line.name for line in lines_repo.all_lines(conn)}
-    who = orgs.names_for(
+    # THE INDEX NAMES THINGS THAT ALREADY HAPPENED, so it reads the same way
+    # the composed report above it does: a line of coverage that has been
+    # retired and a market org that has been deleted are still the line and
+    # the market this response was recorded against. Through the living
+    # lookups the agent got a raw slug for one and `null` for the other — the
+    # id it needs to name the row is here, and the words it needs to say
+    # WHICH row were missing (2026-08-25, the same defect the panel had).
+    for line_id in {r.line_id for r in responses} - set(vocabulary):
+        retired = lines_repo.get_any(conn, line_id)
+        if retired is not None:
+            vocabulary[line_id] = retired.name
+    who = orgs.names_for_any(
         conn,
         ({r.market_org_id or "" for r in responses}
          | {r.via_org_id or "" for r in responses}) - {""},

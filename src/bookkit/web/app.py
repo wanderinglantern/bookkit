@@ -235,6 +235,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
         changes,
         exports,
         items,
+        marketing,
         markets,
         orgs,
         pipeline,
@@ -276,6 +277,16 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
     app.include_router(work.router)
     app.include_router(pipeline.router)
     app.include_router(projects.router)
+    # BEFORE program.router, NOT AFTER. Its position is not free: program.py's
+    # terms strip ends in a `/program/{placement_id}/{kind}/{index}` family,
+    # and Starlette matches on shape before FastAPI validates the enum — so
+    # `POST /program/<id>/marketing/lines` was being read as
+    # `{kind}="marketing", {index}="lines"` and answered 422 instead of adding
+    # a line of coverage. The invariant is stated at that block in program.py
+    # ("every literal sibling must be registered FIRST to win") and this
+    # router is one of the siblings it means. Found 2026-08-25 the first time
+    # a test posted to the two-segment form.
+    app.include_router(marketing.router)
     # program.router owns GET /accounts/{ref}/program — same two-segment shape
     # as the generic {tab} route below, so it must be registered first.
     app.include_router(program.router)

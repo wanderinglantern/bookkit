@@ -9,6 +9,45 @@ from ..models import SUBJECTIVITY_OPEN_STATUS, Subjectivity, Submission
 from . import base
 
 
+def _sent_guard(
+    conn: sqlite3.Connection, submission_id: str, sent_on: str | None
+) -> None:
+    """A PACKAGE CANNOT HAVE GONE OUT AFTER AN ANSWER IT ALREADY HAS.
+
+    `repo.marketing._reply_guard` states this rule from the reply's side and
+    its refusal names correcting the send date as the other way out. The
+    marketing grid's Sent cell IS that way out (2026-08-26), and it must not be
+    able to walk straight into the state the other guard exists to refuse —
+    which it could, because that guard only ever looks at the reply being
+    typed.
+
+    The sentence differs from `_reply_guard`'s deliberately: the field being
+    corrected is the other one, so the remedy it names is the other one too.
+
+    HERE, in repo/, for the reason repo/team.py's duplicate guard is: every
+    surface that can move this column lands on `update`, and a rule beside one
+    of them is a rule the next one writes past. The FUTURE-date half of the
+    same field's story is not here — a wall clock in repo/ cannot know the
+    caller's today (`services.consistency.check_not_future` owns it, where
+    today is a parameter, the way the composer's is).
+    """
+    if not sent_on:
+        return
+    row = conn.execute(
+        "SELECT MIN(responded_on) AS first_reply FROM market_response"
+        f" WHERE submission_id = ? AND responded_on IS NOT NULL AND {base.alive()}",
+        (submission_id,),
+    ).fetchone()
+    replied = row["first_reply"] if row else None
+    if replied and sent_on > str(replied):
+        raise ValueError(
+            f"this market answered on {replied} and a package sent {sent_on} "
+            f"would not have reached them yet — a market cannot answer a "
+            f"submission it has not been sent. Correct the reply date on the "
+            f"row if that is the one that is wrong."
+        )
+
+
 def create(
     conn: sqlite3.Connection,
     market_org_id: str,
@@ -172,6 +211,8 @@ def market_counts(
 def update(
     conn: sqlite3.Connection, sub_id: str, note: str | None = None, **changes: Any
 ) -> Submission:
+    if "sent_on" in changes:
+        _sent_guard(conn, sub_id, changes["sent_on"])
     base.update(conn, "submission", sub_id, changes, note)
     return get(conn, sub_id)
 

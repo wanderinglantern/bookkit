@@ -55,7 +55,9 @@ def raw_row(
     that services.contacts's "already removed" and services.interactions's
     "already deleted" survive as the answer instead of being buried under "no
     contact"/"no interaction"; and those two services themselves, which raise
-    those sentences. Everything else keeps using get()."""
+    those sentences; and `repo/lines.get_any`, because a line of coverage that
+    has been retired must still be able to NAME the marketing recorded against
+    it. Everything else keeps using get()."""
     table = ENTITY_TABLES[entity_type]
     row: sqlite3.Row | None = conn.execute(
         f"SELECT * FROM {table} WHERE id = ?", (entity_id,)

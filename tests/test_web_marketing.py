@@ -1,0 +1,1963 @@
+"""The marketing grid on the Program tab — THE PANEL IS THE REPORT.
+
+The first half holds that the grid RENDERS the same report the workbook
+downloads, on a placement with a program file and on one without, and that the
+three things a marketing grid can silently lie about cannot happen here: a
+count printed as money, an empty line printed as an empty table, and a rate
+movement printed as a blank where the composer had a sentence to say instead.
+
+The second half holds that it is EDITABLE where it prints, and that the four
+ways that could go wrong do not: a cell that writes when nothing was typed, a
+status select the browser answers for you, a clearance conflict that refuses a
+legitimate entry, and an underwriter's private opinion reaching a client.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from bookkit.models import MARKET_RESPONSE_STATUSES
+from bookkit.web.app import create_app
+
+GL = "general-liability"
+AUTO = "auto"
+
+
+@pytest.fixture
+def client_and_org(snapshot_db: Path):
+    app = create_app(snapshot_db)
+    from bookkit.repo import orgs, placements
+
+    conn = app.state.conn
+    org = next(
+        o
+        for o in orgs.list_orgs(conn, kind="client")
+        if any(p.program_path for p in placements.for_org(conn, o.id))
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        yield client, org
+
+
+def _linked(client, org):
+    from bookkit.repo import placements
+
+    return next(
+        p for p in placements.for_org(client.app.state.conn, org.id) if p.program_path
+    )
+
+
+def _market(conn, name: str, best: str | None = None):
+    """The market this book knows by that name, created only if it does not
+    already know one.
+
+    NOT an unconditional create. The seeded book already carries Travelers,
+    Berkley, Amwins and friends, so a second org with the same name left two
+    rows a name-lookup could land on — and the routes resolve a typed carrier
+    by NAME, so the test would then assert against the org it made while the
+    app wrote against the one the seed made. That is the same ambiguity
+    repo/team.py's duplicate guard exists to stop, arriving through a
+    fixture."""
+    from bookkit.repo import orgs
+
+    org = orgs.find_by_name(conn, name)
+    if org is None or org.kind != "market":
+        org = orgs.create(conn, kind="market", name=name, status="active")
+    if best:
+        conn.execute(
+            "INSERT OR REPLACE INTO market_profile"
+            " (org_id, am_best_rating, market_type) VALUES (?, ?, 'carrier')",
+            (org.id, best),
+        )
+    return org
+
+
+def _approach(conn, placement_id: str, market, line_id: str = GL, **fields):
+    from bookkit.repo import marketing, submissions
+
+    sub = submissions.create(
+        conn, market_org_id=market.id, sent_on="2026-08-01", placement_id=placement_id
+    )
+    return marketing.create_response(
+        conn, sub.id, line_id, market_org_id=market.id, **fields
+    )
+
+
+def _tab(client, org) -> str:
+    got = client.get(f"/accounts/{org.ref}/program")
+    assert got.status_code == 200
+    return got.text
+
+
+def test_the_grid_renders_beneath_the_workbench_on_a_linked_placement(client_and_org):
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(
+        conn, placement.id, GL,
+        expiring_premium=41_200_000, expiring_exposure=4_100_000_000,
+        expiring_rate_micros=10_048_780, expiring_basis="gross_sales",
+        expected_exposure=4_850_000_000, rating_basis="gross_sales", rate_per=1000,
+        limit_sought=100_000_000,
+    )
+    _approach(
+        conn, placement.id, _market(conn, "Travelers", "A++ XV"),
+        status="quoted", responded_on="2026-08-12", rate_micros=8_100_000,
+        premium=39_285_000, tria_premium=785_000, policy_fees=390_000,
+        surplus_lines_tax=0,
+    )
+
+    html = _tab(client, org)
+
+    assert f'id="marketing-{placement.id}"' in html
+    assert "General Liability" in html
+    assert "Travelers" in html
+    # The block header carries the basis, the exposure and what expired.
+    assert "Gross sales" in html
+    assert "$48,500,000" in html, "the expected exposure is not on the header"
+    assert "$412,000" in html, "the expiring premium is not on the header"
+    # The premium and every component of the total are cells of their own,
+    # because you cannot type a total (Grant, 2026-08-25).
+    assert "$392,850" in html
+    assert "$7,850" in html, "TRIA is not its own cell"
+    assert "$3,900" in html, "fees are not their own cell"
+    assert "$404,600" in html, "the total is not printed"
+    # And the section is BELOW the workbench, not above it.
+    assert html.index("program-workbench") < html.index(f"marketing-{placement.id}")
+
+
+def test_it_renders_on_a_placement_with_no_program_file(client_and_org):
+    """Marketing happens BEFORE a tower exists. Gating this on `program_path`
+    would put it out of reach on exactly the placements it is for."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    from bookkit.repo import placements as placements_repo
+
+    bare = placements_repo.create(
+        conn, org.id, "Casualty renewal", "2026-11-01", "2027-11-01"
+    )
+    _approach(
+        conn, bare.id, _market(conn, "Chubb", "A++ XV"),
+        status="indicated", responded_on="2026-08-11", premium=12_500_000,
+    )
+
+    html = _tab(client, org)
+
+    assert "This placement has no program file." in html, "the fixture is wrong"
+    assert f'id="marketing-{bare.id}"' in html
+    assert "Chubb" in html
+    assert "Indicated" in html
+
+
+def test_a_count_basis_exposure_is_a_count_and_never_money(client_and_org):
+    """350 power units is not $3.50 — the decision belongs to
+    RatingBasis.monetary and is read, never re-judged here."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(
+        conn, placement.id, AUTO,
+        expected_exposure=350, rating_basis="power_units", rate_per=1,
+    )
+
+    html = _tab(client, org)
+
+    assert "350 power units" in html
+    assert "$3.50" not in html
+
+
+def test_a_line_with_no_markets_says_so_in_words(client_and_org):
+    """An empty table cannot be told from a rendering bug."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(conn, placement.id, GL, expected_exposure=1_000_000)
+
+    html = _tab(client, org)
+
+    assert "No markets approached on this line yet." in html
+
+
+def test_a_header_figure_nobody_recorded_reads_not_set(client_and_org):
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(conn, placement.id, GL, expected_exposure=1_000_000)
+
+    html = _tab(client, org)
+
+    assert "not set" in html, "a blank header figure reads as a rendering fault"
+
+
+def test_every_status_renders_as_its_own_pill(client_and_org):
+    """One pill per status in models.MARKET_RESPONSE_STATUSES, printing the
+    composer's own label — the vocabulary has ONE home."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.services import marketing_report
+
+    for status in MARKET_RESPONSE_STATUSES:
+        _approach(
+            conn, placement.id, _market(conn, f"Market {status}"), status=status
+        )
+
+    html = _tab(client, org)
+
+    report = marketing_report.compose(
+        conn, placement.id, __import__("datetime").date(2026, 8, 14)
+    )
+    labels = {row.status for block in report.blocks for row in block.rows}
+    assert len(labels) == len(MARKET_RESPONSE_STATUSES)
+    for label in labels:
+        assert f">{label}</span>" in html, f"{label} did not render as a pill"
+    # The pill is the EDITABLE cell's own value span now (status is corrected
+    # where it prints), so what is counted is the pill-carrying cell — one per
+    # response, tinted by the cell's tone class and still printing its word.
+    assert html.count("pill-cell") == len(MARKET_RESPONSE_STATUSES)
+
+
+def test_a_rate_movement_with_no_number_prints_the_reason(client_and_org):
+    """NEVER a bare blank: the reader cannot tell a missing comparison from a
+    figure that failed to render."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(
+        conn, placement.id, GL, expected_exposure=4_850_000_000,
+        rating_basis="gross_sales", rate_per=1000,
+    )
+    _approach(
+        conn, placement.id, _market(conn, "Zurich"),
+        status="quoted", responded_on="2026-08-10", rate_micros=8_100_000,
+        premium=39_285_000,
+    )
+
+    html = _tab(client, org)
+
+    assert "no expiring rate recorded" in html
+
+
+def test_a_total_is_blank_while_any_component_is_unknown(client_and_org):
+    """NULL is not zero. A total that treats an unquoted surplus lines tax as
+    zero recommends the wrong placement."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    _approach(
+        conn, placement.id, _market(conn, "Liberty Mutual"),
+        status="quoted", responded_on="2026-08-09", premium=10_000_000,
+        tria_premium=200_000,
+    )
+
+    html = _tab(client, org)
+
+    assert "$100,000" in html, "the quoted premium is not printed"
+    assert "$102,000" not in html, "a total was printed from an unknown tax"
+
+
+# --- editing it where it prints --------------------------------------------
+
+
+def _cell_url(org, placement, response, key: str) -> str:
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/marketing/responses/{response.id}/cell/{key}"
+    )
+
+
+def _events(conn, response_id: str) -> int:
+    from bookkit.repo import events
+
+    return len(events.history(conn, "market_response", response_id, limit=500))
+
+
+def test_a_cell_commits_and_an_unchanged_value_writes_nothing(client_and_org):
+    """BLUR COMMITS, and an UNCHANGED value writes NOTHING.
+
+    The blur half is inline-cell.js's; the half a route can be held to is the
+    second one, and it is the one with teeth — opening a cell to READ it must
+    not cost an event-log row and an undo batch per glance, and the guard has
+    to hold even when the JS one is bypassed (a slow click, a keyboard user, a
+    replayed POST). What makes it hold on both sides is that the editor
+    pre-fills exactly what the parser accepts back: if `initial_text` and
+    `parse_value` disagreed about a premium, every re-save would look like a
+    change to `base.update` and the JS comparison against `data-opened-with`
+    would fail too.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    response = _approach(conn, placement.id, _market(conn, "Travelers"), status="quoted")
+    # TRIA rather than the premium: TRIA is one of the four cells that feed the
+    # derived Total and nothing else, so it is the cell the ROW-shaped answer is
+    # for. The premium moves the block's bridge as well and answers one level up
+    # (`_BLOCK_CELLS`), which is a different rule, tested on its own below.
+    url = _cell_url(org, placement, response, "tria_premium")
+
+    saved = client.post(url, data={"tria_premium": "7,850.00"})
+    assert saved.status_code == 200
+    # ONE RESPONSE, ONE TOP-LEVEL ELEMENT: the row, and it says where it goes.
+    assert saved.text.lstrip().startswith("<tr")
+    assert saved.headers["HX-Retarget"] == f"#mrow-{response.id}"
+    assert saved.headers["HX-Reswap"] == "outerHTML"
+    assert marketing.get_response(conn, response.id).tria_premium == 785_000
+    # the caret goes back to the cell the swap replaced
+    assert 'data-refocus="cell:tria_premium"' in saved.text
+
+    before = _events(conn, response.id)
+    editor = client.get(url + "/edit")
+    assert editor.status_code == 200
+    prefilled = re.search(r'name="tria_premium" value="([^"]*)"', editor.text)
+    assert prefilled, "the editor did not pre-fill the stored TRIA"
+
+    client.post(url, data={"tria_premium": prefilled.group(1)})
+
+    assert _events(conn, response.id) == before, (
+        "re-saving the value the editor itself pre-filled wrote to the event log"
+    )
+
+
+def test_a_status_cell_offers_nothing_chosen_first(client_and_org):
+    """A select with no empty option pre-selects its first, and `required` is
+    then satisfied by a value nobody chose — which on THIS field filed an
+    untouched market response as 'quoted'."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    response = _approach(conn, placement.id, _market(conn, "Zurich"), status="quoted")
+
+    editor = client.get(_cell_url(org, placement, response, "status") + "/edit").text
+
+    options = re.findall(r"<option\b[^>]*>", editor)
+    assert options, "the status cell rendered no options at all"
+    assert options[0] == '<option value="">', options[:3]
+    # and it still offers every real status
+    assert len(options) == len(MARKET_RESPONSE_STATUSES) + 1
+
+
+def test_a_rate_cell_is_not_read_through_the_money_parser(client_and_org):
+    """1.42 is 1.42 per unit of exposure. Through the money parser it would be
+    142 cents, and the grid would print a rate a millionfold out."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    response = _approach(conn, placement.id, _market(conn, "AIG"), status="quoted")
+
+    client.post(_cell_url(org, placement, response, "rate_micros"), data={"rate_micros": "8.10"})
+
+    assert marketing.get_response(conn, response.id).rate_micros == 8_100_000
+
+
+def test_no_charges_writes_three_zeros_as_one_undo_unit(client_and_org):
+    """NULL is 'nobody has told us'; 0 is 'we asked, there is none'. Only 0
+    reaches a Total, so without this the Total column stays blank forever on
+    admitted domestic business — or a broker types three zeros."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import batches as batches_repo
+    from bookkit.repo import marketing
+
+    response = _approach(
+        conn, placement.id, _market(conn, "Hartford"),
+        status="quoted", premium=10_000_000,
+    )
+    assert response.total_cost is None, "the fixture already has a total"
+
+    before = batches_repo.most_recent(conn)
+    got = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/marketing/responses/{response.id}/no-charges"
+    )
+    assert got.status_code == 200
+
+    fresh = marketing.get_response(conn, response.id)
+    assert (fresh.tria_premium, fresh.policy_fees, fresh.surplus_lines_tax) == (0, 0, 0)
+    assert fresh.total_cost == 10_000_000, "zeroes did not make the total possible"
+
+    after = batches_repo.most_recent(conn)
+    assert after is not None and (before is None or after.id != before.id)
+    events = [
+        e.field
+        for e in __import__(
+            "bookkit.repo.events", fromlist=["events"]
+        ).history(conn, "market_response", response.id)
+        if e.batch_id == after.id
+    ]
+    assert set(events) == {"tria_premium", "policy_fees", "surplus_lines_tax"}, (
+        "the three zeroes are not one undo unit"
+    )
+
+
+def test_a_market_can_be_added_through_a_wholesaler_alone(client_and_org):
+    """A submission out to a wholesaler whose carrier is not yet known is a
+    REAL row. 'RT Specialty — carrier TBD' is the truth, not a gap."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    _market(conn, "RT Specialty")
+    got = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/marketing/lines/{GL}/approaches",
+        data={
+            "market": "", "via": "RT Specialty", "attach": "", "lim": "10m",
+            "sent_on": "2026-08-10", "status": "pending",
+        },
+    )
+    assert got.status_code == 200
+
+    rows = [
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL
+    ]
+    assert len(rows) == 1
+    assert rows[0].market_org_id is None
+    assert rows[0].via_org_id is not None
+    assert rows[0].lim == 1_000_000_000
+
+    html = _tab(client, org)
+    assert "RT Specialty — carrier TBD" in html
+
+
+def test_the_add_row_offers_nothing_chosen_first(client_and_org):
+    """The add row's own status select, held to the same rule as the cell's."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(conn, placement.id, GL, expected_exposure=1_000_000)
+
+    html = _tab(client, org)
+
+    # `marketing-add-row`, not `market-add-row`: the participation table in the
+    # workbench above carries the latter, and slicing from it would measure the
+    # wrong row entirely.
+    add = html[html.index("marketing-add-row") :]
+    add = add[: add.index("</tr>")]
+    # The SELECT's own options — the carrier inputs carry <datalist> options of
+    # their own, and a scan over the whole row would read one of those first
+    # and pass while the select was still pre-selecting row one.
+    select = add[add.index("<select") : add.index("</select>")]
+    options = re.findall(r"<option\b[^>]*>", select)
+    assert options[0] == '<option value="">', options[:3]
+    # ...and the visible default is one a reader can SEE and change, not one
+    # the browser picked.
+    assert 'value="pending" selected' in add
+
+
+def test_an_approach_joins_the_live_submission_rather_than_opening_a_second(
+    client_and_org,
+):
+    """THE SUBMISSION IS THE PACKAGE. One email to a market carrying two lines
+    is one submission, or 'who did we approach' stops being answerable — and
+    the web must not answer that question differently from MCP."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import submissions
+
+    _market(conn, "Chubb")
+    base = f"/accounts/{org.ref}/program/{placement.id}/marketing/lines"
+    for line in (GL, AUTO):
+        got = client.post(
+            f"{base}/{line}/approaches",
+            data={"market": "Chubb", "via": "", "attach": "", "lim": "",
+                  "sent_on": "2026-08-10", "status": "pending"},
+        )
+        assert got.status_code == 200
+
+    packages = [
+        s for s in submissions.for_placement(conn, placement.id)
+        if s.market_org_id
+    ]
+    chubb = [s for s in packages if s.market_org_id]
+    assert len([s for s in chubb if s.sent_on == "2026-08-10"]) == 1, (
+        "two lines to one market opened two submissions"
+    )
+
+
+def test_a_clearance_conflict_warns_and_the_row_is_still_written(client_and_org):
+    """WARNED, NEVER REFUSED — the `line-gap` rule on a different fact. The
+    double approach is sometimes deliberate, and a hard block would make a
+    legitimate entry impossible."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    carrier = _market(conn, "Berkley")
+    wholesaler = _market(conn, "Amwins")
+    _approach(conn, placement.id, carrier, status="quoted")
+
+    got = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/marketing/lines/{GL}/approaches",
+        data={"market": "Berkley", "via": "Amwins", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending"},
+    )
+    assert got.status_code == 200
+    assert "cell-error-msg" not in got.text, got.text[:2000]
+
+    rows = [
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL and r.market_org_id == carrier.id
+    ]
+    assert len(rows) == 2, "the second approach was refused rather than warned"
+    assert any(r.via_org_id == wholesaler.id for r in rows)
+
+    html = _tab(client, org)
+    assert "clearance" in html
+    assert "Berkley" in html and "Amwins" in html
+
+
+def test_the_public_decline_reason_reaches_the_client_and_the_internal_one_never_does(
+    client_and_org,
+):
+    """Two fields, never one with a 'safe to share' tick.
+
+    Both are written through the grid's own cells, because the cells are the
+    only entry path on this surface — so this is the round trip that matters:
+    what a broker picks from the constrained list is what the client's workbook
+    prints, and what they type in the free-text one goes nowhere near it.
+
+    The panel is asserted on too, and specifically that the two cells address
+    DIFFERENT columns. A grid whose two reason cells both pointed at
+    `decline_reason_public` would look right, save without complaint, and make
+    the private note unreachable — which is how a broker ends up typing the
+    off-the-record sentence into the field that IS the record.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.services import marketing_report
+
+    response = _approach(
+        conn, placement.id, _market(conn, "Sompo"), status="declined"
+    )
+    private = "underwriter hates the loss runs, off the record"
+    public = client.post(
+        _cell_url(org, placement, response, "decline_reason_public"),
+        data={"decline_reason_public": "loss_history"},
+    )
+    assert public.status_code == 200, "the client-facing reason is not editable"
+    internal = client.post(
+        _cell_url(org, placement, response, "decline_reason"),
+        data={"decline_reason": private},
+    )
+    assert internal.status_code == 200, "the internal reason is not editable"
+
+    from bookkit.repo import marketing
+
+    fresh = marketing.get_response(conn, response.id)
+    assert fresh.decline_reason_public == "loss_history"
+    assert fresh.decline_reason == private, "the two reasons share one column"
+
+    today = __import__("datetime").date(2026, 8, 25)
+
+    def words(audience: str) -> str:
+        report = marketing_report.compose(conn, placement.id, today, audience=audience)
+        return " | ".join(
+            cell
+            for section in marketing_report.to_sections(report)
+            for row in section.rows
+            for cell in row
+        )
+
+    client_words = words(marketing_report.CLIENT)
+    assert "Loss history" in client_words, "the public reason did not reach the client"
+    assert private not in client_words, "an underwriter's private words reached a client"
+    assert private in words(marketing_report.INTERNAL)
+
+    # ...and on the broker's own screen: both, each marked at the column that
+    # is the only label an inline cell has.
+    html = _tab(client, org)
+    assert "Reason (to client)" in html and "Internal (never sent)" in html
+    assert 'data-field="decline_reason_public"' in html
+    assert 'data-field="decline_reason"' in html
+    assert private in html, "the internal note is not readable on the broker's grid"
+
+
+# --- the vocabulary, and what a line of coverage is expected to do ----------
+
+
+def _line_cell_url(org, placement, line_id: str, key: str) -> str:
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/marketing/lines/{line_id}/cell/{key}"
+    )
+
+
+def _line_url(org, placement) -> str:
+    return f"/accounts/{org.ref}/program/{placement.id}/marketing/lines"
+
+
+def _line_named(conn, name: str):
+    from bookkit.repo import lines as lines_repo
+
+    return lines_repo.by_name(conn, name)
+
+
+def test_the_picker_opens_an_empty_block_on_a_line_nobody_has_marketed(
+    client_and_org,
+):
+    """A block exists because a placement_line row or a response names the
+    line, so on a fresh placement there is nothing to add a market TO. This is
+    the way in — and it writes the row and NOTHING else: no exposure, no
+    basis, no expiring figure, because every one of those comes off a document
+    that is not in front of anybody yet."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    got = client.post(_line_url(org, placement), data={"line_id": AUTO})
+
+    assert got.status_code == 200
+    assert got.text.lstrip().startswith("<section")
+    assert got.headers["HX-Retarget"] == f"#marketing-{placement.id}"
+    row = marketing.placement_line(conn, placement.id, AUTO)
+    assert row is not None
+    assert (row.expected_exposure, row.rating_basis, row.expiring_premium) == (
+        None, None, None,
+    ), "the picker guessed a figure nobody gave it"
+    assert "No markets approached on this line yet." in got.text
+
+
+def test_the_picker_renders_a_blank_option_first(client_and_org):
+    """Without it the browser pre-selects option one and the picker answers
+    the question — and here it would answer it OVER a name typed into the box
+    beside it, which is the worse half: the line that opened would not be the
+    one the broker named."""
+    client, org = client_and_org
+
+    html = _tab(client, org)
+
+    form = html[html.index('class="marketing-line-add"') :]
+    form = form[: form.index("</form>")]
+    select = form[form.index("<select") : form.index("</select>")]
+    options = re.findall(r"<option\b[^>]*>", select)
+    assert options, "the line picker rendered no options at all"
+    assert options[0] == '<option value="">', options[:3]
+
+
+def test_a_line_the_book_has_never_carried_can_be_created(client_and_org):
+    """The vocabulary has to be able to GROW, or a broker meets a picker that
+    cannot say what they are placing. Nothing close by, so nothing to ask."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    assert _line_named(conn, "Kidnap and Ransom") is None, "the fixture is wrong"
+
+    got = client.post(_line_url(org, placement), data={"line_name": "Kidnap and Ransom"})
+
+    assert got.status_code == 200
+    made = _line_named(conn, "Kidnap and Ransom")
+    assert made is not None, "a line the book does not have was not offered a create"
+    assert marketing.placement_line(conn, placement.id, made.id) is not None
+    assert "Kidnap and Ransom" in got.text
+
+
+def test_a_near_match_asks_and_is_never_a_veto(client_and_org):
+    """ADVISORY, NEVER A REFUSAL.
+
+    `General Liability (Products)` is 90% like `General Liability`, 85% like
+    `Excess Liability` and 85% like `Cyber Liability`, and it is none of them —
+    a products-only tower is its own line of coverage. That is the shape
+    repo/lines.py describes in its own docstring (`Excess Liability` and
+    `Employers Liability` share four letters and are different cover): a
+    warning a broker cannot override makes a correct entry impossible, so both
+    answers are offered and neither is taken here.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import lines as lines_repo
+
+    typed = "General Liability (Products)"
+    assert lines_repo.by_name(conn, typed) is None, "the fixture is wrong"
+    gl = lines_repo.get(conn, GL)
+
+    asked = client.post(_line_url(org, placement), data={"line_name": typed})
+
+    assert asked.status_code == 200
+    assert lines_repo.by_name(conn, typed) is None, (
+        "the near match created the line without asking"
+    )
+    # BOTH answers are offered, and the score is printed so the broker can
+    # judge the resemblance rather than be told about it.
+    assert gl.name in asked.text
+    assert re.search(r"\d+% alike", asked.text), "a match was shown without its score"
+    assert f"&#34;line_id&#34;: &#34;{gl.id}&#34;" in asked.text, (
+        "there is no way to use the line that already exists"
+    )
+    assert "anyway" in asked.text, "the create half of the question is missing"
+
+    # ...and taking the second answer creates it, which is what makes this a
+    # question and not a veto.
+    made = client.post(
+        _line_url(org, placement), data={"line_name": typed, "create": "yes"}
+    )
+    assert made.status_code == 200
+    fresh = lines_repo.by_name(conn, typed)
+    assert fresh is not None, "the guard refused a line it may only warn about"
+    assert fresh.id != gl.id
+    from bookkit.repo import marketing
+
+    assert marketing.placement_line(conn, placement.id, fresh.id) is not None, (
+        "the line was created and never put on the placement"
+    )
+
+
+def test_an_exact_duplicate_is_refused_and_the_refusal_names_the_line(
+    client_and_org,
+):
+    """A REFUSAL SAYS SOMETHING. repo.lines.DuplicateLine carries the row that
+    already exists precisely so a caller can offer to USE it rather than only
+    saying no — otherwise the broker is sent back to a picker they have
+    already looked past."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import lines as lines_repo
+
+    before = len(lines_repo.all_lines(conn))
+    gl = lines_repo.get(conn, GL)
+
+    got = client.post(_line_url(org, placement), data={"line_name": gl.name})
+
+    assert got.status_code == 200
+    assert len(lines_repo.all_lines(conn)) == before, "a duplicate line was created"
+    assert gl.name in got.text
+    assert f'&#34;line_id&#34;: &#34;{gl.id}&#34;' in got.text, (
+        "the refusal did not offer to use the line that already exists"
+    )
+    assert "anyway" not in got.text, "an exact duplicate was still offered a create"
+
+
+def test_the_add_line_control_refuses_in_words_when_nothing_was_given(
+    client_and_org,
+):
+    """A control that refuses in silence reads as a broken app."""
+    client, org = client_and_org
+    placement = _linked(client, org)
+
+    got = client.post(_line_url(org, placement), data={"line_id": "", "line_name": ""})
+
+    assert got.status_code == 200
+    assert "cell-error-msg" in got.text
+    assert "type a new name" in got.text
+
+
+# --- the block header's own cells ------------------------------------------
+
+
+def test_filling_the_expiring_rate_turns_every_rate_delta_into_a_number(
+    client_and_org,
+):
+    """THE WHOLE POINT OF THE HEADER, end to end.
+
+    Until the expiring rate is recorded the composer refuses to compute a rate
+    movement and says so in words — it never assumes exposure was flat, because
+    that puts a figure in front of a client that looks like rate change and is
+    not. Recording it is a HEADER cell, and the rows beneath it are what the
+    figure changes, which is why a header save answers with the whole block
+    rather than with the cell it swapped."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(
+        conn, placement.id, GL,
+        expected_exposure=4_850_000_000, rating_basis="gross_sales", rate_per=1000,
+    )
+    _approach(
+        conn, placement.id, _market(conn, "Travelers"),
+        status="quoted", responded_on="2026-08-10", rate_micros=8_100_000,
+        premium=39_285_000,
+    )
+    _approach(
+        conn, placement.id, _market(conn, "Zurich"),
+        status="quoted", responded_on="2026-08-11", rate_micros=12_060_000,
+        premium=58_491_000,
+    )
+
+    before = _tab(client, org)
+    assert before.count("no expiring rate recorded") == 2, "the fixture is wrong"
+
+    saved = client.post(
+        _line_cell_url(org, placement, GL, "expiring_rate_micros"),
+        data={"expiring_rate_micros": "10.05"},
+    )
+
+    assert saved.status_code == 200
+    # ONE RESPONSE, ONE TOP-LEVEL ELEMENT, and it says where it goes: the
+    # BLOCK, because the write moved a figure on every row inside it.
+    assert saved.text.lstrip().startswith("<article")
+    assert saved.headers["HX-Retarget"] == f"#mblock-{placement.id}-{GL}"
+    assert saved.headers["HX-Reswap"] == "outerHTML"
+    assert 'data-refocus="cell:expiring_rate_micros"' in saved.text
+
+    assert marketing.placement_line(conn, placement.id, GL).expiring_rate_micros == (
+        10_050_000
+    )
+    # 8.10 against 10.05 is -19.4%; 12.06 against 10.05 is +20.0%. Both rows,
+    # in the response the save itself answered with...
+    assert "no expiring rate recorded" not in saved.text
+    assert "-19.4%" in saved.text and "+20.0%" in saved.text
+    # ...and on the next full render of the tab.
+    after = _tab(client, org)
+    assert "no expiring rate recorded" not in after
+    assert "-19.4%" in after and "+20.0%" in after
+
+
+def test_a_count_basis_exposure_refuses_a_fraction_rather_than_flooring_it(
+    client_and_org,
+):
+    """42 power units and $0.42 are the same digits, and models.RatingBasis
+    .monetary is the one place that decides which. A fraction typed against a
+    count basis is REFUSED with a sentence — flooring it would file 1,234
+    power units against a figure somebody typed as an amount, and every rate
+    per unit on the line would then be computed off a number nobody gave."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(conn, placement.id, AUTO, rating_basis="power_units")
+    url = _line_cell_url(org, placement, AUTO, "expected_exposure")
+
+    refused = client.post(url, data={"expected_exposure": "1,234.56"})
+
+    assert refused.status_code == 200
+    assert "cell-error-msg" in refused.text, "a fraction was accepted in silence"
+    assert "whole count" in refused.text
+    # COMMIT IN PLACE: the editor comes back with what was typed still in it.
+    assert 'value="1,234.56"' in refused.text
+    assert marketing.placement_line(conn, placement.id, AUTO).expected_exposure is None
+
+    client.post(url, data={"expected_exposure": "350"})
+
+    assert marketing.placement_line(conn, placement.id, AUTO).expected_exposure == 350
+    html = _tab(client, org)
+    assert "350 power units" in html
+    assert "$3.50" not in html
+
+
+def test_a_monetary_exposure_is_cents_on_the_same_cell(client_and_org):
+    """The other half of the one decision: the SAME cell key, against a
+    monetary basis, parses as money."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(conn, placement.id, GL, rating_basis="gross_sales")
+
+    client.post(
+        _line_cell_url(org, placement, GL, "expected_exposure"),
+        data={"expected_exposure": "48.5m"},
+    )
+
+    assert marketing.placement_line(conn, placement.id, GL).expected_exposure == (
+        4_850_000_000
+    )
+    assert "$48,500,000" in _tab(client, org)
+
+
+def test_an_exposure_is_refused_while_nothing_says_what_it_means(client_and_org):
+    """Refused, and the refusal NAMES THE FIX. Storing it against no basis at
+    all would leave an integer nothing on the page could read as either money
+    or a count."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(conn, placement.id, GL, limit_sought=100_000_000)
+
+    got = client.post(
+        _line_cell_url(org, placement, GL, "expected_exposure"),
+        data={"expected_exposure": "48.5m"},
+    )
+
+    assert "cell-error-msg" in got.text
+    assert "rating basis" in got.text, "the refusal did not name the field to set first"
+    assert marketing.placement_line(conn, placement.id, GL).expected_exposure is None
+
+
+def test_a_basis_cannot_be_swapped_out_from_under_a_stored_exposure(
+    client_and_org,
+):
+    """Nothing marks the stored integer as cents or as a count — the basis
+    beside it IS the marking. Moving the basis re-reads $48,500,000 as
+    48,500,000 power units without touching a byte, and the rate printed on a
+    client's report is then a hundredfold out with no bad value to find."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(
+        conn, placement.id, GL,
+        rating_basis="gross_sales", expected_exposure=4_850_000_000,
+    )
+
+    got = client.post(
+        _line_cell_url(org, placement, GL, "rating_basis"),
+        data={"rating_basis": "power_units"},
+    )
+
+    assert got.status_code == 200
+    assert "cell-error-msg" in got.text, "the basis moved under the figure in silence"
+    line = marketing.placement_line(conn, placement.id, GL)
+    assert line.rating_basis == "gross_sales"
+    assert line.expected_exposure == 4_850_000_000
+    # ...and the same guard holds for MCP, which is why it lives in repo/.
+    with pytest.raises(ValueError, match="MEANS"):
+        marketing.set_placement_line(
+            conn, placement.id, GL, rating_basis="power_units"
+        )
+
+
+def test_the_rate_per_cell_is_a_picker_and_not_free_text(client_and_org):
+    """`rate_per` is what makes a rate mean anything — 1.42 per $100 of payroll
+    and 1.42 per $1,000 of sales are ten times apart — and the conventions in
+    use are a knowable set, which is exactly when the rule says a picker."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.models import RATE_PER_CHOICES
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(conn, placement.id, GL, limit_sought=100_000_000)
+
+    editor = client.get(_line_cell_url(org, placement, GL, "rate_per") + "/edit").text
+
+    assert "<select" in editor, "rate per is free text"
+    options = re.findall(r"<option\b[^>]*>", editor)
+    assert options[0] == '<option value="">', options[:3]
+    assert len(options) == len(RATE_PER_CHOICES) + 1
+
+    client.post(_line_cell_url(org, placement, GL, "rate_per"), data={"rate_per": "1000"})
+    stored = marketing.placement_line(conn, placement.id, GL).rate_per
+    assert stored == 1000, "the picker's string was stored instead of the number"
+    assert "$1,000" in _tab(client, org)
+
+
+def test_the_basis_cell_is_a_picker_over_the_declared_vocabulary(client_and_org):
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.models import RATING_BASES
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(conn, placement.id, GL, limit_sought=100_000_000)
+
+    editor = client.get(
+        _line_cell_url(org, placement, GL, "rating_basis") + "/edit"
+    ).text
+
+    options = re.findall(r"<option\b[^>]*>", editor)
+    assert options[0] == '<option value="">', options[:3]
+    assert len(options) == len(RATING_BASES) + 1
+    # A value outside the vocabulary is refused SERVER-SIDE: markup constrains
+    # a mouse and nothing else.
+    refused = client.post(
+        _line_cell_url(org, placement, GL, "rating_basis"),
+        data={"rating_basis": "vibes"},
+    )
+    assert "cell-error-msg" in refused.text
+    assert marketing.placement_line(conn, placement.id, GL).rating_basis is None
+
+
+def test_a_header_cell_re_saved_unchanged_writes_nothing(client_and_org):
+    """Opening a header cell to READ it must not cost an event-log row and an
+    undo batch per glance. What makes that hold is that the editor pre-fills
+    exactly what the parser accepts back."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import events, marketing
+
+    marketing.set_placement_line(conn, placement.id, GL, rating_basis="gross_sales")
+    line = marketing.placement_line(conn, placement.id, GL)
+    url = _line_cell_url(org, placement, GL, "expiring_premium")
+    client.post(url, data={"expiring_premium": "412,000.00"})
+    assert marketing.placement_line(conn, placement.id, GL).expiring_premium == (
+        41_200_000
+    )
+
+    before = len(events.history(conn, "placement_line", line.id, limit=500))
+    editor = client.get(url + "/edit").text
+    prefilled = re.search(r'name="expiring_premium" value="([^"]*)"', editor)
+    assert prefilled, "the editor did not pre-fill the stored premium"
+
+    client.post(url, data={"expiring_premium": prefilled.group(1)})
+
+    assert len(events.history(conn, "placement_line", line.id, limit=500)) == before, (
+        "re-saving the value the editor itself pre-filled wrote to the event log"
+    )
+
+
+def test_every_header_expectation_is_a_cell_where_it_prints(client_and_org):
+    """Nine facts, nine cells, no second form. Walked off the field builder
+    rather than a hand-written list, so a field added there and not rendered
+    here turns this red."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.forms.inline import PLACEMENT_LINE_KEYS
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(conn, placement.id, GL, limit_sought=100_000_000)
+
+    html = _tab(client, org)
+
+    for key in PLACEMENT_LINE_KEYS:
+        assert f'data-field="{key}"' in html, f"{key} is not editable where it prints"
+    assert f'id="mblock-{placement.id}-{GL}"' in html
+
+
+# --- three ways a wrong number reached the client, and the guards now on them
+
+
+def test_a_denominator_cannot_be_swapped_out_from_under_a_stored_rate(
+    client_and_org,
+):
+    """`rate_per` has the same property `_basis_guard` protects the exposure
+    columns from, and had no guard: 1.42 per $100 is ten times 1.42 per
+    $1,000, and nothing inside the stored rate says which one it was. Moving
+    the picker re-labelled the expiring rate without touching a byte — the
+    header printed it under the new denominator and the client's premium
+    bridge came out $9,000 short of the quote it sat beneath.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(
+        conn, placement.id, GL,
+        rating_basis="payroll", expiring_basis="payroll",
+        expected_exposure=1_000_000_000, expiring_exposure=1_000_000_000,
+        expiring_premium=10_000_000, expiring_rate_micros=1_000_000, rate_per=100,
+    )
+
+    refused = client.post(
+        _line_cell_url(org, placement, GL, "rate_per"), data={"rate_per": "1000"}
+    )
+
+    assert refused.status_code == 200
+    assert "cell-error-msg" in refused.text, "the denominator moved in silence"
+    assert "MEANS" in refused.text
+    assert marketing.placement_line(conn, placement.id, GL).rate_per == 100
+    # ...and the same guard holds for MCP, which is why it lives in repo/.
+    with pytest.raises(ValueError, match="MEANS"):
+        marketing.set_placement_line(conn, placement.id, GL, rate_per=1000)
+    # The ordinary correction — the denominator AND the rate it belongs to,
+    # restated in one act — is not refused.
+    marketing.set_placement_line(
+        conn, placement.id, GL, rate_per=1000, expiring_rate_micros=10_000_000
+    )
+    line = marketing.placement_line(conn, placement.id, GL)
+    assert line.rate_per == 1000 and line.expiring_rate_micros == 10_000_000
+
+
+def test_the_header_says_why_there_is_no_exposure_comparison(client_and_org):
+    """A line rated on sales last term and marketed on power units this term
+    is two pickers apart, and the header printed "-100.0%" for it — 350 power
+    units over $41,000,000. The percentage is refused in the composer's own
+    words, in the place the percentage would have been."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(
+        conn, placement.id, GL,
+        expiring_basis="gross_sales", expiring_exposure=4_100_000_000,
+        rating_basis="power_units", expected_exposure=350,
+    )
+
+    html = _tab(client, org)
+
+    assert "vs expiring" in html
+    assert "basis changed" in html
+    assert "-100.0%" not in html, "a comparison across two bases is on the panel"
+
+
+def test_a_replied_date_outside_the_window_prints_its_year(client_and_org):
+    """2001, 2026 and 2099 all rendered "12 Aug" — on the grid the broker
+    types into and in the workbook the client is sent. The year prints where
+    it is news, and the cell a save swaps back agrees with the row it lands
+    in."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+
+    ordinary = _approach(
+        conn, placement.id, _market(conn, "Travelers"),
+        status="quoted", responded_on="2026-08-12", premium=39_285_000,
+    )
+    mistyped = _approach(
+        conn, placement.id, _market(conn, "Zurich"),
+        status="quoted", responded_on="2099-08-12", premium=41_000_000,
+    )
+
+    html = _tab(client, org)
+
+    assert "12 Aug 2099" in html, "a mistyped year is invisible on the grid"
+    assert re.search(r">\s*12 Aug\s*<", html), "an ordinary date grew a year"
+    # The cell the save swaps back must not judge the year differently from
+    # the row it lands in — the same window, or it is the copy that differs,
+    # on the same screen, one swap apart.
+    plain = client.get(_cell_url(org, placement, ordinary, "responded_on"))
+    assert plain.status_code == 200
+    assert "12 Aug" in plain.text
+    assert "2026" not in plain.text, "the cell grew a year the row beside it has not"
+    loud = client.get(_cell_url(org, placement, mistyped, "responded_on"))
+    assert "12 Aug 2099" in loud.text
+
+
+def test_a_reply_dated_before_the_submission_went_out_is_refused(client_and_org):
+    """The cross-field rule the Replied cell needed the moment it became
+    typeable: a market cannot answer a package it has not been sent, and a
+    mistyped year is the ordinary way to record one that did."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    response = _approach(  # the submission went out 2026-08-01
+        conn, placement.id, _market(conn, "Travelers"), status="quoted",
+        premium=39_285_000,
+    )
+
+    refused = client.post(
+        _cell_url(org, placement, response, "responded_on"),
+        data={"responded_on": "2025-08-12"},
+    )
+
+    assert refused.status_code == 200
+    assert "cell-error-msg" in refused.text, "a reply before its submission was taken"
+    assert "cannot answer" in refused.text
+    assert marketing.get_response(conn, response.id).responded_on is None
+    # COMMIT IN PLACE: what was typed is still under the caret.
+    assert 'value="2025-08-12"' in refused.text
+
+    client.post(
+        _cell_url(org, placement, response, "responded_on"),
+        data={"responded_on": "2026-08-12"},
+    )
+    assert marketing.get_response(conn, response.id).responded_on == "2026-08-12"
+
+
+# --- what a save re-renders, and what a refusal says ------------------------
+#
+# A cell answers with the smallest thing its write can change — and never with
+# something SMALLER than that. Three of the response cells feed facts printed
+# above the grid, and answering those with the row left the panel stating two
+# different things about one market at once (all four found in a browser,
+# 2026-08-25).
+
+
+def _quoting_line(conn, placement_id: str):
+    """The worked example the bridge was written against: an expiring year that
+    reconciles to the quote, so the block prints a four-line premium walk.
+
+    412,000 − 79,899.98 (rate) + 60,750 (exposure) = 392,850.02, a couple of
+    cents off what Travelers quoted and well inside the bridge's own slack —
+    which is the ordinary case, because the expiring rate is a figure somebody
+    wrote down rounded."""
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(
+        conn, placement_id, GL,
+        expiring_premium=41_200_000, expiring_exposure=4_100_000_000,
+        expiring_rate_micros=10_048_780, expiring_basis="gross_sales",
+        expected_exposure=4_850_000_000, rating_basis="gross_sales", rate_per=1000,
+    )
+
+
+def _bridge_of(html: str) -> str:
+    """The premium walk as it stands on the page, markup and all."""
+    if "marketing-bridge" not in html:
+        return ""
+    start = html.index('<dl class="marketing-bridge">')
+    return html[start : html.index("</dl>", start)]
+
+
+def test_the_cells_the_premium_bridge_is_built_from_answer_with_the_block(
+    client_and_org,
+):
+    """A ROW ANSWER CANNOT CARRY A BLOCK FACT.
+
+    The bridge decomposes the LEADING quote's premium through its rate, so both
+    cells move it — and a row-shaped answer left it standing at the old figures.
+    A broker correcting Travelers' premium to $500,000 read $500,000 in the row
+    and "Travelers $392,850" in the walk four inches below it: two premiums for
+    one market, on the panel whose whole purpose is comparing quotes.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    _quoting_line(conn, placement.id)
+    response = _approach(
+        conn, placement.id, _market(conn, "Travelers"), status="quoted",
+        responded_on="2026-08-12", rate_micros=8_100_000, premium=39_285_000,
+    )
+
+    standing = _bridge_of(_tab(client, org))
+    assert "$392,850" in standing, "the fixture does not print a bridge at all"
+
+    saved = client.post(
+        _cell_url(org, placement, response, "premium"), data={"premium": "500,000"}
+    )
+
+    assert saved.status_code == 200
+    # ONE RESPONSE, ONE TOP-LEVEL ELEMENT, and it says where it goes.
+    assert saved.text.lstrip().startswith("<article")
+    assert saved.headers["HX-Retarget"] == f"#mblock-{placement.id}-{GL}"
+    assert saved.headers["HX-Reswap"] == "outerHTML"
+    assert marketing.get_response(conn, response.id).premium == 50_000_000
+    # The walk that explained $392,850 does not survive the figure it explained.
+    assert standing not in saved.text
+    assert "$392,850" not in saved.text
+    assert "$500,000" in saved.text
+    # The caret goes back to THIS row's cell — a block holds one premium cell
+    # per market, so the token has to name the row and not just the field.
+    assert f'data-refocus="{response.id}:premium"' in saved.text
+    assert f'data-layer-row="{response.id}"' in saved.text, (
+        "the row carries no record hook, so the refocus token resolves nowhere"
+    )
+
+
+def test_correcting_the_rate_re_renders_the_walk_the_rate_effect_is_in(
+    client_and_org,
+):
+    """The rate effect is (quoted rate − expiring rate) × the expiring exposure.
+    Answered with the row, editing the rate left the OLD rate effect printed —
+    and it is the one figure on the panel that changes SIGN, so the walk went on
+    saying the rate had taken the premium down while the new rate had put it up.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+
+    _quoting_line(conn, placement.id)
+    response = _approach(
+        conn, placement.id, _market(conn, "Travelers"), status="quoted",
+        responded_on="2026-08-12", rate_micros=8_100_000, premium=39_285_000,
+    )
+    standing = _bridge_of(_tab(client, org))
+    assert "-$79,899.98" in standing, "the fixture's rate effect is not negative"
+
+    saved = client.post(
+        _cell_url(org, placement, response, "rate_micros"),
+        data={"rate_micros": "12.00"},
+    )
+
+    assert saved.status_code == 200
+    assert saved.headers["HX-Retarget"] == f"#mblock-{placement.id}-{GL}"
+    assert "-$79,899.98" not in saved.text, (
+        "the rate effect of the rate that was replaced is still on the panel"
+    )
+    assert standing not in saved.text
+
+
+def test_declining_a_market_takes_its_clearance_warning_with_it(client_and_org):
+    """DECLINING THE DUPLICATE APPROACH IS THE ACT THAT RESOLVES THE CONFLICT.
+
+    The strip counts LIVE approaches (repo.marketing.clearance_conflicts), and
+    a status is the only cell that can move it — so a row-shaped answer left the
+    panel warning about a collision that no longer existed until the tab was
+    reloaded.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+
+    carrier = _market(conn, "Berkley")
+    wholesaler = _market(conn, "Amwins")
+    _approach(conn, placement.id, carrier, status="quoted")
+    doubled = _approach(conn, placement.id, carrier, status="quoted")
+    from bookkit.repo import marketing
+
+    marketing.edit_response(conn, doubled.id, {"via_org_id": wholesaler.id})
+
+    assert _tab(client, org).count("also reached via") == 2, "the fixture does not clash"
+
+    saved = client.post(
+        _cell_url(org, placement, doubled, "status"), data={"status": "declined"}
+    )
+
+    assert saved.status_code == 200
+    assert saved.headers["HX-Retarget"] == f"#mblock-{placement.id}-{GL}"
+    # BOTH warnings go, and the second one is the point. A clearance conflict
+    # is two LIVE approaches: the live row stops warning because the market it
+    # was clashing with has said no, and the DECLINED row stops warning because
+    # it is no longer in the fight. It used to keep its own — the strip said the
+    # carrier was being reached twice while one live approach remained — because
+    # `clearance_conflicts` filtered the OTHER rows by open status and never
+    # looked at the status of the row asking (found 2026-08-26).
+    assert saved.text.count("also reached via") == 0, saved.text
+    assert saved.text.count("also reached via") == _tab(client, org).count(
+        "also reached via"
+    ), "the block answered with a different count from a full re-render"
+
+
+def _scope_of(html: str, needle_class: str) -> list[str]:
+    """The classes of every ancestor of the first element carrying
+    `needle_class` — what inline-cell.js's `closest(ERROR_SCOPE)` walks."""
+    from html.parser import HTMLParser
+
+    void = {"input", "br", "img", "meta", "link", "hr", "source", "col"}
+
+    class Walker(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stack: list[tuple[str, str]] = []
+            self.found: list[str] | None = None
+
+        def handle_starttag(self, tag, attrs):  # type: ignore[no-untyped-def]
+            classes = dict(attrs).get("class") or ""
+            if self.found is None and needle_class in classes.split():
+                self.found = [c for _, c in self.stack]
+            if tag not in void:
+                self.stack.append((tag, classes))
+
+        def handle_endtag(self, tag):  # type: ignore[no-untyped-def]
+            # POP TO THE MATCH, not one entry per close: an unclosed or void
+            # element otherwise shifts every ancestor after it, which reads as
+            # a message sitting at the top of the document.
+            for index in range(len(self.stack) - 1, -1, -1):
+                if self.stack[index][0] == tag:
+                    del self.stack[index:]
+                    return
+
+    walker = Walker()
+    walker.feed(html)
+    assert walker.found is not None, f"no .{needle_class} in the markup"
+    return walker.found
+
+
+def test_the_add_row_refusal_sits_where_a_keystroke_can_clear_it(client_and_org):
+    """VALIDATE ON BLUR, CLEAR ON KEYSTROKE — the researched rule the listener
+    exists to enforce.
+
+    inline-cell.js walks UP from the input being corrected to an ERROR_SCOPE and
+    clears the messages inside it. The refusal was rendered as a SIBLING of
+    `.market-add-form`, so nothing ever reached it: a broker mistyped a carrier,
+    was refused, retyped "Zurich", and the red "no market matching 'Zzzz
+    Mutual'" was still under the box. A message that survives its own correction
+    makes a valid entry read as broken.
+    """
+    client, org = client_and_org
+    placement = _linked(client, org)
+
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/marketing/lines/{GL}/approaches",
+        data={"market": "Zzzz Mutual", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending"},
+    )
+
+    assert refused.status_code == 200
+    assert "no market matching" in refused.text
+    scope = _scope_of(refused.text, "cell-error-msg")
+    assert any("market-add-form" in classes for classes in scope), (
+        "the refusal is outside the scope the clear-on-keystroke listener walks: "
+        f"{scope}"
+    )
+    # COMMIT IN PLACE: what was typed is still in the row.
+    assert 'value="Zzzz Mutual"' in refused.text
+
+
+def test_the_add_row_refuses_a_blank_status_rather_than_filing_pending(
+    client_and_org,
+):
+    """A DECLARED GUARD THAT DOES NOT HOLD IS WORSE THAN NO GUARD.
+
+    `status` is declared required (forms/inline.py, citing the response that
+    filed itself as "quoted"), and the markup `required` cannot fire here: the
+    add row is inside a table with no <form> ancestor and its Save is a
+    type="button". Cleared back to blank, an approach filed itself as "pending"
+    — a status nobody chose — while the cell route one door over refused the
+    same empty value.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    _market(conn, "Zurich")
+    refused = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/marketing/lines/{GL}/approaches",
+        data={"market": "Zurich", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": ""},
+    )
+
+    assert refused.status_code == 200
+    assert "status is required" in refused.text, refused.text[:2000]
+    assert [
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL
+    ] == [], "a blank status filed an approach anyway"
+    # COMMIT IN PLACE, and then the correction goes through.
+    assert 'value="Zurich"' in refused.text
+    accepted = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/marketing/lines/{GL}/approaches",
+        data={"market": "Zurich", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending"},
+    )
+    assert accepted.status_code == 200
+    assert len([
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL
+    ]) == 1
+
+
+def test_a_figure_too_large_to_store_is_refused_in_this_books_own_words(
+    client_and_org,
+):
+    """A REFUSAL SAYS SOMETHING, and what it says is OURS.
+
+    A pasted 20-digit premium parsed cleanly, was multiplied into cents and then
+    failed inside the INSERT — so the sentence in the premium cell was "Python
+    int too large to convert to SQLite INTEGER". The ceiling belongs in the
+    parser, ahead of every writer, where MCP and the importers inherit it too.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.money import parse_money_cents
+    from bookkit.repo import marketing
+
+    response = _approach(conn, placement.id, _market(conn, "Travelers"), status="quoted")
+
+    refused = client.post(
+        _cell_url(org, placement, response, "premium"),
+        data={"premium": "99999999999999999999"},
+    )
+
+    assert refused.status_code == 200
+    assert "SQLite" not in refused.text and "Python int" not in refused.text
+    assert "is not an amount" in refused.text
+    assert "this book can record" in refused.text
+    assert marketing.get_response(conn, response.id).premium is None
+    # ONE HOME: the same refusal reaches MCP and the importers, because it is
+    # the parser's and not this route's.
+    with pytest.raises(Exception, match="this book can record"):
+        parse_money_cents("99999999999999999999")
+    # ...and the ordinary amounts either side of it are untouched.
+    assert parse_money_cents("1,234.56") == 123_456
+
+
+def test_a_failure_that_is_not_a_refusal_never_speaks_as_a_library(
+    client_and_org, monkeypatch
+):
+    """The floor under the ceiling. Whatever else breaks inside a write, the
+    sentence a broker reads is one this book wrote — a route that renders
+    `str(exc)` for anything at all is one library upgrade away from putting a
+    stack-trace sentence in a premium cell again."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.web.routes import marketing as marketing_routes
+
+    response = _approach(conn, placement.id, _market(conn, "Travelers"), status="quoted")
+
+    def boom(*args, **kwargs):
+        raise OverflowError("Python int too large to convert to SQLite INTEGER")
+
+    monkeypatch.setattr(marketing_routes.marketing_repo, "edit_response", boom)
+    refused = client.post(
+        _cell_url(org, placement, response, "premium"), data={"premium": "500,000"}
+    )
+
+    assert refused.status_code == 200, "a broken write became a 500"
+    assert "Python int" not in refused.text and "SQLite" not in refused.text
+    assert "nothing was written" in refused.text
+    # COMMIT IN PLACE still holds on the way out.
+    assert 'value="500,000"' in refused.text
+
+
+def test_two_marketed_placements_do_not_share_a_dom_id(client_and_org):
+    """One Program tab renders EVERY placement on the account, so an id built
+    from the line of coverage alone is emitted twice the moment two placements
+    market the same line — invalid HTML, and both carrier inputs resolve to the
+    first datalist."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+    from bookkit.repo import placements as placements_repo
+
+    second = placements_repo.create(
+        conn, org.id, "Casualty renewal", "2026-11-01", "2027-11-01"
+    )
+    for pid in (placement.id, second.id):
+        marketing.set_placement_line(conn, pid, GL, expected_exposure=1_000_000)
+
+    html = _tab(client, org)
+
+    # Scoped to the ids this panel emits. The tower diagram above it emits its
+    # own duplicates across two placements ('primary-gl', 'umbrella'), which is
+    # the same bug one section up and not this one's to assert.
+    ids = [
+        i for i in re.findall(r'\bid="([^"]+)"', html)
+        if i.startswith(("marketing-", "mblock-", "mrow-", "mk-"))
+    ]
+    duplicates = sorted({i for i in ids if ids.count(i) > 1})
+    assert duplicates == [], f"the marketing panel emits duplicate DOM ids: {duplicates}"
+    assert any(i.startswith("mk-") for i in ids), "no datalist ids to check at all"
+
+
+# --- the states with nothing in them ----------------------------------------
+#
+# Three ways a block can exist with something missing behind it, each of which
+# had the panel rendering controls that did not work or facts that were not
+# there. The rule under all three: what is missing is SAID, and what is still
+# recorded is still reachable.
+
+
+def _panel_html(html: str, placement_id: str) -> str:
+    """ONE placement's marketing section. The Program tab renders every
+    placement on the account, and each carries its own add-a-line picker."""
+    start = html.index(f'id="marketing-{placement_id}"')
+    rest = html[start:]
+    end = rest.find('<section class="marketing"')
+    return rest if end == -1 else rest[:end]
+
+
+def _block_html(html: str, block_id: str) -> str:
+    """One block's markup, from its own <article> to the next one."""
+    start = html.index(f'id="{block_id}"')
+    rest = html[start:]
+    end = rest.find('<article class="marketing-block"')
+    return rest if end == -1 else rest[:end]
+
+
+def test_a_block_with_no_expectations_row_is_still_editable(client_and_org):
+    """A BLOCK CAN EXIST WITH NO `placement_line` ROW BEHIND IT — a response
+    named the line and nobody has stated an expectation about it. All nine
+    header cells rendered as clickable, and all nine answered 500: reached by
+    pressing `u` on "started marketing …", and by MCP's `market_approach`,
+    which writes a response and no row. The cells are an upsert; that is what
+    `set_placement_line` is for."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+    from bookkit.web import marketing_grid
+
+    _approach(
+        conn, placement.id, _market(conn, "Chubb", "A++ XV"),
+        status="quoted", responded_on="2026-08-12", premium=39_285_000,
+    )
+    assert marketing.placement_line(conn, placement.id, GL) is None, "fixture"
+
+    html = _tab(client, org)
+    assert f'id="mblock-{placement.id}-{GL}"' in html
+
+    base = f"/accounts/{org.ref}/program/{placement.id}/marketing/lines/{GL}/cell"
+    for key in marketing_grid.LINE_KEYS:
+        opened = client.get(f"{base}/{key}/edit")
+        assert opened.status_code == 200, f"{key} detonated on a block with no row"
+
+    saved = client.post(f"{base}/expiring_premium", data={"expiring_premium": "412,000"})
+    assert saved.status_code == 200
+    row = marketing.placement_line(conn, placement.id, GL)
+    assert row is not None and row.expiring_premium == 41_200_000
+    assert "$412,000" in saved.text
+
+
+def test_the_picker_offers_a_line_only_a_response_has_named(client_and_org):
+    """AND THE WAY BACK IS NOT REFUSED EITHER. The picker dropped any line a
+    RESPONSE named, so the line above was in neither half of the add control —
+    not in the list, and refused by name as already carried — and the
+    near-match card's own "use <line>" button posted an id the picker's own
+    check did not recognise. Picking it creates the row."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    _approach(conn, placement.id, _market(conn, "Chubb"), status="quoted")
+    assert marketing.placement_line(conn, placement.id, GL) is None, "fixture"
+
+    assert f'<option value="{GL}">' in _panel_html(_tab(client, org), placement.id)
+
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/marketing/lines",
+        data={"line_id": GL},
+    )
+    assert added.status_code == 200
+    assert "is not one of the choices offered" not in added.text
+    assert marketing.placement_line(conn, placement.id, GL) is not None
+    # And once the row exists it stops being offered: picking it again would
+    # re-write a row that already exists and move nothing.
+    assert f'<option value="{GL}">' not in _panel_html(_tab(client, org), placement.id)
+
+
+def test_a_retired_line_of_coverage_keeps_its_marketing_on_the_panel(client_and_org):
+    """SURFACE IT, DO NOT HIDE IT. Retiring a line of coverage soft-deletes one
+    vocabulary row and touches neither the responses nor the expectations — but
+    the composer read the LIVING vocabulary, found no name, and dropped the
+    whole block: a bound quote gone from the tab and from the client's own
+    workbook, with the panel saying nothing was being marketed."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import base, lines, marketing
+
+    cargo = lines.create(conn, "Ocean Cargo")
+    marketing.set_placement_line(
+        conn, placement.id, cargo, expiring_premium=41_200_000
+    )
+    _approach(
+        conn, placement.id, _market(conn, "Chubb", "A++ XV"), line_id=cargo,
+        status="bound", responded_on="2026-08-12", premium=39_285_000,
+    )
+    base.soft_delete(conn, "line_of_coverage", cargo)
+
+    block = _block_html(_tab(client, org), f"mblock-{placement.id}-{cargo}")
+    assert "Ocean Cargo" in block
+    assert "Chubb" in block and "Bound" in block and "$392,850" in block
+    assert "line of coverage retired" in block
+    # NO NEW APPROACHES on a line the book no longer carries — the control is
+    # withdrawn where the header can say why, not left to refuse.
+    assert "/approaches" not in block
+    # What is already recorded stays correctable where it prints.
+    saved = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/marketing/lines/{cargo}/cell/expiring_premium",
+        data={"expiring_premium": "500,000"},
+    )
+    assert saved.status_code == 200
+    assert "$500,000" in saved.text
+
+
+def test_a_market_the_book_has_deleted_is_still_named_on_its_row(client_and_org):
+    """THE COLUMN THAT SAYS WHOSE ANSWER IT IS. A soft-deleted carrier org left
+    the Market cell completely empty — a row with a premium, a status and an
+    A.M. Best rating and nothing identifying it, which reads as a rendering
+    fault. Deleting the org does not unmake the quote."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import orgs as orgs_repo
+
+    chubb = _market(conn, "Chubb", "A++ XV")
+    response = _approach(
+        conn, placement.id, chubb, status="quoted", responded_on="2026-08-12",
+        premium=39_285_000,
+    )
+    orgs_repo.delete(conn, chubb.id)
+
+    html = _tab(client, org)
+    row = html[html.index(f'id="mrow-{response.id}"') :]
+    row = row[: row.index("</tr>")]
+    first_cell = re.search(r"<td[^>]*>(.*?)</td>", row, re.S)
+    assert first_cell is not None
+    assert first_cell.group(1).strip() == "Chubb"
+
+
+def test_the_marketing_panel_is_reachable_with_no_program_file_anywhere(snapshot_db):
+    """THE PANEL IS REACHABLE FROM THE ACCOUNT PAGE on an account whose
+    placements are all unlinked — the question the panel's author raised and
+    nobody answered. Marketing happens before a tower exists, so an account
+    that has never had a program file is the ordinary case, not the edge."""
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import placements as placements_repo
+
+    app = create_app(snapshot_db)
+    conn = app.state.conn
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        org = next(
+            o
+            for o in orgs_repo.list_orgs(conn, kind="client")
+            if placements_repo.for_org(conn, o.id)
+            and not any(p.program_path for p in placements_repo.for_org(conn, o.id))
+        )
+        placements = placements_repo.for_org(conn, org.id)
+
+        page = client.get(f"/accounts/{org.ref}")
+        assert page.status_code == 200
+        assert f'href="/accounts/{org.ref}/program"' in page.text, (
+            "the Program tab is the only way to the marketing panel"
+        )
+
+        tab = client.get(f"/accounts/{org.ref}/program")
+        assert tab.status_code == 200
+        for placement in placements:
+            assert f'id="marketing-{placement.id}"' in tab.text
+        assert 'class="marketing-line-add"' in tab.text
+
+
+# --- entry: what a broker types, and what the book does with it -------------
+#
+# Five defects a fresh-eyes pass found on 2026-08-26, all of them about the
+# same thing from different sides: a surface that silently changes, discards or
+# mis-states what somebody typed.
+
+
+def _sent_url(org, placement, response) -> str:
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/marketing/responses/{response.id}/sent"
+    )
+
+
+def _approaches_url(org, placement, line: str = GL) -> str:
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/marketing/lines/{line}/approaches"
+    )
+
+
+def test_a_second_approach_on_another_day_opens_its_own_submission(client_and_org):
+    """A DIFFERENT SENT DATE IS A DIFFERENT SUBMISSION.
+
+    The reuse rule is about LINES — one email carries every line — and it was
+    keyed on the market alone, so the second approach silently JOINED the first
+    package and the `sent` date the broker typed was thrown away with no
+    message. The block then printed a submission date nobody had entered.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import submissions
+
+    _market(conn, "Chubb")
+    for line, sent in ((GL, "2026-08-03"), (AUTO, "2026-08-11")):
+        got = client.post(
+            _approaches_url(org, placement, line),
+            data={"market": "Chubb", "via": "", "attach": "", "lim": "",
+                  "sent_on": sent, "status": "pending"},
+        )
+        assert got.status_code == 200, got.text[:800]
+
+    dates = sorted(
+        s.sent_on for s in submissions.for_placement(conn, placement.id)
+        if s.sent_on in ("2026-08-03", "2026-08-11")
+    )
+    assert dates == ["2026-08-03", "2026-08-11"], (
+        "the second approach joined the first package and lost its own date"
+    )
+
+
+def test_a_submission_dated_in_the_future_is_refused_in_words(client_and_org):
+    """A SUBMISSION IS A RECORD OF SOMETHING THAT HAPPENED.
+
+    One wrong year is one keystroke, nothing downstream ever objects, and
+    `_reply_guard` then refuses every reply to that row for good — a wedge with
+    a refusal on top of it naming a correction.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    _market(conn, "Chubb")
+    refused = client.post(
+        _approaches_url(org, placement),
+        data={"market": "Chubb", "via": "", "attach": "", "lim": "5m",
+              "sent_on": "2027-08-01", "status": "pending"},
+    )
+
+    assert refused.status_code == 200
+    assert "has not happened yet" in refused.text, refused.text[:1200]
+    # NEVER LOSE TYPING: the refused row comes back with what was in it.
+    assert 'value="Chubb"' in refused.text
+    assert 'value="2027-08-01"' in refused.text
+    assert not [
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL
+    ], "the refused approach was written anyway"
+
+
+def test_the_date_a_submission_went_out_is_correctable_where_it_prints(
+    client_and_org,
+):
+    """A REFUSAL MUST NOT NAME A FIX THAT DOES NOT EXIST.
+
+    `_reply_guard` refuses a reply dated before its submission went out and
+    names correcting the send date as the other way out. Until the Sent cell
+    existed, no surface in the app could make that correction — so one
+    transposed digit made the Replied cell on that row unanswerable. This is
+    the whole wedge, driven end to end: refused, corrected, accepted.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing, submissions
+
+    market = _market(conn, "Chubb")
+    sub = submissions.create(
+        conn, market_org_id=market.id, sent_on="2026-08-12", placement_id=placement.id
+    )
+    response = marketing.create_response(
+        conn, sub.id, GL, market_org_id=market.id, status="quoted"
+    )
+
+    wedged = client.post(
+        _cell_url(org, placement, response, "responded_on"),
+        data={"responded_on": "2026-08-04"},
+    )
+    assert "did not go out until 2026-08-12" in wedged.text
+
+    # THE CELL THE REFUSAL NAMED. It is on the row, addressed by the response,
+    # and it writes the submission behind it.
+    assert client.get(_sent_url(org, placement, response) + "/edit").status_code == 200
+    fixed = client.post(_sent_url(org, placement, response), data={"sent_on": "2026-08-02"})
+    assert fixed.status_code == 200
+    # ONE RESPONSE, ONE TOP-LEVEL ELEMENT — the SECTION, because one submission
+    # carries every line of coverage it was sent on.
+    assert fixed.headers["HX-Retarget"] == f"#marketing-{placement.id}"
+    assert fixed.headers["HX-Reswap"] == "outerHTML"
+    assert submissions.get(conn, sub.id).sent_on == "2026-08-02"
+
+    accepted = client.post(
+        _cell_url(org, placement, response, "responded_on"),
+        data={"responded_on": "2026-08-04"},
+    )
+    assert accepted.status_code == 200
+    assert marketing.get_response(conn, response.id).responded_on == "2026-08-04"
+
+
+def test_a_corrected_send_date_cannot_land_after_an_answer_already_recorded(
+    client_and_org,
+):
+    """The Sent cell is the way out of `_reply_guard`, so it must not be a way
+    INTO the state that guard refuses — the guard only ever looks at the reply
+    being typed."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing, submissions
+
+    market = _market(conn, "Chubb")
+    sub = submissions.create(
+        conn, market_org_id=market.id, sent_on="2026-08-01", placement_id=placement.id
+    )
+    response = marketing.create_response(
+        conn, sub.id, GL, market_org_id=market.id,
+        status="quoted", responded_on="2026-08-06",
+    )
+
+    refused = client.post(
+        _sent_url(org, placement, response), data={"sent_on": "2026-08-09"}
+    )
+    assert refused.status_code == 200
+    assert "answered on 2026-08-06" in refused.text, refused.text[:800]
+    # COMMIT IN PLACE: the editor stays open with what was typed under the caret.
+    assert 'value="2026-08-09"' in refused.text
+    assert submissions.get(conn, sub.id).sent_on == "2026-08-01"
+
+
+def test_a_block_answer_keeps_a_half_typed_approach(client_and_org):
+    """NEVER LOSE TYPING TO SOMEBODY ELSE'S WRITE.
+
+    Three cells answer with the whole BLOCK, and that swap rebuilt the add row
+    from its defaults — so correcting a premium wiped a half-typed approach in
+    the same block, silently. `hx-preserve` rides on the answer and htmx keeps
+    the element already on the page; the add row's OWN successful save is the
+    one answer that must not carry it, because there a cleared row is right.
+    """
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+
+    response = _approach(
+        conn, placement.id, _market(conn, "Travelers"), status="quoted"
+    )
+    block_id = f"add-mblock-{placement.id}-{GL}"
+
+    moved = client.post(
+        _cell_url(org, placement, response, "premium"), data={"premium": "590,000"}
+    )
+    assert moved.status_code == 200
+    assert moved.headers["HX-Retarget"] == f"#mblock-{placement.id}-{GL}"
+    assert f'id="{block_id}"' in moved.text
+    assert 'hx-preserve="true"' in moved.text, (
+        "a block answer rebuilt the add row and threw away what was typed in it"
+    )
+
+    _market(conn, "Zurich")
+    added = client.post(
+        _approaches_url(org, placement),
+        data={"market": "Zurich", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending"},
+    )
+    assert added.status_code == 200
+    assert f'id="{block_id}"' in added.text
+    assert "hx-preserve" not in added.text, (
+        "the add row's own save kept the form it had just saved"
+    )
+
+
+def test_a_carrier_cannot_be_reached_through_itself(client_and_org):
+    """`Chubb (via Chubb)` — paper reached through itself, on the CLIENT's
+    sheet. Plausible whenever a broker is unsure which of the two a name is,
+    and the route only ever checked that AT LEAST ONE was given."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    _market(conn, "Chubb")
+    refused = client.post(
+        _approaches_url(org, placement),
+        data={"market": "Chubb", "via": "Chubb", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending"},
+    )
+
+    assert refused.status_code == 200
+    assert "not reached through itself" in refused.text, refused.text[:1200]
+    assert not [
+        r for r in marketing.responses_for_placement(conn, placement.id)
+        if r.line_id == GL
+    ]
+
+
+def test_a_market_new_to_the_book_is_told_where_to_put_it(client_and_org):
+    """A REFUSAL NAMES THE FIX. A carrier this book has never carried is
+    ordinary in placement, and `nearest: none close` stated the objection and
+    stopped — the one refusal on this panel that fell short of the standard
+    `date_refusal` sets."""
+    client, org = client_and_org
+    placement = _linked(client, org)
+
+    refused = client.post(
+        _approaches_url(org, placement),
+        data={"market": "Zzzz Mutual", "via": "", "attach": "", "lim": "",
+              "sent_on": "2026-08-10", "status": "pending"},
+    )
+
+    assert refused.status_code == 200
+    assert "no market matching" in refused.text
+    assert "/markets/new" in refused.text, refused.text[:1200]

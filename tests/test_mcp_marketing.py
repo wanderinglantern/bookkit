@@ -94,7 +94,7 @@ def test_an_approach_through_a_wholesaler_alone_is_a_real_row(conn) -> None:
     _market(conn, "RT Specialty")
 
     out = mcpserver._market_approach(
-        conn, placement.ref, "GL", via="RT Specialty", sent_on="2027-07-07"
+        conn, placement.ref, "GL", via="RT Specialty", sent_on="2026-07-07"
     )
 
     assert out["market"] is None
@@ -262,7 +262,7 @@ def _a_marketed_line(conn):
         expected_exposure="52,000,000",
     )
     approach = mcpserver._market_approach(
-        conn, placement.ref, "GL", market="Travelers", sent_on="2027-07-07"
+        conn, placement.ref, "GL", market="Travelers", sent_on="2026-07-07"
     )
     mcpserver._market_responded(
         conn, approach["response_id"], status="quoted",

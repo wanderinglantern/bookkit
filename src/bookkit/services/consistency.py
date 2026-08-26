@@ -118,6 +118,37 @@ def check_order(
     )
 
 
+def check_not_future(value: str | None, *, label: str, today: str) -> None:
+    """Refuse a date that records something as having already happened when it
+    has not.
+
+    NOT EVERY DATE IS PAST-ONLY, and this is deliberately not applied to any
+    that are not: a task is due next week, a quote expires next month, a policy
+    period runs a year out. The shape this is for is a date that WITNESSES an
+    act — the day a submission went to the market — where "next year" is not a
+    plan, it is a typo, and where nothing downstream will ever object.
+
+    `submission.sent_on` is the one the book has been hurt by. It is typed with
+    no upper bound, so 2027 for 2026 is one keystroke, and the consequence is
+    not cosmetic: `repo.marketing._reply_guard` refuses every reply dated
+    before a submission went out, so a send date in the future makes the
+    Replied cell on that row unanswerable — permanently, and with a refusal
+    naming a correction (found 2026-08-26).
+
+    `today` IS A PARAMETER, never `date.today()` read in here. Half this
+    book's rendering takes today from its caller for exactly this reason, and
+    a rule that reads the wall clock cannot be tested against a book whose own
+    world is a different year.
+    """
+    if not value or value <= today:
+        return
+    raise ValueError(
+        f"{label} {value} has not happened yet — today is {today}. Enter the "
+        f"date it actually happened; check the year if this was meant to be a "
+        f"date in the past."
+    )
+
+
 # --- the five pairs -----------------------------------------------------------
 
 

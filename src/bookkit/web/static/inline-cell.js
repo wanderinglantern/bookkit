@@ -50,9 +50,30 @@
 (function () {
   "use strict";
 
-  var RECORD_SCOPE = "tr, .contact-card";
+  // A RECORD is whatever groups one thing's editable cells. `.marketing-block`
+  // is the third: a line of coverage's own expectations (basis, rate per,
+  // exposure, what expired) are cells in the block HEADER, outside any <tr>,
+  // so without it Tab in the header found no scope and the hop was dropped —
+  // a key the editor advertises and does not honour. It is last on purpose:
+  // `closest` walks UP, so a cell inside one of the block's rows still finds
+  // its <tr> first and hops along the row, not into the header.
+  var RECORD_SCOPE = "tr, .contact-card, .marketing-block";
 
-  var pendingHop = null; // { scope: <element>, nextCell: <element> } set by a Tab keydown
+  // { field: "<data-field>", record: "<data-layer-row>" | null } set by a Tab
+  // keydown — the FIELD KEY, not the node. A node reference is detached the
+  // moment a save answers with the whole record row instead of the one cell
+  // (the marketing grid does that, because four of its cells feed a derived
+  // Total that would otherwise sit there stale), and htmx.ajax against a
+  // detached element is a request whose answer lands nowhere. A key is
+  // re-resolved against whatever is on the page when the swap arrives, which
+  // is correct for both shapes.
+  //
+  // `record` is what makes that re-resolve land on the RIGHT row when the
+  // answer is bigger than the row: three marketing cells answer with the whole
+  // block, because they move the premium bridge and the clearance strip above
+  // them, and a block holds one `premium` cell per market — so a key alone
+  // would hop into the first market's row from anywhere in the grid.
+  var pendingHop = null;
 
   function editableCells(scope) {
     return Array.prototype.slice.call(scope.querySelectorAll(".cell[data-field]"));
@@ -179,7 +200,7 @@
   // <td>, OUTSIDE the .market-add-form whose input is being corrected
   // (_layer_details.html). Clearing only the nearest scope would leave that
   // one on screen — the exact failure this listener exists to end.
-  var ERROR_SCOPE = ".cell-editing, .entity-form, .market-add-form, .layer-details";
+  var ERROR_SCOPE = ".cell-editing, .entity-form, .market-add-form, .marketing-line-add, .layer-details";
 
   function clearError(scope) {
     scope.classList.remove("cell-error");
@@ -210,7 +231,12 @@
     // cell, Tab commits this one rather than abandoning the browser to its
     // own tab order mid-edit.
     evt.preventDefault();
-    pendingHop = next ? { scope: scope, nextCell: next } : null;
+    pendingHop = next
+      ? {
+          field: next.getAttribute("data-field"),
+          record: scope.getAttribute("data-layer-row"),
+        }
+      : null;
     form.requestSubmit();
   });
 
@@ -342,10 +368,35 @@
     if (!pendingHop) return;
     var hop = pendingHop;
     pendingHop = null;
-    if (!el.classList.contains("cell") || !hop.scope.contains(el)) return; // wrong swap, or a refusal
-    var action = hop.nextCell.getAttribute("data-cell-action");
+    // WHAT LANDED IS EITHER THE CELL OR THE RECORD IT BELONGS TO. A plain cell
+    // save swaps the cell and the record scope is its ancestor; a save whose
+    // write moved a value in a SIBLING cell has to answer with the whole row
+    // (routes/marketing.py `_row_response`, because Total is the sum of four
+    // typed cells) and the swapped element IS the scope. Anything else — a
+    // refusal, an unrelated request completing — matches neither and the hop
+    // is dropped, which is the same guard `hop.scope.contains(el)` was.
+    var scope = null;
+    if (el.classList.contains("cell")) {
+      scope = el.closest(RECORD_SCOPE);
+    } else if (el.matches && el.matches(RECORD_SCOPE)) {
+      scope = el;
+    }
+    if (!scope) return;
+    // NARROW TO THE RECORD THE HOP STARTED IN. When the answer is the record
+    // itself the two are the same element; when it is the whole block, the
+    // record is one row inside it and the same `data-layer-row` the refocus
+    // token resolves against finds it.
+    var within = scope;
+    if (hop.record && scope.getAttribute("data-layer-row") !== hop.record) {
+      within =
+        scope.querySelector('[data-layer-row="' + CSS.escape(hop.record) + '"]') ||
+        scope;
+    }
+    var next = within.querySelector('.cell[data-field="' + CSS.escape(hop.field) + '"]');
+    if (!next) return;
+    var action = next.getAttribute("data-cell-action");
     if (!action || typeof htmx === "undefined") return;
-    htmx.ajax("GET", action + "/edit", { target: hop.nextCell, swap: "outerHTML" });
+    htmx.ajax("GET", action + "/edit", { target: next, swap: "outerHTML" });
   });
 
   // --- whole-form cancel (macros/form.html) -------------------------------

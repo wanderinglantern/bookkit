@@ -108,6 +108,31 @@ def names_for(conn: sqlite3.Connection, org_ids: set[str]) -> dict[str, str]:
     return {org_id: label.name for org_id, label in labels_for(conn, org_ids).items()}
 
 
+def names_for_any(conn: sqlite3.Connection, org_ids: set[str]) -> dict[str, str]:
+    """id → name, LIVING OR NOT, ONE query.
+
+    FOR NAMING SOMETHING THAT ALREADY HAPPENED. A market response points at
+    the carrier that quoted it, and deleting or merging that org away does not
+    unmake the quote — but `names_for` misses the id, and the marketing grid
+    rendered the row with its premium, its status and its A.M. Best rating and
+    a COMPLETELY EMPTY Market cell, which is the one column identifying whose
+    answer it was (2026-08-25). The same silence one column over from the
+    retired line of coverage, and the same answer: name it.
+
+    NOT THE DEFAULT, and deliberately not a flag on `names_for`. Anything that
+    offers something to DO — a picker, a link, an assignment — keeps using
+    `labels_for`/`names_for`, because "living" is exactly what those need to
+    mean. This is for reports.
+    """
+    if not org_ids:
+        return {}
+    marks = ",".join("?" * len(org_ids))
+    rows = conn.execute(
+        f"SELECT id, name FROM org WHERE id IN ({marks})", tuple(org_ids)
+    ).fetchall()
+    return {r["id"]: r["name"] for r in rows}
+
+
 def find(conn: sqlite3.Connection, ref_or_id: str) -> Org | None:
     row = conn.execute(
         f"SELECT * FROM org WHERE (id = ? OR ref = ?) AND {base.alive()}",
