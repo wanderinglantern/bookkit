@@ -1025,6 +1025,25 @@ def _an_assignment(rw):
     return mcpserver._team_assign(rw, "Dana Okafor", client="Acme")
 
 
+def _a_marketed_placement(rw):
+    """A client with a placement and a market on the book — what the four
+    marketing writes need. No towerkit file: a program nobody has drawn yet is
+    still a placement being marketed."""
+    org = _acme(rw)
+    placement = placements.create(
+        rw, org_id=org.id, program_name="2027 casualty",
+        period_from="2027-01-01", period_to="2028-01-01",
+    )
+    orgs.create(rw, kind="market", name="Travelers", status="active")
+    return placement
+
+
+def _an_approach(rw):
+    return mcpserver._market_approach(
+        rw, _a_marketed_placement(rw).ref, "General Liability", market="Travelers"
+    )
+
+
 def _linked_placement(rw, tmp_path):
     """A placement backed by a real towerkit program file — what the four
     program_* writes need. Same shape as tests/test_mcp_program.py's fixture."""
@@ -1135,6 +1154,15 @@ _BATCHED_WRITES = {
         rw, _a_request_item(rw)),
     "request_item_waive": lambda rw, tmp: mcpserver._request_item_waive(
         rw, _a_request_item(rw)),
+    "line_add": lambda rw, tmp: mcpserver._line_add(rw, "Kidnap & Ransom"),
+    "market_approach": lambda rw, tmp: _an_approach(rw),
+    "market_responded": lambda rw, tmp: mcpserver._market_responded(
+        rw, _an_approach(rw)["response_id"], status="quoted",
+        responded_on="2027-07-20", premium="120,000"),
+    "set_placement_line": lambda rw, tmp: mcpserver._set_placement_line(
+        rw, _a_marketed_placement(rw).ref, "GL",
+        expiring_premium="100,000", rating_basis="gross_sales",
+        expected_exposure="48,500,000"),
     "program_layer_add": lambda rw, tmp: mcpserver._program_layer_add(
         rw, _linked_placement(rw, tmp).ref, "Excess GL", line_ids=["gl"],
         attach="2m", limit="5m"),
@@ -1184,6 +1212,13 @@ _TOUCHES = {
     "request_remove": {"rfi_request", "rfi_item"},
     "request_item_remove": {"rfi_item"},
     "request_item_waive": {"rfi_item"},
+    "line_add": {"line_of_coverage"},
+    # the submission is filed by the same call — see mcpparity's submission
+    # cells, which say why that is a consequence and not a submission verb
+    "market_approach": {"submission", "market_response"},
+    # the roll-up moves the submission from 'out' to 'quoted' in the same unit
+    "market_responded": {"market_response", "submission"},
+    "set_placement_line": {"placement_line"},
     "program_layer_add": {"placement"},
     "program_bind": {"placement"},
     "program_market_premium": {"placement"},

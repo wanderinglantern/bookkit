@@ -160,6 +160,34 @@ def _register_read_tools(server: MCPServer, ro: sqlite3.Connection) -> None:
         return _program_summary(ro, ref)
 
     @server.tool()
+    async def lines_list() -> list[dict[str, Any]]:
+        """The book's ONE vocabulary of lines of coverage: id, name,
+        abbreviation and ACORD code, in reading order. Every marketing tool
+        takes a line by its exact name, abbreviation or id from this list —
+        read it BEFORE market_approach or set_placement_line rather than
+        inventing a spelling, because a fifth spelling of General Liability
+        is a duplicate nobody can merge back without moving its references.
+        Use line_add only when the line genuinely is not here."""
+        return _lines_list(ro)
+
+    @server.tool()
+    async def marketing_report(
+        placement_ref: str, audience: str = "client", as_of: str | None = None
+    ) -> dict[str, Any]:
+        """The marketing report for ONE placement (exact PLC ref — read
+        list_programs), as readable text: one block per line of coverage,
+        markets beneath it, live options first. `audience` is 'client' or
+        'internal' and anything else is refused with the list — 'client'
+        WITHHOLDS the internal decline reason, the commission and the internal
+        notes, and prints only the controlled public decline wording; go to
+        'internal' to see those and the clearance collisions. `as_of` is a
+        human date and defaults to today; the composer never reads the clock,
+        so the same date always composes the same report. Also returns
+        `responses`, an index of ids — that is where market_responded's
+        `response_ref` comes from, because a printed row carries no id."""
+        return _marketing_report(ro, placement_ref, audience=audience, as_of=as_of)
+
+    @server.tool()
     async def staleness_report() -> list[dict[str, Any]]:
         """Active client accounts that have gone quiet: no logged interaction
         in over 60 days, sorted with the most neglected (days stale × premium)
@@ -622,6 +650,125 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         is required — an undated need can't be chased. Unmet needs surface in
         attention and never fall off."""
         return _need_add(rw, project_ref, line, needed_by, notes=notes)
+
+    @server.tool()
+    async def line_add(
+        name: str, abbr: str | None = None, acord_code: str | None = None
+    ) -> dict[str, Any]:
+        """Add a line of coverage to the book's vocabulary — additive and
+        event-logged. READ lines_list FIRST: an exact duplicate is refused and
+        names the line that already exists, and near matches come back in
+        `near_matches` with their scores WITHOUT blocking the write. That
+        warning is the point of this tool having a reply at all — 'Excess
+        Liability' and 'Employers Liability' are genuinely different lines, so
+        nothing can refuse for you, but a new line that scores 94 against one
+        already on the book is almost always the same line spelled twice.
+        Check `near_matches` and revert the batch if it is."""
+        return _line_add(rw, name, abbr=abbr, acord_code=acord_code)
+
+    @server.tool()
+    async def market_approach(
+        placement_ref: str,
+        line: str,
+        market: str | None = None,
+        via: str | None = None,
+        attach: str | None = None,
+        limit: str | None = None,
+        sent_on: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Record going to a market on one line of coverage of one placement
+        (exact PLC ref — read list_programs). `line` is the exact name,
+        abbreviation or id from lines_list; a miss names the nearest lines and
+        writes nothing. At least one of `market` (the carrier whose paper it
+        is) and `via` (the wholesaler or MGA it went through) is required —
+        give `via` alone when the wholesaler has not named the paper yet,
+        which is the truth rather than a gap, and fill the carrier in later.
+        Both resolve as exact market names or refs. `attach` and `limit` say
+        WHICH slab the approach is about, in dollars, for an excess tower;
+        omit both for primary or the whole line. `sent_on` is a human date and
+        defaults to today. Reuses the submission already out to that market on
+        this placement rather than filing a second one. `clearance_warnings`
+        comes back non-empty when somebody else is already reaching that same
+        carrier on that same line through a different intermediary — a
+        WARNING, never a refusal, because the double approach is sometimes
+        deliberate; read it and decide."""
+        return _market_approach(
+            rw, placement_ref, line, market=market, via=via, attach=attach,
+            limit=limit, sent_on=sent_on, notes=notes,
+        )
+
+    @server.tool()
+    async def market_responded(
+        response_ref: str,
+        status: str | None = None,
+        responded_on: str | None = None,
+        rate: str | None = None,
+        premium: str | None = None,
+        fees: str | None = None,
+        decline_reason: str | None = None,
+        decline_reason_public: str | None = None,
+    ) -> dict[str, Any]:
+        """Record what a market said, onto the row market_approach created.
+        `response_ref` MUST be an exact id from marketing_report's `responses`
+        list — this tool never fuzzy-matches. `status` is the market-response
+        vocabulary (anything outside it is refused with the list). `rate` is a
+        rate per unit of exposure like '1.42' — NOT money and NOT a percent.
+        `premium` and `fees` are dollars, as the carrier stated them; leave one
+        out rather than passing zero, because a zero is a claim the carrier did
+        not make. `decline_reason` is INTERNAL free text and never reaches a
+        client; `decline_reason_public` takes the controlled public wording and
+        is what a client-facing report prints — leave it blank to say nothing,
+        which is safer than a sentence anyone will wish they had not written.
+        The submission's own status is a roll-up of its response rows and is
+        never typed: the recomputed value comes back as
+        `submission_status`."""
+        return _market_responded(
+            rw, response_ref, status=status, responded_on=responded_on,
+            rate=rate, premium=premium, fees=fees,
+            decline_reason=decline_reason,
+            decline_reason_public=decline_reason_public,
+        )
+
+    @server.tool()
+    async def set_placement_line(
+        placement_ref: str,
+        line: str,
+        expiring_premium: str | None = None,
+        expiring_exposure: str | None = None,
+        expiring_rate: str | None = None,
+        expiring_basis: str | None = None,
+        expected_exposure: str | None = None,
+        rating_basis: str | None = None,
+        rate_per: str | None = None,
+        limit_sought: str | None = None,
+    ) -> dict[str, Any]:
+        """State what one line of coverage on one placement is expected to do —
+        the expiring figures the client's comparison is measured against, and
+        the basis every market response on that line inherits. Creates the row
+        or corrects it; there is only ever one per placement and line.
+        `placement_ref` is an exact PLC ref, `line` an exact entry from
+        lines_list. An EXPOSURE is money on a monetary basis and a whole count
+        otherwise (a fleet is 42 power units, and 42 cannot be cents), so
+        either figure is refused unless its basis is already stored or arrives
+        in the same call — pass `rating_basis` (or `expiring_basis` for the
+        expiring side) from the rating-basis vocabulary, which refuses with its
+        list. `rate_per` is the denominator a rate is quoted against (100,
+        1000, or 1 per unit). `expiring_rate` is stored rather than derived:
+        deriving it needs the expiring exposure, which is a separate fact
+        nobody may have recorded, and the report leaves the comparison blank
+        instead of assuming exposure was flat."""
+        return _set_placement_line(
+            rw, placement_ref, line,
+            expiring_premium=expiring_premium,
+            expiring_exposure=expiring_exposure,
+            expiring_rate=expiring_rate,
+            expiring_basis=expiring_basis,
+            expected_exposure=expected_exposure,
+            rating_basis=rating_basis,
+            rate_per=rate_per,
+            limit_sought=limit_sought,
+        )
 
     @server.tool()
     async def member_create(
@@ -2717,3 +2864,590 @@ def _pipeline_status(conn: sqlite3.Connection) -> dict[str, Any]:
 
 def serve(db_path: Path | str | None = None) -> None:
     build_server(db_path).run()  # stdio transport is the SDK's default
+
+
+# --- marketing: who we went to, and what they said ---------------------------
+#
+# Six tools over repo/lines.py, repo/marketing.py and
+# services/marketing_report.py. NO RULE OF THEIR OWN lives here: the near-match
+# warning, the duplicate refusal, the carrier-or-intermediary CHECK, the
+# submission roll-up and the clearance warning are all in repo/, where the web
+# inherits them too. What lives here is resolution, entry cleaning, and the
+# shape of a reply.
+
+
+def _resolve_placement(conn: sqlite3.Connection, placement_ref: str) -> Any:
+    """_resolve_linked_placement's sibling for the marketing verbs, which work
+    on the BOOK's placement row rather than on a towerkit file: a program
+    nobody has drawn yet is still a placement being marketed, and requiring a
+    linked file would put the whole renewal cycle behind a tower."""
+    from .repo import placements as placements_repo
+
+    placement = placements_repo.find(conn, placement_ref)
+    if placement is None:
+        raise ValueError(
+            f"no placement {placement_ref!r} — read list_programs for exact PLC refs"
+        )
+    return placement
+
+
+def _resolve_line(conn: sqlite3.Connection, line: str) -> Any:
+    """The exact name, abbreviation or slug of a line of coverage — a write
+    target is never fuzzy-matched. The near matches go in the REFUSAL, which
+    is repo/lines.py's rule (advisory, never a block) applied to resolution."""
+    from .repo import lines as lines_repo
+
+    found = lines_repo.by_name(conn, line) or lines_repo.get(conn, line)
+    if found is not None:
+        return found
+    near = lines_repo.near_matches(conn, line, cutoff=60)
+    hint = ", ".join(f"{m.name} ({m.id})" for m, _score in near) if near else "none close"
+    raise ValueError(
+        f"no line of coverage matching {line!r} — nearest: {hint}. Read "
+        f"lines_list for the vocabulary, or line_add to record a new one."
+    )
+
+
+def _resolve_response(conn: sqlite3.Connection, response_ref: str) -> Any:
+    """Exact id only, and the refusal names where one comes from:
+    marketing_report's `responses` index exists so this tool has a ref to
+    take, the way open_items exists for task_complete."""
+    from .repo import marketing
+
+    try:
+        return marketing.get_response(conn, response_ref)
+    except KeyError:
+        raise ValueError(
+            f"no market response {response_ref!r} — read marketing_report for "
+            f"that placement and use an id from its `responses` list"
+        ) from None
+
+
+def _rate_micros(field: str, value: str | None) -> int | None:
+    """A RATE IS NOT MONEY, so it does not go through parse_money_cents: '1.42'
+    is 1.42 per unit of exposure and is stored x1,000,000 because a rate
+    rounded to cents lies at the fourth decimal, which is where casualty rates
+    actually differ. Anything that is not a plain number is refused rather
+    than coerced — a stored zero rate reads as 'they quoted nothing'."""
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    try:
+        return round(float(text) * 1_000_000)
+    except ValueError:
+        raise ValueError(
+            f"{field!r} must be a rate like '1.42' — per unit of exposure, no "
+            f"currency symbol and no percent sign — not {value!r}"
+        ) from None
+
+
+def _exposure(basis_key: str | None, field: str, value: str | None) -> int | None:
+    """CENTS when the basis is monetary, a whole COUNT when it is not — the one
+    decision models.RatingBasis.monetary exists to make, READ here rather than
+    judged here.
+
+    Refuses without a basis instead of picking one: 42 power units and $0.42
+    are the same digits, and a client-facing report renders them a
+    hundred-thousandfold apart."""
+    from .models import RATING_BASIS_KEYS, rating_basis
+
+    if value is None:
+        return None
+    if basis_key is None:
+        raise ValueError(
+            f"{field!r} needs its rating basis in the same call — one of "
+            f"{list(RATING_BASIS_KEYS)} — so the figure is stored as money or "
+            f"as a count rather than guessed"
+        )
+    if rating_basis(basis_key).monetary:
+        from .money import parse_money_cents
+
+        return int(parse_money_cents(value))
+    try:
+        return int(str(value).replace(",", "").strip())
+    except ValueError:
+        raise ValueError(
+            f"{field!r} on a {basis_key!r} basis is a whole count, not money — "
+            f"got {value!r}"
+        ) from None
+
+
+def _check_basis(field: str, key: str | None) -> str | None:
+    """models.rating_basis is the vocabulary check and raises with the list;
+    calling it for its refusal is how a basis is validated even when no
+    exposure arrives with it."""
+    from .models import rating_basis
+
+    if key is None:
+        return None
+    rating_basis(key)
+    return key
+
+
+def _lines_list(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    from .repo import lines as lines_repo
+
+    return [
+        {
+            "line_id": line.id,
+            "name": line.name,
+            "abbr": line.abbr,
+            "acord_code": line.acord_code,
+        }
+        for line in lines_repo.all_lines(conn)
+    ]
+
+
+def _line_add(
+    conn: sqlite3.Connection,
+    name: str,
+    abbr: str | None = None,
+    acord_code: str | None = None,
+) -> dict[str, Any]:
+    """The near-match warning reaches the REPLY, not only the refusal.
+
+    repo/lines.py refuses an exact duplicate and deliberately does NOT refuse a
+    near one — `Excess Liability` and `Employers Liability` are four letters
+    apart and are not the same thing, so a block nobody can override makes a
+    correct entry impossible. A human sees that warning beside the field and
+    decides; an assistant that never sees it is exactly how a fifth spelling
+    of General Liability gets in. So it is measured BEFORE the write and
+    returned with the new line rather than swallowed.
+
+    The duplicate guard is repo's and is caught, not re-implemented here: a
+    second copy in a caller is the thing repo/team.py's comment is about, and
+    the failed create rolls back with its own batch row."""
+    from .repo import lines as lines_repo
+
+    near = [
+        {"line_id": match.id, "name": match.name, "score": score}
+        for match, score in lines_repo.near_matches(conn, name)
+    ]
+    with _open_batch(
+        conn, tool="line_add", summary=f"added line of coverage {name!r}"
+    ) as batch:
+        try:
+            line_id = lines_repo.create(
+                conn, name, abbr=abbr, acord_code=acord_code
+            )
+        except lines_repo.DuplicateLine as dup:
+            raise ValueError(
+                f"a line of coverage named {dup.existing.name!r} already exists "
+                f"as {dup.existing.id!r} — use that one rather than a second "
+                f"spelling of it"
+            ) from None
+        _provenance(conn, "line_of_coverage", line_id)
+    line = lines_repo.get(conn, line_id)
+    assert line is not None  # just written
+    return {
+        "line_id": line.id,
+        "name": line.name,
+        "abbr": line.abbr,
+        "acord_code": line.acord_code,
+        "near_matches": near,
+        "batch": batch.ref,
+    }
+
+
+def _market_approach(
+    conn: sqlite3.Connection,
+    placement_ref: str,
+    line: str,
+    market: str | None = None,
+    via: str | None = None,
+    attach: str | None = None,
+    limit: str | None = None,
+    sent_on: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Record an approach: who we went to, on which line of coverage, through
+    whom.
+
+    THE SUBMISSION IS THE PACKAGE AND THE RESPONSE IS THE ANSWER. One
+    submission goes to one market carrying every line, and the response rows
+    hang off it one per line — so an approach REUSES the live submission
+    already out to that market on this placement and creates one only when
+    there is none. Otherwise one email becomes three submissions and "who did
+    we approach" stops being answerable, which is the shape migration 015's
+    header refuses.
+
+    The submission is addressed to the INTERMEDIARY where there is one: a
+    package sent to RT Specialty went to RT Specialty, whatever paper they
+    come back with. `submission.market_org_id` is NOT NULL, so this is not a
+    preference — it is the only truthful value available at that moment.
+
+    Clearance conflicts are WARNED, never refused, exactly as repo/marketing
+    reports them: the double approach is sometimes deliberate and a hard block
+    would make a legitimate entry impossible (the `line-gap` rule again)."""
+    from .repo import marketing, orgs
+    from .repo import submissions as submissions_repo
+
+    if not (market or via):
+        raise ValueError(
+            "an approach needs `market` (the carrier) or `via` (the wholesaler "
+            "or MGA) — if the wholesaler has not named the paper yet, give "
+            "`via` alone and fill the carrier in later with market_responded"
+        )
+    placement = _resolve_placement(conn, placement_ref)
+    coverage = _resolve_line(conn, line)
+    carrier = _resolve_market(conn, market) if market else None
+    intermediary = _resolve_market(conn, via) if via else None
+    addressed = intermediary or carrier
+    assert addressed is not None  # one of the two, checked above
+
+    when = (
+        _clean_typed("date", "sent_on", sent_on)
+        if sent_on
+        else date.today().isoformat()
+    )
+    fields: dict[str, Any] = {}
+    if carrier is not None:
+        fields["market_org_id"] = carrier.id
+    if intermediary is not None:
+        fields["via_org_id"] = intermediary.id
+    if attach:
+        fields["attach"] = _clean_typed("money", "attach", attach)
+    if limit:
+        fields["lim"] = _clean_typed("money", "limit", limit)
+    if notes:
+        fields["notes"] = notes
+
+    # A WITHDRAWN SUBMISSION IS NOT REUSED. We pulled that package; hanging a
+    # new approach off it would leave the row permanently mis-stated, because
+    # repo/marketing.roll_up_submission never writes over `withdrawn` and
+    # never un-withdraws one. Going back to a market we withdrew from is a
+    # NEW submission, which is also what happened in the world.
+    existing = next(
+        (
+            sub
+            for sub in submissions_repo.for_placement(conn, placement.id)
+            if sub.market_org_id == addressed.id and sub.status != "withdrawn"
+        ),
+        None,
+    )
+    with _open_batch(
+        conn,
+        tool="market_approach",
+        org_id=placement.org_id,
+        summary=f"approached {addressed.name} on {coverage.name}",
+    ) as batch:
+        submission = existing or submissions_repo.create(
+            conn,
+            market_org_id=addressed.id,
+            sent_on=when,
+            placement_id=placement.id,
+        )
+        response = marketing.create_response(
+            conn, submission.id, coverage.id, **fields
+        )
+        _provenance(conn, "market_response", response.id)
+
+    conflicts = marketing.clearance_conflicts(conn, response)
+    names = orgs.names_for(
+        conn, {c.via_org_id or "" for c in conflicts} - {""}
+    )
+    return {
+        "response_id": response.id,
+        "line": coverage.name,
+        "market": carrier.name if carrier else None,
+        "via": intermediary.name if intermediary else None,
+        "status": response.status,
+        "submission_id": submission.id,
+        "submission_is_new": existing is None,
+        "sent_on": submission.sent_on,
+        "clearance_warnings": [
+            f"{carrier.name if carrier else 'this carrier'} is already being "
+            f"reached on {coverage.name} via "
+            f"{names.get(c.via_org_id or '', 'a direct approach')}"
+            for c in conflicts
+        ],
+        "batch": batch.ref,
+    }
+
+
+def _market_responded(
+    conn: sqlite3.Connection,
+    response_ref: str,
+    status: str | None = None,
+    responded_on: str | None = None,
+    rate: str | None = None,
+    premium: str | None = None,
+    fees: str | None = None,
+    decline_reason: str | None = None,
+    decline_reason_public: str | None = None,
+) -> dict[str, Any]:
+    """What the market said, onto the row that recorded the approach.
+
+    The submission's status is NOT written here and cannot be: repo/marketing
+    rolls it up from its response rows after every write, because two
+    hand-maintained copies of one fact disagree and then nobody knows which is
+    right. The rolled-up value comes back in the reply so the caller can see
+    what its edit did to the parent.
+
+    The two decline reasons are two fields on purpose. `decline_reason` is
+    internal free text and NEVER reaches a client; `decline_reason_public`
+    takes the controlled vocabulary and is what a client-facing report
+    prints."""
+    from .models import PUBLIC_DECLINE_REASONS
+    from .repo import lines as lines_repo
+    from .repo import marketing, orgs, placements
+    from .repo import submissions as submissions_repo
+
+    response = _resolve_response(conn, response_ref)
+    changes: dict[str, Any] = {}
+    if status is not None:
+        changes["status"] = status  # repo._validate_status refuses with the list
+    if responded_on is not None:
+        changes["responded_on"] = _clean_typed("date", "responded_on", responded_on)
+    if rate is not None:
+        changes["rate_micros"] = _rate_micros("rate", rate)
+    if premium is not None:
+        changes["premium"] = _clean_typed("money", "premium", premium)
+    if fees is not None:
+        changes["policy_fees"] = _clean_typed("money", "fees", fees)
+    if decline_reason is not None:
+        changes["decline_reason"] = decline_reason
+    if decline_reason_public is not None:
+        changes["decline_reason_public"] = _clean_typed(
+            PUBLIC_DECLINE_REASONS, "decline_reason_public", decline_reason_public
+        )
+    if not changes:
+        raise ValueError(
+            "market_responded was given nothing to record — pass at least one "
+            "of status, responded_on, rate, premium, fees or a decline reason"
+        )
+
+    submission = submissions_repo.get(conn, response.submission_id)
+    org_id = (
+        placements.get(conn, submission.placement_id).org_id
+        if submission.placement_id
+        else None
+    )
+    coverage = lines_repo.get(conn, response.line_id)
+    who = orgs.names_for(
+        conn, {response.market_org_id or "", response.via_org_id or ""} - {""}
+    )
+    market_name = who.get(response.market_org_id or "") or who.get(
+        response.via_org_id or "", "a market"
+    )
+    said = status or "an update"
+    with _open_batch(
+        conn,
+        tool="market_responded",
+        org_id=org_id,
+        summary=(
+            f"recorded {said} from {market_name} on "
+            f"{coverage.name if coverage else response.line_id}"
+        ),
+    ) as batch:
+        fresh = marketing.edit_response(conn, response.id, changes)
+
+    rolled = submissions_repo.get(conn, fresh.submission_id)
+    return {
+        "response_id": fresh.id,
+        "line": coverage.name if coverage else response.line_id,
+        "market": market_name,
+        "status": fresh.status,
+        "responded_on": fresh.responded_on,
+        "submission_id": rolled.id,
+        "submission_status": str(
+            rolled.status.value if hasattr(rolled.status, "value") else rolled.status
+        ),
+        "batch": batch.ref,
+    }
+
+
+def _set_placement_line(
+    conn: sqlite3.Connection,
+    placement_ref: str,
+    line: str,
+    expiring_premium: str | None = None,
+    expiring_exposure: str | None = None,
+    expiring_rate: str | None = None,
+    expiring_basis: str | None = None,
+    expected_exposure: str | None = None,
+    rating_basis: str | None = None,
+    rate_per: str | None = None,
+    limit_sought: str | None = None,
+) -> dict[str, Any]:
+    """What ONE line of coverage on ONE placement is expected to do: the
+    expiring figures a client's comparison is built on, and the exposure and
+    basis every market response inherits unless it overrides them.
+
+    UPSERT, deliberately: "this line expects X" has no meaningful difference
+    between the first statement and the second, and repo/marketing owns the
+    one-row-per-(placement, line) rule so this cannot write a second row.
+
+    An exposure is stored as CENTS or as a whole COUNT depending on its basis,
+    and is refused when no basis is known — 42 power units and $0.42 are the
+    same digits."""
+    from .repo import marketing
+
+    placement = _resolve_placement(conn, placement_ref)
+    coverage = _resolve_line(conn, line)
+    current = marketing.placement_line(conn, placement.id, coverage.id)
+
+    expiring_key = _check_basis("expiring_basis", expiring_basis) or (
+        current.expiring_basis if current else None
+    )
+    current_key = _check_basis("rating_basis", rating_basis) or (
+        current.rating_basis if current else None
+    )
+
+    fields: dict[str, Any] = {}
+    if expiring_premium is not None:
+        fields["expiring_premium"] = _clean_typed(
+            "money", "expiring_premium", expiring_premium
+        )
+    if expiring_exposure is not None:
+        fields["expiring_exposure"] = _exposure(
+            expiring_key, "expiring_exposure", expiring_exposure
+        )
+    if expiring_rate is not None:
+        fields["expiring_rate_micros"] = _rate_micros("expiring_rate", expiring_rate)
+    if expiring_basis is not None:
+        fields["expiring_basis"] = expiring_basis
+    if expected_exposure is not None:
+        fields["expected_exposure"] = _exposure(
+            current_key, "expected_exposure", expected_exposure
+        )
+    if rating_basis is not None:
+        fields["rating_basis"] = rating_basis
+    if rate_per is not None:
+        fields["rate_per"] = _clean_typed("int", "rate_per", rate_per)
+    if limit_sought is not None:
+        fields["limit_sought"] = _clean_typed("money", "limit_sought", limit_sought)
+    if not fields:
+        raise ValueError(
+            "set_placement_line was given nothing to set — pass at least one "
+            "expiring figure, an expected exposure, a basis, a rate_per or a "
+            "limit sought"
+        )
+
+    with _open_batch(
+        conn,
+        tool="set_placement_line",
+        org_id=placement.org_id,
+        summary=f"set expectations for {coverage.name} on {placement.ref}",
+    ) as batch:
+        row = marketing.set_placement_line(
+            conn, placement.id, coverage.id, **fields
+        )
+
+    return {
+        "placement_ref": placement.ref,
+        "line": coverage.name,
+        "line_id": coverage.id,
+        "expiring_premium": row.expiring_premium,
+        "expiring_exposure": row.expiring_exposure,
+        "expiring_rate_micros": row.expiring_rate_micros,
+        "expiring_basis": row.expiring_basis,
+        "expected_exposure": row.expected_exposure,
+        "rating_basis": row.rating_basis,
+        "rate_per": row.rate_per,
+        "limit_sought": row.limit_sought,
+        "batch": batch.ref,
+    }
+
+
+def _report_text(report: Any, sections: list[Any], headers: list[str]) -> str:
+    """The composed report as text a model can read in one piece.
+
+    Columns that are blank the whole way down a section are DROPPED from that
+    section: eighteen headers over a block where four carry anything is the
+    undifferentiated density the UI rule names, and here it is also paid for
+    in tokens. Nothing is summarised away — every row and every non-empty cell
+    survives."""
+    out = [
+        f"{report.account} — {report.program}",
+        f"period {report.period} · as of {report.as_of} · {report.audience} report",
+    ]
+    for section in sections:
+        out.append("")
+        out.append(str(section.label or ""))
+        rows = [
+            tuple(list(r) + [""] * (len(headers) - len(r)))[: len(headers)]
+            for r in section.rows
+        ]
+        keep = [
+            i for i in range(len(headers)) if any(row[i].strip() for row in rows)
+        ]
+        if not keep:
+            keep = [0]
+        widths = [
+            max([len(headers[i])] + [len(row[i]) for row in rows]) for i in keep
+        ]
+        out.append(
+            "  ".join(
+                headers[i].ljust(w) for i, w in zip(keep, widths, strict=True)
+            ).rstrip()
+        )
+        for row in rows:
+            out.append(
+                "  ".join(
+                    row[i].ljust(w) for i, w in zip(keep, widths, strict=True)
+                ).rstrip()
+            )
+    return "\n".join(out)
+
+
+def _marketing_report(
+    conn: sqlite3.Connection,
+    placement_ref: str,
+    audience: str = "client",
+    as_of: str | None = None,
+) -> dict[str, Any]:
+    """The composed marketing report, rendered as text.
+
+    `today` is a PARAMETER all the way down: services/marketing_report never
+    reads the wall clock, so a report can be composed as of any date and two
+    runs of the same date agree. This tool is the only place a default is
+    applied, and it says so in the reply's `as_of`.
+
+    The `responses` index is not decoration — a composed row carries no id, so
+    without it there is no way to name the row market_responded should
+    update."""
+    from .repo import lines as lines_repo
+    from .repo import marketing, orgs
+    from .services import marketing_report as report_svc
+
+    placement = _resolve_placement(conn, placement_ref)
+    audiences = (report_svc.CLIENT, report_svc.INTERNAL)
+    if audience not in audiences:
+        raise ValueError(
+            f"audience must be one of {list(audiences)}, not {audience!r}"
+        )
+    today = (
+        date.fromisoformat(_clean_typed("date", "as_of", as_of))
+        if as_of
+        else date.today()
+    )
+    report = report_svc.compose(conn, placement.id, today, audience)
+    sections = report_svc.to_sections(report)
+    headers = [header for header, _width, _right in report_svc.columns(audience)]
+
+    responses = marketing.responses_for_placement(conn, placement.id)
+    vocabulary = {line.id: line.name for line in lines_repo.all_lines(conn)}
+    who = orgs.names_for(
+        conn,
+        ({r.market_org_id or "" for r in responses}
+         | {r.via_org_id or "" for r in responses}) - {""},
+    )
+    return {
+        "account": report.account,
+        "program": report.program,
+        "period": report.period,
+        "as_of": report.as_of,
+        "audience": report.audience,
+        "report": _report_text(report, sections, headers),
+        "responses": [
+            {
+                "response_id": r.id,
+                "line": vocabulary.get(r.line_id, r.line_id),
+                "market": who.get(r.market_org_id or ""),
+                "via": who.get(r.via_org_id or ""),
+                "status": r.status,
+            }
+            for r in responses
+        ],
+    }
