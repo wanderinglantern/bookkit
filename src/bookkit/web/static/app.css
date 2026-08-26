@@ -3312,6 +3312,79 @@ tr:hover .market .chip-remove {
    markets' premiums against each other is the entire reason it exists — and
    figures compare only when their digits line up. The header takes the same
    gutter as the cell or the label stops sitting over its own column. */
+/* --- open items, gathered under the account that owes them ---------------
+   ONE ACCOUNT, ONE HEADING (Grant, 2026-08-26). The heading has to read as a
+   divider between lists rather than as a row in one, or a reader scanning down
+   a hundred items cannot tell where an account ends — so it takes the
+   section rule and its name takes the serif, the same way every other section
+   name in this app does. */
+.item-group-row > td {
+  /* A DIVIDER, NOT A ROW — and the divider is the TYPE and the AIR, not a
+     rule. A `border-top` here was written first and rendered nothing: under
+     `border-collapse: collapse` the two cells share one edge, and with equal
+     width and style the cell that comes FIRST wins — so the row above's
+     hairline was drawn every time and the ink line never was. Making it win
+     means 2px of ink between every group, which at thirteen groups is more
+     furniture than the page can carry. The serif name against the mono rows,
+     with room above it, separates them on its own (seen side by side,
+     2026-08-26); a rule that does nothing is worse than no rule, because the
+     next reader believes it. */
+  border-bottom: none;
+  padding: 1.15rem 0.6rem 0.25rem;
+  height: auto;
+}
+
+.item-group-row:first-child > td {
+  padding-top: 0.35rem;
+}
+
+/* THE FLEX IS ON A DIV INSIDE THE CELL. A `<td>` given `display: flex` stops
+   being a table cell — its `colspan` is ignored and it takes the width of
+   the FIRST column, which pushed Due out to 620px and dragged every column
+   after it right. */
+.item-group-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  align-items: baseline;
+}
+
+/* No hover tint and no pointer: it is not a row anything happens to. */
+.item-group-row:hover > td {
+  background: none;
+}
+
+.item-group-name {
+  font-family: var(--serif);
+  font-size: 1rem;
+  font-weight: 400;
+}
+
+/* The counts caption the list under them, so they sit at the far end of the
+   heading rather than beside the name — a reader looking for an account
+   scans the left edge, and a number in that path is something to read past. */
+.item-group-counts {
+  margin-left: auto;
+  font-size: var(--hint-size);
+  color: var(--muted);
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+/* OVERDUE IS THE ONE COUNT WORTH A TINT, and it carries its own word — the
+   row stripe below says the same thing per row, and this says it once for the
+   account so it is visible without opening the group. */
+.pill-overdue {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: var(--hint-size);
+  color: var(--danger);
+  background: var(--danger-wash);
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+}
+
 /* --- ordering the grid ----------------------------------------------------
    A HEADER IS A CONTROL NOW, and it has to still read as a header. The button
    inherits the `th`'s own type — uppercase, tracked, mono, muted — rather than

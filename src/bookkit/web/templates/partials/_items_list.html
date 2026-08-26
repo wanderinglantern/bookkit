@@ -58,16 +58,75 @@
       <div class="empty-state">Nothing outstanding — every request is answered.</div>
     {% endif %}
   {% elif tasks %}
+    {# ONE ACCOUNT, ONE HEADING, and the Account COLUMN is gone with it (Grant,
+       2026-08-26). A hundred-odd items across ten clients printed the same
+       account name down a column on every row — the duplication the DRY
+       rule names, arriving as something a person reads past rather than as
+       code. The account is stated once, where a reader looks for it, and the
+       column it vacated goes to the two prose columns that were being
+       squeezed.
+
+       THE GROUPS LEAD WITH THE MOST URGENT (routes/items.py `_grouped`), so
+       the account with something overdue is at the top of the page. The
+       filter chips stay above all of it: narrowing to "overdue" narrows
+       inside the groups rather than replacing them. #}
+    {# ONE TABLE, WITH THE ACCOUNTS AS ROWS IN IT — not a table per group.
+       A table each was the obvious build and it was wrong twice, both visible
+       the moment it was rendered against a real book (2026-08-26): the column
+       header repeated thirteen times down the page, which is the very
+       duplication grouping exists to remove wearing a row instead of a
+       column; and each table sized its own columns, so Due, Task and Category
+       landed at a different x in every group and the page read as thirteen
+       unrelated lists rather than one book.
+
+       One table fixes both, and it makes the vertical hop right as well:
+       inline-cell.js scopes shift+Enter to the closest TABLE, so working down
+       the Due column now carries on across the account boundary — which is
+       what working down a list means. #}
     <div class="table-scroll">
       <table class="rows rows-fit">
         <thead>
           <tr>
-            <th>Due</th><th>Task</th><th>Account</th><th>Category</th>
+            <th>Due</th><th>Task</th><th>Category</th>
             <th>Assignee</th><th>Notes</th><th></th>
           </tr>
         </thead>
         <tbody>
-          {% for task in tasks %}
+        {% for group in groups %}
+          {# THE HEADING IS A ROW, and it must not read as a task. It takes the
+             section rule and the serif every other section name in this app
+             takes, and it carries the counts at the far end so a reader
+             scanning the left edge for an account is not reading past a
+             number to find one. #}
+          <tr class="item-group-row">
+            <td colspan="6">
+              {# THE FLEX GOES ON A DIV INSIDE THE CELL, never on the `<td>`.
+                 A table cell given `display: flex` stops being a table cell:
+                 its `colspan` is ignored and it takes the FIRST column's
+                 width, which pushed Due out to 620px and dragged every other
+                 column right (seen the moment it was rendered, 2026-08-26). #}
+              <div class="item-group-line">
+              <span class="item-group-name">
+                {% if group.ref %}
+                  {{ account.account_link(accounts, group.org_id, "work") }}
+                {% else %}
+                  {# NOT AN ACCOUNT, and it must not read as one. A
+                     placement-attached task can carry no org legitimately and
+                     those rows cannot open a cell here — the heading says
+                     so once instead of every row saying it in a cell. #}
+                  <span class="detail-label">no account — these are not editable here</span>
+                {% endif %}
+              </span>
+              <span class="item-group-counts">
+                <span class="mono">{{ group.count }}</span> open
+                {% if group.overdue %}
+                  <span class="pill-overdue">{{ group.overdue }} overdue</span>
+                {% endif %}
+              </span>
+              </div>
+            </td>
+          </tr>
+          {% for task in group.rows %}
             {# `data-layer-row` is the RECORD HOOK — inline-cell.js resolves a
                vertical hop (shift+Enter, down the same column) against it, and
                #cell-keys in the shell announces that key on EVERY page. Without
@@ -79,16 +138,15 @@
               {% if task.editable %}
                 {{ task.cells.due_on | safe }}
                 {{ task.cells.title | safe }}
-                <td class="prose">{{ account.account_link(accounts, task.org_id, "work") }}</td>
                 {{ task.cells.category | safe }}
                 {{ task.cells.assignee | safe }}
                 {{ task.cells.description | safe }}
               {% else %}
-                {# No account, so no route to post a cell to. Said plainly:
-                   a cell that silently refuses to open reads as broken. #}
+                {# No account, so no route to post a cell to. The GROUP
+                   heading says why once; the row prints its facts plainly
+                   rather than repeating the sentence. #}
                 <td class="num">{{ task.due_on or "—" }}</td>
                 <td class="prose">{{ task.title }}</td>
-                <td class="prose"><span class="detail-label">no account — not editable here</span></td>
                 <td class="prose">{{ task.category or "—" }}</td>
                 <td class="prose">—</td>
                 <td class="prose">—</td>
@@ -110,6 +168,7 @@
               </td>
             </tr>
           {% endfor %}
+        {% endfor %}
         </tbody>
       </table>
     </div>
