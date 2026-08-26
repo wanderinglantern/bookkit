@@ -538,7 +538,12 @@ def test_a_market_can_be_added_through_a_wholesaler_alone(client_and_org):
     assert rows[0].lim == 1_000_000_000
 
     html = _tab(client, org)
-    assert "RT Specialty — carrier TBD" in html
+    # TWO COLUMNS NOW, one fact each: the Market cell says the paper is not
+    # named yet and the Access cell says who we went through. The workbook
+    # still collapses them into "RT Specialty — carrier TBD"
+    # (`ReportRow.market_cell`) because a client only reads it.
+    assert "carrier TBD" in html
+    assert "RT Specialty" in html
 
 
 def test_the_add_row_offers_nothing_chosen_first(client_and_org):
@@ -2788,3 +2793,225 @@ def test_undo_on_the_rail_leaves_the_panel_and_the_pipeline_saying_the_same_thin
         "SELECT * FROM submission WHERE id = ?", (gl.submission_id,)
     ).fetchone()
     assert {f: before[f] for f in derived} == {f: after[f] for f in derived}
+
+
+# --- how we reached the paper, corrected where it prints -------------------
+#
+# THE ACCESS POINT HAD NO FIX ON ANY SURFACE (Grant, 2026-08-26: "no way to
+# update the access point … to turn back to a direct approach if needed to
+# clean up"). It is the one fact on an approach a broker cannot know until the
+# submission actually goes out — you record RT Specialty, and it goes direct —
+# and it was not a cell, not a form field and not an MCP argument.
+
+
+def _access(client, org, placement, response, typed: str):
+    return client.post(
+        _cell_url(org, placement, response, "via_org_id"),
+        data={"via_org_id": typed},
+    )
+
+
+def test_an_access_point_is_cleared_back_to_a_direct_approach(client_and_org):
+    """THE CORRECTION THE COLUMN EXISTS FOR. Emptying the cell records a direct
+    approach — blank is an ANSWER here, not an unset value, which is why the
+    display prints the word `direct` and the editor still pre-fills empty."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    carrier = _market(conn, "Zurich")
+    wholesaler = _market(conn, "RT Specialty")
+    response = _approach(conn, placement.id, carrier, via_org_id=wholesaler.id)
+
+    got = _access(client, org, placement, response, "")
+
+    assert got.status_code == 200
+    assert marketing.get_response(conn, response.id).via_org_id is None
+    assert "direct" in got.text, "a cleared access point must say so in words"
+
+
+def test_an_access_point_is_named_and_changed_where_it_prints(client_and_org):
+    """A NAME IN, AN ID OUT — the same resolution the add row two rows down
+    makes, over the same vocabulary."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    carrier = _market(conn, "Zurich")
+    amwins = _market(conn, "Amwins Brokerage")
+    response = _approach(conn, placement.id, carrier)
+    assert response.via_org_id is None
+
+    got = _access(client, org, placement, response, "Amwins Brokerage")
+
+    assert got.status_code == 200
+    assert marketing.get_response(conn, response.id).via_org_id == amwins.id
+
+
+def test_an_access_point_the_book_does_not_carry_is_refused_and_nothing_written(
+    client_and_org,
+):
+    """A MISS IS REFUSED, NOT MINTED. `via_org_id` is a foreign key with no
+    freeform half to degrade to (unlike an assignee), and a cell that created a
+    market as a side effect of a correction is the wrong write the missing-verb
+    rule is about. The refusal names the nearest, says blank means direct, and
+    names the door that makes one."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing
+
+    carrier = _market(conn, "Zurich")
+    _market(conn, "RT Specialty")
+    response = _approach(conn, placement.id, carrier)
+    before = _events(conn, response.id)
+
+    got = _access(client, org, placement, response, "RT Speciallty Grp")
+
+    assert got.status_code == 200
+    assert "no market on this book is called" in got.text
+    assert "RT Specialty" in got.text, "the refusal must name the nearest match"
+    assert "direct approach" in got.text, "blank means direct — say so"
+    assert marketing.get_response(conn, response.id).via_org_id is None
+    assert _events(conn, response.id) == before, "a refused save wrote something"
+
+
+def test_the_access_cell_never_prints_the_id_it_stores(client_and_org):
+    """THE ONE EDITABLE KEY STORED AS AN ID AND PRINTED AS A NAME. The generic
+    display path would fall through to `str(value)` and put a ULID in a cell a
+    broker reads, which looks like data rather than like a bug."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+
+    carrier = _market(conn, "Zurich")
+    wholesaler = _market(conn, "RT Specialty")
+    _approach(conn, placement.id, carrier, via_org_id=wholesaler.id)
+
+    html = _tab(client, org)
+
+    assert wholesaler.id not in html
+    assert "RT Specialty" in html
+
+
+def test_correcting_the_access_point_answers_with_the_whole_block(client_and_org):
+    """IT MOVES THE CLEARANCE STRIP, which lives in the BLOCK header above the
+    row. A conflict is the same carrier reached twice on one line through
+    DIFFERENT intermediaries, so making a wholesaler approach direct either
+    raises the warning or takes it away — and a row-sized answer would leave
+    the strip standing over a conflict that no longer exists."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+
+    carrier = _market(conn, "Zurich")
+    wholesaler = _market(conn, "RT Specialty")
+    direct = _approach(conn, placement.id, carrier, status="pending")
+    through = _approach(
+        conn, placement.id, carrier, via_org_id=wholesaler.id, status="pending"
+    )
+    assert "clearance" in _tab(client, org)
+
+    got = _access(client, org, placement, through, "")
+
+    assert got.status_code == 200
+    assert got.headers["HX-Retarget"].startswith("#mblock-"), (
+        "the access cell must answer with the block that carries the strip"
+    )
+    assert "clearance" not in got.text, (
+        "the very act that resolves the conflict left the warning standing"
+    )
+    assert direct.id  # both rows survive; only the route to the paper changed
+
+
+def test_the_access_editor_prefills_the_name_and_offers_the_book(client_and_org):
+    """WHAT A FORM PRE-FILLS MUST BE SOMETHING ITS OWN PARSER ACCEPTS BACK.
+    The editor holds the NAME — the id is what is stored, and a ULID in the box
+    is unsaveable without retyping the whole thing — and it carries the book's
+    own market list as completion, which is the same anti-drift rule the add
+    row two rows down follows over the same vocabulary."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+
+    carrier = _market(conn, "Zurich")
+    wholesaler = _market(conn, "RT Specialty")
+    response = _approach(conn, placement.id, carrier, via_org_id=wholesaler.id)
+
+    got = client.get(_cell_url(org, placement, response, "via_org_id") + "/edit")
+
+    assert got.status_code == 200
+    assert 'value="RT Specialty"' in got.text
+    assert wholesaler.id not in got.text
+    assert "<datalist" in got.text, "the access editor lost its completion list"
+
+
+def test_the_access_display_cell_prints_direct_not_an_id(client_and_org):
+    """The display half of the same contract, fetched on Escape and after a
+    revert: `via_org_id` is the ONE editable key stored as an id, and the
+    generic path would fall through to `str(value)`."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+
+    carrier = _market(conn, "Zurich")
+    response = _approach(conn, placement.id, carrier)
+
+    got = client.get(_cell_url(org, placement, response, "via_org_id"))
+
+    assert got.status_code == 200
+    assert "direct" in got.text
+
+
+# --- the grid is 22 columns and does not fit -------------------------------
+#
+# Measured on the running app (2026-08-26, 1600px window): the table asks for
+# 1811px and gets 1064px, so 41% of it is off the right-hand edge. The columns
+# are what the client's workbook prints and thinning them is not on the table,
+# so the two columns that say WHOSE row it is pin to the left edge instead.
+
+
+def test_the_two_columns_that_name_the_row_are_pinned(client_and_org):
+    """MARKET AND ACCESS PIN, header and body cells alike. A pinned body cell
+    under an unpinned header slides out from under its own label the moment the
+    grid is scrolled sideways, so both halves carry the same class."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+
+    carrier = _market(conn, "Zurich")
+    wholesaler = _market(conn, "RT Specialty")
+    _approach(conn, placement.id, carrier, via_org_id=wholesaler.id)
+
+    html = _tab(client, org)
+
+    assert 'class="num pin pin-1"' not in html, "Market is prose, not numeric"
+    assert "pin pin-1" in html and "pin pin-2" in html
+    # BOTH HALVES. Counting rather than asserting presence, because a header
+    # that pinned and a body that did not would still satisfy `in`.
+    assert html.count("pin pin-1") >= 2
+    assert html.count("pin pin-2") >= 2
+
+
+def test_a_pinned_column_is_one_of_the_leftmost(client_and_org):
+    """THE `left` OFFSETS ONLY MEAN SOMETHING IN ORDER. `pin-1` sits at 0 and
+    `pin-2` at the width of `pin-1`, so a column pinned from the middle of the
+    tuple would be positioned over columns it does not follow — and nothing in
+    the stylesheet could detect it. The rule is checked here rather than
+    written in a comment nobody re-reads."""
+    from bookkit.web import marketing_grid
+
+    pinned = [c for c in marketing_grid.COLUMNS if c.pin]
+    assert [c.pin for c in pinned] == list(range(1, len(pinned) + 1)), (
+        "pins must be numbered 1..N with no gaps — the CSS positions each one "
+        "against the one before it"
+    )
+    assert marketing_grid.COLUMNS[: len(pinned)] == tuple(pinned), (
+        "a pinned column must be among the leftmost columns, in pin order — "
+        "pinning one from the middle of the tuple lays it over columns it "
+        "does not follow"
+    )
+    # And the header cells say so, off the same declaration the body cells use.
+    assert pinned[0].th_class == "pin pin-1"

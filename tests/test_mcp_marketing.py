@@ -695,3 +695,95 @@ def test_reinstating_recomputes_figures_the_roll_up_refused_to_touch(conn) -> No
         "the package came back stating a premium no row says"
     )
     assert submissions.get(conn, sub_id).quoted_premium == 9_800_000
+
+
+# --- how we reached the paper, on the agent's surface ----------------------
+
+
+def test_the_assistant_can_turn_an_approach_back_into_a_direct_one(conn) -> None:
+    """A SCHEMA CHANGE IS NOT DONE UNTIL AN AGENT CAN SEE IT (CLAUDE.md), and
+    this correction had no door on ANY surface: not a cell, not a form, not an
+    MCP argument. AN EMPTY STRING IS THE ANSWER — a wholesaler recorded on an
+    approach that in fact went straight to the carrier is cleaned up by saying
+    there is no intermediary, and there is no other word for that."""
+    _, placement = _book(conn)
+    _market(conn, "Zurich")
+    _market(conn, "RT Specialty")
+    approach = mcpserver._market_approach(
+        conn, placement.ref, "GL",
+        market="Zurich", via="RT Specialty", sent_on="2026-07-07",
+    )
+    assert marketing.get_response(conn, approach["response_id"]).via_org_id
+
+    mcpserver._market_responded(conn, approach["response_id"], via="")
+
+    assert marketing.get_response(conn, approach["response_id"]).via_org_id is None
+    # …AND CAN READ IT BACK. A tool that writes a fact the assistant can never
+    # see again is half a link in the chain.
+    report = mcpserver._marketing_report(conn, placement.ref)
+    assert [r["via"] for r in report["responses"]] == [None]
+
+
+def test_the_assistant_can_name_a_different_access_point(conn) -> None:
+    _, placement = _book(conn)
+    _market(conn, "Zurich")
+    _market(conn, "RT Specialty")
+    amwins = _market(conn, "Amwins Brokerage")
+    approach = mcpserver._market_approach(
+        conn, placement.ref, "GL",
+        market="Zurich", via="RT Specialty", sent_on="2026-07-07",
+    )
+
+    mcpserver._market_responded(
+        conn, approach["response_id"], via="Amwins Brokerage"
+    )
+
+    assert (
+        marketing.get_response(conn, approach["response_id"]).via_org_id == amwins.id
+    )
+
+
+def test_an_access_point_the_book_does_not_carry_is_refused_not_minted(conn) -> None:
+    """A MISSING VERB IS NOT A REFUSAL — IT IS A WRONG WRITE (CLAUDE.md), and
+    the answer to that rule is that `market_create` EXISTS. So this tool
+    refuses rather than minting a market as a side effect of correcting an
+    approach, which is precisely the wrong write the rule is about."""
+    _, placement = _book(conn)
+    _market(conn, "Zurich")
+    approach = mcpserver._market_approach(
+        conn, placement.ref, "GL", market="Zurich", sent_on="2026-07-07"
+    )
+
+    # THE MESSAGE IS MATCHED, not merely the exception type. `market_responded`
+    # refuses an empty `changes` with a sentence of its own, so a bare
+    # `pytest.raises(ValueError)` here goes green against a build that ignores
+    # the argument entirely — which is the exact regression this test is for.
+    with pytest.raises(ValueError, match="Nobody Underwriters"):
+        mcpserver._market_responded(
+            conn, approach["response_id"], via="Nobody Underwriters"
+        )
+
+    assert marketing.get_response(conn, approach["response_id"]).via_org_id is None
+    assert orgs.find_by_name(conn, "Nobody Underwriters") is None
+
+
+def test_a_market_can_say_no_here_and_yes_higher_up(conn) -> None:
+    """"Not for us on the primary, but show us the excess" is an ANSWER, and
+    the assistant can record it: `declined` alone drops the carrier out of the
+    open set and off the clearance check while the work of going back to them
+    is still to do."""
+    _, placement = _book(conn)
+    _market(conn, "Zurich")
+    approach = mcpserver._market_approach(
+        conn, placement.ref, "GL", market="Zurich", sent_on="2026-07-07"
+    )
+
+    out = mcpserver._market_responded(
+        conn, approach["response_id"],
+        status="declined_open_elsewhere", responded_on="2026-07-20",
+    )
+
+    assert out["status"] == "declined_open_elsewhere"
+    # THE PACKAGE IS NOT CLOSED. `declined` would take it off the Pipeline's
+    # "out at market" queue with the carrier still in play.
+    assert out["submission_status"] == "out"

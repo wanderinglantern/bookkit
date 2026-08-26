@@ -43,7 +43,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ...forms.inline import market_approach_fields
+from ...forms.inline import market_approach_fields, market_response_fields
 from ...forms.spec import Field, checked_option, parse_value
 from ...models import MarketResponse
 from ...repo import lines as lines_repo
@@ -98,17 +98,25 @@ def _owned_response(
     return response
 
 
-def _field(key: str) -> Field:
+def _field(key: str, conn: sqlite3.Connection | None = None) -> Field:
     """The editable set, checked SERVER-SIDE. The markup constrains a mouse and
     nothing else — every route is reachable by anything that can POST, and the
-    keys deliberately left out of MARKET_RESPONSE_FIELDS (the carrier, the
+    keys deliberately left out of MARKET_RESPONSE_FIELDS (the CARRIER, the
     total, the rate movement) are left out for reasons a URL must not be able
-    to talk its way past."""
+    to talk its way past.
+
+    `conn` is the access point's completion list and nothing else. Pass it
+    wherever a broker TYPES — the editor, and the refusal it comes back as —
+    and leave it off where a value is only printed: a display cell that
+    queried the book's whole market list once per row would pay for a datalist
+    nobody can open."""
     field = marketing_grid.CELL_FIELDS.get(key)
     if field is None:
         raise HTTPException(
             status_code=404, detail=f"{key!r} is not editable on a market response"
         )
+    if conn is not None and key == marketing_grid.VIA:
+        return next(f for f in market_response_fields(conn) if f.key == key)
     return field
 
 
@@ -135,6 +143,66 @@ def _house(exc: Exception) -> str:
             "that could not be saved and nothing was written — check the "
             "figure and try again, and say so if it keeps happening"
         )
+    )
+
+
+def _via_name(conn: sqlite3.Connection, response: MarketResponse) -> str:
+    """The intermediary's NAME, or "" for a direct approach.
+
+    THE ONE LOOKUP. `via_org_id` is stored as an id and typed as a name, and
+    both halves of the cell contract need the name — the display prints it, the
+    editor pre-fills it — so resolving it twice in two places is the copy that
+    quietly differs. An id with no org behind it comes back blank rather than
+    as a ULID: a deleted intermediary reads as a direct approach, which is
+    wrong in the safe direction (it is correctable in the cell), where printing
+    `01J…` reads as data.
+    """
+    if not response.via_org_id:
+        return ""
+    return orgs_repo.names_for(conn, {response.via_org_id}).get(
+        response.via_org_id, ""
+    )
+
+
+def _access_point(conn: sqlite3.Connection, typed: str) -> str | None:
+    """The market a typed access point names, `None` for a direct approach.
+
+    BLANK IS AN ANSWER, and it is the one Grant asked for: an approach recorded
+    through a wholesaler that actually went straight to the carrier is cleaned
+    up by emptying this cell, not by finding a word that means "nobody". That
+    is why the cell prints `direct` and pre-fills empty — the display says what
+    the blank MEANS and the editor stays something its own parser accepts back
+    unchanged.
+
+    A MISS IS REFUSED, not degraded. `via_org_id` is a foreign key, so unlike
+    an assignee there is no freeform half to fall back to (repo/assignees.py
+    explains why that field HAS one), and unlike the add row two rows down
+    there is no half-typed approach to lose by sending the reader elsewhere —
+    this cell holds exactly one value. So the refusal names the nearest markets
+    to type instead, says blank means direct, and names the door that makes a
+    market the book has never carried.
+    """
+    typed = typed.strip()
+    if not typed:
+        return None
+    org = orgs_repo.find_market(conn, typed)
+    if org is not None:
+        return org.id
+    # THE SCORES ARE PRINTED, the same reading the add row's card takes:
+    # "91% alike" is a fact a broker can judge and "did you mean…" is not.
+    near = ", ".join(
+        f"{match.name} ({score}% alike)"
+        for match, score in orgs_repo.near_markets(conn, typed)
+    )
+    # ONE f-STRING, not a `+` chain. The G5 walk reads a refusal off the AST
+    # and only sees a `Constant` or a `JoinedStr` — a sentence assembled with
+    # `+` is a `BinOp` and goes unwalked, which is a refusal nobody is made to
+    # declare a fix for.
+    nearest = f" — nearest: {near}" if near else ""
+    raise ValueError(
+        f"no market on this book is called {typed!r}{nearest}. Type one of "
+        "those, leave it blank for a direct approach, or add the market on "
+        "the Markets page first."
     )
 
 
@@ -175,11 +243,16 @@ def _display_cell(
         if placement is not None
         else None
     )
+    conn = _conn(request)
     return HTMLResponse(
         render_cell_display(
             request,
             _field(key),
-            _plain(marketing_grid.display_value(response, key, window)),
+            _plain(
+                marketing_grid.display_value(
+                    response, key, window, via_name=_via_name(conn, response)
+                )
+            ),
             marketing_grid.cell_action(ref, placement_id, response.id, key),
             extra_class=marketing_grid.cell_class(key, response),
         )
@@ -203,11 +276,23 @@ def _editor_cell(
     error: str | None = None,
     typed: str | None = None,
 ) -> HTMLResponse:
-    value = typed if typed is not None else marketing_grid.editor_value(response, key)
+    conn = _conn(request)
+    value = (
+        typed
+        if typed is not None
+        else marketing_grid.editor_value(
+            response, key, via_name=_via_name(conn, response)
+        )
+    )
     return HTMLResponse(
         render_cell(
             request,
-            _field(key),
+            # THE COMPLETION LIST RIDES ON THE EDITOR, and on the refusal it
+            # comes back as. This is the only half of the contract a broker
+            # types into, and a refused access point re-rendered without its
+            # datalist would take the suggestions away at the exact moment the
+            # name typed was one the book does not carry.
+            _field(key, conn),
             value,
             marketing_grid.cell_action(ref, placement_id, response.id, key),
             error=error,
@@ -290,7 +375,14 @@ _CELL = "/accounts/{ref}/program/{placement_id}/marketing/responses/{response_id
 # `responded_on` is the near miss and stays a row on purpose: it is only a
 # tie-break in the row ORDER between two rows already identical in status and
 # premium, and no figure anywhere moves with it.
-_BLOCK_CELLS = frozenset({"premium", "rate_micros", "status"})
+#
+# * `via_org_id` is the fourth, and for the CLEARANCE half of the same reason
+#   `status` is: a conflict is the same carrier reached twice on one line
+#   through DIFFERENT intermediaries (repo.marketing.clearance_conflicts
+#   compares exactly that), so turning a wholesaler approach into a direct one
+#   either raises the warning or takes it away — and the strip that prints it
+#   lives in the block header, above the row.
+_BLOCK_CELLS = frozenset({"premium", "rate_micros", "status", marketing_grid.VIA})
 
 
 @router.get(_CELL, response_class=HTMLResponse)
@@ -331,14 +423,29 @@ async def response_cell_save(
     org, _ = _placement(request, ref, placement_id)
     conn = _conn(request)
     response = _owned_response(conn, org, placement_id, response_id)
-    field = _field(key)
+    field = _field(key, conn)
     raw = str((await request.form()).get(key, ""))
-    try:
-        value = parse_value(field, raw)
-    except ValueError as exc:
-        return _editor_cell(
-            request, ref, placement_id, response, key, error=str(exc), typed=raw
-        )
+    if key == marketing_grid.VIA:
+        # A NAME IN, AN ID OUT. Resolved here rather than in `parse_value`
+        # because resolution needs the book, and refused here rather than
+        # silently stored because `via_org_id` is a foreign key — there is no
+        # freeform half to degrade to, the way repo.assignees has for a person
+        # the book has never heard of.
+        try:
+            value = _access_point(conn, raw)
+        except ValueError as exc:
+            return _editor_cell(
+                request, ref, placement_id, response, key,
+                error=str(exc), typed=raw,
+            )
+    else:
+        try:
+            value = parse_value(field, raw)
+        except ValueError as exc:
+            return _editor_cell(
+                request, ref, placement_id, response, key,
+                error=str(exc), typed=raw,
+            )
     if field.required and value in (None, ""):
         return _editor_cell(
             request, ref, placement_id, response, key,

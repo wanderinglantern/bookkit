@@ -217,6 +217,68 @@
     }
   });
 
+  // --- shift+Enter: commit and hop DOWN THE COLUMN ------------------------
+  //
+  // A QUOTE LETTER FILLS A ROW; A MARKETING ROUND FILLS A COLUMN. Tab walks
+  // along the row, which is right for one market's answer arriving all at
+  // once — but chasing four markets means four reply dates and then four
+  // premiums, and there was no way down a column but the mouse, one cell at a
+  // time (Grant, 2026-08-26: scrolling and updating the grid is clunky).
+  //
+  // shift+Enter, NOT an arrow key. Down-arrow already means something in both
+  // controls this editor renders — it moves the caret in a text input and it
+  // changes the selected option in a `<select>` — and the status column is
+  // precisely a column somebody wants to fill down. Enter commits and closes,
+  // shift+Enter commits and carries on; neither does anything native in a
+  // one-line input or a select, so nothing is being taken away.
+  //
+  // IT REUSES `pendingHop` WHOLE. That mechanism already resolves by
+  // { field, record } against whatever markup the answer brought back, which
+  // is what makes it survive a save that answers with the entire block — so a
+  // vertical hop is the same object with the SAME field key and a DIFFERENT
+  // record, and needs no second path through the swap handler.
+  function siblingRecord(cell, forward) {
+    var row = cell.closest("[data-layer-row]");
+    if (!row) return null;
+    // SCOPED TO ONE TABLE, never `document`. `data-layer-row` is the record
+    // hook on the layers panel too, and the Program tab renders a marketing
+    // block per line of coverage AND a placement per account — so a global
+    // query would hop out of General Liability into Auto, or out of the
+    // marketing grid into the tower's layers, on the last row of a column.
+    var table = row.closest("table");
+    if (!table) return null;
+    var key = CSS.escape(cell.getAttribute("data-field"));
+    // Only rows that actually HAVE this column as a cell. The add row and the
+    // "no markets approached" row are single colspan cells with nothing to
+    // edit, and hopping into one would land the caret nowhere while the
+    // commit's own focus had already gone.
+    var rows = Array.prototype.slice
+      .call(table.querySelectorAll("[data-layer-row]"))
+      .filter(function (r) {
+        return r.querySelector('.cell[data-field="' + key + '"]');
+      });
+    var idx = rows.indexOf(row);
+    if (idx < 0) return null;
+    var next = rows[idx + (forward ? 1 : -1)];
+    return next ? next.getAttribute("data-layer-row") : null;
+  }
+
+  document.body.addEventListener("keydown", function (evt) {
+    if (evt.key !== "Enter" || !evt.shiftKey) return;
+    var form = evt.target.closest && evt.target.closest("form.cell-editor");
+    if (!form) return;
+    var cell = form.closest(".cell-editing");
+    if (!cell) return;
+    var field = cell.getAttribute("data-field");
+    var record = siblingRecord(cell, true);
+    // Always prevent the default: whether or not there is a row below, this
+    // commits rather than letting the browser submit and then wonder where
+    // the caret went — the same reasoning Tab's own handler gives.
+    evt.preventDefault();
+    pendingHop = record ? { field: field, record: record } : null;
+    form.requestSubmit();
+  });
+
   document.body.addEventListener("keydown", function (evt) {
     if (evt.key !== "Tab") return;
     var form = evt.target.closest && evt.target.closest("form.cell-editor");

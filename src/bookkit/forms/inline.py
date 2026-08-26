@@ -311,6 +311,12 @@ MARKET_RESPONSE_FIELDS: tuple[Field, ...] = (
     # on is a fact off their email.
     Field("attach", "attaches at", "money"),
     Field("lim", "limit", "money"),
+    # HOW WE REACHED THE PAPER — not WHICH paper. A NAME, resolved to a market
+    # by the route the way the add row's `via` is, and BLANK MEANS DIRECT
+    # (routes/marketing.py `_save_access` and marketing_grid.DIRECT own the
+    # word). Its suggestions are filled per-connection by
+    # `market_response_fields`, because the book's market list is data.
+    Field("via_org_id", "access point", placeholder="blank = a direct approach"),
     # REQUIRED, and rendered with a blank option anyway (macros/cell.html) —
     # `required` refuses the empty submit, and the blank stops the browser
     # answering the question. A response left untouched filing itself as
@@ -366,9 +372,16 @@ hand-maintained copies of one fact disagree and then nobody knows which is right
 
 WHAT IS DELIBERATELY ABSENT, and why each one would read as broken:
 
-* `market_org_id` / `via_org_id` — retyping the carrier is not correcting a
-  figure, it is RE-SCOPING the approach onto a different market. Same rule
-  team assignments follow (CLAUDE.md: corrected in place, never re-scoped).
+* `market_org_id` — retyping the CARRIER is not correcting a figure, it is
+  RE-SCOPING the approach onto a different market: a different underwriter
+  answered, and the premium, the reply date and the reason on the row all
+  belonged to somebody else. Same rule team assignments follow (CLAUDE.md:
+  corrected in place, never re-scoped). `via_org_id` IS HERE and is not the
+  same act — the market is the same market and the answer is the same answer;
+  what is being corrected is how we got to it, which is the one fact on this
+  row a broker cannot know until the submission actually goes out. Recording
+  a wholesaler and finding out it went direct had NO fix on any surface
+  (Grant, 2026-08-26): not a cell, not a form, not an MCP argument.
 * the Total — derived from premium + TRIA + fees + tax, and blank while any of
   them is unknown. You cannot type a total.
 * the rate movement — derived from the line's expiring rate.
@@ -387,7 +400,11 @@ MARKET_APPROACH_FIELDS: tuple[Field, ...] = (
     # services.marketing_entry and again in repo.marketing.create_response (and
     # under both, a DB CHECK), never only in a route.
     Field("market", "carrier"),
-    Field("via", "via (wholesaler or MGA)"),
+    # THE SAME WORDS THE COLUMN ABOVE IT USES. This box and the Access cell
+    # write the SAME fact and were labelled two different ways on one screen
+    # ("via (wholesaler or MGA)" here, "access point" three inches up), which
+    # is the DRY rule applied to what a person READS rather than to code.
+    Field("via", "access point (wholesaler or MGA)"),
     Field("attach", "attaches at", "money", placeholder="blank = primary"),
     Field("lim", "limit", "money"),
     Field("sent_on", "sent", "date"),
@@ -414,6 +431,24 @@ does not exist yet when an approach is recorded, and the data-entry rule is
 that a figure off a document is never pre-filled and never asked for early —
 they are cells on the row the moment it exists.
 """
+
+
+def market_response_fields(conn: sqlite3.Connection) -> tuple[Field, ...]:
+    """MARKET_RESPONSE_FIELDS with the access point completing from the book's
+    own markets — the same enrichment `market_approach_fields` makes to the
+    same vocabulary one row down, so the box a broker types a wholesaler into
+    when RECORDING an approach and the box they correct it in offer the very
+    same names.
+
+    ONLY THE EDITOR NEEDS IT. The display half of a cell prints a name it was
+    handed; it is the editor that has to complete one, which is why the grid's
+    first render still reads the plain tuple and only routes/marketing.py's
+    editor route pays for this query."""
+    markets = tuple(vocab.market_names(conn))
+    return tuple(
+        replace(f, suggestions=markets) if f.key == "via_org_id" else f
+        for f in MARKET_RESPONSE_FIELDS
+    )
 
 
 def market_approach_fields(conn: sqlite3.Connection) -> tuple[Field, ...]:

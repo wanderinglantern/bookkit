@@ -81,7 +81,7 @@
           hx-post="{{ action }}" hx-target="closest {{ tag }}" hx-swap="outerHTML">
       {% if field.kind == "select" %}
         <select name="{{ field.key }}" aria-label="{{ field.label }}"
-                aria-describedby="cell-keys" title="Enter or click away saves · Esc discards"
+                aria-describedby="cell-keys" title="Enter or click away saves · Esc discards · shift+Enter saves and moves down the column"
                 {% if field.required %}required{% endif %} autofocus>
         {# THE BLANK OPTION IS ALWAYS RENDERED, required or not — the same rule
            macros/form.html carries, for the same reason. A <select> with no
@@ -118,7 +118,8 @@
            or bypasses parse_human_date's bare-number refusal #}
         <input type="text" name="{{ field.key }}" value="{{ value }}"
                placeholder="{{ placeholder }}" aria-label="{{ field.label }}"
-               aria-describedby="cell-keys" title="Enter or click away saves · Esc discards"
+               aria-describedby="cell-keys"
+               title="Enter or click away saves · Esc discards · shift+Enter saves and moves down the column"
                {% if field.suggestions %}list="cl-{{ field.key }}"{% endif %}
                {% if field.required %}required{% endif %}
                autofocus>

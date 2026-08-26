@@ -121,6 +121,14 @@
   /* Mono — every number, date, id, file name, share, and all column headers. */
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 
+  /* WHERE THE SECOND PINNED COLUMN OF THE MARKETING GRID STARTS. Declared
+     here so the stylesheet is complete on its own — the value is the FIRST
+     pinned column's rendered width, which auto table layout decides from
+     content, so marketing-grid.js overrides it per table the moment it runs.
+     What is here is what is used for that first frame, and it is what the
+     page falls back to if the script never runs at all. */
+  --pin-2: 9.5rem;
+
   --label-size: 0.625rem;    /* 10px section labels, uppercase, tracked */
   --hint-size: 0.6875rem;    /* 11px */
   --body-size: 0.8125rem;    /* 13px */
@@ -3304,6 +3312,104 @@ tr:hover .market .chip-remove {
    markets' premiums against each other is the entire reason it exists — and
    figures compare only when their digits line up. The header takes the same
    gutter as the cell or the label stops sitting over its own column. */
+/* --- the grid is 22 columns and does not fit ------------------------------
+   MEASURED, not guessed (2026-08-26, running app, 1600px window): the table
+   asks for 1811px and gets 1064px, so 747px — 41% of the grid — is off the
+   right-hand edge. That is the designed fallback, not a failure: the columns
+   are what the client's workbook prints and thinning them is not on the table
+   (CLAUDE.md — density is not the enemy; undifferentiated density is).
+
+   What WAS a failure is that scrolling lost the reader's place in two
+   directions at once, so the three rules below answer three separate losses.
+
+   1. SCROLL RIGHT AND YOU LOSE THE ROW. Market and Access scrolled away with
+      everything else, so by the time a reader reached SL tax nothing on
+      screen said whose answer it was. They pin to the left edge instead — the
+      two columns that, together, say which market and how we reached it.
+      Declared on the Column tuple (`Column.pin`), never as an `nth-child`
+      here: a rule counting positions goes silently wrong the moment a column
+      is inserted before it.
+
+   2. SCROLL DOWN AND YOU LOSE THE COLUMN. The header stuck to nothing,
+      because a `position: sticky` top resolves against the nearest scroll
+      container and `.table-scroll` was the PAGE's child, not a scroller of
+      its own in that axis. The cap below makes it one — and only when it
+      would earn its keep: a block shorter than the cap never scrolls
+      vertically and never grows a second scrollbar, which is most blocks.
+
+   3. THE PINNED CELLS NEED A GROUND. A sticky cell with a transparent
+      background has the rest of the row slide visibly UNDER its text. They
+      take the paper, and the hover tint with it, or hovering a row would make
+      its first two cells the only ones that did not light up. */
+.marketing-block .table-scroll {
+  /* Tall enough that an ordinary line of coverage (a handful of markets) is
+     never boxed into a nested scroller, low enough that a long one keeps its
+     header on screen. */
+  max-height: 78vh;
+  overflow: auto;
+}
+
+.marketing-grid thead th {
+  position: sticky;
+  top: 0;
+  /* Above the pinned BODY cells (z-index 2) so the header wins where the two
+     stickies cross in the top-left corner; the pinned header cells below
+     raise themselves further still. */
+  z-index: 3;
+}
+
+.marketing-grid .pin {
+  position: sticky;
+  /* Opaque, or the row scrolls visibly under the text. `--paper` and not
+     `transparent`, and the hover rule below keeps it in step with its row. */
+  background: var(--paper);
+  z-index: 2;
+}
+
+.marketing-grid thead th.pin {
+  background: var(--stone);
+  z-index: 4;
+}
+
+.marketing-grid .pin-1 {
+  left: 0;
+}
+
+/* WHERE THE PINNED PAIR ENDS AND THE SCROLLING GRID BEGINS. Without a seam the
+   pinned columns read as ordinary ones that happen not to have moved, and a
+   reader cannot tell a scrolled grid from a short one. It is the row
+   separator's own hairline, turned ninety degrees, so it is the quietest mark
+   that still answers the question. */
+.marketing-grid .pin-2 {
+  border-right: 1px solid var(--hairline);
+}
+
+.marketing-grid .pin-2 {
+  /* THE FIRST PINNED COLUMN'S RENDERED WIDTH, which auto table layout decides
+     from content — so it cannot be a number in this file. marketing-grid.js
+     measures it after every render and every htmx swap and sets the custom
+     property; the fallback is only what is used for the instant before that
+     script runs. */
+  left: var(--pin-2);
+}
+
+/* THE PINNED CELLS FOLLOW THEIR ROW. `.cell:hover` tints one cell; this tints
+   the pinned ones when anything in the row is hovered, so a row does not light
+   up in nineteen columns and stay white in two. */
+.marketing-row:hover .pin {
+  background: var(--hover);
+}
+
+/* A pinned cell being EDITED keeps the editor's own ground, which is what
+   marks it as the one cell taking input. */
+.marketing-grid .pin.cell-editing {
+  background: var(--paper);
+}
+
+/* The add row and the "nobody approached" row are single `colspan` cells that
+   span every column, so nothing in them can pin — and the rules above do not
+   reach them. Said here because the absence looks like an oversight. */
+
 .marketing-grid th.num,
 .marketing-grid td.num {
   text-align: right;

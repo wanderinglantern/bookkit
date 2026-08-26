@@ -46,13 +46,17 @@ INTERNAL = "internal"
 # The order a client should read them in: what is live first, what is closed
 # last. The eye lands on the top of a block and must find the options, not a
 # declination that happens to sort first alphabetically.
+# `declined_open_elsewhere` sorts ABOVE `declined` and below everything still
+# being chased: the market is live on the line and dead on this band, and a
+# reader scanning for who is left has to find it above the markets that walked.
 _STATUS_ORDER = {
     "bound": 0,
     "quoted": 1,
     "indicated": 2,
     "pending": 3,
-    "declined": 4,
-    "non_response": 5,
+    "declined_open_elsewhere": 4,
+    "declined": 5,
+    "non_response": 6,
 }
 
 # READ, not declared: models.py owns both vocabularies now, because the
