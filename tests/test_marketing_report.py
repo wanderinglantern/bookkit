@@ -247,4 +247,63 @@ def test_the_section_label_carries_the_header_facts(conn) -> None:
     assert "submitted 7 Jul" in label
     assert "Gross sales" in label
     assert "+18.3%" in label
-    assert "expiring $412,000.00 at 10.05" in label or "expiring $412,000 at 10.05" in label
+    assert "expiring $412,000 at 10.05" in label
+
+
+# --- through a REAL workbook ----------------------------------------------
+
+
+def _sheet_text(path) -> str:
+    """Everything on sheet 1 of a real .xlsx, as one string.
+
+    Through the FILE, not the row objects: the composition can be right while
+    the writer's column spec puts a value under the wrong header, which is
+    the class of bug the Owner column nearly shipped."""
+    from openpyxl import load_workbook  # test-only import; src never imports it
+
+    sheet = load_workbook(path).active
+    return "\n".join(
+        "\t".join("" if cell.value is None else str(cell.value) for cell in row)
+        for row in sheet.iter_rows()
+    )
+
+
+def test_the_workbook_carries_the_block_and_its_numbers(conn, tmp_path) -> None:
+    placement = _full_book(conn)
+    out = marketing_report.write(
+        conn, placement.id, tmp_path / "marketing.xlsx", TODAY
+    )
+    assert out.exists()
+    text = _sheet_text(out)
+
+    # the block header, and the rate story it exists to tell
+    assert "General Liability" in text
+    assert "Gross sales" in text
+    assert "+18.3%" in text
+    # the markets, live options first, the wholesaler named beside the paper
+    assert "CNA (via RT Specialty)" in text
+    assert "Travelers" in text
+    # the money, and the E&S inversion
+    # format_cents keeps cents only when present, so whole dollars have no .00
+    assert "$385,575" in text and "$392,850" in text
+    assert "$412,965" in text and "$404,600" in text
+    # the bridge
+    assert "Rate effect" in text and "Exposure effect" in text
+    # column headers come from the renderer, once, not once per block
+    assert text.count("Est. premium") == 1
+
+
+def test_the_client_workbook_never_carries_the_underwriter_s_words(
+    conn, tmp_path
+) -> None:
+    """The one failure this whole two-field design exists to prevent."""
+    placement = _full_book(conn)
+    client_file = marketing_report.write(
+        conn, placement.id, tmp_path / "client.xlsx", TODAY
+    )
+    internal_file = marketing_report.write(
+        conn, placement.id, tmp_path / "internal.xlsx", TODAY, audience="internal"
+    )
+    assert "off the record" not in _sheet_text(client_file)
+    assert "Loss history" in _sheet_text(client_file)
+    assert "off the record" in _sheet_text(internal_file)

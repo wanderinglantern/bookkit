@@ -20,6 +20,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 
 from babel.dates import format_date
 
@@ -422,11 +423,37 @@ def _block(
 # --- flattening for the spreadsheet ---------------------------------------
 
 
-_CLIENT_COLUMNS = (
-    "Market", "Best", "Layer", "Status", "Replied", "Rate", "Rate Δ",
-    "Est. premium", "TRIA", "Total est. cost", "Subj.", "Reason", "Basis", "Exposure",
+# (header, width, right-aligned). Width is the renderer's, not a guess: a
+# money column that wraps is unreadable and a client will not widen it.
+_CLIENT_COLUMNS: tuple[tuple[str, float, bool], ...] = (
+    ("Market", 30.0, False),
+    ("Best", 9.0, False),
+    ("Layer", 20.0, False),
+    ("Status", 14.0, False),
+    ("Replied", 10.0, False),
+    ("Rate", 9.0, True),
+    ("Rate Δ", 11.0, True),
+    ("Est. premium", 15.0, True),
+    ("TRIA", 12.0, True),
+    ("Total est. cost", 16.0, True),
+    ("Subj.", 7.0, True),
+    ("Reason", 22.0, False),
+    ("Basis", 15.0, False),
+    ("Exposure", 17.0, True),
 )
-_INTERNAL_EXTRA = ("Decline reason", "Commission", "Clearance", "Notes")
+_INTERNAL_EXTRA: tuple[tuple[str, float, bool], ...] = (
+    ("Decline reason", 36.0, False),
+    ("Commission", 12.0, True),
+    ("Clearance", 26.0, False),
+    ("Notes", 32.0, False),
+)
+
+
+def columns(audience: str) -> tuple[tuple[str, float, bool], ...]:
+    """The column spec, so the sheet and any other rendering of these rows
+    cannot disagree about how many there are or what they are called."""
+    extra = _INTERNAL_EXTRA if audience == INTERNAL else ()
+    return _CLIENT_COLUMNS + extra
 
 
 def _block_label(block: ReportBlock) -> str:
@@ -483,25 +510,71 @@ def to_sections(report: MarketingReport) -> list[SheetSection]:
     WORDS: an empty table is ambiguous, and a client cannot tell a line nobody
     has gone to market on from a rendering bug."""
     internal = report.audience == INTERNAL
-    header = _CLIENT_COLUMNS + (_INTERNAL_EXTRA if internal else ())
+    width = len(columns(report.audience))
     sections: list[SheetSection] = []
     for block in report.blocks:
         if block.is_empty:
             sections.append(
                 SheetSection(
                     _block_label(block),
-                    ((("No markets approached on this line yet."),) + ("",) * (len(header) - 1),),
+                    (("No markets approached on this line yet.",) + ("",) * (width - 1),),
                 )
             )
             continue
-        rows = [header, *(_row_cells(row, internal) for row in block.rows)]
+        rows = [_row_cells(row, internal) for row in block.rows]
         if block.bridge is not None:
             bridge = block.bridge
-            blank = ("",) * (len(header) - 3)
-            rows.append(("",) * len(header))
+            blank = ("",) * (width - 3)
+            rows.append(("",) * width)
             rows.append(("Expiring premium", "", format_cents(bridge.expiring_premium)) + blank)
             rows.append(("Rate effect", "", format_cents(bridge.rate_effect)) + blank)
             rows.append(("Exposure effect", "", format_cents(bridge.exposure_effect)) + blank)
             rows.append((f"{bridge.market}", "", format_cents(bridge.quoted_premium)) + blank)
         sections.append(SheetSection(_block_label(block), tuple(rows)))
     return sections
+
+
+def write(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    out_path: Path,
+    today: date,
+    audience: str = CLIENT,
+) -> Path:
+    """The marketing report as a workbook, rendered through towerkit so it
+    carries the same formatting as every other sheet a client receives (the
+    money.parse_share pattern: formatting authority in ONE place).
+
+    One sheet, one section per line of coverage. The towerkit imports are
+    function-level like every other writer here: this module composes, and
+    nothing above this line knows a spreadsheet exists."""
+    from towerkit.render.table_xlsx import (
+        TableColumn,
+        TableSection,
+        finalize_workbook,
+        new_workbook,
+        render_table_sheet,
+        sanitize_sheet_title,
+    )
+    from towerkit.theme import load_theme
+
+    report = compose(conn, placement_id, today, audience)
+    theme = load_theme(None)
+    wb = new_workbook()
+    title = "Marketing" if audience == CLIENT else "Marketing (internal)"
+    # The workbook's FIRST sheet, the way every other writer here does it.
+    # `create_sheet` would leave the library's default empty sheet in front of
+    # this one, and a reader opening the file would land on a blank page.
+    ws = wb.active
+    assert ws is not None
+    ws.title = sanitize_sheet_title(f"{title} — {report.account}"[:31])
+    render_table_sheet(
+        ws,
+        [
+            TableColumn(header, width, align="right" if right else "left")
+            for header, width, right in columns(audience)
+        ],
+        [TableSection(s.label, s.rows) for s in to_sections(report)],
+        theme=theme,
+    )
+    return finalize_workbook(wb, out_path)

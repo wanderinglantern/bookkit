@@ -26,6 +26,15 @@
                 hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/submissions/new"
                 hx-target="#program-{{ placement.id }} .form-host"
                 hx-swap="innerHTML">Submission</button>
+        {# NOT in the export strip below, and the comment on the open-items
+           anchor in _programs_panel.html says why: that strip is gated on a
+           linked program file, and an account with no file could never reach
+           an anchor put there — the built-but-not-accessible class the audit
+           caught once already. Marketing happens BEFORE a tower exists and
+           every figure on this sheet lives in SQLite, so it belongs here in
+           the band, beside the Submission button that creates its rows. #}
+        <a class="btn"
+           href="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/export/marketing.xlsx">Marketing XLSX</a>
         <button type="button" class="btn"
                 hx-get="/accounts/{{ header.org.ref }}/program/{{ placement.id }}/renew"
                 hx-target="#program-{{ placement.id }} .form-host"

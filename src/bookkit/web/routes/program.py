@@ -4322,6 +4322,65 @@ def export_schematic(request: Request, ref: str, placement_id: str) -> Any:
     )
 
 
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/export/marketing.xlsx",
+    response_class=HTMLResponse,
+)
+def export_marketing_report(
+    request: Request, ref: str, placement_id: str, audience: str = "client"
+) -> Any:
+    """The marketing report — which markets we are approaching, what they said,
+    at what rate — by line of coverage.
+
+    NOT a second composition path, for the reason `export_work_workbook` gives
+    about its own: `services.marketing_report.write` composes through the same
+    `compose()` the MCP tool reads, so the file a client is sent and the answer
+    the assistant gives cannot disagree about what a market said.
+
+    TWO AUDIENCES, ONE QUERY. `?audience=internal` adds the underwriter's own
+    words, the commission, the clearance warnings and our notes. The default is
+    the CLIENT sheet, because this is a document that leaves the building and
+    the safe rendering is the one you get by not thinking about it. The
+    composer withholds per audience; this route only names which.
+
+    It needs NO program file: marketing happens before a tower exists, and
+    every figure on this sheet lives in SQLite. That is why it is here rather
+    than behind the `program_path` guard the schematic download carries.
+    """
+    import tempfile
+    from datetime import date as _date
+    from pathlib import Path as _Path
+
+    from ...services import marketing_report as report_svc
+
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
+    if audience not in (report_svc.CLIENT, report_svc.INTERNAL):
+        # A typo'd audience must not silently fall through to the client sheet
+        # in one direction or leak in the other. Refuse and say so.
+        return _refusal_page(
+            request,
+            f"unknown audience {audience!r} — it is 'client' or 'internal'",
+            f"/accounts/{ref}/program",
+        )
+    suffix = "marketing" if audience == report_svc.CLIENT else "marketing-internal"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = report_svc.write(
+            conn,
+            placement.id,
+            _Path(tmp) / f"{placement.ref}-{suffix}.xlsx",
+            _date.today(),
+            audience=audience,
+        )
+        content = out.read_bytes()
+    return _attachment(
+        content,
+        f"{placement.ref}-{suffix}.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 @router.get("/accounts/{ref}/export/open-items.xlsx", response_class=HTMLResponse)
 def export_open_items_workbook(request: Request, ref: str) -> Any:
     """The TUI's `x`, webside — the same services.export_open_items.write the
