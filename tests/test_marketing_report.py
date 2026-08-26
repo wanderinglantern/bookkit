@@ -307,3 +307,79 @@ def test_the_client_workbook_never_carries_the_underwriter_s_words(
     assert "off the record" not in _sheet_text(client_file)
     assert "Loss history" in _sheet_text(client_file)
     assert "off the record" in _sheet_text(internal_file)
+
+
+# --- a basis that is not money --------------------------------------------
+
+
+def _fleet(conn):
+    """A trucking fleet: 350 power units, rated per unit. The whole worked
+    example above is `gross_sales`, where cents happen to be right — which is
+    exactly why the count case shipped broken."""
+    from bookkit.repo import placements as placements_repo
+
+    client = orgs.create(conn, kind="client", name="Haulage Co", status="active")
+    placement = placements_repo.create(
+        conn, org_id=client.id, program_name="2027 fleet",
+        period_from="2027-01-01", period_to="2028-01-01",
+    )
+    marketing.set_placement_line(
+        conn, placement.id, "auto",
+        rating_basis="power_units", rate_per=1,
+        expected_exposure=350, expiring_exposure=300,
+        expiring_premium=52_500_000, expiring_rate_micros=175_000_000,
+    )
+    market = _market(conn, "Progressive", "A+ XV")
+    sub = submissions.create(
+        conn, market_org_id=market.id, sent_on="2027-07-07", placement_id=placement.id
+    )
+    marketing.create_response(
+        conn, sub.id, "auto", market_org_id=market.id, status="quoted",
+        responded_on="2027-07-20", rate_micros=180_000_000, premium=63_000_000,
+        # The ORDINARY override: this carrier counted the fleet itself and got
+        # the same number, and did NOT restate the basis.
+        exposure_amount=350,
+    )
+    return placement
+
+
+def test_a_count_is_never_rendered_as_money(conn) -> None:
+    """350 power units printed to a client as "$3.50" — a hundredfold
+    mis-render on the client sheet AND the client workbook, found 2026-08-25.
+
+    `ReportBlock` carried the basis LABEL and not the basis KEY, so
+    `_block_label` had nothing to pass and `_fmt_exposure` fell back to
+    format_cents; the row cell hit the same thing whenever a market overrode
+    the exposure without restating the basis. models.RatingBasis.monetary is
+    the ONE place that decides cents-or-count, and both call sites had thrown
+    the key away before asking it."""
+    placement = _fleet(conn)
+    report = marketing_report.compose(conn, placement.id, TODAY)
+    block = report.blocks[0]
+
+    assert block.basis_key == "power_units"
+    label = marketing_report.to_sections(report)[0].label
+    assert "350 power units" in label
+    assert "$3.50" not in label and "$350" not in label
+
+    # and the same figure in the row cell a market overrode
+    assert block.rows[0].exposure_override == "350 power units"
+
+
+def test_the_basis_column_prints_only_what_a_market_overrode(conn) -> None:
+    """The row falls back to the line's basis so it can RENDER the exposure
+    correctly — but the Basis COLUMN must stay blank unless this market stated
+    its own, or every row repeats the header and "blank means as above" dies."""
+    placement = _fleet(conn)
+    block = marketing_report.compose(conn, placement.id, TODAY).blocks[0]
+    assert block.rows[0].basis_override == ""
+
+
+def test_a_count_never_reaches_the_workbook_as_money(conn, tmp_path) -> None:
+    """The composer and the writer share `to_sections`, so this is the same
+    defect reaching the file a client is actually sent."""
+    placement = _fleet(conn)
+    out = marketing_report.write(conn, placement.id, tmp_path / "fleet.xlsx", TODAY)
+    text = _sheet_text(out)
+    assert "350 power units" in text
+    assert "$3.50" not in text

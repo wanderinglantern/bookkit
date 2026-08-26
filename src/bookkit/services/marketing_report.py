@@ -168,6 +168,12 @@ class ReportBlock:
     line_name: str
     line_abbr: str | None
     submitted_on: str
+    # BOTH the label and the KEY. The label is what a person reads; the key is
+    # what decides whether the exposure beside it is cents or a count, and a
+    # block that carried only the label had nothing to pass to _fmt_exposure —
+    # so 350 power units printed to a client as "$3.50" (found 2026-08-25 by
+    # an adversarial check, on the client sheet AND the client xlsx).
+    basis_key: str | None
     basis_label: str
     rate_per: int | None
     exposure: int | None
@@ -339,7 +345,12 @@ def _row(
 ) -> ReportRow:
     market = names.get(response.market_org_id or "", "")
     via = names.get(response.via_org_id or "") if response.via_org_id else None
-    basis_key = response.rating_basis
+    # The line's basis unless this market stated its own — the same fallback
+    # _rate_move makes. Overriding the exposure without overriding the basis is
+    # the ORDINARY case (a carrier using its own audit figure on the same
+    # unit), and reading the basis as None there rendered a count as money.
+    line_basis = expectation.rating_basis if expectation else None
+    basis_key = response.rating_basis or line_basis
     internal = audience == INTERNAL
     clearance = ""
     if internal:
@@ -364,7 +375,9 @@ def _row(
         total_cost=response.total_cost,
         open_subjectivities=subjectivities.get(response.submission_id, 0),
         public_reason=_PUBLIC_REASON_LABEL.get(response.decline_reason_public or "", ""),
-        basis_override=rating_basis(basis_key).label if basis_key else "",
+        basis_override=(
+            rating_basis(response.rating_basis).label if response.rating_basis else ""
+        ),
         exposure_override=_fmt_exposure(response.exposure_amount, basis_key),
         internal_reason=(response.decline_reason or "") if internal else "",
         commission_bps=response.commission_bps if internal else None,
@@ -407,6 +420,7 @@ def _block(
         line_name=line.name,
         line_abbr=line.abbr,
         submitted_on=header_date,
+        basis_key=basis_key,
         basis_label=rating_basis(basis_key).label if basis_key else "",
         rate_per=expectation.rate_per if expectation else None,
         exposure=exposure,
@@ -466,7 +480,7 @@ def _block_label(block: ReportBlock) -> str:
             per = f", per {format_cents(block.rate_per * 100)}"
         parts.append(f"basis {block.basis_label}{per}")
     if block.exposure is not None:
-        exposure = _fmt_exposure(block.exposure, None)
+        exposure = _fmt_exposure(block.exposure, block.basis_key)
         if block.exposure_change_pct is not None:
             exposure += f" ({block.exposure_change_pct:+.1f}%)"
         parts.append(f"exposure {exposure}")
