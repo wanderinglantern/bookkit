@@ -146,6 +146,14 @@ COLUMNS: tuple[Column, ...] = (
     Column("sent_on", "Sent", field="sent_on", record="submission"),
     Column("responded_on", "Replied", field="responded_on"),
     Column("rate", "Rate", numeric=True, field="rate_micros"),
+    # WHAT THE ROW'S RATE IS STATED PER, where the block heading's denominator
+    # is not it. PRINTED, never a cell: `market_response.rate_per` is stamped
+    # by the write from the line's own denominator
+    # (repo.marketing._stamp_rate_per) and typing over it would be claiming a
+    # rate was quoted against something it was not — the same reason the Total
+    # and the rate movement are printed and not editable. Correcting it means
+    # correcting the rate, which IS a cell, one column to the left.
+    Column("rate_per", "Rate per"),
     Column("rate_move", "Rate Δ", numeric=True),
     Column("premium", "Premium", numeric=True, field="premium"),
     Column("tria", "TRIA", numeric=True, field="tria_premium"),
@@ -160,6 +168,17 @@ COLUMNS: tuple[Column, ...] = (
     # a checkbox fails the first time somebody forgets it, and the cost of
     # that failure is a client reading an underwriter's private opinion.
     Column("reason", "Reason (to client)", field="decline_reason_public", prose=True),
+    # THE TWO PER-ROW OVERRIDES OF THE BLOCK HEADING'S FACTS. They are on the
+    # CLIENT's workbook and were on no screen the broker has — so a client
+    # could read a basis and an exposure the panel did not show, which makes
+    # "the panel is the report" false in the direction that matters most
+    # (found 2026-08-26 by the column walk). PRINTED, not cells: neither
+    # `rating_basis` nor `exposure_amount` is an editable Field on a market
+    # response, and an exposure typed with no basis beside it is the one thing
+    # `_basis_guard` exists to refuse. Blank on the ordinary row, because a
+    # row that agrees with its heading has nothing to add.
+    Column("basis_override", "Basis", prose=True),
+    Column("exposure_override", "Exposure", numeric=True),
     Column("internal_reason", "Internal (never sent)", field="decline_reason", prose=True),
 )
 
@@ -231,6 +250,11 @@ def _cells(
             marketing_report.fmt_date(row.responded_on, window) or DASH
         ),
         "rate": _cell(marketing_report.fmt_rate(row.rate_micros) or DASH),
+        # THE COMPOSER'S OWN STRING. Deciding here whether this row's
+        # denominator differs from its block's would be a second copy of that
+        # judgment, and the copy that differs is the one on the screen rather
+        # than the one in the file the client is sent.
+        "rate_per": _cell(row.rate_per_override or DASH),
         "rate_move": _rate_move_cell(row),
         "premium": _cell(_money(row.premium)),
         "tria": _cell(_money(row.tria)),
@@ -242,6 +266,8 @@ def _cells(
             tone="is-warn" if row.open_subjectivities else "",
         ),
         "reason": _cell(row.public_reason or DASH),
+        "basis_override": _cell(row.basis_override or DASH),
+        "exposure_override": _cell(row.exposure_override or DASH),
         "internal_reason": _cell(row.internal_reason or DASH),
     }
 
@@ -722,6 +748,8 @@ def panel(
     error: str | None = None,
     pending: dict[str, Any] | None = None,
     refocus: str | None = None,
+    line_values: dict[str, str] | None = None,
+    line_add_preserve: bool = True,
 ) -> dict[str, Any]:
     """The whole Marketing section for one placement.
 
@@ -732,6 +760,18 @@ def panel(
     own to put one; `pending` is the near-match question that control asks
     before it creates a line the book has never carried. Both ride the section
     because the control does, and both are None on an ordinary render.
+
+    `line_values` and `line_add_preserve` are the two halves of A CONTROL
+    KEEPS WHAT WAS TYPED INTO IT, and they are the add-market row's rule
+    reaching the control three inches above it (D5, 2026-08-26).
+    `line_values` is what came back on a refusal, so the form re-renders
+    holding it; `line_add_preserve` decides whether the markup carries
+    `hx-preserve`, and the answer is the same one the add row gives — YES for
+    every render that is somebody ELSE'S write (a Sent cell answers with this
+    whole section, and it used to rebuild this form from its defaults and wipe
+    a half-typed line name with no message), NO for the two answers the
+    control's own save produces, because a refusal has to swap its message in
+    and a saved line has to clear the form for the next one.
     """
     report = marketing_report.compose(
         conn, placement_id, today, audience=marketing_report.INTERNAL
@@ -763,6 +803,8 @@ def panel(
         "line_url": f"{base}/lines",
         "error": error,
         "pending": pending,
+        "line_values": line_values or {},
+        "line_add_preserve": line_add_preserve,
         # A line of coverage nobody has started marketing yet. Without this the
         # add-market row is unreachable on a fresh placement — the whole
         # feature would be built and not accessible, which is the bug class

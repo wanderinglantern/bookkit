@@ -1,5 +1,5 @@
-"""Recording an approach: who we went to, on which line of coverage, through
-whom.
+"""Recording an approach and what came back: who we went to, on which line of
+coverage, through whom — and what they then said.
 
 ONE HOME FOR ONE RULE. The rule is THE SUBMISSION IS THE PACKAGE AND THE
 RESPONSE IS THE ANSWER: one submission goes to one market carrying every line,
@@ -143,3 +143,55 @@ def approach(
     return Approach(
         response=response, submission=submission, submission_is_new=existing is None
     )
+
+
+# A DATE THAT WITNESSES AN ACT CANNOT BE IN THE FUTURE, and every one of them
+# on a market response is named here rather than checked at whichever door
+# somebody remembered.
+#
+# `sent_on` gained this guard on 2026-08-25 (see `approach` above) and
+# `responded_on` — the cell one column to the RIGHT of it on the same row —
+# did not, which is this book's recurring shape: the rule applied at one site
+# and not at the adjacent one. `parse_human_date` FUTURE-BIASES a bare month
+# and day, so a reply typed "aug 5" on 14 August 2026 stored 2027-08-05 and
+# was accepted in silence; the client's workbook then printed "5 Aug 2027" as
+# the day a market answered (D2, found 2026-08-26). `_reply_guard`'s own
+# refusal already says "check the year on the reply" — the book knew this was
+# the failure mode and had no guard for it.
+#
+# A DICT, not a branch, because the walk is the point: a second date added to
+# `MARKET_RESPONSE_FIELDS` is either declared here or reported by
+# tests/test_marketing_gates.py's date gate, which reads this table and the
+# Field tuple and refuses to let them differ.
+WITNESS_DATES: dict[str, str] = {
+    "responded_on": "a market's reply dated",
+}
+
+
+def responded(
+    conn: sqlite3.Connection,
+    response_id: str,
+    changes: dict[str, Any],
+    *,
+    today: str | None = None,
+) -> MarketResponse:
+    """Record what a market said, from either surface.
+
+    ONE HOME, the same reading `approach` is placed by: the web's response
+    cell and MCP's `market_responded` both land here, so a rule stated once
+    binds both — and a rule stated in one route is a rule the other writes
+    past. `repo.marketing.edit_response` stays the writer (it owns the reply
+    guard, the status vocabulary, the rate stamp and the submission roll-up);
+    what lives HERE is the one rule repo/ cannot hold, because it needs a
+    today and a wall clock in repo/ cannot know the caller's
+    (repo.submissions._sent_guard says exactly this about the same field on
+    the other table).
+
+    The batch is NOT opened here, for the reason the module header gives:
+    each surface stamps its own source and its own sentence.
+    """
+    when = today or date.today().isoformat()
+    for key, label in WITNESS_DATES.items():
+        if key in changes:
+            consistency.check_not_future(changes[key], label=label, today=when)
+    return marketing.edit_response(conn, response_id, changes)

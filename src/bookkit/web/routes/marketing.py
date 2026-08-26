@@ -321,10 +321,13 @@ async def response_cell_save(
 ) -> HTMLResponse:
     """One field, one writer action, one batch.
 
-    `repo.marketing.edit_response` is the writer for every surface, and it
-    rolls the submission's status up afterwards — inside this batch, so the
-    parent row moving is part of the same undo unit rather than a change
-    nobody can take back."""
+    `services.marketing_entry.responded` is where this and MCP's
+    `market_responded` meet, and `repo.marketing.edit_response` under it is
+    the writer for every surface — it rolls the submission's status up
+    afterwards, inside this batch, so the parent row moving is part of the
+    same undo unit rather than a change nobody can take back. The service is
+    in the middle for the one rule repo/ cannot hold: a date that witnesses an
+    act needs a TODAY to be judged against."""
     org, _ = _placement(request, ref, placement_id)
     conn = _conn(request)
     response = _owned_response(conn, org, placement_id, response_id)
@@ -347,7 +350,7 @@ async def response_cell_save(
             conn, source="web", tool="market_responded",
             summary=f"set {field.label} on {who}", org_id=org.id,
         ):
-            marketing_repo.edit_response(conn, response_id, {key: value})
+            marketing_entry.responded(conn, response_id, {key: value})
     except Exception as exc:  # a refused save is a message, never a 500
         return _editor_cell(
             request, ref, placement_id, response, key, error=_house(exc), typed=raw
@@ -569,6 +572,8 @@ def _section(
     error: str | None = None,
     pending: dict[str, Any] | None = None,
     refocus: str | None = None,
+    line_values: dict[str, str] | None = None,
+    its_own: bool = False,
 ) -> HTMLResponse:
     """The whole Marketing section, retargeted onto itself.
 
@@ -579,12 +584,22 @@ def _section(
     re-parse the towerkit file for a write that never touched it. Every write
     in this module answers with the section, one block of it, or one row of
     it: whichever is the smallest thing the write can actually change.
+
+    `its_own` says this answer is the ADD-A-LINE CONTROL's own — its refusal,
+    its near-match question, or the section after it wrote a line. Only those
+    three may rebuild that control, because only those three have something
+    new to put in it; every other answer that passes through here belongs to
+    somebody else's write and must leave whatever is half-typed there alone
+    (`marketing_grid.panel`, `line_add_preserve`). Defaulting to False is
+    deliberate: a new caller is somebody else's write until it says otherwise,
+    which is the direction that fails safe.
     """
     conn = _conn(request)
     placement = _owned(conn, org, "placement", placement_id, placements_repo.get)
     context = marketing_grid.panel(
         request, conn, placement_id, today=date.today(), ref=ref,
         error=error, pending=pending, refocus=refocus,
+        line_values=line_values, line_add_preserve=not its_own,
     )
     html = TEMPLATES.env.get_template("account/_marketing_panel.html").render(
         placement=placement, marketing=context
@@ -895,8 +910,16 @@ async def marketing_line_add(
     typed = str(form.get("line_name", "")).strip()
     confirmed = bool(str(form.get("create", "")).strip())
 
+    # WHAT WAS TYPED, so every answer below can hand it back. A refusal that
+    # empties the control it refuses makes the user retype a value the server
+    # is holding in its own hand.
+    kept = {"line_id": picked, "line_name": typed}
+
     def refuse(message: str) -> HTMLResponse:
-        return _section(request, ref, org, placement_id, error=message)
+        return _section(
+            request, ref, org, placement_id,
+            error=message, line_values=kept, its_own=True,
+        )
 
     if picked and typed:
         # A REFUSAL SAYS SOMETHING, and it must not pick a winner: whichever
@@ -923,6 +946,7 @@ async def marketing_line_add(
         # find it in a picker they have already looked past.
         return _section(
             request, ref, org, placement_id,
+            line_values=kept, its_own=True,
             pending=_clash(
                 conn, placement_id, typed, [(existing, 100)],
                 head=(
@@ -938,6 +962,7 @@ async def marketing_line_add(
         if matches:
             return _section(
                 request, ref, org, placement_id,
+                line_values=kept, its_own=True,
                 pending=_clash(
                     conn, placement_id, typed, matches,
                     head=(
@@ -962,6 +987,7 @@ async def marketing_line_add(
         # the exception that carries the row.
         return _section(
             request, ref, org, placement_id,
+            line_values=kept, its_own=True,
             pending=_clash(
                 conn, placement_id, typed, [(exc.existing, 100)],
                 head=(
@@ -973,7 +999,11 @@ async def marketing_line_add(
         )
     except Exception as exc:  # a refused save is a message, never a 500
         return refuse(_house(exc))
-    return _section(request, ref, org, placement_id)
+    # WRITTEN: the control is rebuilt EMPTY and without hx-preserve, ready for
+    # the next line — the same thing the add-market row's own successful save
+    # does. Preserving here would leave the name that was just created sitting
+    # in the box as though it had not been.
+    return _section(request, ref, org, placement_id, its_own=True)
 
 
 def _add_line(
@@ -987,7 +1017,7 @@ def _add_line(
         org_id=org.id,
     ):
         marketing_repo.set_placement_line(conn, placement_id, line_id)
-    return _section(request, ref, org, placement_id)
+    return _section(request, ref, org, placement_id, its_own=True)
 
 
 @router.post(

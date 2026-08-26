@@ -27,6 +27,7 @@ from babel.dates import format_date
 from ..models import (
     MARKET_RESPONSE_STATUS_LABELS,
     PUBLIC_DECLINE_REASON_LABELS,
+    RATE_PER_LABELS,
     LineOfCoverage,
     MarketResponse,
     PlacementLine,
@@ -70,8 +71,25 @@ _MICROS = RATE_SCALE
 # quietly stops matching.
 BASIS_CHANGED = "basis changed"
 DENOMINATOR_CHANGED = "denominator changed"
+# SILENCE IS NOT AGREEMENT. "changed" is what a comparison says when it can SEE
+# two axes disagree; these two are what it says when one side never stated the
+# axis at all, which is the failure that is invisible without them — the
+# comparison reads the gap as "the same as the other side" and divides. A rate
+# typed while the line carried no denominator, the line then given one, is the
+# ordinary two-click way to reach it (D4, 2026-08-26), and the block header a
+# client reads then states a denominator the quote was never stated against.
+# Separate words from "changed" because they are a different fact and a
+# different fix: one is a correction, the other is a figure nobody has recorded.
+BASIS_UNKNOWN = "basis not stated"
+DENOMINATOR_UNKNOWN = "denominator not stated"
 NO_EXPIRING_RATE = "no expiring rate recorded"
-REFUSAL_NOTES: tuple[str, ...] = (BASIS_CHANGED, DENOMINATOR_CHANGED, NO_EXPIRING_RATE)
+REFUSAL_NOTES: tuple[str, ...] = (
+    BASIS_CHANGED,
+    DENOMINATOR_CHANGED,
+    BASIS_UNKNOWN,
+    DENOMINATOR_UNKNOWN,
+    NO_EXPIRING_RATE,
+)
 
 
 @dataclass(frozen=True)
@@ -151,12 +169,67 @@ def fmt_exposure(amount: int | None, basis_key: str | None) -> str:
     return f"{amount:,}{unit}"
 
 
-def _premium_from(rate_micros: int, exposure: int, rate_per: int) -> int:
+def _per_label(rate_per: int) -> str:
+    """How a denominator READS, out of models.RATE_PER_LABELS — the same list
+    the picker offers from and the block header prints.
+
+    It was `format_cents(rate_per * 100)` at both sites, which is a second
+    copy of that vocabulary and gets `rate_per = 1` wrong in two different
+    ways: the header dropped the clause entirely (`> 1`) and a row would have
+    printed "per $1.00" for a rate quoted per UNIT.
+    """
+    return RATE_PER_LABELS.get(rate_per, str(rate_per))
+
+
+def _rate_per_override(
+    response: MarketResponse, expectation: PlacementLine | None
+) -> str:
+    """What this row's rate is stated per, when the block heading does not
+    already say it.
+
+    Blank in the ordinary case: the heading states the line's denominator and
+    every rate on it inherited that denominator on the write, so repeating it
+    on each row is noise. It speaks in exactly the two states where the
+    heading is not the answer — the row carries its own denominator and it is
+    a different one, and the row carries a rate with no denominator at all
+    (which `repo.marketing._stamp_rate_per` now refuses to create, and which
+    rows written before it could not).
+    """
+    if response.rate_micros is None:
+        return ""
+    line_per = expectation.rate_per if expectation is not None else None
+    if response.rate_per is None:
+        # The words `Move` uses one column over, so the two cells agree about
+        # what happened rather than each inventing a phrasing.
+        return DENOMINATOR_UNKNOWN
+    if response.rate_per == line_per:
+        return ""
+    return f"per {_per_label(response.rate_per)}"
+
+
+def _premium_from(
+    rate_micros: int, exposure: int, rate_per: int, *, monetary: bool
+) -> int:
     """Cents, from a rate and an exposure. Used ONLY for the bridge, never to
     replace a stated premium: carriers round, apply minimum premiums and
     expense constants, and a computed figure will disagree with the one on
-    their quote letter."""
-    return round(rate_micros * exposure / (_MICROS * rate_per))
+    their quote letter.
+
+    `monetary` IS NOT OPTIONAL, because the integer it multiplies means two
+    different things and nothing inside it says which — the same fact
+    `fmt_exposure` exists to read and `_basis_guard` exists to protect. On a
+    monetary basis the exposure is CENTS and `rate_per` is DOLLARS, so the
+    hundred cancels: 10.00 per $100 over $41,000,000 is $410,000 and the
+    arithmetic lands in cents on its own. On a COUNT basis the exposure is a
+    number of things, so rate x count is DOLLARS and has to be taken up to
+    cents — without that the bridge came out a hundredfold LOW (320 power
+    units at 1287.50 per unit read as $4,120 for $412,000), `_reconciles`
+    dropped every walk, and the premium bridge was silently dead on every
+    non-monetary basis in the book (D7, found 2026-08-26). Failing safe is not
+    the same as working.
+    """
+    cents = rate_micros * exposure / (_MICROS * rate_per)
+    return round(cents if monetary else cents * 100)
 
 
 @dataclass(frozen=True)
@@ -241,6 +314,16 @@ class ReportRow:
     public_reason: str
     basis_override: str
     exposure_override: str
+    # THE DENOMINATOR THIS ROW'S RATE WAS TYPED AGAINST, where it is not the
+    # one the block heading states — the `basis_override` rule on the other
+    # axis, and the column D3 was missing. The heading said "per $1,000" while
+    # a stored response carried `rate_per = 100`, and the Rate cell printed
+    # "9.60" bare underneath it: ten times out on the CLIENT's workbook, with
+    # "denominator changed" in the next column the only hint and it never said
+    # WHICH. Empty when the row agrees with its block, exactly as
+    # `basis_override` is — a column that repeats the heading on every row is
+    # the duplication the DRY rule names.
+    rate_per_override: str
     # internal only, never composed into a client sheet
     internal_reason: str = ""
     commission_bps: int | None = None
@@ -287,7 +370,6 @@ class ReportBlock:
     # is the broker's business. What the client sheet needed was the rows,
     # which is what it lost.
     line_retired: bool
-    submitted_on: str
     # BOTH the label and the KEY. The label is what a person reads; the key is
     # what decides whether the exposure beside it is cents or a count, and a
     # block that carried only the label had nothing to pass to fmt_exposure —
@@ -355,7 +437,15 @@ def _rate_move(response: MarketResponse, line: PlacementLine | None) -> Move:
     if line is None or line.expiring_rate_micros is None:
         return Move(None, NO_EXPIRING_RATE)
     quoted_basis = response.rating_basis or (line.rating_basis if line else None)
-    if line.expiring_basis and quoted_basis and line.expiring_basis != quoted_basis:
+    # AN AXIS NOBODY STATED IS NOT AN AXIS THAT AGREES. Both halves used to be
+    # guarded by `and`, so a missing basis on either side skipped the check
+    # entirely and the two rates were divided as though they had been measured
+    # on the same thing. An expiring rate can be recorded with no expiring
+    # basis in two clicks (the header cells are independent), which is how this
+    # reaches a client's workbook.
+    if line.expiring_basis is None or quoted_basis is None:
+        return Move(None, BASIS_UNKNOWN)
+    if line.expiring_basis != quoted_basis:
         return Move(None, BASIS_CHANGED)
     # A RATE COMPARES ONLY WITHIN ONE BASIS **AND** ONE DENOMINATOR. The basis
     # says what is being measured; `rate_per` says how much of it one unit of
@@ -368,7 +458,16 @@ def _rate_move(response: MarketResponse, line: PlacementLine | None) -> Move:
     # the denominator its rate was TYPED against (repo.marketing stamps it on
     # the write); where it is absent the rate simply inherits the line's, and
     # the two agree by definition.
-    if (response.rate_per or line.rate_per) != line.rate_per:
+    # `response.rate_per or line.rate_per` READ SILENCE AS AGREEMENT: an
+    # unstamped rate inherited the line's denominator and then compared equal
+    # to it by construction, so the one state this check exists for — a rate
+    # typed before the line had a denominator — walked straight through it.
+    # The response's own stamp is the ONLY thing that says what its rate was
+    # typed against (repo.marketing._stamp_rate_per writes it, and now refuses
+    # a rate it cannot stamp), so its absence is a fact and not a default.
+    if response.rate_per is None or line.rate_per is None:
+        return Move(None, DENOMINATOR_UNKNOWN)
+    if response.rate_per != line.rate_per:
         # The same shape as "basis changed", one word apart: it is the same
         # refusal about the same column, and a reader who has met one has met
         # both.
@@ -398,11 +497,15 @@ def _exposure_move(expectation: PlacementLine | None) -> Move:
         return Move(None)
     if not expectation.expiring_exposure:
         return Move(None)
-    if (
-        expectation.expiring_basis
-        and expectation.rating_basis
-        and expectation.expiring_basis != expectation.rating_basis
-    ):
+    if expectation.expiring_basis is None or expectation.rating_basis is None:
+        # The same reading `_rate_move` makes one function up: two figures
+        # nobody has said the units of are not two figures known to share
+        # them. No surface can store an exposure with no basis today (the cell
+        # refuses and `_basis_guard` refuses clearing one), so this costs
+        # nothing now and is the door the next surface would come through —
+        # the same reason `fmt_exposure` carries its "basis not set" branch.
+        return Move(None, BASIS_UNKNOWN)
+    if expectation.expiring_basis != expectation.rating_basis:
         # The SAME WORDS `_rate_move` uses, because it is the same refusal
         # about the same two columns — a reader who learns what it means in
         # one place has learned it everywhere on this report.
@@ -440,7 +543,11 @@ def _bridge(response: MarketResponse, line: PlacementLine | None, market: str) -
     rather than half a story."""
     if line is None or response.rate_micros is None or response.premium is None:
         return None
-    rate_per = response.rate_per or line.rate_per
+    # THE RESPONSE'S OWN STAMP, never the line's read in as a default — the
+    # same correction `_rate_move` carries, and for the same reason: falling
+    # back made an unstamped rate equal to the line's denominator by
+    # construction, so the check below could not fail.
+    rate_per = response.rate_per
     exposure = response.exposure_amount or line.expected_exposure
     if not rate_per or exposure is None:
         return None
@@ -448,20 +555,34 @@ def _bridge(response: MarketResponse, line: PlacementLine | None, market: str) -
         return None
     if line.expiring_rate_micros is None:
         return None
-    if line.expiring_basis and line.rating_basis and line.expiring_basis != line.rating_basis:
+    # BOTH AXES KNOWN, NOT MERELY NOT-CONTRADICTORY. `and`-guarded equality
+    # read an unstated basis as agreement and walked a bridge across two
+    # figures nobody had said the units of.
+    if line.expiring_basis is None or line.rating_basis is None:
+        return None
+    if line.expiring_basis != line.rating_basis:
         return None
     # AND ONE DENOMINATOR — `rate_effect` SUBTRACTS the expiring rate from the
     # quoted one, which is arithmetic only while both are stated per the same
     # unit. `_reconciles` catches most of the damage after the fact; refusing
     # here says why, and does not rely on the walk happening to miss by more
     # than a percent.
-    if rate_per != line.rate_per:
+    if line.rate_per is None or rate_per != line.rate_per:
         return None
+    # WHICH KIND OF INTEGER THE EXPOSURE IS. Both bases are equal by the check
+    # above, so one lookup answers for both sides of the walk.
+    monetary = rating_basis(line.rating_basis).monetary
     rate_effect = _premium_from(
-        response.rate_micros - line.expiring_rate_micros, line.expiring_exposure, rate_per
+        response.rate_micros - line.expiring_rate_micros,
+        line.expiring_exposure,
+        rate_per,
+        monetary=monetary,
     )
     exposure_effect = _premium_from(
-        response.rate_micros, exposure - line.expiring_exposure, rate_per
+        response.rate_micros,
+        exposure - line.expiring_exposure,
+        rate_per,
+        monetary=monetary,
     )
     bridge = Bridge(
         expiring_premium=line.expiring_premium,
@@ -557,7 +678,7 @@ def compose(
                 ),
             )
         )
-        blocks.append(_block(line, expectation, rows, submitted, by_line.get(line_id, [])))
+        blocks.append(_block(line, expectation, rows, by_line.get(line_id, [])))
 
     return MarketingReport(
         account=names.get(placement.org_id, ""),
@@ -624,6 +745,7 @@ def _row(
             rating_basis(response.rating_basis).label if response.rating_basis else ""
         ),
         exposure_override=fmt_exposure(response.exposure_amount, basis_key),
+        rate_per_override=_rate_per_override(response, expectation),
         internal_reason=(response.decline_reason or "") if internal else "",
         commission_bps=response.commission_bps if internal else None,
         notes=(response.notes or "") if internal else "",
@@ -635,15 +757,15 @@ def _block(
     line: LineOfCoverage,
     expectation: PlacementLine | None,
     rows: tuple[ReportRow, ...],
-    submitted: dict[str, str],
     responses: list[MarketResponse],
 ) -> ReportBlock:
+    # NO SEND DATE ON THE BLOCK. It used to collapse to a header fact when
+    # every package on the line agreed and to nothing at all when they did
+    # not, which is a fact of the DATA masquerading as a fact of the block —
+    # and on a line marketed over two days it printed nowhere. It is a column
+    # on the row now, on both the sheet and the grid (`Sent`).
     basis_key = expectation.rating_basis if expectation else None
     exposure = expectation.expected_exposure if expectation else None
-    # The submission date belongs in the header: one submission goes out, and
-    # repeating its date down a column is the duplication the DRY rule names.
-    dates = {submitted.get(r.submission_id, "") for r in responses}
-    header_date = dates.pop() if len(dates) == 1 else ""
     # A ROW IS IDENTIFIED BY ITS ID, never re-found by matching two of its
     # values. `leading` comes out of `rows` (sorted by status, premium, reply
     # date) and `source` has to be the SAME response out of `responses` (SQL
@@ -670,7 +792,6 @@ def _block(
         line_name=line.name,
         line_abbr=line.abbr,
         line_retired=line.deleted_at is not None,
-        submitted_on=header_date,
         basis_key=basis_key,
         basis_label=rating_basis(basis_key).label if basis_key else "",
         rate_per=expectation.rate_per if expectation else None,
@@ -697,8 +818,26 @@ _CLIENT_COLUMNS: tuple[tuple[str, float, bool], ...] = (
     ("Best", 9.0, False),
     ("Layer", 20.0, False),
     ("Status", 14.0, False),
+    # SENT, THEN REPLIED, in the order they happened.
+    #
+    # IT WAS COLLAPSED INTO THE BLOCK HEADING and therefore printed only when
+    # every package on the line happened to go out the same day — a
+    # coincidence of values, not a block fact. On a line marketed over two
+    # days the heading fell silent and there was no column to fall back on, so
+    # the CLIENT's workbook carried NO send date at all while the broker's own
+    # grid had one (D6, found 2026-08-26). "The panel is the report" was false
+    # in that column. The heading no longer prints it, so nothing is stated
+    # twice — the same un-collapsing, and the same reason, as the grid's.
+    ("Sent", 10.0, False),
     ("Replied", 10.0, False),
     ("Rate", 9.0, True),
+    # THE DENOMINATOR THIS ROW'S RATE IS STATED PER, where the heading's is
+    # not it. Left-aligned and blank on the ordinary row: it is a unit in
+    # words, not a figure, and it speaks only where the heading would mislead
+    # (`ReportRow.rate_per_override`). The `Basis` column at the end of this
+    # tuple is the same rule on the other axis, and the pair is why a reader
+    # can trust the heading everywhere else.
+    ("Rate per", 11.0, False),
     # WIDE ENOUGH FOR THE REFUSAL, not just for the percentage. This column
     # prints "-19.4%" most of the time and a SENTENCE the rest of it — "basis
     # changed", "denominator changed", "no expiring rate recorded" — and at
@@ -728,14 +867,10 @@ def columns(audience: str) -> tuple[tuple[str, float, bool], ...]:
     return _CLIENT_COLUMNS + extra
 
 
-def _block_label(block: ReportBlock, window: DateWindow | None = None) -> str:
+def _block_label(block: ReportBlock) -> str:
     parts = [block.line_name]
-    if block.submitted_on:
-        parts.append(f"submitted {fmt_date(block.submitted_on, window)}")
     if block.basis_label:
-        per = ""
-        if block.rate_per and block.rate_per > 1:
-            per = f", per {format_cents(block.rate_per * 100)}"
+        per = f", per {_per_label(block.rate_per)}" if block.rate_per else ""
         parts.append(f"basis {block.basis_label}{per}")
     if block.exposure is not None:
         exposure = fmt_exposure(block.exposure, block.basis_key)
@@ -761,8 +896,10 @@ def _row_cells(
         row.best,
         row.layer,
         row.status,
+        fmt_date(row.submitted_on, window),
         fmt_date(row.responded_on, window),
         fmt_rate(row.rate_micros),
+        row.rate_per_override,
         row.rate_move.cell,
         format_cents(row.premium) if row.premium is not None else "",
         format_cents(row.tria) if row.tria is not None else "",
@@ -793,7 +930,7 @@ def to_sections(report: MarketingReport) -> list[SheetSection]:
         if block.is_empty:
             sections.append(
                 SheetSection(
-                    _block_label(block, report.window),
+                    _block_label(block),
                     (("No markets approached on this line yet.",) + ("",) * (width - 1),),
                 )
             )
@@ -807,7 +944,7 @@ def to_sections(report: MarketingReport) -> list[SheetSection]:
             rows.append(("Rate effect", "", format_cents(bridge.rate_effect)) + blank)
             rows.append(("Exposure effect", "", format_cents(bridge.exposure_effect)) + blank)
             rows.append((f"{bridge.market}", "", format_cents(bridge.quoted_premium)) + blank)
-        sections.append(SheetSection(_block_label(block, report.window), tuple(rows)))
+        sections.append(SheetSection(_block_label(block), tuple(rows)))
     return sections
 
 

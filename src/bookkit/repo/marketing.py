@@ -82,6 +82,21 @@ def _reply_guard(
     )
 
 
+# THE SENTENCE A RATE WITH NO DENOMINATOR IS REFUSED IN, stated once and
+# raised from both sites that can be handed one — the response's rate and the
+# line's expiring rate. It was the exposure cell's guard that existed and the
+# rate cell's that did not, which is this book's recurring shape: the rule
+# applied at one site and not at the one three inches away (D4, 2026-08-26).
+# One constant so the two refusals cannot drift into two different remedies
+# for one rule.
+_NO_DENOMINATOR = (
+    "a rate needs the denominator it is quoted against, and this line of "
+    "coverage has none — set `rate per` on the line first, then enter the "
+    "rate. 1.42 per $100 is ten times 1.42 per $1,000, and nothing inside the "
+    "figure says which one it is."
+)
+
+
 def _stamp_rate_per(
     conn: sqlite3.Connection,
     submission_id: str,
@@ -121,8 +136,16 @@ def _stamp_rate_per(
         f" WHERE s.id = ? AND pl.line_id = ? AND {base.alive('pl')}",
         (submission_id, line_id),
     ).fetchone()
-    if row is not None and row["rate_per"] is not None:
-        fields["rate_per"] = int(row["rate_per"])
+    if row is None or row["rate_per"] is None:
+        # REFUSED, NOT STORED BARE. There is nothing to stamp, so the rate
+        # would land as a figure with no unit anywhere in the book — and
+        # setting the line's denominator afterwards would silently CLAIM it,
+        # because every reader inherits the line's. The exposure cell one
+        # column over has refused exactly this since the day it shipped ("42
+        # power units and $0.42 are the same digits"); a rate is the same
+        # sentence with a different unit.
+        raise ValueError(_NO_DENOMINATOR)
+    fields["rate_per"] = int(row["rate_per"])
 
 
 def _one_market_twice(market_org_id: Any, via_org_id: Any) -> None:
@@ -463,6 +486,31 @@ def _rate_per_guard(existing: PlacementLine | None, fields: dict[str, Any]) -> N
     )
 
 
+def _expiring_rate_guard(
+    existing: PlacementLine | None, fields: dict[str, Any]
+) -> None:
+    """AN EXPIRING RATE NEEDS A DENOMINATOR TOO.
+
+    The adjacent site to `_stamp_rate_per`'s, and the reason this exists as a
+    second function rather than as one more branch there: the two rates are
+    stored on two tables and reached by two writers, and the rule is the same
+    one. `_rate_per_guard` below protects a denominator that is already under
+    a stored rate; this refuses the rate that has none yet. Together they say
+    the figure and its unit are recorded as one act or not at all.
+
+    A denominator arriving in the SAME call is the ordinary way to record both
+    (the MCP tool takes `rate_per` and `expiring_rate` together), and clearing
+    the rate is always allowed — a rate being removed needs no unit.
+    """
+    if fields.get("expiring_rate_micros") is None:
+        return
+    if fields.get("rate_per") is not None:
+        return
+    if existing is not None and existing.rate_per is not None:
+        return
+    raise ValueError(_NO_DENOMINATOR)
+
+
 def set_placement_line(
     conn: sqlite3.Connection, placement_id: str, line_id: str, **fields: Any
 ) -> PlacementLine:
@@ -471,6 +519,7 @@ def set_placement_line(
     existing = placement_line(conn, placement_id, line_id)
     _basis_guard(existing, fields)
     _rate_per_guard(existing, fields)
+    _expiring_rate_guard(existing, fields)
     if existing is None:
         base.insert(
             conn,

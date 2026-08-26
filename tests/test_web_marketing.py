@@ -359,6 +359,10 @@ def test_a_rate_cell_is_not_read_through_the_money_parser(client_and_org):
     placement = _linked(client, org)
     from bookkit.repo import marketing
 
+    # A LINE WITH A DENOMINATOR, because a rate typed against a line that has
+    # none is refused now — 1.42 per $100 and 1.42 per $1,000 differ by a
+    # factor of ten and nothing in the figure says which (D4, 2026-08-26).
+    marketing.set_placement_line(conn, placement.id, GL, rate_per=100)
     response = _approach(conn, placement.id, _market(conn, "AIG"), status="quoted")
 
     client.post(_cell_url(org, placement, response, "rate_micros"), data={"rate_micros": "8.10"})
@@ -791,6 +795,13 @@ def test_filling_the_expiring_rate_turns_every_rate_delta_into_a_number(
     marketing.set_placement_line(
         conn, placement.id, GL,
         expected_exposure=4_850_000_000, rating_basis="gross_sales", rate_per=1000,
+        # THE EXPIRING SIDE'S OWN BASIS. A rate movement is refused while
+        # either basis is merely UNKNOWN, not only when the two disagree —
+        # silence is not agreement (G2, 2026-08-26) — so a line that states
+        # what it is rated on this term and nothing about last term gets
+        # "basis not stated" where the percentage would be, and the header
+        # cell that closes it is one click away.
+        expiring_basis="gross_sales",
     )
     _approach(
         conn, placement.id, _market(conn, "Travelers"),

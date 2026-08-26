@@ -182,6 +182,15 @@ class Change:
 class Conflict:
     change: Change
     current_value: str | None
+    clause: str | None = None
+    """The sentence this conflict is refused WITH, where the generic
+    '<entity> <field> changed since' the surfaces build would be wrong.
+
+    A dependent conflict (below) is not a field that moved — nothing on the
+    row changed at all — so a surface rendering it as "submission created
+    changed since" describes neither what happened nor what to do about it.
+    The clause is written once, here, and both surfaces read it rather than
+    each growing a copy that drifts (the `program_file_refusal` pattern)."""
 
 
 @dataclass(frozen=True)
@@ -214,6 +223,31 @@ def account_names(
 def _cell(row: sqlite3.Row, field: str) -> str | None:
     value = row[field]
     return None if value is None else str(value)
+
+
+def dependent_clause(
+    entity_type: str, holders: list[tuple[str, str, str]]
+) -> str:
+    """The sentence a dependent conflict is refused with, in one home because
+    two surfaces render it.
+
+    It names the way OUT, which is the whole reason this refuses rather than
+    cascading: the children were recorded after this batch, so undoing them
+    first leaves nothing hanging off the parent and this batch reverts clean.
+    That is ordinary last-in-first-out undo, not a dead end.
+
+    Entity types are printed with their underscores opened out rather than
+    through a label table — a second vocabulary is a second thing to drift."""
+    counts: dict[str, int] = {}
+    for child_entity, _child_id, _column in holders:
+        counts[child_entity] = counts.get(child_entity, 0) + 1
+    named = ", ".join(
+        f"{count} {child.replace('_', ' ')}(s)" for child, count in counts.items()
+    )
+    return (
+        f"{entity_type.replace('_', ' ')} still has {named} recorded against it "
+        f"since — undo those first"
+    )
 
 
 def plan_revert(conn: sqlite3.Connection, batch: EventBatch) -> RevertPlan:
@@ -288,6 +322,7 @@ def plan_revert(conn: sqlite3.Connection, batch: EventBatch) -> RevertPlan:
             # someone undeleted it since (or it vanished outright)
             conflicts.append(Conflict(change, None))
 
+    revertible = set(created)
     for entity, change in created.items():
         # The contract is 'changed since → refused', and a row this batch
         # created is no exception: user edits after the create would vanish
@@ -300,6 +335,64 @@ def plan_revert(conn: sqlite3.Connection, batch: EventBatch) -> RevertPlan:
             conflicts.append(
                 Conflict(change, f"({edits} change(s) since it was created)")
             )
+            revertible.discard(entity)
+
+    # ... and 'acquired children since → refused', which is the same fact read
+    # through the SCHEMA instead of the event log, because a child logs against
+    # the child and an earlier batch's plan cannot see it (repo/base.py's
+    # `child_links` carries the why).
+    #
+    # A LINK THIS BATCH IS LETTING GO OF DOES NOT HOLD. `need_to_opportunity`
+    # creates an opportunity and points an EXISTING need at it; reverting sets
+    # `need.opportunity_id` back to NULL in the same act, so the need is not a
+    # holder — it is being released. Reading the raw row alone called that a
+    # conflict and made the flow unrevertible. Only a CLEAN update releases:
+    # one that conflicted is not going to be written back, so the link stays
+    # and it does hold.
+    released = {
+        (change.entity_type, change.entity_id, change.field): change.old_value
+        for change in updates
+    }
+
+    def holds(parent_id: str, held: tuple[str, str, str]) -> bool:
+        child_type, child_id, column = held
+        key = (child_type, child_id, column)
+        return released.get(key, parent_id) == parent_id
+
+    links = base.child_links(conn)
+    holders = {
+        entity: [
+            held
+            for held in base.live_dependents(conn, entity[0], entity[1], links)
+            if holds(entity[1], held)
+        ]
+        for entity in created
+    }
+
+    # Settled to a FIXPOINT because the answer feeds itself: a child this batch
+    # created but can no longer delete (edited since, above) is a child that
+    # survives, so its parent cannot go either. `revertible` shrinks every
+    # round, so this terminates.
+    while True:
+        stuck = {
+            entity: [
+                held for held in holders[entity]
+                if (held[0], held[1]) not in revertible
+            ]
+            for entity in revertible
+        }
+        stuck = {entity: held for entity, held in stuck.items() if held}
+        if not stuck:
+            break
+        for entity, held in stuck.items():
+            conflicts.append(
+                Conflict(
+                    created[entity],
+                    f"({len(held)} row(s) still point at it)",
+                    clause=dependent_clause(entity[0], held),
+                )
+            )
+        revertible -= set(stuck)
 
     alias_moves, alias_conflicts = _plan_alias_moves(conn, events)
     conflicts.extend(alias_conflicts)

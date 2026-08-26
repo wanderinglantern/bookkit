@@ -1039,8 +1039,13 @@ def _a_marketed_placement(rw):
 
 
 def _an_approach(rw):
+    # A SEND DATE IN THE PAST, explicitly. Left to default it takes TODAY, and
+    # the two cases that record a reply against it then hit
+    # repo.marketing._reply_guard — a market cannot answer a package it has
+    # not been sent, and every plausible reply date is before today.
     return mcpserver._market_approach(
-        rw, _a_marketed_placement(rw).ref, "General Liability", market="Travelers"
+        rw, _a_marketed_placement(rw).ref, "General Liability",
+        market="Travelers", sent_on="2026-07-07",
     )
 
 
@@ -1158,7 +1163,9 @@ _BATCHED_WRITES = {
     "market_approach": lambda rw, tmp: _an_approach(rw),
     "market_responded": lambda rw, tmp: mcpserver._market_responded(
         rw, _an_approach(rw)["response_id"], status="quoted",
-        responded_on="2027-07-20", premium="120,000"),
+        responded_on="2026-07-20", premium="120,000"),
+    "submission_sent_on": lambda rw, tmp: mcpserver._submission_sent_on(
+        rw, _an_approach(rw)["response_id"], "2026-07-01"),
     "set_placement_line": lambda rw, tmp: mcpserver._set_placement_line(
         rw, _a_marketed_placement(rw).ref, "GL",
         expiring_premium="100,000", rating_basis="gross_sales",
@@ -1218,6 +1225,9 @@ _TOUCHES = {
     "market_approach": {"submission", "market_response"},
     # the roll-up moves the submission from 'out' to 'quoted' in the same unit
     "market_responded": {"market_response", "submission"},
+    # the package alone: the responses hanging off it are untouched, which is
+    # exactly why the reply names the rows it moved rather than rewriting them
+    "submission_sent_on": {"submission"},
     "set_placement_line": {"placement_line"},
     "program_layer_add": {"placement"},
     "program_bind": {"placement"},
@@ -1478,6 +1488,46 @@ def test_revert_batch_refuses_and_explains_a_conflict(server_db):
     assert got["refused"][0]["field"] == "website"
     assert got["refused"][0]["current"] == "https://grant-typed.example"
     assert orgs.get(rw, org.id).website == "https://grant-typed.example"
+
+
+def test_revert_batch_names_what_still_hangs_off_a_shared_row(server_db):
+    """`market_approach` on a second line JOINS the submission the first one
+    opened, so reverting the first would soft-delete a package two live
+    responses still hang off. The refusal has to reach the ASSISTANT too, and
+    entity/field/current describe it wrongly on their own — they say "the
+    submission was created", which is not the blocker. `why` is the planner's
+    own sentence, the same one the browser toast prints (2026-08-26)."""
+    from bookkit.repo import orgs as orgs_repo
+    from bookkit.repo import placements as placements_repo
+
+    conn = db.connect(server_db)
+    org = orgs_repo.create(conn, name="Acme", kind="client")
+    orgs_repo.create(conn, name="Chubb", kind="market")
+    placement = placements_repo.create(
+        conn, org_id=org.id, program_name="2027 casualty",
+        period_from="2027-01-01", period_to="2028-01-01",
+    )
+    conn.close()
+    rw = db.connect(server_db)
+
+    first = mcpserver._market_approach(
+        rw, placement.ref, "general liability", market="Chubb",
+        sent_on="2026-08-12",
+    )
+    mcpserver._market_approach(
+        rw, placement.ref, "auto", market="Chubb", sent_on="2026-08-12",
+    )
+
+    got = mcpserver._revert_batch(rw, first["batch"], now="2026-08-26T18:00:00Z")
+    assert got["applied"] is False
+    assert [row["why"] for row in got["refused"]] == [
+        "submission still has 1 market response(s) recorded against it since "
+        "— undo those first"
+    ]
+    alive = rw.execute(
+        "SELECT COUNT(*) FROM market_response WHERE deleted_at IS NULL"
+    ).fetchone()[0]
+    assert alive == 2
 
 
 def test_batch_tools_are_registered(server_db):

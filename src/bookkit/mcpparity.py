@@ -211,13 +211,22 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "wrong for anything else.",
     ),
     ("submission", "update"): (
-        ("market_approach", "market_responded"),
+        ("market_approach", "market_responded", "submission_sent_on"),
         "status ONLY, and never typed: repo/marketing.roll_up_submission "
         "recomputes it from the response rows after every response write, "
         "because two hand-maintained copies of one fact disagree. "
         "`withdrawn` is never written and never overwritten by the roll-up. "
-        "Everything else on a submission — quoted premium, quote expiry, the "
-        "underwriter — is still unreachable.",
+        "THE ONE TYPED COLUMN IS `sent_on`, and it is here because a refusal "
+        "named a fix that did not exist: repo/marketing._reply_guard tells "
+        "the caller to correct the date the submission went out, the web "
+        "grew that as the grid's Sent cell on 2026-08-26, and MCP had no "
+        "submission verb at all — so one transposed digit in market_approach "
+        "wedged the reply date on every row of that package, permanently. "
+        "submission_sent_on is addressed by the RESPONSE (the row a report "
+        "hands back) and names every row it moved, because one package "
+        "carries every line of coverage it was sent on. Everything else on a "
+        "submission — quoted premium, quote expiry, the underwriter — is "
+        "still unreachable.",
     ),
     # --- lines of coverage and marketing (migrations 014/015) ---
     ("line_of_coverage", "create"): (

@@ -731,6 +731,21 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         )
 
     @server.tool()
+    async def submission_sent_on(response_ref: str, sent_on: str) -> dict[str, Any]:
+        """Correct the date the package behind a market response went out.
+        `response_ref` is an exact response id from marketing_report's
+        `responses` list, the same id market_responded takes — the submission
+        is what gets written and the response is the row you are holding.
+        THIS MOVES EVERY LINE OF COVERAGE ON THAT PACKAGE, because one
+        submission carries all of them; `responses_affected` names the rows it
+        moved. Use it when a reply is refused for being dated before the
+        submission went out AND the send date is the one that is wrong — when
+        the reply is the typo, correct that with market_responded instead. A
+        date that has not happened yet is refused, and so is one later than an
+        answer already recorded against the package."""
+        return _submission_sent_on(rw, response_ref, sent_on)
+
+    @server.tool()
     async def set_placement_line(
         placement_ref: str,
         line: str,
@@ -2590,9 +2605,15 @@ def _revert_batch(
             for c in result.reverted
         ],
         "refused": [
+            # `why` is the planner's own sentence where it has one — a
+            # dependent conflict is not a field that moved, so entity/field/
+            # current describe it wrongly on their own, and the assistant
+            # would report "the submission was created" as the blocker. One
+            # home for that sentence (services/batches.dependent_clause), read
+            # by this surface and the browser's toast alike.
             {"entity": c.change.entity_type, "id": c.change.entity_id,
              "field": c.change.field, "batch_set": c.change.new_value,
-             "current": c.current_value}
+             "current": c.current_value, "why": c.clause}
             for c in result.refused
         ],
     }
@@ -3189,8 +3210,9 @@ def _market_responded(
     prints."""
     from .models import PUBLIC_DECLINE_REASONS
     from .repo import lines as lines_repo
-    from .repo import marketing, orgs, placements
+    from .repo import orgs, placements
     from .repo import submissions as submissions_repo
+    from .services import marketing_entry
 
     response = _resolve_response(conn, response_ref)
     changes: dict[str, Any] = {}
@@ -3239,7 +3261,12 @@ def _market_responded(
             f"{coverage.name if coverage else response.line_id}"
         ),
     ) as batch:
-        fresh = marketing.edit_response(conn, response.id, changes)
+        # THE SERVICE, not the repo writer under it — the same home the web's
+        # response cell posts through, so "a date that witnesses an act cannot
+        # be in the future" binds the assistant too. `responded_on` reaches
+        # here as a human date through `_clean_typed`, and parse_human_date
+        # FUTURE-BIASES a bare month and day.
+        fresh = marketing_entry.responded(conn, response.id, changes)
 
     rolled = submissions_repo.get(conn, fresh.submission_id)
     return {
@@ -3252,6 +3279,78 @@ def _market_responded(
         "submission_status": str(
             rolled.status.value if hasattr(rolled.status, "value") else rolled.status
         ),
+        "batch": batch.ref,
+    }
+
+
+def _submission_sent_on(
+    conn: sqlite3.Connection,
+    response_ref: str,
+    sent_on: str,
+) -> dict[str, Any]:
+    """Correct the date the package behind one market response went out.
+
+    A REFUSAL MUST NEVER NAME A FIX THAT DOES NOT EXIST, and this one did.
+    `repo.marketing._reply_guard` refuses a reply dated before its submission
+    went out and its sentence names two ways out — correct the reply, or
+    correct the date the submission went out. The web grew the second one as
+    the grid's Sent cell on 2026-08-26; on MCP there was no `submission_*`
+    tool at all, so one transposed digit in `market_approach` wedged the reply
+    date on every row of that package, permanently, with the assistant being
+    told to make a correction it had no verb for (D8). A change that lands on
+    the web and not on MCP has shipped to two thirds of its users.
+
+    ADDRESSED BY THE RESPONSE, the way the web's cell is: the submission is
+    what gets written, but the response is the row the caller is holding (it
+    is what `marketing_report` hands back), one response hangs off exactly one
+    submission, and `_resolve_response` is the scope check that already
+    exists. A ref naming the submission would need a second resolver for a row
+    no report prints.
+
+    IT MOVES EVERY LINE ON THE PACKAGE, and the reply says which: one
+    submission carries every line of coverage it was sent on, so this is never
+    a one-row edit and a caller that thinks it is would mis-report what it
+    just did. Both refusals are inherited rather than restated — the future
+    check is `services.consistency`'s (the same rule `market_approach`
+    applies) and "not after an answer already recorded" is
+    `repo.submissions._sent_guard`'s, under the write itself.
+    """
+    from datetime import date as _date
+
+    from .repo import marketing, orgs, placements
+    from .repo import submissions as submissions_repo
+    from .services import consistency
+
+    response = _resolve_response(conn, response_ref)
+    when = _clean_typed("date", "sent_on", sent_on)
+    consistency.check_not_future(
+        when, label="a submission sent", today=_date.today().isoformat()
+    )
+    submission = submissions_repo.get(conn, response.submission_id)
+    org_id = (
+        placements.get(conn, submission.placement_id).org_id
+        if submission.placement_id
+        else None
+    )
+    who = orgs.names_for(conn, {submission.market_org_id})
+    market_name = who.get(submission.market_org_id, "a market")
+    with _open_batch(
+        conn,
+        tool="submission_sent_on",
+        org_id=org_id,
+        summary=f"corrected the date we went to {market_name}",
+    ) as batch:
+        submissions_repo.update(conn, submission.id, sent_on=when)
+
+    fresh = submissions_repo.get(conn, submission.id)
+    moved = marketing.responses_for_submission(conn, submission.id)
+    return {
+        "submission_id": fresh.id,
+        "market": market_name,
+        "sent_on": fresh.sent_on,
+        # EVERY ROW THIS MOVED, named. The caller asked about one response and
+        # changed the package all of them hang off.
+        "responses_affected": [r.id for r in moved],
         "batch": batch.ref,
     }
 

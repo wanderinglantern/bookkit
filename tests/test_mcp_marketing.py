@@ -162,14 +162,23 @@ def test_a_response_rolls_the_submissions_status_up(conn) -> None:
     caller can see what its edit did to the parent."""
     _, placement = _book(conn)
     _market(conn, "Travelers")
+    # THE LINE'S DENOMINATOR FIRST. A rate is stamped with the denominator it
+    # was typed against and refused when there is none to stamp — this test
+    # records `rate="1.42"`, and 1.42 per $100 is ten times 1.42 per $1,000.
+    mcpserver._set_placement_line(conn, placement.ref, "GL", rate_per="100")
     approach = mcpserver._market_approach(
-        conn, placement.ref, "GL", market="Travelers"
+        conn, placement.ref, "GL", market="Travelers", sent_on="2026-07-07"
     )
     assert submissions.get(conn, approach["submission_id"]).status == "out"
 
     out = mcpserver._market_responded(
         conn, approach["response_id"], status="quoted",
-        responded_on="2027-07-20", rate="1.42", premium="120,000", fees="2,500",
+        # A REPLY IS NOT IN THE FUTURE. This book's period runs through 2027
+        # and the fixture dated the reply inside it, which is a year past the
+        # wall clock — and `marketing_entry.responded` now refuses that
+        # everywhere, because parse_human_date future-biases a bare month and
+        # day and the year is the thing that goes wrong (D2, 2026-08-26).
+        responded_on="2026-07-20", rate="1.42", premium="120,000", fees="2,500",
     )
 
     assert out["status"] == "quoted"
@@ -241,7 +250,11 @@ def test_set_placement_line_upserts_one_row_per_line(conn) -> None:
     )
     out = mcpserver._set_placement_line(
         conn, placement.ref, "GL", expected_exposure="48,500,000",
-        expiring_rate="1.61",
+        # WITH ITS DENOMINATOR: an expiring rate is refused while the line has
+        # none, in the same call or already stored (D4's adjacent site). This
+        # test is about the upsert, and the pair is what makes the row
+        # writable at all.
+        expiring_rate="1.61", rate_per="1000",
     )
     assert out["expiring_premium"] == 10_000_000     # the first call survived
     assert out["expected_exposure"] == 4_850_000_000
@@ -266,7 +279,7 @@ def _a_marketed_line(conn):
     )
     mcpserver._market_responded(
         conn, approach["response_id"], status="quoted",
-        responded_on="2027-07-20", rate="2.31", premium="120,120",
+        responded_on="2026-07-20", rate="2.31", premium="120,120",
     )
     return placement, approach
 
@@ -274,14 +287,14 @@ def _a_marketed_line(conn):
 def test_the_report_text_carries_a_block_for_the_line(conn) -> None:
     placement, _ = _a_marketed_line(conn)
 
-    out = mcpserver._marketing_report(conn, placement.ref, as_of="2027-07-21")
+    out = mcpserver._marketing_report(conn, placement.ref, as_of="2026-07-21")
 
     text = out["report"]
     assert "General Liability" in text, text
     assert "Travelers" in text
     assert "Quoted" in text
     assert "$120,120" in text
-    assert out["as_of"] == "2027-07-21"
+    assert out["as_of"] == "2026-07-21"
 
 
 def test_the_report_indexes_the_ids_market_responded_takes(conn) -> None:
@@ -321,8 +334,8 @@ def test_the_report_never_reads_the_wall_clock_below_this_tool(conn) -> None:
     agree, and the default is applied HERE and named in the reply."""
     placement, _ = _a_marketed_line(conn)
 
-    first = mcpserver._marketing_report(conn, placement.ref, as_of="2027-07-21")
-    second = mcpserver._marketing_report(conn, placement.ref, as_of="2027-07-21")
+    first = mcpserver._marketing_report(conn, placement.ref, as_of="2026-07-21")
+    second = mcpserver._marketing_report(conn, placement.ref, as_of="2026-07-21")
     assert first["report"] == second["report"]
 
     defaulted = mcpserver._marketing_report(conn, placement.ref)

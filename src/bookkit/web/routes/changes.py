@@ -164,22 +164,30 @@ def _refusal_text(conn: Connection, batch: EventBatch) -> str:
     not just how many. The batch is still unreverted — that is what refused
     means — so re-planning it here yields the same conflicts the POST hit.
 
-    Conflicts are deduped by (entity_type, field) first, in order. One clause
-    per Conflict meant two contacts conflicting on `title` printed "contact
-    title changed since, contact title changed since" — which reads as a
-    rendering fault and still names neither record, so it was strictly worse
-    than saying it once (review round 1, F5). The `+N more` count follows the
-    deduped list, or it would promise clauses that do not exist."""
-    pairs: list[tuple[str, str]] = []
+    Conflicts are deduped by their CLAUSE, in order. One clause per Conflict
+    meant two contacts conflicting on `title` printed "contact title changed
+    since, contact title changed since" — which reads as a rendering fault and
+    still names neither record, so it was strictly worse than saying it once
+    (review round 1, F5). The `+N more` count follows the deduped list, or it
+    would promise clauses that do not exist.
+
+    A conflict that carries its own `clause` is printed verbatim: the planner
+    writes that sentence where "<entity> <field> changed since" would be a
+    false description of what happened. A dependent conflict is the case —
+    nothing on the row changed at all, something new was hung off it — and
+    rendering it through the generic mould said "submission created changed
+    since", which names neither the blocker nor the way past it (2026-08-26).
+    The sentence lives in services/batches.py so this surface and the MCP one
+    cannot drift apart on it."""
+    clauses: list[str] = []
     for conflict in batches_svc.plan_revert(conn, batch).conflicts:
-        pair = (conflict.change.entity_type, conflict.change.field)
-        if pair not in pairs:
-            pairs.append(pair)
-    named = ", ".join(
-        f"{entity_type} {field} changed since"
-        for entity_type, field in pairs[:_NAMED_CONFLICTS]
-    )
-    extra = len(pairs) - _NAMED_CONFLICTS
+        clause = conflict.clause or (
+            f"{conflict.change.entity_type} {conflict.change.field} changed since"
+        )
+        if clause not in clauses:
+            clauses.append(clause)
+    named = ", ".join(clauses[:_NAMED_CONFLICTS])
+    extra = len(clauses) - _NAMED_CONFLICTS
     if extra > 0:
         named = f"{named}, +{extra} more"
     return f"{batch.ref} refused — {named}"

@@ -200,7 +200,11 @@ def test_a_missing_expiring_rate_leaves_the_comparison_blank(conn) -> None:
         period_to="2028-01-01",
     )
     marketing.set_placement_line(
-        conn, placement.id, "general-liability", expiring_premium=41_200_000
+        conn, placement.id, "general-liability",
+        # THE DENOMINATOR, because a rate cannot be stored without one any
+        # more (repo.marketing._stamp_rate_per). It is not what this test is
+        # about; it is what makes the row it is about writable at all.
+        rate_per=100, expiring_premium=41_200_000,
     )
     market = _market(conn, "Travelers")
     _approach(conn, placement.id, market, status="quoted", rate_micros=8_100_000,
@@ -246,10 +250,20 @@ def test_the_section_label_carries_the_header_facts(conn) -> None:
     report = marketing_report.compose(conn, placement.id, TODAY)
     label = marketing_report.to_sections(report)[0].label
     assert "General Liability" in label
-    assert "submitted 7 Jul" in label
+    # THE SEND DATE IS NOT IN THE HEADING ANY MORE. It collapsed into the
+    # label only when every package on the line went out the same day and
+    # printed NOWHERE otherwise, so the client's workbook lost it on any line
+    # marketed over more than one day (D6, 2026-08-26). It is a `Sent` column
+    # on the row now — the same un-collapsing the grid did — and the row
+    # assertion below is what holds it.
+    assert "submitted" not in label
     assert "Gross sales" in label
     assert "+18.3%" in label
     assert "expiring $412,000 at 10.05" in label
+
+    headers = [h for h, _, _ in marketing_report.columns(marketing_report.CLIENT)]
+    section = marketing_report.to_sections(report)[0]
+    assert section.rows[0][headers.index("Sent")] == "7 Jul"
 
 
 # --- through a REAL workbook ----------------------------------------------
@@ -329,7 +343,17 @@ def _fleet(conn):
         conn, placement.id, "auto",
         rating_basis="power_units", rate_per=1,
         expected_exposure=350, expiring_exposure=300,
-        expiring_premium=52_500_000, expiring_rate_micros=175_000_000,
+        # THE EXPIRING SIDE'S BASIS TOO. It was absent, and every comparison
+        # this fixture reaches was therefore refused for an axis nobody had
+        # stated (silence is not agreement) — which is right, and made the
+        # fixture unable to exercise the one thing the count case is here for.
+        expiring_basis="power_units",
+        # THE PREMIUMS RECONCILE TO THE RATE AND THE COUNT: 300 units at
+        # 175.00 per unit is $52,500. They were stated a factor of TEN apart
+        # from the rate beside them, and nothing noticed, because the premium
+        # bridge could not be computed on a count basis at all — the one check
+        # that would have objected (D7).
+        expiring_premium=5_250_000, expiring_rate_micros=175_000_000,
     )
     market = _market(conn, "Progressive", "A+ XV")
     sub = submissions.create(
@@ -337,12 +361,45 @@ def _fleet(conn):
     )
     marketing.create_response(
         conn, sub.id, "auto", market_org_id=market.id, status="quoted",
-        responded_on="2027-07-20", rate_micros=180_000_000, premium=63_000_000,
+        # 350 units at 180.00 per unit is $63,000.
+        responded_on="2027-07-20", rate_micros=180_000_000, premium=6_300_000,
         # The ORDINARY override: this carrier counted the fleet itself and got
         # the same number, and did NOT restate the basis.
         exposure_amount=350,
     )
     return placement
+
+
+def test_the_premium_bridge_walks_on_a_count_basis_too(conn) -> None:
+    """THE BRIDGE WAS DEAD ON EVERY NON-MONETARY BASIS, silently.
+
+    `_premium_from` multiplied a rate by an exposure and returned the product
+    as CENTS. That is right where the exposure is money — cents times a
+    dollar denominator cancels the hundred — and a hundredfold LOW where the
+    exposure is a COUNT: 320 power units at 1287.50 per unit came out $4,120
+    for $412,000. `_reconciles` then dropped the walk, every time, so nothing
+    wrong was ever printed and the feature simply never appeared for a
+    trucking fleet (D7, found 2026-08-26). Failing safe is not working.
+
+    The figures reconcile to the cent on purpose: 300 units at 175.00 is
+    $52,500 and 350 at 180.00 is $63,000, so a bridge that does not appear
+    here cannot be excused as rounding.
+    """
+    placement = _fleet(conn)
+    block = marketing_report.compose(conn, placement.id, TODAY).blocks[0]
+
+    bridge = block.bridge
+    assert bridge is not None, "the bridge is dropped on a count basis"
+    assert bridge.expiring_premium == 5_250_000
+    # (180.00 - 175.00) x 300 units = $1,500
+    assert bridge.rate_effect == 150_000
+    # 180.00 x (350 - 300) units = $9,000
+    assert bridge.exposure_effect == 900_000
+    assert bridge.quoted_premium == 6_300_000
+    assert (
+        bridge.expiring_premium + bridge.rate_effect + bridge.exposure_effect
+        == bridge.quoted_premium
+    )
 
 
 def test_a_count_is_never_rendered_as_money(conn) -> None:
