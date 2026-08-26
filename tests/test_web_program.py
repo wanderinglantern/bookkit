@@ -4408,3 +4408,226 @@ def test_the_rail_can_rename_relabel_and_remove_a_line(app_and_org):
     )
     assert removed.status_code == 200
     assert line_id not in [lid for lid, _ in sync.program_lines(conn, placement.id)]
+
+
+# --- recording a policy: nine facts, one act -------------------------------
+#
+# Measured on the running app (2026-08-27): the layer worksheet holds 17
+# fields and 9 of them render an em-dash, in the widest column on the page —
+# and until this form existed the only way to say them was nine separate cell
+# clicks. That is the friction Grant described as "areas to edit all over the
+# place": the act he actually performs had no surface at all.
+
+
+def _record_url(org, placement, layer) -> str:
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/layers/{layer['id']}/record"
+    )
+
+
+def _policy(**over) -> dict[str, str]:
+    """A whole policy, as it arrives. `premiumDetail` is deliberately blank:
+    towerkit refuses it on a layer that states a premium (it is the word a
+    ZERO premium prints), which is a real rule this form inherits rather than
+    re-states — and the test one down proves the inheritance."""
+    data = {
+        "policy_number": "GL-99-1234",
+        "period_from": "2026-09-01",
+        "period_to": "2027-09-01",
+        "premium_cents": "125,000",
+        "layer.auditable": "true",
+        "layer.limitsDetail": "$5M each occurrence / $10M aggregate",
+        "layer.retentionDetail": "$25,000 SIR",
+        "layer.premiumDetail": "",
+        "layer.states": "",
+        "layer.notes": "bound at renewal",
+    }
+    data.update(over)
+    return data
+
+
+def _batches(conn) -> int:
+    return int(conn.execute("SELECT COUNT(*) FROM event_batch").fetchone()[0])
+
+
+def test_the_form_asks_for_the_facts_a_policy_brings_and_writes_nothing(app_and_org):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    before = _batches(conn)
+
+    got = client.get(_record_url(org, placement, layer))
+
+    assert got.status_code == 200
+    from bookkit.web.routes.program import _POLICY_FORM
+
+    for key, _seam in _POLICY_FORM:
+        assert f'name="{key}"' in got.text, f"{key} is not on the form"
+    assert _batches(conn) == before, "the form wrote something"
+
+
+def test_the_form_prefills_what_is_already_recorded(app_and_org):
+    """A COMPLETION FORM CORRECTS RATHER THAN RE-ASKS. Blanking the half
+    somebody already typed is the worst thing a form like this can do — and
+    it is NOT the pre-filled-figure rule, which refuses a GUESS. What is here
+    is what the book already holds."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    client.post(_record_url(org, placement, layer), data=_policy())
+
+    again = client.get(_record_url(org, placement, layer))
+
+    assert 'value="GL-99-1234"' in again.text
+    assert "bound at renewal" in again.text
+
+
+def test_recording_a_policy_is_ONE_batch(app_and_org):
+    """Nine fields land across two writers — four on the layer, five on
+    towerkit's derived surface — and they are one undo unit, or taking back a
+    policy means nine presses of `u`.
+
+    THIS PROPERTY IS `program_files.write`'s, not the composition's: it opens
+    one batch around whatever `mutate` does. Mutation testing said so — going
+    back to two writers in a row left THIS test green and the file test red.
+    What the composition buys is the test below."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    before = _batches(conn)
+
+    saved = client.post(_record_url(org, placement, layer), data=_policy())
+
+    assert saved.status_code == 200
+    assert _batches(conn) - before == 1, "a policy must be one batch, not nine"
+    row = conn.execute(
+        "SELECT ref, tool, summary FROM event_batch ORDER BY rowid DESC LIMIT 1"
+    ).fetchone()
+    assert layer["name"] in row["summary"]
+    # AND IT REACHED THE FILE, not just the projection.
+    import json
+
+    written = json.loads(_file_of(conn, placement).read_text())
+    got = next(x for x in written["layers"] if x["id"] == layer["id"])
+    assert got["policyNumber"] == "GL-99-1234"
+    assert got["auditable"] is True
+    assert got["limitsDetail"] == "$5M each occurrence / $10M aggregate"
+
+
+def test_one_revert_takes_the_whole_policy_back(app_and_org):
+    """ONE UNDO UNIT, and for a program write that means ONE
+    `program_files.revert_file` — file contents are not event_log rows, so the
+    generic batch undo refuses this batch by name and says which verb to use.
+    Nine cell saves would have been nine of these."""
+    import json
+
+    from bookkit.repo import batches as batches_repo
+    from bookkit.services import program_files
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    was = json.loads(_file_of(conn, placement).read_text())
+    before = next(x for x in was["layers"] if x["id"] == layer["id"])
+
+    client.post(_record_url(org, placement, layer), data=_policy())
+    ref = conn.execute(
+        "SELECT ref FROM event_batch ORDER BY rowid DESC LIMIT 1"
+    ).fetchone()["ref"]
+    changed = json.loads(_file_of(conn, placement).read_text())
+    assert next(x for x in changed["layers"] if x["id"] == layer["id"])[
+        "policyNumber"
+    ] == "GL-99-1234"
+
+    program_files.revert_file(conn, batches_repo.get_by_ref(conn, ref))
+
+    now = json.loads(_file_of(conn, placement).read_text())
+    after = next(x for x in now["layers"] if x["id"] == layer["id"])
+    assert after.get("policyNumber") == before.get("policyNumber")
+    assert after.get("auditable") == before.get("auditable")
+    assert after.get("notes") == before.get("notes")
+
+
+def test_a_value_the_model_refuses_leaves_the_FILE_UNTOUCHED(app_and_org):
+    """ALL OR NOTHING, and this is the test that says why the form composes
+    ONE mutation instead of calling two writers in a row.
+
+    `premiumDetail` is the word a ZERO premium prints, so towerkit refuses it
+    on a layer that states $125,000 — a rule this form inherits rather than
+    re-states. It fires on the EIGHTH field. Written one writer at a time, the
+    first seven would already be on disk with the batch rolled back and no
+    snapshot taken: a half-recorded policy, which is the state the batch rule
+    exists to make impossible.
+    """
+
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    before_file = _file_of(conn, placement).read_bytes()
+    before = _batches(conn)
+
+    refused = client.post(
+        _record_url(org, placement, layer),
+        data=_policy(**{"layer.premiumDetail": "net of TRIA"}),
+    )
+
+    assert refused.status_code == 200
+    assert "premiumDetail" in refused.text or "premium" in refused.text
+    assert _batches(conn) == before, "a refused save opened a batch"
+    assert _file_of(conn, placement).read_bytes() == before_file, (
+        "a value refused on the eighth field left the first seven on disk"
+    )
+
+
+def test_a_refused_save_keeps_every_field_that_was_typed(app_and_org):
+    """COMMIT IN PLACE. Nine fields is the most this page asks for at once and
+    losing them to one bad date would be the worst version of the friction the
+    form exists to remove."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    refused = client.post(
+        _record_url(org, placement, layer),
+        data=_policy(period_to="not a date", policy_number="KEEP-ME-1234"),
+    )
+
+    assert refused.status_code == 200
+    assert "KEEP-ME-1234" in refused.text, "the form threw away what was typed"
+    assert "bound at renewal" in refused.text
+    assert "not a date" in refused.text
+
+
+def test_the_refusal_names_which_field(app_and_org):
+    """One message above nine boxes has to say WHICH box, or the reader is
+    comparing what they typed against a refusal that names none of it."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    refused = client.post(
+        _record_url(org, placement, layer), data=_policy(period_to="not a date")
+    )
+
+    assert "to:" in refused.text or "expiry" in refused.text.lower()
+
+
+def test_the_worksheet_offers_the_form_as_its_one_primary_action(app_and_org):
+    """95 buttons on this page share 11 style variants and every one of them is
+    `font-weight: 400`, so nothing was ranked above anything else. This is the
+    only `.btn-primary` in the worksheet's control strip — which fills with
+    the accent rather than going bold (the weight is unchanged; checked in the
+    browser) and is the stronger of the two signals."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    strip = page.split('class="ws-controls"', 1)[1].split("</div>", 1)[0]
+    assert strip.count("btn-primary") == 1, "exactly one primary action"
+    assert "Record policy" in strip
+    assert strip.index("btn-primary") < strip.index("move up"), (
+        "the primary action leads the strip"
+    )

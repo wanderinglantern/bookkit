@@ -1043,6 +1043,40 @@ def update_layer(
     period_from: str | None = None,
     period_to: str | None = None,
 ) -> Diagnostics:
+
+
+    return _mutate(
+        conn,
+        placement_id,
+        layer_mutation(
+            layer_id, name=name, policy_number=policy_number,
+            attach_cents=attach_cents, limit_cents=limit_cents,
+            premium_cents=premium_cents, period_from=period_from,
+            period_to=period_to,
+        ),
+    )
+
+
+def layer_mutation(
+    layer_id: str,
+    *,
+    name: str | None = None,
+    policy_number: str | None = None,
+    attach_cents: int | None = None,
+    limit_cents: int | None = None,
+    premium_cents: int | None = None,
+    period_from: str | None = None,
+    period_to: str | None = None,
+) -> Callable[[Program], None]:
+    """`update_layer`'s change, as a mutation that has not been written yet.
+
+    LIFTED OUT so more than one change can share ONE write_through. A surface
+    that records a whole policy sets four of these fields AND several derived
+    ones, and calling two writers in a row means two loads, two validations
+    and two dumps — with the file left half-updated if the second refuses.
+    Composing the mutations instead keeps the cycle this module is built on:
+    load once, mutate, validate, dump once (CLAUDE.md).
+    """
     from datetime import date as _date
 
     from towerkit.edit import set_field as edit_set_field
@@ -1078,7 +1112,7 @@ def update_layer(
                 raise ValueError(f"policy period ends {end} on or before it starts {start}")
             layer.period = TkPeriod(start=start, end=end)
 
-    return _mutate(conn, placement_id, mutate)
+    return mutate
 
 
 def add_layer(
@@ -2260,8 +2294,34 @@ def set_tower_field(
     one with a bare setattr. The note saying WHICH defaults were written rides
     back as a warning: the caller is now answerable for values they never sent.
     """
-    entry = mcpsurface.resolve(kind, name)
     created: list[str] = []
+    diags = _mutate(
+        conn,
+        placement_id,
+        tower_mutation(kind, name, value, target, index, created),
+    )
+    for note in created:
+        if diags.ok:
+            diags.warn("container-created", note)
+    return diags
+
+
+def tower_mutation(
+    kind: str,
+    name: str,
+    value: Any,
+    target: str | None,
+    index: int | None,
+    created: list[str],
+) -> Callable[[Program], None]:
+    """`set_tower_field`'s change, as a mutation that has not been written yet.
+
+    Lifted for the same reason `layer_mutation` is — see its docstring.
+    `created` is an out-parameter because a materialised container is a
+    WARNING the caller has to attach to the diagnostics AFTER the write
+    succeeds, and the mutation itself has none to attach it to.
+    """
+    entry = mcpsurface.resolve(kind, name)
 
     def mutate(program: Program) -> None:
         entity = _addressed(program, kind, target, index)
@@ -2279,6 +2339,49 @@ def set_tower_field(
             )
             created.append(note)
         mcpsurface.apply(program, entry, target, index, value)
+
+    return mutate
+
+
+def record_layer_policy(
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    *,
+    layer_fields: dict[str, Any],
+    tower_fields: list[tuple[str, str, Any]],
+) -> Diagnostics:
+    """Every fact a policy brings, applied to the file in ONE cycle.
+
+    THE WHOLE POINT IS THAT IT IS ONE WRITE. A policy that has just been issued
+    brings nine facts and they land across two writers — four on the layer
+    itself (`layer_mutation`) and the rest on towerkit's derived surface
+    (`tower_mutation`). Calling those writers one after another would be nine
+    loads, nine validations and nine dumps; worse, a value the MODEL refuses on
+    the seventh would leave the file holding the first six with the batch
+    rolled back and no snapshot taken — a half-recorded policy, which is
+    exactly the state `seed()` and the batch rule exist to make impossible.
+
+    Composed into one mutation, the cycle is the one this module is built on:
+    load once, mutate, validate, canonical dump, re-project. towerkit validates
+    the WHOLE program after every change, so a refusal anywhere leaves the file
+    untouched and the caller with one sentence to show.
+
+    ORDER MATTERS AND IT IS THE CALLER'S. The layer's own fields go first
+    because a derived field can address a container that the layer's own change
+    creates; within each group the caller's order is kept, so a form can put
+    its fields in the order the document reads.
+    """
+    created: list[str] = []
+    mutations: list[Callable[[Program], None]] = []
+    if layer_fields:
+        mutations.append(layer_mutation(layer_id, **layer_fields))
+    for kind, name, value in tower_fields:
+        mutations.append(tower_mutation(kind, name, value, layer_id, None, created))
+
+    def mutate(program: Program) -> None:
+        for step in mutations:
+            step(program)
 
     diags = _mutate(conn, placement_id, mutate)
     for note in created:

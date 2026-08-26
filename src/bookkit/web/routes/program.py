@@ -31,7 +31,13 @@ from fastapi.responses import HTMLResponse
 from ... import db, sync, towerfields
 from ...forms.entities import apply_placement, placement_form
 from ...forms.inline import LAYER_FIELDS, PARTICIPANT_FIELDS, PLACEMENT_FIELDS
-from ...forms.spec import Field, checked_option, initial_text, parse_value
+from ...forms.spec import (
+    Field,
+    FormSpec,
+    checked_option,
+    initial_text,
+    parse_value,
+)
 from ...money import format_cents, format_cents_compact
 from ...repo import placements as placements_repo
 from ...repo import projection, vocab
@@ -1629,6 +1635,196 @@ def layer_insert_form(
         request, ref, placement_id, layer, position,
         line_id=str(layer["applies_to"][0]),
     )
+
+
+# --- recording a policy: nine facts, one act --------------------------------
+
+
+def _policy_field(request: Request, key: str, seam: str) -> Field:
+    """The Field for one slot of the form, from the seam that owns it.
+
+    NEITHER LIST IS RE-DECLARED. A layer field comes out of `LAYER_FIELDS`, a
+    derived one out of towerkit through `towerfields.bookkit_field` — the
+    same two sources the CELLS are built from, so the label a broker reads in
+    this form and the label they read in the cell afterwards cannot differ, and
+    a field towerkit renames turns red in one place rather than rendering an
+    empty box here.
+    """
+    if seam == _POLICY_LAYER:
+        return _layer_field(key)
+    kind, _, name = key.partition(".")
+    return towerfields.bookkit_field(_field_entry(kind, name), key)
+
+
+def _policy_initial(
+    request: Request, placement: Any, layer: dict[str, Any]
+) -> dict[str, str]:
+    """What is already recorded, so the form CORRECTS rather than re-asks.
+
+    NOT a violation of "never pre-fill a figure that comes off a document".
+    That rule refuses a GUESS — a figure this surface computed or assumed.
+    What is here is what the book already holds, and showing it is the
+    difference between a form that completes a record and one that quietly
+    blanks the half somebody already typed. Anything unrecorded arrives
+    visibly EMPTY, which is the other half of the same rule.
+    """
+    out: dict[str, str] = {}
+    for key, seam in _POLICY_FORM:
+        if seam == _POLICY_LAYER:
+            value = layer.get(key)
+            out[key] = initial_text(_layer_field(key), value)
+        else:
+            kind, _, name = key.partition(".")
+            entry = _field_entry(kind, name)
+            out[key] = towerfields.editor_text(
+                entry,
+                _field_value(request, placement.id, kind, name, layer["id"], None),
+            )
+    return out
+
+
+def _policy_form(
+    request: Request, ref: str, placement_id: str, layer: dict[str, Any],
+    text: dict[str, str], error: str | None = None,
+) -> HTMLResponse:
+    """The form itself, in the `.ws-host` the other layer sub-forms use.
+
+    COMMIT IN PLACE: a refusal re-renders this with the message and everything
+    typed still in it. Nine fields is the most this page asks for at once, and
+    losing them to one bad date would be the worst version of the friction
+    this form exists to remove.
+
+    `text` IS ALWAYS TEXT, and it always goes through `submitted=` — never
+    `initial=`. Those are two different contracts and mixing them corrupts the
+    money fields: `FormSpec.initial` holds RAW values and the renderer runs
+    `initial_text` over them, so a premium already formatted as "180,000"
+    arrives at `int()` and raises. The two sources this form pre-fills from
+    both produce TEXT already (`initial_text` for a layer field,
+    `towerfields.editor_text` for a derived one), so one convention — the
+    exact characters that belong in the box — is the only one that can be
+    right for both.
+    """
+    spec = FormSpec(
+        title=f"Record the policy on {layer['name']}",
+        fields=[
+            _policy_field(request, key, seam) for key, seam in _POLICY_FORM
+        ],
+    )
+    return HTMLResponse(
+        render_form(
+            request,
+            spec,
+            f"/accounts/{ref}/program/{placement_id}/layers/{layer['id']}/record",
+            error=error,
+            submitted=dict(text),
+        )
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/record",
+    response_class=HTMLResponse,
+)
+def layer_record_form(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """The nine facts a policy brings, asked for together.
+
+    WRITES NOTHING — the split every form in this app makes."""
+    org = _org(request, ref)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    return _policy_form(
+        request, ref, placement_id, layer,
+        _policy_initial(request, placement, layer),
+    )
+
+
+@router.post(
+    "/accounts/{ref}/program/{placement_id}/layers/{layer_id}/record",
+    response_class=HTMLResponse,
+)
+async def layer_record_save(
+    request: Request, ref: str, placement_id: str, layer_id: str
+) -> HTMLResponse:
+    """Nine fields, TWO seams, ONE undo unit — and one FILE write.
+
+    Two different properties, and it is worth separating them because only one
+    of them is this route's doing (mutation testing, 2026-08-27, said so:
+    breaking the composition left the batch count right and the file wrong).
+
+    THE ONE BATCH IS `program_files.write`'s. It opens exactly one batch around
+    whatever `mutate` does, so any number of writers inside it are already one
+    undo unit. What that buys over nine separate CELL saves is real — nine
+    saves are nine batches and nine presses of `u` to take back one policy —
+    but it is not what composing the mutation is for.
+
+    THE ONE FILE WRITE IS. `sync.record_layer_policy` runs every change inside
+    a single `write_through`, so the file is loaded once, validated once and
+    dumped once. Called one writer at a time instead, a value the MODEL refuses
+    on the eighth field — `premiumDetail` on a layer that states a premium is
+    the real example — leaves the first seven ON DISK with the batch rolled
+    back and no snapshot taken. That is a half-recorded policy, and the file
+    would then disagree with the event log about what happened.
+
+    Everything is parsed BEFORE anything is written for the same reason, one
+    layer up: a bad date is refused without towerkit being asked at all.
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    placement, layer = _owned_layer(request, org, placement_id, layer_id)
+    form = await request.form()
+    typed = {key: str(form.get(key, "")) for key, _ in _POLICY_FORM}
+
+    def refused(message: str) -> HTMLResponse:
+        # WHAT WAS TYPED, not what is stored: a refused save changed nothing
+        # and the reader must not have to retype eight good fields to fix one.
+        return _policy_form(request, ref, placement_id, layer, typed, error=message)
+
+    # --- parse everything first ------------------------------------------
+    layer_changes: dict[str, Any] = {}
+    tower_changes: list[tuple[str, str, Any]] = []
+    for key, seam in _POLICY_FORM:
+        field = _policy_field(request, key, seam)
+        raw = typed[key]
+        try:
+            if seam == _POLICY_LAYER:
+                layer_changes[key] = parse_value(field, raw)
+            else:
+                kind, _, name = key.partition(".")
+                entry = _field_entry(kind, name)
+                text = checked_option(field, raw) if (
+                    field.kind == "select" and raw.strip()
+                ) else raw
+                tower_changes.append((kind, name, towerfields.to_wire(entry, text)))
+        except (ValueError, towerfields.FieldRefused) as exc:
+            # THE FIELD'S OWN LABEL, in front of the sentence. One message
+            # above nine boxes has to say WHICH box, or the reader is left
+            # comparing what they typed against a refusal that names none of
+            # it.
+            return refused(f"{field.label}: {exc}")
+
+    try:
+        program_files.write(
+            conn, placement,
+            tool="program_layer_edit",
+            summary=f"recorded the policy on {layer['name']}",
+            # ONE CYCLE, NOT NINE — see the docstring for which property this
+            # buys and which one `program_files.write` was already giving.
+            mutate=lambda: sync.record_layer_policy(
+                conn, placement.id, layer_id,
+                layer_fields=layer_changes, tower_fields=tower_changes,
+            ),
+            open_batch=_open_batch_web,
+        )
+    except program_files.ProgramWriteRefused as exc:
+        return refused(str(exc))
+    except Exception as exc:  # a refused write is a message, never a 500
+        return refused(str(exc))
+
+    forget_program_reads(request)
+    # THE WHOLE SECTION. Nine fields have moved, three of them figures the
+    # tower and the header print, so nothing smaller is honest.
+    return _panel(request, ref, org, placement_id, selected=layer_id)
 
 
 def _split_form(
@@ -4863,6 +5059,52 @@ _PLACED: dict[str, _Placed] = {
     "program.render.colorBy": _Placed(tag="span"),
     "program.render.soiSchematic": _Placed(tag="span"),
 }
+
+# --- the facts that arrive together ----------------------------------------
+#
+# RECORDING A POLICY IS ONE ACT, AND THE PAGE HAD NO SURFACE FOR IT (Grant,
+# 2026-08-27). Correcting one figure is an inline cell and this book does that
+# well; a policy that has just been issued brings NINE facts at once, and the
+# worksheet offered nine separate cells to click one at a time. Measured on the
+# running app: 17 fields in that pane, 9 of them an em-dash — 53% of the
+# widest column on the page is things nobody has said yet, and the only way to
+# say them was one click each.
+#
+# THIS IS THE ONE EXCEPTION TO "THE PANEL IS THE REPORT, NO SECOND ENTRY FORM",
+# and it is worth saying exactly why it does not generalise. That rule was
+# written about the MARKETING GRID, where the panel genuinely is a report a
+# client receives, and where a second form would be a second way to state a
+# fact the client reads. The layer worksheet is not a report — it is a
+# RECORD, and nobody sends it anywhere. This form does not add a second way to
+# state one fact; it adds the first way to state nine at once. Every one of
+# them still has its cell, and correcting one afterwards still goes through it.
+#
+# THE FIELDS SPAN TWO SEAMS, which is the whole reason the form has to exist
+# rather than being a loop over one list. `policy no`, the two dates and the
+# premium are LAYER_FIELDS and go through `sync.update_layer`; auditable, the
+# three detail lines and the notes are towerkit-derived fields and go through
+# `sync.set_tower_field`. A broker does not know that and must not have to.
+_POLICY_LAYER = "layer"      # writes through sync.update_layer
+_POLICY_TOWER = "tower"      # writes through sync.set_tower_field
+
+
+# IN THE ORDER A POLICY IS READ, not the order the seams fall in. The number
+# and the dates are on the declarations page; the premium is next to them; the
+# rest is what the wording actually says. A form whose order matches the
+# document is a form somebody can fill from the top.
+_POLICY_FORM: tuple[tuple[str, str], ...] = (
+    ("policy_number", _POLICY_LAYER),
+    ("period_from", _POLICY_LAYER),
+    ("period_to", _POLICY_LAYER),
+    ("premium_cents", _POLICY_LAYER),
+    ("layer.auditable", _POLICY_TOWER),
+    ("layer.limitsDetail", _POLICY_TOWER),
+    ("layer.retentionDetail", _POLICY_TOWER),
+    ("layer.premiumDetail", _POLICY_TOWER),
+    ("layer.states", _POLICY_TOWER),
+    ("layer.notes", _POLICY_TOWER),
+)
+
 
 # The order the chart strip prints them in, and the words it prints. Derived
 # labels would give "show totals" / "cell premiums", which say what the JSON

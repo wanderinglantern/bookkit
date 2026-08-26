@@ -36,6 +36,24 @@
   </p>
 
   <div class="ws-controls">
+    {# THE ONE PRIMARY ACTION ON THIS PANE, and the only button here that is
+       not structural. Recording a policy is nine facts arriving together —
+       measured on the running app, 9 of this pane's 17 fields are an em-dash
+       — and until this existed the only way to say them was nine separate
+       cell clicks, which is the friction that reads as "edit boxes
+       everywhere" (Grant, 2026-08-27).
+
+       It goes FIRST and it is the only `.btn-primary` in the strip. Measured
+       on the running app: 95 buttons across 11 style variants, and every one
+       of them `font-weight: 400` — so nothing on the page was ranked above
+       anything else. `.btn-primary` does not change the WEIGHT (checked in the
+       browser, 2026-08-27); it fills the button with the accent and turns the
+       label white, which is the stronger signal of the two and the one this
+       design system already had. #}
+    <button type="button" class="btn btn-primary"
+            hx-get="{{ ws.base }}/record"
+            hx-target="#program-{{ placement.id }} .ws-host"
+            hx-swap="innerHTML">Record policy</button>
     <button type="button" class="btn" hx-post="{{ ws.base }}/move"
             hx-vals='{"direction": "up"}'>move up</button>
     <button type="button" class="btn" hx-post="{{ ws.base }}/move"
