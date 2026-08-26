@@ -178,12 +178,23 @@ def _marketing(
 
     `date.today()` is read here rather than inside the view model, so the one
     module that formats the report keeps its "today is a parameter" rule.
+
+    THE ORDER SURVIVES A FULL PAGE LOAD. `?sort=` is what the marketing
+    section's own header control puts in the URL, and this is the render that
+    happens when a broker refreshes, follows a link back, or opens the tab in a
+    second window. Reading it here is what makes the sort a real view of the
+    page rather than something that only exists between two htmx swaps — and
+    it is the SAME parameter name routes/marketing.py's router dependency
+    reads, because there is one spelling of this.
     """
     from datetime import date as _date
 
     from ..marketing_grid import panel
 
-    return panel(request, conn, placement.id, today=_date.today(), ref=ref)
+    return panel(
+        request, conn, placement.id, today=_date.today(), ref=ref,
+        sort_spec=str(request.query_params.get("sort", "")),
+    )
 
 
 def _last_synced(conn: sqlite3.Connection, placement_id: str) -> dict[str, Any] | None:

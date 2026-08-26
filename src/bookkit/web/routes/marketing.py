@@ -40,7 +40,7 @@ import sqlite3
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ...forms.inline import market_approach_fields, market_response_fields
@@ -58,7 +58,47 @@ from ..app import TEMPLATES
 from ..forms_render import render_cell, render_cell_display
 from .account import _conn, _not_here, _org, _owned
 
-router = APIRouter()
+
+async def _remember_sort(request: Request) -> None:
+    """THE ORDER A READER ASKED FOR, read ONCE for every route in this module.
+
+    A ROUTER-LEVEL DEPENDENCY, not a line in each handler. Twenty call sites
+    in here compose or re-render a panel, and a read written per route is
+    nineteen chances to forget one — and a forgotten one is not a crash, it is
+    a view that silently resets to the composer's default the next time a
+    broker edits a cell. So it is taken before any handler runs and the three
+    answer helpers read it off `request.state`, synchronously, wherever they
+    are called from.
+
+    BOTH HALVES OF THE REQUEST. The section publishes the spec as an inherited
+    `hx-vals`, which htmx sends as a FORM FIELD on a POST and as a QUERY
+    PARAMETER on a GET. Awaiting the form here is free for the handler that
+    also awaits it: Starlette parses once and caches on the request.
+
+    NOT VALIDATED HERE. `marketing_grid.parse_sorts` drops what it cannot read
+    and `panel` re-formats from what it actually APPLIED, so a spec naming a
+    column this grid cannot order simply does not sort — no refusal, and no
+    page left claiming an order it is not in.
+    """
+    spec = str(request.query_params.get("sort", ""))
+    if request.method == "POST":
+        typed = (await request.form()).get("sort")
+        if typed is not None:
+            spec = str(typed)
+    request.state.sort_spec = spec
+
+
+def _sorted_by(request: Request) -> str:
+    """What `_remember_sort` put there. Defaulted rather than assumed: this
+    module's helpers are also called from routes/program.py's first render of
+    the tab, which is a different router and never ran that dependency."""
+    return str(getattr(request.state, "sort_spec", "") or "")
+
+
+# EVERY ROUTE IN THIS MODULE READS THE ORDER, whether it thinks it needs to or
+# not — see `_remember_sort`. The dependency is on the ROUTER so a route added
+# later inherits it without anybody remembering to.
+router = APIRouter(dependencies=[Depends(_remember_sort)])
 
 
 # --- resolution and scope ---------------------------------------------------
@@ -324,7 +364,8 @@ def _row_response(
     """
     conn = _conn(request)
     report = marketing_grid.panel(
-        request, conn, placement_id, today=date.today(), ref=ref
+        request, conn, placement_id, today=date.today(), ref=ref,
+        sort_spec=_sorted_by(request),
     )
     row = next(
         (
@@ -383,6 +424,29 @@ _CELL = "/accounts/{ref}/program/{placement_id}/marketing/responses/{response_id
 #   either raises the warning or takes it away — and the strip that prints it
 #   lives in the block header, above the row.
 _BLOCK_CELLS = frozenset({"premium", "rate_micros", "status", marketing_grid.VIA})
+
+
+def _orders_the_block(request: Request, line_id: str, key: str) -> bool:
+    """Whether this write changes the figure the block is currently SORTED by.
+
+    THE FIFTH BLOCK CELL, AND IT IS NOT A FIXED ONE. The four above answer with
+    the block because of what they move above the rows — the bridge, the
+    clearance strip. A sorted column moves the ROWS THEMSELVES: with the grid
+    ordered by Expires, typing an expiry that belongs three rows up and getting
+    a row-sized answer leaves the row sitting exactly where it was, in a column
+    that now visibly is not in order. The grid would be lying about the one
+    thing the reader asked it to do.
+
+    Keyed on the COLUMN, not the field: `marketing_report.SORT_KEYS` and
+    `marketing_grid.COLUMNS` share their keys, and the editable columns share
+    them with the `market_response` field they write — the one exception being
+    `rate_micros`, whose column is `rate` and which is in `_BLOCK_CELLS`
+    already for the bridge.
+    """
+    column, _ = marketing_grid.parse_sorts(_sorted_by(request)).get(
+        line_id, ("", False)
+    )
+    return bool(column) and column == key
 
 
 @router.get(_CELL, response_class=HTMLResponse)
@@ -462,7 +526,7 @@ async def response_cell_save(
         return _editor_cell(
             request, ref, placement_id, response, key, error=_house(exc), typed=raw
         )
-    if key in _BLOCK_CELLS:
+    if key in _BLOCK_CELLS or _orders_the_block(request, response.line_id, key):
         # The refocus token names THIS ROW, not "cell" — inside a block there
         # are as many `premium` cells as there are markets, and `cell:premium`
         # would put the caret in the first row's.
@@ -710,6 +774,7 @@ def _section(
         error=error, pending=pending, refocus=refocus,
         line_values=line_values, line_add_preserve=not its_own,
         provisional_error=provisional_error, provisional_row=provisional_row,
+        sort_spec=_sorted_by(request),
     )
     html = TEMPLATES.env.get_template("account/_marketing_panel.html").render(
         placement=placement, marketing=context
@@ -748,7 +813,8 @@ def _block_response(
     posted values and the message.
     """
     context = marketing_grid.panel(
-        request, _conn(request), placement_id, today=date.today(), ref=ref
+        request, _conn(request), placement_id, today=date.today(), ref=ref,
+        sort_spec=_sorted_by(request),
     )
     block = next(
         (b for b in context["blocks"] if b["line_id"] == line_id), None
@@ -760,13 +826,161 @@ def _block_response(
     html = str(
         template.make_module({}).block(  # type: ignore[attr-defined]
             block, context["columns"], context["add_fields"], context["add_values"],
-            keep_add_row,
+            keep_add_row, context["id"],
         )
     )
     response = HTMLResponse(html)
     response.headers["HX-Retarget"] = f"#{block['id']}"
     response.headers["HX-Reswap"] = "outerHTML"
     return response
+
+
+# --- a row that records marketing which did not happen ------------------------
+
+
+_REMOVE = (
+    "/accounts/{ref}/program/{placement_id}/marketing/responses/{response_id}/remove"
+)
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/marketing/responses/{response_id}/row",
+    response_class=HTMLResponse,
+)
+def response_row(
+    request: Request, ref: str, placement_id: str, response_id: str
+) -> HTMLResponse:
+    """THE ROW AGAIN, unchanged — what [keep] on the remove confirm fetches.
+
+    A fragment route so backing out of a confirm costs one row rather than a
+    whole section, which is the same reason `_market_confirm.html`'s keep
+    button re-fetches a participation rather than the panel around it."""
+    org, _ = _placement(request, ref, placement_id)
+    _owned_response(_conn(request), org, placement_id, response_id)
+    return _row_response(request, ref, placement_id, response_id)
+
+
+@router.get(_REMOVE, response_class=HTMLResponse)
+def response_remove_confirm(
+    request: Request, ref: str, placement_id: str, response_id: str
+) -> HTMLResponse:
+    """The question, in the row's own place. WRITES NOTHING — only the POST
+    below writes, which is the split every confirm in this app makes."""
+    org, _ = _placement(request, ref, placement_id)
+    conn = _conn(request)
+    response = _owned_response(conn, org, placement_id, response_id)
+    return HTMLResponse(_confirm_html(request, conn, ref, placement_id, response))
+
+
+def _confirm_html(
+    request: Request,
+    conn: sqlite3.Connection,
+    ref: str,
+    placement_id: str,
+    response: MarketResponse,
+    error: str | None = None,
+) -> str:
+    line = lines_repo.get_any(conn, response.line_id)
+    submission = submissions_repo.get(conn, response.submission_id)
+    # WHETHER THE APPROACH IS LEFT WITH NOTHING TO SAY. Counted over the LIVE
+    # rows only, and the answer changes what the confirm tells the reader will
+    # happen — which is the one fact they cannot work out for themselves.
+    siblings = [
+        r
+        for r in marketing_repo.responses_for_submission(conn, response.submission_id)
+        if r.id != response.id
+    ]
+    return TEMPLATES.env.get_template(
+        "account/_response_remove_confirm.html"
+    ).render(
+        response_id=response.id,
+        base=marketing_grid.response_base(ref, placement_id, response.id),
+        who=_who(conn, response),
+        line_name=line.name if line else "this line of coverage",
+        last_on_package=not siblings,
+        sent_on=submission.sent_on,
+        span=len(marketing_grid.COLUMNS) + 1,
+        error=error,
+    )
+
+
+@router.post(_REMOVE, response_class=HTMLResponse)
+def response_remove(
+    request: Request, ref: str, placement_id: str, response_id: str
+) -> HTMLResponse:
+    """Take the row back, in one revertible act.
+
+    IT ANSWERS WITH THE SECTION, and this is the one write in this module where
+    that is the SMALLEST honest unit rather than the largest. Answer with the
+    smallest thing the write can actually change — and a removal can change
+    three things outside the row's own block, each of which was tried and
+    failed as a block-sized answer (all three found by clicking it, 2026-08-26):
+
+      * THE APPROACH MOVES. Take the last answer off a package and the package
+        itself renders in the PROVISIONAL block — "line of coverage not
+        recorded", because it did go out on its day — which is a sibling
+        article the confirm explicitly promises. A block answer left that
+        promise unkept until the reader reloaded.
+      * THE BLOCK CAN VANISH. Remove the only row on a line the placement has
+        no expectations for and the composer stops building that block at all;
+        a block-targeted answer then retargets onto an element that is not
+        there and comes back 404, which reads as nothing having happened.
+      * THE BRIDGE AND THE CLEARANCE STRIP move for the same reasons
+        `_BLOCK_CELLS` exists — the bridge is decomposed from the LEADING
+        quote and the strip counts LIVE approaches.
+    """
+    org, _ = _placement(request, ref, placement_id)
+    conn = _conn(request)
+    response = _owned_response(conn, org, placement_id, response_id)
+    try:
+        with batches_svc.open_batch(
+            conn, source="web", tool="market_response_remove",
+            summary=(
+                f"removed what {_who(conn, response)} said, recorded in error"
+            ),
+            org_id=org.id,
+        ):
+            marketing_repo.remove_response(conn, response_id)
+    except Exception as exc:  # a refused delete is a message, never a 500
+        # THE CONFIRM AGAIN, CARRYING THE REFUSAL. Answering with the row would
+        # put the reader back where they started with no sign anything had
+        # happened — the "a refusal says something" rule, on the one control in
+        # this module whose failure destroys nothing and therefore looks
+        # exactly like success.
+        return HTMLResponse(
+            _confirm_html(request, conn, ref, placement_id, response, _house(exc))
+        )
+    return _section(request, ref, org, placement_id)
+
+
+# --- the order a reader asked for --------------------------------------------
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/marketing/sort",
+    response_class=HTMLResponse,
+)
+def marketing_sort(request: Request, ref: str, placement_id: str) -> HTMLResponse:
+    """Re-render the section in the order a header click asked for.
+
+    A GET, AND IT WRITES NOTHING. Sorting changes what a broker is looking at
+    and nothing about the book — no column, no event log, no batch, nothing to
+    undo — so it is idempotent, safe to repeat, and the URL says what it shows.
+
+    IT ANSWERS WITH THE SECTION, not the block whose header was clicked. The
+    order for every block lives on the section as one inherited `hx-vals`
+    (`marketing_grid.panel`), which is what keeps a sort alive through a Sent
+    cell — and a block-sized answer could not update the element that carries
+    it. The cost is a re-compose of the other blocks, which is what the Sent
+    cell already pays and is a deliberate click rather than a keystroke.
+
+    NOTHING IS VALIDATED HERE and nothing is refused: `parse_sorts` drops a
+    column this grid cannot order and `panel` re-formats from what it applied,
+    so the worst a hand-typed URL can do is render the grid in its own default
+    order while saying so.
+    """
+    org, _ = _placement(request, ref, placement_id)
+    return _section(request, ref, org, placement_id)
 
 
 # --- giving a package the line of coverage nobody recorded -------------------

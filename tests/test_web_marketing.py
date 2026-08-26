@@ -3015,3 +3015,360 @@ def test_a_pinned_column_is_one_of_the_leftmost(client_and_org):
     )
     # And the header cells say so, off the same declaration the body cells use.
     assert pinned[0].th_class == "pin pin-1"
+
+
+# --- the order a reader asked for ------------------------------------------
+
+
+def _sorted_html(client, org, placement, spec: str) -> str:
+    got = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/marketing/sort?sort={spec}"
+    )
+    assert got.status_code == 200
+    return got.text
+
+
+def _market_order(html: str, block_id: str) -> list[str]:
+    """The Market cells of one block, top to bottom, off the rendered HTML.
+
+    The FIRST `<td>` of each `marketing-row`: the Market column is printed
+    rather than editable (`Column.field is None`), so it carries no
+    `data-field` to match on — which is itself the thing that makes the read
+    unambiguous."""
+    block = html.split(f'id="{block_id}"', 1)[1].split("</article>", 1)[0]
+    body = block.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    out = []
+    for row in body.split('<tr id="mrow-')[1:]:
+        cell = re.search(r"<td[^>]*>(.*?)</td>", row, re.S)
+        if cell:
+            out.append(re.sub(r"<[^>]+>", "", cell.group(1)).strip())
+    return out
+
+
+def _gl_block(placement) -> str:
+    from bookkit.web.marketing_grid import block_id
+
+    return block_id(placement.id, GL)
+
+
+def _priced(client_and_org):
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    for name, premium in (("Zurich", 30_000_00), ("Chubb", 10_000_00), ("Berkley", 20_000_00)):
+        _approach(conn, placement.id, _market(conn, name), status="quoted",
+                  premium=premium)
+    return client, org, placement
+
+
+def test_the_grid_reads_live_first_until_somebody_asks_otherwise(client_and_org):
+    """THE DEFAULT IS A REAL ORDER WITH A REASON — live options first, then
+    cheapest — and it is what the client's workbook prints."""
+    client, org, placement = _priced(client_and_org)
+
+    order = _market_order(_tab(client, org), _gl_block(placement))
+
+    assert order == ["Chubb", "Berkley", "Zurich"], "cheapest quote leads"
+
+
+def test_a_header_click_orders_the_block(client_and_org):
+    client, org, placement = _priced(client_and_org)
+
+    html = _sorted_html(client, org, placement, f"{GL}:premium:desc")
+
+    assert _market_order(html, _gl_block(placement)) == ["Zurich", "Berkley", "Chubb"]
+
+
+def test_an_unknown_figure_is_last_in_both_directions(client_and_org):
+    """NULL IS "NOBODY HAS TOLD US" — neither the smallest premium nor the
+    largest. A plain `reverse=True` would flip it from the bottom of the
+    ascending sort to the TOP of the descending one, putting the rows carrying
+    no answer above every quote in hand."""
+    client, org, placement = _priced(client_and_org)
+    conn = client.app.state.conn
+    _approach(conn, placement.id, _market(conn, "Hartford"), status="pending")
+
+    for direction in ("asc", "desc"):
+        order = _market_order(
+            _sorted_html(client, org, placement, f"{GL}:premium:{direction}"),
+            _gl_block(placement),
+        )
+        assert order[-1] == "Hartford", f"the unpriced row must sit last, {direction}"
+
+
+def test_sorting_by_status_uses_the_reports_own_rank(client_and_org):
+    """NEVER ALPHABETICAL. A-Z puts "Bound" above "Quoted" by accident and
+    "Non-response" above "Pending" against every reading of the word; what a
+    broker means by sorting on status is live first, closed last."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    for name, status in (
+        ("Zurich", "declined"), ("Chubb", "bound"), ("Berkley", "pending")
+    ):
+        _approach(conn, placement.id, _market(conn, name), status=status)
+
+    order = _market_order(
+        _sorted_html(client, org, placement, f"{GL}:status:asc"), _gl_block(placement)
+    )
+
+    assert order == ["Chubb", "Berkley", "Zurich"]
+
+
+def test_a_third_click_puts_the_default_back(client_and_org):
+    """THE WAY BACK, not a fourth state. A reader who sorted to answer one
+    question has to be able to restore the order the workbook prints without
+    reloading the page."""
+    from bookkit.web.marketing_grid import cycled, format_sorts
+
+    assert format_sorts(cycled({}, GL, "premium")) == f"{GL}:premium:asc"
+    assert format_sorts(cycled({GL: ("premium", False)}, GL, "premium")) == (
+        f"{GL}:premium:desc"
+    )
+    assert format_sorts(cycled({GL: ("premium", True)}, GL, "premium")) == ""
+
+
+def test_a_sort_survives_a_cell_save(client_and_org):
+    """THE ONE THAT MATTERED. Four cells answer with the whole block and the
+    Sent cell answers with the whole SECTION, so a sort held anywhere but on
+    the section is thrown away by a write in a different block — a view
+    silently resetting, which reads as broken."""
+    client, org, placement = _priced(client_and_org)
+    conn = client.app.state.conn
+    from bookkit.repo import marketing as mrepo
+
+    rows = [r for r in mrepo.responses_for_placement(conn, placement.id)
+            if r.line_id == GL]
+
+    # `status` is a block cell for its OWN reasons (it moves the clearance
+    # strip and decides which row leads the bridge) and is NOT the column the
+    # grid is sorted by — so what this measures is the sort surviving somebody
+    # else's write, and not the re-order rule one test down.
+    saved = client.post(
+        _cell_url(org, placement, rows[0], "status"),
+        data={"status": "indicated", "sort": f"{GL}:premium:desc"},
+    )
+
+    assert saved.status_code == 200
+    assert _market_order(saved.text, _gl_block(placement)) == [
+        "Zurich", "Berkley", "Chubb"
+    ], "the block came back in the composer's default order, losing the sort"
+
+
+def test_editing_the_sorted_column_re_orders_the_block(client_and_org):
+    """THE FIFTH BLOCK CELL, AND IT IS NOT A FIXED ONE. With the grid ordered by
+    premium, typing a premium that belongs three rows up and getting a
+    row-sized answer leaves the row where it was, in a column that visibly is
+    not in order — the grid lying about the one thing it was asked to do."""
+    client, org, placement = _priced(client_and_org)
+    conn = client.app.state.conn
+    from bookkit.repo import marketing as mrepo
+
+    rows = [r for r in mrepo.responses_for_placement(conn, placement.id)
+            if r.line_id == GL]
+    cheapest = min(rows, key=lambda r: r.premium or 0)
+
+    saved = client.post(
+        _cell_url(org, placement, cheapest, "responded_on"),
+        data={"responded_on": "2026-08-10", "sort": f"{GL}:responded_on:desc"},
+    )
+
+    assert saved.status_code == 200
+    assert saved.headers["HX-Retarget"] == f"#{_gl_block(placement)}", (
+        "a save to the column the block is SORTED by must answer with the block"
+    )
+
+
+def test_a_sort_naming_a_column_the_grid_cannot_order_is_dropped(client_and_org):
+    """REACHABLE FROM A URL, so anything can send anything. The parser drops
+    what it cannot read and the panel re-formats from what it APPLIED, so the
+    worst a hand-typed spec does is render the default order while saying so."""
+    client, org, placement = _priced(client_and_org)
+
+    html = _sorted_html(client, org, placement, f"{GL}:rate_move:asc")
+
+    assert _market_order(html, _gl_block(placement)) == ["Chubb", "Berkley", "Zurich"]
+    assert "rate_move:asc" not in html, "the page claimed an order it is not in"
+
+
+def test_a_sortable_header_says_so_to_a_screen_reader(client_and_org):
+    client, org, placement = _priced(client_and_org)
+
+    plain = _tab(client, org)
+    sorted_html = _sorted_html(client, org, placement, f"{GL}:premium:desc")
+
+    assert 'aria-sort="none"' in plain, "a sortable-but-unsorted column says none"
+    assert 'aria-sort="descending"' in sorted_html
+    # The prose columns the composer cannot order carry no aria-sort at all —
+    # "cannot be sorted" and "is not sorted" are two different claims.
+    assert plain.count("col-sort") > 0
+
+
+# --- a row recorded in error ------------------------------------------------
+
+
+def test_removing_a_row_asks_first_and_writes_nothing(client_and_org):
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    response = _approach(conn, placement.id, _market(conn, "Zurich"))
+    before = _events(conn, response.id)
+
+    got = client.get(_cell_url(org, placement, response, "x").rsplit("/cell/", 1)[0]
+                     + "/remove")
+
+    assert got.status_code == 200
+    assert "remove" in got.text.lower()
+    assert _events(conn, response.id) == before, "the confirm wrote something"
+
+
+def test_removing_a_row_takes_it_off_the_grid(client_and_org):
+    """The ordinary case: the package carries another answer, so the approach
+    survives and only this line's grid loses a row."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    from bookkit.repo import marketing as mrepo
+
+    gone = _approach(conn, placement.id, _market(conn, "Zurich"))
+    # A SECOND ANSWER ON THE SAME PACKAGE — a market is approached once with a
+    # whole submission and answers line by line, which is the ordinary shape.
+    kept = mrepo.create_response(
+        conn, gone.submission_id, AUTO, market_org_id=gone.market_org_id
+    )
+    base = _cell_url(org, placement, gone, "x").rsplit("/cell/", 1)[0]
+
+    done = client.post(base + "/remove")
+
+    assert done.status_code == 200
+    assert done.headers["HX-Retarget"] == f"#marketing-{placement.id}"
+    live = [r.id for r in mrepo.responses_for_placement(conn, placement.id)]
+    assert live == [kept.id]
+    # AND THE BLOCK IS GONE WITH IT, because that line of coverage now has
+    # nothing recorded against it and no expectation row either — the
+    # composer's own rule, and the second reason a removal cannot answer with
+    # a block: there would be no block to answer with.
+    assert _gl_block(placement) not in done.text
+    # Zurich itself is still on the page, correctly: the same package answered
+    # on Auto and that row was not touched. What is gone is the GL answer.
+    from bookkit.web.marketing_grid import block_id
+
+    assert block_id(placement.id, AUTO) in done.text
+
+
+def test_removing_the_last_answer_shows_the_approach_where_it_lands(client_and_org):
+    """THE ANSWER KEEPS THE PROMISE THE CONFIRM MADE. The approach moves into
+    the provisional block — a SIBLING of the one whose row just went — so a
+    block-sized answer left the reader looking at a row that had gone and a
+    promise that had not been kept until they reloaded."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    only = _approach(conn, placement.id, _market(conn, "Hanover"))
+    base = _cell_url(org, placement, only, "x").rsplit("/cell/", 1)[0]
+
+    done = client.post(base + "/remove")
+
+    assert done.status_code == 200
+    assert done.headers["HX-Retarget"] == f"#marketing-{placement.id}", (
+        "the approach moved to a different block, so the section is the answer"
+    )
+    assert "Line of coverage not recorded" in done.text
+    assert "Hanover" in done.text.split("marketing-provisional", 1)[1]
+
+
+def test_the_confirm_says_what_becomes_of_the_approach(client_and_org):
+    """THE ONE FACT A BROKER CANNOT WORK OUT FOR THEMSELVES. Removing the last
+    answer leaves the package under "line of coverage not recorded" — it did
+    go out — and a control whose consequence is only discoverable by undoing it
+    is one nobody trusts."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    only = _approach(conn, placement.id, _market(conn, "Zurich"))
+    base = _cell_url(org, placement, only, "x").rsplit("/cell/", 1)[0]
+
+    got = client.get(base + "/remove")
+
+    assert "only answer recorded against that approach" in got.text
+
+
+def test_the_confirm_stands_in_for_the_row_it_replaced(client_and_org):
+    """IT CARRIES THE ROW'S OWN id. Every row-sized answer in this module says
+    `HX-Retarget: #mrow-<id>`, so a confirm without that id leaves [keep]
+    fetching a row that lands nowhere — the question just sits there looking
+    ignored (found by clicking it in a browser, 2026-08-26)."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    response = _approach(conn, placement.id, _market(conn, "Zurich"))
+    base = _cell_url(org, placement, response, "x").rsplit("/cell/", 1)[0]
+
+    confirm = client.get(base + "/remove")
+
+    assert f'id="mrow-{response.id}"' in confirm.text
+
+
+def test_keeping_a_row_costs_one_row(client_and_org):
+    """Backing out of the confirm re-fetches the ROW, not the section — the
+    same reason a participation's [keep] does."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    response = _approach(conn, placement.id, _market(conn, "Zurich"))
+    base = _cell_url(org, placement, response, "x").rsplit("/cell/", 1)[0]
+
+    got = client.get(base + "/row")
+
+    assert got.status_code == 200
+    assert got.headers["HX-Retarget"] == f"#mrow-{response.id}"
+
+
+def test_a_sorted_header_offers_the_NEXT_order_not_the_one_it_is_in(client_and_org):
+    """THE SECOND CLICK. The section publishes the CURRENT order as an
+    inherited `hx-vals` so every write round-trips the sort, and htmx builds a
+    GET's query string from that inherited value — which silently overwrote a
+    `?sort=` the button had put in its own URL. Premium sorted ascending and
+    then never moved again, however many times it was clicked (found in a
+    browser, 2026-08-26).
+
+    So the next order rides in the BUTTON's own `hx-vals`, which overrides an
+    ancestor's for the same key, and the button's URL carries no `sort` at all
+    — the two would be the same collision wearing a different hat.
+    """
+    client, org, placement = _priced(client_and_org)
+
+    html = _sorted_html(client, org, placement, f"{GL}:premium:asc")
+
+    block = html.split(f'id="{_gl_block(placement)}"', 1)[1].split("</thead>", 1)[0]
+    button = next(
+        b for b in block.split("<button")[1:] if ">Premium" in b.split("</button>")[0]
+    )
+    # UNESCAPED, because Jinja escapes the quotes inside the attribute and the
+    # browser hands htmx the decoded value back — reading the raw source here
+    # would be testing the escaping rather than the contract.
+    from html import unescape
+
+    assert f'{{"sort": "{GL}:premium:desc"}}' in unescape(button), (
+        "an ascending column must offer descending, not the order it is in"
+    )
+    url = re.search(r'hx-get="([^"]*)"', button).group(1)
+    assert "sort=" not in url, (
+        "a `sort` in the button's URL is shadowed by the section's inherited "
+        "hx-vals — the collision this test exists for"
+    )
+
+
+def test_the_section_publishes_the_order_it_is_actually_in(client_and_org):
+    """The other side of the same contract: the SECTION says where the grid IS
+    (so a cell save carries it) and the HEADER says where it is going."""
+    client, org, placement = _priced(client_and_org)
+
+    plain = _tab(client, org)
+    sorted_html = _sorted_html(client, org, placement, f"{GL}:premium:desc")
+
+    assert "hx-vals" not in plain.split('<section class="marketing"')[1][:400], (
+        "an unsorted section must not publish an order at all"
+    )
+    section = sorted_html.split('<section class="marketing"', 1)[1][:400]
+    assert f'{GL}:premium:desc' in section

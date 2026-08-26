@@ -814,6 +814,22 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         )
 
     @server.tool()
+    async def market_response_remove(response_ref: str) -> dict[str, Any]:
+        """Take back a marketing row that records something which did not
+        happen. `response_ref` MUST be an exact id from marketing_report's
+        `responses` list — this tool never fuzzy-matches. Use it ONLY for a row
+        recorded in error: a market that looked and said no is `status`
+        'declined' through market_responded, one we ruled out on price is
+        'not_viable', and a package we pulled is submission_withdraw — each of
+        those is a fact worth keeping and this erases the row instead. The
+        delete is soft and revertible from the change list, the submission is
+        NOT removed with it (the approach still went out on its day, and shows
+        under 'line of coverage not recorded' if this was its last answer), and
+        the package's status, premium, limit, reply date and expiry are rolled
+        up again from the rows that are left."""
+        return _market_response_remove(rw, response_ref)
+
+    @server.tool()
     async def market_assign_line(submission_ref: str, line: str) -> dict[str, Any]:
         """Say which line of coverage a package's answer is about, for a
         submission that has none recorded. `submission_ref` MUST be an exact id
@@ -3083,6 +3099,67 @@ def _resolve_response(conn: sqlite3.Connection, response_ref: str) -> Any:
             f"no market response {response_ref!r} — read marketing_report for "
             f"that placement and use an id from its `responses` list"
         ) from None
+
+
+def _market_response_remove(
+    conn: sqlite3.Connection, response_ref: str
+) -> dict[str, Any]:
+    """A ROW RECORDED IN ERROR, taken back — the MCP half of the web's remove.
+
+    A MISSING VERB IS NOT A REFUSAL, IT IS A WRONG WRITE (CLAUDE.md). Without
+    this an assistant asked to undo a mis-recorded approach reaches for the
+    nearest door it has, and the nearest door here is `market_responded` — so
+    the row would be re-labelled `declined`, crediting a carrier with a
+    refusal it never made, on a client-facing document. The tool that can NAME
+    a market response needs one that can unmake it.
+
+    Nothing is decided here: `repo.marketing.remove_response` owns the soft
+    delete and the roll-up, exactly as it does for the browser.
+    """
+    from .repo import lines as lines_repo
+    from .repo import marketing, orgs, placements
+    from .repo import submissions as submissions_repo
+
+    response = _resolve_response(conn, response_ref)
+    submission = submissions_repo.get(conn, response.submission_id)
+    org_id = (
+        placements.get(conn, submission.placement_id).org_id
+        if submission.placement_id
+        else None
+    )
+    coverage = lines_repo.get_any(conn, response.line_id)
+    who = orgs.names_for_any(
+        conn, {response.market_org_id or "", response.via_org_id or ""} - {""}
+    )
+    market_name = who.get(response.market_org_id or "") or who.get(
+        response.via_org_id or "", "a market"
+    )
+    with _open_batch(
+        conn,
+        tool="market_response_remove",
+        org_id=org_id,
+        summary=(
+            f"removed what {market_name} said about "
+            f"{coverage.name if coverage else response.line_id}, recorded in error"
+        ),
+    ) as batch:
+        marketing.remove_response(conn, response.id)
+
+    rolled = submissions_repo.get(conn, response.submission_id)
+    remaining = marketing.responses_for_submission(conn, response.submission_id)
+    return {
+        "removed": response.id,
+        "market": market_name,
+        "line": coverage.name if coverage else response.line_id,
+        "submission_id": rolled.id,
+        "submission_status": str(
+            rolled.status.value if hasattr(rolled.status, "value") else rolled.status
+        ),
+        # WHETHER THE APPROACH IS LEFT WITH NOTHING TO SAY, so the assistant can
+        # tell the user what became of it rather than discovering it later.
+        "answers_left_on_the_approach": len(remaining),
+        "batch": batch.ref,
+    }
 
 
 def _rate_micros(field: str, value: str | None) -> int | None:

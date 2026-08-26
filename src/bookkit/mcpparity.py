@@ -332,6 +332,31 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "the report\'s own \'Line of coverage not recorded\' block, and "
         "market_assign_line takes their ids.",
     ),
+    ("market_response", "delete"): (
+        ("market_response_remove",),
+        "A ROW RECORDED IN ERROR, and ONLY that. Every other way a market "
+        "leaves the running is a FACT worth keeping — 'declined' is what they "
+        "said, 'not_viable' is what we decided about their minimum premium, "
+        "and a package we pulled is submission_withdraw — so this erases a "
+        "row that records marketing which did not happen, and the tool's own "
+        "description says which verb each of the others is. It exists because "
+        "the browser gained the same control and a tool that can NAME a "
+        "response needs one that can unmake it: without it an assistant asked "
+        "to undo a mis-recorded approach reaches for market_responded and "
+        "re-labels the row 'declined', crediting a carrier with a refusal it "
+        "never made on a client-facing document (CLAUDE.md: a missing verb is "
+        "not a refusal, it is a wrong write). Soft and revertible; the "
+        "SUBMISSION is not removed with it, because the approach did go out. "
+        "THIS SUPERSEDES A DEFERRAL, and the deferral was not wrong about what "
+        "it was looking at: 'a market we approached and then removed is "
+        "history being rewritten; the honest record is a status'. That holds "
+        "for every market this book actually went to, and the tool refuses "
+        "nothing but says so in its own description. What it did not cover is "
+        "a row that records an approach WHICH NEVER HAPPENED — a mistyped "
+        "carrier, a duplicate, an answer filed against the wrong placement — "
+        "and there is no status for that, because a status is a claim about "
+        "marketing and no marketing occurred (Grant, 2026-08-26).",
+    ),
     ("market_response", "update"): (
         ("market_responded",),
         "status, date, rate, premium, fees and both decline reasons in one "
@@ -522,11 +547,6 @@ DEFERRED: dict[tuple[str, str], str] = {
         "opportunity and response pointing at it. The honest verb is MERGE, "
         "which moves the references first and is not undoable in one press — "
         "not something a tool should do in one call."
-    ),
-    ("market_response", "delete"): (
-        "DECISION. A market we approached and then removed is history being "
-        "rewritten; the honest record is a status, and `non_response` and "
-        "`withdrawn` already say what happened."
     ),
     ("placement_line", "delete"): (
         "DECISION. Removing a line's expectations silently drops the "

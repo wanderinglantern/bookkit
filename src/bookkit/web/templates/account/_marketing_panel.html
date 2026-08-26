@@ -23,7 +23,18 @@
    answers with the whole section and the cell the caret was in is gone.
    inline-cell.js resolves "<response_id>:<field>" against `data-layer-row`,
    the same token a layer cell save uses when the program section comes back. #}
-<section class="marketing" id="{{ marketing.id }}"{% if marketing.refocus %} data-refocus="{{ marketing.refocus }}"{% endif %}>
+{# `hx-vals` CARRIES THE ORDER TO EVERY REQUEST MADE FROM INSIDE THIS SECTION.
+   htmx inherits it down the tree, so a cell save, an added market, a
+   "no charges" and — the one that mattered — a Sent cell, which answers with
+   this whole section, all round-trip the sort rather than silently dropping
+   the reader back into the composer's default order. It is only rendered when
+   something IS sorted: an empty `sort` on every ordinary request is a
+   parameter nobody needs to read.
+
+   `marketing_grid.panel` re-formats it from what it actually APPLIED, never
+   from what arrived, so this attribute cannot claim an order the grid is not
+   in. #}
+<section class="marketing" id="{{ marketing.id }}"{% if marketing.sort %} hx-vals='{"sort": "{{ marketing.sort }}"}'{% endif %}{% if marketing.refocus %} data-refocus="{{ marketing.refocus }}"{% endif %}>
   <header class="marketing-head">
     <h3 class="marketing-title">Marketing</h3>
     <span class="marketing-caption">What each market has said, by line of
@@ -138,7 +149,7 @@
 
   {% if marketing.blocks or marketing.provisional %}
     {% for b in marketing.blocks %}
-      {{ marketing_block(b, marketing.columns, marketing.add_fields, marketing.add_values) }}
+      {{ marketing_block(b, marketing.columns, marketing.add_fields, marketing.add_values, True, marketing.id) }}
     {% endfor %}
     {# LAST, BELOW THE LINES OF COVERAGE. These are the packages nobody has
        finished recording, and leading the section with the least certain rows

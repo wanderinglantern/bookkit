@@ -735,6 +735,59 @@ def test_g3c_the_database_accepts_exactly_the_declared_statuses(conn) -> None:
     )
 
 
+def test_g3d_a_column_the_grid_offers_to_sort_can_actually_be_sorted() -> None:
+    """G3d — the sort control and the sort itself are one declaration.
+
+    WHERE THIS GATE LOOKS: `marketing_report.SORT_KEYS` against
+    `marketing_grid.COLUMNS`. A key for a column the grid does not have is a
+    rule nothing can reach; a header offering an order the composer cannot
+    produce is a control whose own route then quietly does nothing — and the
+    grid would re-render saying it is unsorted, which reads as a broken button
+    rather than as a refusal.
+
+    AND THE SEPARATORS. The spec travels as `<line_id>:<column>:<direction>`
+    in a URL, and a line of coverage is NAMED BY A USER — its id is derived
+    from that name, so a colon or a comma reaching one would silently split a
+    spec into pieces that parse as something else. Checked here rather than
+    trusted, against the ids the seeded book actually carries.
+    """
+    from bookkit.web import marketing_grid
+
+    keys = {c.key for c in marketing_grid.COLUMNS}
+    failures = [
+        f"marketing_report.SORT_KEYS names {key!r}, which is not a column of "
+        f"marketing_grid.COLUMNS — nothing can ask for that order"
+        for key in sorted(marketing_report.SORT_KEYS)
+        if key not in keys
+    ]
+    failures += [
+        f"column {c.key!r} says it is sortable and marketing_report.SORT_KEYS "
+        f"has no key for it"
+        for c in marketing_grid.COLUMNS
+        if c.sortable and c.key not in marketing_report.SORT_KEYS
+    ]
+    _named(failures, "the sort control and the sort itself disagree:")
+
+
+def test_g3e_a_line_of_coverage_id_cannot_break_the_sort_spec(conn) -> None:
+    """The other half of G3d: the id a user's own words produce stays safe in
+    the wire format. `repo.lines` slugs a typed name, and this is the assertion
+    that the slug can never contain a separator — the failure would be a spec
+    silently parsing as a different column on a different line."""
+    from bookkit.repo import lines as lines_repo
+
+    made = lines_repo.create(conn, "Excess: Liability, Umbrella")
+    _named(
+        [
+            f"line id {made!r} contains a sort-spec separator — a typed "
+            f"name reached the wire format"
+            for sep in (":", ",")
+            if sep in made
+        ],
+        "a line of coverage id can break the sort spec:",
+    )
+
+
 def _client_headers() -> tuple[str, ...]:
     return tuple(h for h, _, _ in marketing_report.columns(marketing_report.CLIENT))
 
