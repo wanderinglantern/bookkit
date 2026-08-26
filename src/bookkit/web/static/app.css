@@ -2284,9 +2284,23 @@ table.rows tr.is-waived td {
 
 .market-add-form {
   display: inline-flex;
+  /* IT WRAPS, and without this it was the one thing on the worksheet that
+     could not give way: an `inline-flex` row of two inputs and a button has a
+     min-content width of its widest line, so at 487px it pushed the whole
+     facts column past its container and the layer's policy row scrolled
+     sideways under it. Found by measuring at a 1280px window while widening
+     the tower (2026-08-27) — the widening did not cause it, it only made the
+     worksheet narrow enough to meet it a step sooner. */
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 0.35rem;
   margin: 0;
+}
+
+/* A FLOOR SO THE BOXES STAY TYPEABLE once the row wraps: a two-character
+   input is worse than a wrapped one. */
+.market-add-form input {
+  min-width: 6rem;
 }
 
 .market-add-form input {
@@ -4350,15 +4364,40 @@ tr:hover .market .chip-remove {
 }
 
 .worksheet {
-  flex: 1;
-  min-width: 0; /* without it a long carrier name pushes the rail off-screen */
+  flex: 1 1 auto;
+  /* A FLOOR, NOT ZERO. It was `min-width: 0` to stop a long carrier name
+     pushing the rail off-screen, and that was right while the rail was 14.5rem
+     — but widening the rail to 22rem turned the same rule into the opposite
+     failure: at a 1280px window the worksheet was squeezed to 360px and its
+     facts row, its participation table and two fact blocks all overflowed
+     (measured, 2026-08-27). The floor is what the participation table's four
+     columns and the policy row actually need; below it the rail gives way
+     first, because a diagram that is 2rem narrower still reads and a table
+     with its columns crushed does not. */
+  min-width: 32rem;
   padding: 1rem 1.25rem 1.25rem;
   overflow-y: auto;
 }
 
 .program-rail {
-  flex: none;
-  width: 14.5rem;
+  /* THE TOWER IS THE FASTEST READ ON THIS PAGE AND IT WAS THE SMALLEST THING
+     ON IT. Measured at a 1600px window (2026-08-27): the workbench is 1296px,
+     of which the diagram got 204 — 13% — while the worksheet took 800 and
+     rendered 9 of its 17 fields as an em-dash. It is the only element here
+     that answers "what does this client actually have" without reading a
+     figure, so it was the one paying for a form that was half empty.
+
+     22rem is ~27% of the workbench and leaves the worksheet ~650px, which its
+     widest content (the participation table's four columns) still fits — the
+     width was checked against the rendered page rather than chosen, because
+     the failure mode of guessing here is a carrier name wrapping to two lines
+     on every row. */
+  /* SHRINKABLE, not fixed. `flex: 0 1 22rem` asks for 22rem and gives it back
+     when the worksheet's floor needs it, which is what keeps a 1280px window
+     working; a fixed width took 36% there and crushed the table. */
+  flex: 0 1 22rem;
+  width: 22rem;
+  min-width: 14.5rem;
   border-left: 1px solid var(--hairline);
   background: var(--wash);
   padding: 0.9rem 0.85rem;
