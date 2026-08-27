@@ -342,7 +342,10 @@ def test_merge_confirm_names_the_alias_rule_and_writes_nothing(client: TestClien
     source = _market(client, "AIG")
     target = _market(client, "Chubb")
     confirm = client.get(
-        f"/markets/{source.ref}/merge/confirm", params={"target": target.id}
+        f"/markets/{source.ref}/merge/confirm",
+        # `survivor=other` is the direction this page used to assume: the
+        # market you are looking at dies. It is asked now (`_merge_pair`).
+        params={"target": target.id, "survivor": "other"},
     )
     assert confirm.status_code == 200
     assert "becomes an alias" in confirm.text
@@ -361,7 +364,7 @@ def test_merge_moves_everything_and_preserves_the_name_as_an_alias(client: TestC
 
     done = client.post(
         f"/markets/{source.ref}/merge/confirm",
-        params={"target": target.id},
+        params={"target": target.id, "survivor": "other"},
         follow_redirects=False,
     )
     assert done.status_code == 303
@@ -384,11 +387,80 @@ def test_merge_refuses_a_forged_target_in_place(client: TestClient):
     conn = _conn(client)
     source = _market(client, "Travelers")
     refused = client.post(
-        f"/markets/{source.ref}/merge/confirm", params={"target": source.id}
+        f"/markets/{source.ref}/merge/confirm",
+        params={"target": source.id, "survivor": "other"},
     )
     assert refused.status_code == 200
-    assert "pick which market" in refused.text
+    assert "pick the other market" in refused.text
     assert orgs_repo.find(conn, source.ref) is not None  # nothing written
+
+
+def test_merge_refuses_a_direction_nobody_chose(client: TestClient):
+    """WHICH WAY ROUND IS ASKED, NEVER ASSUMED. This page's market used to die
+    by construction, so the older record survived whichever one you happened to
+    open — and the button that gets here reads "Merge duplicate…", promising
+    the opposite (Grant, 2026-08-27: "there is a prompt to merge AIG into AIG
+    Environmental but technically I need it the other way around").
+
+    Rank it by what the WRITE does: this soft-deletes an org, moves every
+    contact, submission and alias off it, and turns its NAME into an alias of
+    the other. There is no default to fall back on."""
+    conn = _conn(client)
+    source = _market(client, "AIG")
+    target = _market(client, "Chubb")
+
+    refused = client.post(
+        f"/markets/{source.ref}/merge/confirm", params={"target": target.id}
+    )
+
+    assert refused.status_code == 200
+    assert "which of the two survives" in refused.text
+    assert orgs_repo.find(conn, source.ref) is not None
+    assert orgs_repo.find(conn, target.ref) is not None
+
+
+def test_merge_can_keep_the_market_whose_page_you_are_on(client: TestClient):
+    """Grant's case exactly: the older record (AIG Environmental) was set up
+    first, the real one (AIG) came later, and the merge has to run the other
+    way. Reached from EITHER page now, and the confirm names both by name."""
+    conn = _conn(client)
+    keeper = _market(client, "AIG")
+    doomed = _market(client, "Chubb")
+
+    confirm = client.get(
+        f"/markets/{keeper.ref}/merge/confirm",
+        params={"target": doomed.id, "survivor": "this"},
+    )
+    assert confirm.status_code == 200
+    assert f"Merge <strong>{doomed.name}</strong> into <strong>{keeper.name}</strong>" in (
+        confirm.text
+    )
+    # THE COUNTS ARE THE LOSER'S — they say what MOVES, and reading them off
+    # this page's own market would describe the other merge entirely. Asserted
+    # on a pair whose counts DIFFER, or the check passes either way round.
+    contacts_repo.create(
+        conn, org_id=doomed.id, first_name="Second", last_name="Underwriter"
+    )
+    confirm = client.get(
+        f"/markets/{keeper.ref}/merge/confirm",
+        params={"target": doomed.id, "survivor": "this"},
+    )
+    mine = len(contacts_repo.for_org(conn, keeper.id))
+    theirs = len(contacts_repo.for_org(conn, doomed.id))
+    assert mine != theirs, "the fixture cannot tell the two directions apart"
+    assert f"{theirs} contact(s)" in confirm.text
+    assert f"{mine} contact(s)" not in confirm.text
+
+    done = client.post(
+        f"/markets/{keeper.ref}/merge/confirm",
+        params={"target": doomed.id, "survivor": "this"},
+        follow_redirects=False,
+    )
+    assert done.status_code == 303
+    assert done.headers["location"] == f"/markets/{keeper.ref}"
+    assert orgs_repo.find(conn, doomed.ref) is None
+    assert orgs_repo.find(conn, keeper.ref) is not None
+    assert doomed.name in aliases_repo.for_market(conn, keeper.id)
 
 
 # --- nest --------------------------------------------------------------------
@@ -462,7 +534,8 @@ def test_merging_a_master_folds_its_children_into_the_survivor(client: TestClien
         follow_redirects=False,
     ).status_code == 303
     assert client.post(
-        f"/markets/{chubb.ref}/merge/confirm", params={"target": aig.id},
+        f"/markets/{chubb.ref}/merge/confirm",
+        params={"target": aig.id, "survivor": "other"},
         follow_redirects=False,
     ).status_code == 303
 
@@ -480,7 +553,8 @@ def test_merging_a_master_into_its_own_child_unnests_the_child(client: TestClien
         follow_redirects=False,
     ).status_code == 303
     assert client.post(
-        f"/markets/{chubb.ref}/merge/confirm", params={"target": sompo.id},
+        f"/markets/{chubb.ref}/merge/confirm",
+        params={"target": sompo.id, "survivor": "other"},
         follow_redirects=False,
     ).status_code == 303
     # the survivor cannot nest under itself; it takes the dead master's spot

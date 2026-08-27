@@ -3865,7 +3865,7 @@ def test_the_client_note_is_a_cell_on_the_header_that_says_who_reads_it(
     conn, placement = _with_expiring(client, org)
 
     html = _tab(client, org)
-    assert "the client&#39;s copy" in html or "the client's copy" in html
+    assert "the client reads this" in html
     assert 'data-field="client_note"' in html
 
     note = "TIV excludes the Ohio site, added mid-term."

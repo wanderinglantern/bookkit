@@ -991,10 +991,14 @@ LINE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # ITS OWN GROUP, because it is a different KIND of fact from the nine
     # figures above it — proximity is what tells a reader where one kind ends
     # (the layer details row, 2026-08-20), and prose filed among figures reads
-    # as one more expectation of the line. The group LABEL says who reads it,
-    # which is the same marking the field's own label carries: this is the one
-    # thing on the header a client sees in the broker's words.
-    ("the client's copy", ("client_note",)),
+    # as one more expectation of the line.
+    #
+    # The group label does NOT repeat the field's. Both said "the client's
+    # copy" first, and a group of one whose heading restates its only label is
+    # the same words twice on one line. The marking lives on the FIELD, where
+    # it has to (it is the cell editor's aria-label, and a group heading is not
+    # announced); the group says what kind of thing follows.
+    ("note", ("client_note",)),
 )
 
 LINE_KEYS: tuple[str, ...] = tuple(k for _, keys in LINE_GROUPS for k in keys)

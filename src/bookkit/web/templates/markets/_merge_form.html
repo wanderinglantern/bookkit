@@ -7,16 +7,32 @@
 <form class="entity-form" method="get" action="/markets/{{ market.ref }}/merge/confirm"
       hx-get="/markets/{{ market.ref }}/merge/confirm"
       hx-target="closest .form-host" hx-swap="innerHTML">
-  <h2 class="form-title">merge {{ market.name }} into which market?</h2>
+  <h2 class="form-title">merge {{ market.name }} with which market?</h2>
   {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
   {% if targets %}
     <div class="field">
-      <label for="f-merge-target">survivor <span class="req">*</span></label>
+      <label for="f-merge-target">the other market <span class="req">*</span></label>
       <select id="f-merge-target" name="target" required>
         <option value=""></option>
         {% for t in targets %}
           <option value="{{ t.id }}">{{ t.name }}</option>
         {% endfor %}
+      </select>
+    </div>
+    {# WHICH WAY ROUND IS ASKED. This page's market used to be the loser by
+       construction, so the older record survived whichever one you happened to
+       open — and the button that gets here says "Merge duplicate…", which
+       promises the opposite (Grant, 2026-08-27: "there is a prompt to merge
+       AIG into AIG Environmental but technically I need it the other way
+       around"). No default and no blank-means-something: a merge soft-deletes
+       an org and turns its name into an alias of the other, so the direction is
+       a required choice, checked server-side in `_merge_pair`. #}
+    <div class="field">
+      <label for="f-merge-survivor">which survives <span class="req">*</span></label>
+      <select id="f-merge-survivor" name="survivor" required>
+        <option value=""></option>
+        <option value="other">the market chosen above</option>
+        <option value="this">{{ market.name }}</option>
       </select>
     </div>
     <div class="form-actions">

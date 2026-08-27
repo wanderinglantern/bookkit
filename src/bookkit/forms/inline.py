@@ -552,7 +552,13 @@ def placement_line_fields(
         # somebody forgets to tick it. It is last because it is a different
         # KIND of fact from the eight figures before it: those are what the
         # line is expected to do, this is what somebody wants said about it.
-        Field("client_note", "note on the client's copy", "textarea"),
+        # THE LABEL IS THE MARKING and has to stand ALONE — it is what the
+        # cell editor announces (aria-label), where the group heading above it
+        # is not read. "note" alone would be the `decline_reason` mistake in a
+        # new place: one field, no marking, and the day the dead
+        # `placement_line.notes` column is surfaced beside it there would be
+        # two notes and nothing telling them apart.
+        Field("client_note", "the client reads this", "textarea"),
     )
 
 
