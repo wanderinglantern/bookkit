@@ -395,6 +395,26 @@ def test_merge_refuses_a_forged_target_in_place(client: TestClient):
     assert orgs_repo.find(conn, source.ref) is not None  # nothing written
 
 
+def test_the_merge_confirm_names_nesting_as_the_other_reading(client: TestClient):
+    """THE ALIAS IS WHAT MAKES A MERGE SAFE AND WHAT MAKES IT WRONG. Folding
+    "AIG Environmental" into AIG makes that name resolve to AIG for ever —
+    right for a duplicate record, and the loss of a real underwriting unit.
+    Nothing in the data can tell the two apart, so the confirm names the
+    control that fits the other reading rather than leaving it to be
+    remembered (Grant, 2026-08-27, on exactly that pair)."""
+    source = _market(client, "AIG")
+    target = _market(client, "Chubb")
+
+    confirm = client.get(
+        f"/markets/{source.ref}/merge/confirm",
+        params={"target": target.id, "survivor": "other"},
+    )
+
+    assert confirm.status_code == 200
+    assert "Nest under" in confirm.text
+    assert "keeps both markets" in confirm.text
+
+
 def test_merge_refuses_a_direction_nobody_chose(client: TestClient):
     """WHICH WAY ROUND IS ASKED, NEVER ASSUMED. This page's market used to die
     by construction, so the older record survived whichever one you happened to

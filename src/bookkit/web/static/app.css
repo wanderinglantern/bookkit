@@ -1245,6 +1245,15 @@ table.rows td.mono {
   color: var(--warn);
 }
 
+/* The other reading of the same act, inside the confirm that would take the
+   first one. Quieter than the consequence list above it — it is not another
+   thing that WILL happen, it is the door to take instead. */
+.confirm-remove-aside {
+  margin: 0.75rem 0 0;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
 /* an overdue due date carries the word, not just the colour */
 .tag-overdue {
   margin-left: 0.375rem;
