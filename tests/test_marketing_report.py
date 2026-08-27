@@ -259,9 +259,17 @@ def test_the_section_label_carries_the_header_facts(conn) -> None:
     # workbook. The client's copy carries neither the heading fact nor the
     # column (Grant, 2026-08-27), so both halves are asserted below.
     assert "submitted" not in label
-    assert "Gross sales" in label
-    assert "+18.3%" in label
-    assert "expiring $412,000 at 10.05" in label
+    # ONE CLAUSE PER TERM, EACH TRUE ON ITS OWN (Grant, 2026-08-27). The basis
+    # and the exposure it measures used to be read off THIS TERM's columns
+    # while the premium and rate beside them came off the EXPIRING ones — so a
+    # line with only its expiring side recorded printed a rate with no basis,
+    # no denominator and no exposure to check it against. Each clause now
+    # names the basis it was actually measured on.
+    assert "this term: Gross sales $48,500,000 (+18.3%)" in label
+    assert (
+        "expiring: Gross sales $41,000,000, premium $412,000, rate 10.05 per $1,000"
+        in label
+    )
 
     client_headers = [h for h, _, _ in marketing_report.columns(marketing_report.CLIENT)]
     assert "Sent" not in client_headers and "Replied" not in client_headers

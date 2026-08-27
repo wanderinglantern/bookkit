@@ -513,10 +513,13 @@ def placement_line_fields(
     Guessing is the bug; refusing is the feature.
 
     `expiring_rate_micros` is a rate and NOT money: 1.42 is 1.42 per unit of
-    exposure, and money's parser would read '$1.42' as 142 cents. It is stored
-    rather than derived because deriving it needs the expiring exposure, which
-    is a fact nobody may have recorded — and the report then leaves the
-    comparison blank instead of assuming exposure was flat.
+    exposure, and money's parser would read '$1.42' as 142 cents. It is a
+    COLUMN and not the whole answer: where the expiring premium and exposure
+    are both recorded the rate IS their quotient and nobody is asked for it
+    (`services.marketing_report.expiring_rate`, 2026-08-27), and a typed
+    figure outranks that division. With no expiring exposure recorded there is
+    nothing to divide and the report leaves the comparison blank rather than
+    assuming exposure was flat.
     """
 
     def exposure_kind(basis_key: str | None) -> str:
@@ -542,6 +545,14 @@ def placement_line_fields(
               exposure_kind(expiring_basis_key)),
         Field("expiring_premium", "expiring premium", "money"),
         Field("expiring_rate_micros", "expiring rate", "rate"),
+        # THE ONE FREEFORM FIELD ON THIS HEADER, and the only one a client
+        # reads as written. The LABEL is the marking — the same rule
+        # `decline_reason` / `decline_reason_public` settled above, where a
+        # single field guarded by a "safe to share" tick fails the first time
+        # somebody forgets to tick it. It is last because it is a different
+        # KIND of fact from the eight figures before it: those are what the
+        # line is expected to do, this is what somebody wants said about it.
+        Field("client_note", "note on the client's copy", "textarea"),
     )
 
 

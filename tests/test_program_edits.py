@@ -1400,3 +1400,139 @@ def test_the_dry_run_says_whether_the_door_opens(linked) -> None:
     assert not sync.follows_would_seat(conn, placement.id, layer_id, [])
     # NOTHING WAS WRITTEN by either question — byte for byte.
     assert path.read_bytes() == before
+
+
+def test_a_spanning_slab_is_seated_where_seating_it_moves_nothing(linked) -> None:
+    """THE WEDGE (Grant, 2026-08-27: "want it chased?" — yes).
+
+    A slab widened onto a line whose tower happens to top out at the same
+    figure went through with its single attach intact, right by coincidence.
+    Raising a limit underneath is then refused as an overlap naming an
+    attachment nobody set — and because every write re-validates the whole
+    file, EVERY later edit to that program is refused with it."""
+    conn, _, placement, path = linked
+    # gl tops at 2M and cy at 5M in this fixture; raise gl so the two match
+    assert sync.add_layer(
+        conn, placement.id, "GL Excess", ["gl"],
+        attach_cents=2_000_000_00, limit_cents=3_000_000_00,
+    ).ok
+    assert sync.add_layer(
+        conn, placement.id, "Umbrella", ["gl"],
+        attach_cents=5_000_000_00, limit_cents=10_000_000_00,
+    ).ok
+    layer_id = next(
+        ly.id for ly in load_program(path).layers if ly.name == "Umbrella"
+    )
+
+    assert sync.set_applies_to(conn, placement.id, layer_id, ["gl", "cy"]).ok
+
+    layer = next(ly for ly in load_program(path).layers if ly.id == layer_id)
+    assert layer.follows_underlying is True
+    # AND IT DID NOT MOVE. That is the condition the heal fires under: it is a
+    # no-op on geometry today and the difference only shows tomorrow.
+    assert layer.attach == 5_000_000
+
+    # the edit that used to wedge the file
+    assert sync.update_layer(
+        conn, placement.id, "primary-cy", limit_cents=6_000_000_00
+    ).ok
+    layer = next(ly for ly in load_program(path).layers if ly.id == layer_id)
+    assert layer.attach == 6_000_000  # re-seated, per column
+
+
+def test_a_slab_that_would_move_is_left_pinned_and_the_gap_reported(linked) -> None:
+    """CLOSING A GAP MOVES COVER THE CLIENT DID NOT BUY. Where seating the
+    slab would land it lower on any line it covers, the pin stays and
+    towerkit's `line-gap` warning stands — A GAP IS REPORTED, NOT REFUSED."""
+    conn, _, placement, path = linked
+    # gl tops at 2M, cy at 5M — deliberately unequal
+    assert sync.add_layer(
+        conn, placement.id, "Umbrella", ["cy"],
+        attach_cents=5_000_000_00, limit_cents=10_000_000_00,
+    ).ok
+    layer_id = next(
+        ly.id for ly in load_program(path).layers if ly.name == "Umbrella"
+    )
+
+    diags = sync.set_applies_to(conn, placement.id, layer_id, ["gl", "cy"])
+
+    assert diags.ok, [d.message for d in diags.errors]
+    layer = next(ly for ly in load_program(path).layers if ly.id == layer_id)
+    assert layer.follows_underlying is False, "the heal closed a real gap"
+    assert layer.attach == 5_000_000
+    assert any(d.code == "line-gap" for d in diags.warnings)
+
+
+def test_a_primary_widened_over_another_primary_is_still_refused(linked) -> None:
+    """THE HEAL MUST NEVER MAKE THIS ONE PASS. Widening a GL primary onto a
+    line that already has one is geometrically identical to widening an
+    umbrella, and seating it would turn a primary into an excess layer over
+    the other line's primary — silently, with no error. It stays refused; the
+    browser offers the seating as an explicit choice instead."""
+    conn, _, placement, path = linked
+    before = path.read_bytes()
+
+    diags = sync.set_applies_to(conn, placement.id, "primary-gl", ["gl", "cy"])
+
+    assert not diags.ok
+    assert any("OVERLAP" in d.message for d in diags.errors)
+    assert path.read_bytes() == before
+
+
+def test_a_slab_at_the_ground_is_never_seated() -> None:
+    """A SLAB AT $0 IS NOT SEATED ON ANYTHING, so the flag would change what
+    it MEANS rather than correct it: `towerkit.soi` reads
+    `attach == 0 and not follows_underlying` to decide a layer is PRIMARY, and
+    ONE POLICY COVERING TWO LINES FROM THE GROUND is an ordinary shape (it is
+    what `add_layer` builds when two lines are ticked on a fresh program).
+
+    Driven against the heal itself because it runs on EVERY write, not only on
+    a rescope — which is the whole point of putting it beside `heal_follows`,
+    and also what puts every layer in the book under it.
+    """
+    from datetime import date
+
+    from towerkit.model import Layer, Line, Period, Program
+    from towerkit.model import Placement as TkPlacement
+
+    program = Program(
+        insured="Test Client, Inc.", program="Package",
+        placement=TkPlacement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="gl", name="GL"), Line(id="al", name="Auto")],
+        layers=[
+            Layer(id="package", name="Package Primary", applies_to=["gl", "al"],
+                  attach=0, limit=1_000_000, participants=[]),
+        ],
+    )
+
+    sync.heal_spanning_seats(program)
+
+    assert program.layers[0].follows_underlying is False, (
+        "a primary covering two lines was turned into an excess layer"
+    )
+
+
+def test_a_statutory_bar_over_two_lines_is_never_seated() -> None:
+    """A statutory layer owns its column floor to top and has no dollar
+    arithmetic in it at all — `_check_line_stack` returns before any of it."""
+    from datetime import date
+
+    from towerkit.model import Layer, Line, Period, Program
+    from towerkit.model import Placement as TkPlacement
+
+    program = Program(
+        insured="Test Client, Inc.", program="WC",
+        placement=TkPlacement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="wc", name="Workers Comp"), Line(id="el", name="EL")],
+        layers=[
+            Layer(id="wc-bar", name="Statutory WC", applies_to=["wc", "el"],
+                  attach=0, limit=0, statutory=True, states=["CA"],
+                  participants=[]),
+        ],
+    )
+
+    sync.heal_spanning_seats(program)
+
+    assert program.layers[0].follows_underlying is False

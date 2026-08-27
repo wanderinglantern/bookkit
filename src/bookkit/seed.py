@@ -377,8 +377,17 @@ def _demo_program(insured: str, period_from: str, period_to: str, rng: Random) -
                 attach=0, limit=2_000_000, premium=650_000,
                 participants=[Participant(carrier="Travelers", share_bps=10_000)],
             ),
+            # IT FOLLOWS UNDERLYING, because it spans two lines. A slab over
+            # GL and AL sits on a different stack in each, and the pinned
+            # $2,000,000 was right here only because both primaries happen to
+            # top out there — raise either one and towerkit refuses the write,
+            # naming an attachment nobody set, and every later edit to this
+            # program is refused with it. `sync.heal_spanning_seats` corrects
+            # this on the first write to any program carrying it; the demo
+            # book should not be shipping the shape that needs correcting.
             Layer(
                 id="umbrella", name="Umbrella", applies_to=["gl", "al"],
+                follows_underlying=True,
                 attach=2_000_000, limit=25_000_000, premium=rng.choice([1_800_000, 2_400_000]),
                 participants=[
                     Participant(carrier="Swiss Re", share_bps=6_000),

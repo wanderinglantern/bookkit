@@ -2177,6 +2177,68 @@ def _rescope(
     return mutate
 
 
+def heal_spanning_seats(program: Program) -> None:
+    """A SLAB THAT SPANS SEVERAL LINES DOES NOT CARRY A PINNED ATTACHMENT —
+    but only where saying so moves nothing.
+
+    `_reseat_column` already states the rule for INSERTS: "an umbrella over GL
+    and AL sits on a different stack in each, so pinning GL's figure onto it
+    opens a gap in AL". The WIDEN path had no such rule, so a slab widened
+    onto a line whose tower happens to top out at the same figure went through
+    with its single attach intact — right by coincidence. Raise a limit
+    underneath and towerkit refuses the write, correctly, naming an attachment
+    nobody set; every later edit to that program is then refused too, because
+    every write re-validates the whole file. Reproduced on 2026-08-27: a
+    $10,000,000 umbrella pinned at $5,000,000 over two lines that both topped
+    at $5,000,000, then Primary Cyber raised to $6,000,000.
+
+    IT CANNOT BE UNCONDITIONAL, and that is the whole difficulty. Widening a
+    GL *primary* onto a line that already has one is geometrically identical
+    to widening an umbrella, and forcing it to follow would turn a primary
+    into an excess layer over the other line's primary — silently, with no
+    error, which is the worst available outcome. That widen is REFUSED as an
+    overlap and stays refused; the browser offers the seating as an explicit
+    choice there (`set_applies_to(follows=True)`), because the model cannot
+    read intent.
+
+    SO THE TEST IS "DOES IT MOVE ANYTHING". Following underlying seats the
+    slab on each line's own top; where that lands exactly where the pinned
+    figure already had it on EVERY line, this changes nothing today and stops
+    the wedge tomorrow. Where it would land lower on any line it is closing a
+    GAP — cover the client did not buy, moved without being asked — and A GAP
+    IS REPORTED, NOT REFUSED (CLAUDE.md); the warning stands and the pin
+    stays.
+
+    Never turned OFF: a single-line excess follows its own primary, and
+    narrowing a spanning slab is no reason to pin it (the same set-only rule
+    `_reseat_column` follows).
+    """
+    for layer in program.layers:
+        if layer.follows_underlying or len(layer.applies_to) < 2:
+            continue
+        if layer.attach <= 0 or layer.statutory:
+            # A SLAB AT THE GROUND IS NOT SEATED ON ANYTHING. At $0 the pin
+            # says nothing that following would say differently, and the flag
+            # would CHANGE what the layer means rather than correct it:
+            # `towerkit.soi` reads `attach == 0 and not follows_underlying` to
+            # decide a layer is PRIMARY, and one policy covering two lines
+            # from the ground is what `add_layer` builds when two lines are
+            # ticked.
+            #
+            # `or layer.statutory` is redundant TODAY and kept deliberately:
+            # it is towerkit's rule, in another repo, that a statutory bar
+            # attaches at $0 (`statutory-attach`), and that rule is enforced
+            # by a validation that runs AFTER this heal. A mutation check on
+            # 2026-08-27 confirmed the clause cannot currently fire; the test
+            # beside it asserts the PROPERTY (a statutory bar over two lines
+            # is never seated) rather than this branch, so it stays green
+            # whichever guard is doing the work.
+            continue
+        tops = program.underlying_tops(layer)
+        if tops and all(top == layer.attach for top in tops.values()):
+            layer.follows_underlying = True
+
+
 def set_applies_to(
     conn: sqlite3.Connection,
     placement_id: str,
@@ -2898,6 +2960,7 @@ def preview(
     except WriteConflict as exc:
         diags.error("conflict", str(exc))
         return None, diags
+    heal_spanning_seats(program)
     heal_follows(program)
     heal_premiums(program)
     return program, validate_program(program)
@@ -3134,6 +3197,14 @@ def write_through(
     # attachment, so the projection and towerkit's own editor disagree about
     # where the excess sits. Healing here means one thing is validated, dumped
     # and re-projected: the healed program.
+    # BEFORE `heal_follows`, so a slab this seats is one it then owns. An
+    # invariant maintained by ONE verb is broken by every other writer
+    # (CLAUDE.md): the wedge this prevents is created by the widen but SPRUNG
+    # by an unrelated limit edit two weeks later, so the correction belongs
+    # here beside the other heals rather than inside `set_applies_to`. It is a
+    # no-op on geometry by construction — see the docstring — so it can never
+    # move cover on a write that was about something else.
+    heal_spanning_seats(program)
     heal_follows(program)
     # AND THE PREMIUM SUM, for the same reason and in the same place. A layer
     # whose markets all state their own premium IS their sum
