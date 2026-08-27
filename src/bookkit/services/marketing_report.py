@@ -488,6 +488,40 @@ class ExpiringRate:
 
     micros: int | None
     derived: bool
+    # WHAT THE DIVISION GIVES, whenever it can be done at all — including when
+    # a rate WAS typed, which is the only state in which this says anything
+    # new. Grant asked for the disagreement to be surfaced (2026-08-27) after
+    # it was first reported as a design cost: a typed rate that contradicts
+    # premium / exposure is two figures where one is a lie, and the one the
+    # client's Rate delta is composed from is the typed one.
+    #
+    # It is NOT the same as `micros` when a rate was typed, and it is the same
+    # object when one was not — `derived` is what says which of the two the
+    # surface is showing, and this is what it can be checked against.
+    computed: int | None = None
+
+    @property
+    def disagrees(self) -> bool:
+        """A typed rate that premium / exposure does not agree with.
+
+        Never on a rounding difference: `_ROUNDING_SLACK_BPS` exists because a
+        broker writes 10.05 for 10.0488, and a marker that fired on that would
+        be on every correctly-entered line in the book — which is how a
+        warning stops being read (premature error blindness, the data-entry
+        rules).
+
+        NO `self.derived` GUARD, and its absence is deliberate rather than an
+        omission: a derived rate IS the division, so the two figures are the
+        same integer and the subtraction below is zero. A branch on `derived`
+        was written first and could not be made to fire by any mutation, which
+        is a branch that reads as though it were doing something. The property
+        is asserted directly instead
+        (`test_a_derived_rate_can_never_disagree_with_itself`).
+        """
+        if self.micros is None or self.computed is None:
+            return False
+        slack = max(1, self.computed * _ROUNDING_SLACK_BPS // 10_000)
+        return abs(self.micros - self.computed) > slack
 
 
 def expiring_rate(line: PlacementLine | None) -> ExpiringRate:
@@ -503,25 +537,34 @@ def expiring_rate(line: PlacementLine | None) -> ExpiringRate:
     """
     if line is None:
         return ExpiringRate(None, False)
+    computed = _computed_rate(line)
     if line.expiring_rate_micros is not None:
-        return ExpiringRate(line.expiring_rate_micros, False)
-    if line.expiring_premium is None or not line.expiring_exposure:
+        # THE DIVISION IS STILL WORKED OUT, and carried beside the typed
+        # figure rather than skipped: it is what `disagrees` checks against,
+        # and a check that only ran when nobody had typed anything could never
+        # catch the case it exists for.
+        return ExpiringRate(line.expiring_rate_micros, False, computed)
+    if computed is None:
         return ExpiringRate(None, False)
+    return ExpiringRate(computed, True, computed)
+
+
+def _computed_rate(line: PlacementLine) -> int | None:
+    """premium / exposure, or None where it cannot be done at all."""
+    if line.expiring_premium is None or not line.expiring_exposure:
+        return None
     if line.expiring_basis is None or not line.rate_per:
         # The denominator is what makes the digits mean anything (1.42 per
         # $100 is ten times 1.42 per $1,000) and the basis is what says
         # whether the exposure is money or a count. Neither is guessable, and
         # `repo.marketing._expiring_rate_guard` refuses to STORE a rate
         # without a denominator for the same reason.
-        return ExpiringRate(None, False)
-    return ExpiringRate(
-        _rate_from(
-            line.expiring_premium,
-            line.expiring_exposure,
-            line.rate_per,
-            monetary=rating_basis(line.expiring_basis).monetary,
-        ),
-        True,
+        return None
+    return _rate_from(
+        line.expiring_premium,
+        line.expiring_exposure,
+        line.rate_per,
+        monetary=rating_basis(line.expiring_basis).monetary,
     )
 
 
@@ -716,6 +759,13 @@ class ReportBlock:
     expiring_basis: str | None
     limit_sought: int | None
     attach_sought: int | None
+    # WHAT THE BROKER WANTS SAID ABOUT THIS LINE, in their own words, on the
+    # CLIENT's copy (Grant, 2026-08-27). It is not part of the heading: a
+    # heading is a fixed set of labelled figures a reader scans, and prose of
+    # unknown length inside one pushes the figures off the end of the cell.
+    # It gets a row of its own directly under the heading — before the market
+    # rows, because it is context for reading them.
+    client_note: str | None
     bridge: Bridge | None
     rows: tuple[ReportRow, ...]
 
@@ -961,15 +1011,19 @@ def _exposure_move(expectation: PlacementLine | None) -> Move:
     return Move(pct)
 
 
-# One percent of the premium being explained, and never less than a dollar.
-# THE BRIDGE DECOMPOSES ROUNDED INPUTS — the expiring rate is the figure a
-# broker wrote down (412,000 / 41,000 = 10.0488, entered as 10.05), so the
-# walk can never be required to land to the cent and a hard equality would
-# drop the bridge on ordinary business. What this catches is the other
+# One percent. A BROKER WRITES DOWN A ROUNDED FIGURE — 412,000 / 41,000 is
+# 10.0488 and goes on the file as 10.05 — so nothing built on an expiring rate
+# may require it to land to the cent, and a hard equality would fire on
+# ordinary business every time. What a percent still catches is the other
 # magnitude entirely: a rate read against the wrong denominator or the wrong
-# basis moves an effect by a factor of ten, which is $9,000 adrift on a
-# $110,000 quote.
-_BRIDGE_SLACK_BPS = 100
+# basis is out by a FACTOR OF TEN.
+#
+# ONE CONSTANT FOR THE TWO CHECKS THAT BOTH REST ON THAT SENTENCE — the
+# premium bridge's walk (`_reconciles`) and the typed-versus-derived rate
+# comparison (`ExpiringRate.disagrees`). It was `_BRIDGE_SLACK_BPS` and named
+# for its first caller; two copies of one tolerance is the copy that quietly
+# differs, and the day somebody widens one the other keeps refusing.
+_ROUNDING_SLACK_BPS = 100
 
 
 def _reconciles(bridge: Bridge) -> bool:
@@ -980,7 +1034,7 @@ def _reconciles(bridge: Bridge) -> bool:
     as an explanation of the number above them.
     """
     walked = bridge.expiring_premium + bridge.rate_effect + bridge.exposure_effect
-    slack = max(100, abs(bridge.quoted_premium) * _BRIDGE_SLACK_BPS // 10_000)
+    slack = max(100, abs(bridge.quoted_premium) * _ROUNDING_SLACK_BPS // 10_000)
     return abs(walked - bridge.quoted_premium) <= slack
 
 
@@ -1418,6 +1472,7 @@ def _block(
         expiring_basis=expectation.expiring_basis if expectation else None,
         limit_sought=expectation.limit_sought if expectation else None,
         attach_sought=expectation.attach_sought if expectation else None,
+        client_note=expectation.client_note if expectation else None,
         bridge=bridge,
         rows=rows,
     )
@@ -1547,24 +1602,74 @@ def _walk(cells: dict[str, str], audience: str) -> tuple[str, ...]:
 
 
 def _block_label(block: ReportBlock) -> str:
+    """The heading over one line of coverage's table, on both sheets.
+
+    ONE CLAUSE PER TERM, AND EACH IS TRUE ON ITS OWN (Grant, 2026-08-27: "I
+    would like to provide the basis value ... GL: Basis: Total Insured Value:
+    $10,000, Expiring Premium: $1,000, Rate: $1.00 per $1,000"). The basis and
+    the exposure it measures used to come off THIS TERM's columns while the
+    premium and rate beside them came off the EXPIRING ones — so a line whose
+    expiring side was recorded and whose current side was not printed
+    `expiring $100,000 at 100.00`: a rate with no denominator, no basis, and
+    no exposure to check it against, on a client's own workbook. That is the
+    ordinary shape now, because the composite rate (`expiring_rate`) is worked
+    out of exactly those two figures and a broker who records them records
+    nothing else.
+
+    A CLAUSE NEVER BORROWS THE OTHER TERM'S BASIS. `_rate_move` refuses a
+    comparison when either basis is merely unstated — silence is not agreement
+    — and a heading that filled last year's basis in from this year's would
+    make that same claim in prose, where no guard can see it. Each clause
+    prints the basis it was actually measured on, or none.
+
+    The basis is repeated when the two terms share one, and that is the
+    intended cost: a reader looking at the expiring figures gets a complete
+    statement without having to carry a word over from the clause before, and
+    a basis that CHANGED between terms then reads as the fact it is.
+    """
     parts = [block.line_name]
-    if block.basis_label:
-        per = f", per {_per_label(block.rate_per)}" if block.rate_per else ""
-        parts.append(f"basis {block.basis_label}{per}")
-    if block.exposure is not None:
-        exposure = fmt_exposure(block.exposure, block.basis_key)
+
+    if block.exposure is not None or block.basis_label:
+        this_term = _term_clause(block.basis_key, block.basis_label, block.exposure)
         # THE REASON, WHERE THE PERCENTAGE WOULD HAVE BEEN. A blank beside the
         # exposure reads as a comparison that failed to render; "basis changed"
         # says the two terms are not comparable, which is the fact.
         if block.exposure_move.cell:
-            exposure += f" ({block.exposure_move.cell})"
-        parts.append(f"exposure {exposure}")
+            this_term += f" ({block.exposure_move.cell})"
+        parts.append(f"this term: {this_term}")
+
+    expiring_basis = (
+        rating_basis(block.expiring_basis).label if block.expiring_basis else ""
+    )
+    expiring = _term_clause(
+        block.expiring_basis, expiring_basis, block.expiring_exposure
+    )
     if block.expiring_premium is not None:
-        expiring = f"expiring {format_cents(block.expiring_premium)}"
-        if block.expiring_rate.micros:
-            expiring += f" at {fmt_rate(block.expiring_rate.micros)}"
-        parts.append(expiring)
+        expiring += f", premium {format_cents(block.expiring_premium)}" if expiring \
+            else f"premium {format_cents(block.expiring_premium)}"
+    if block.expiring_rate.micros:
+        # THE DENOMINATOR RIDES WITH THE RATE, because 1.42 per $100 is ten
+        # times 1.42 per $1,000 and this is the one place on the sheet a reader
+        # can divide the premium by the exposure and check it.
+        per = f" per {_per_label(block.rate_per)}" if block.rate_per else ""
+        rate = f"rate {fmt_rate(block.expiring_rate.micros)}{per}"
+        expiring += f", {rate}" if expiring else rate
+    if expiring:
+        parts.append(f"expiring: {expiring}")
     return " · ".join(parts)
+
+
+def _term_clause(basis_key: str | None, basis_label: str, exposure: int | None) -> str:
+    """`Gross sales $41,000,000`, or as much of it as was recorded.
+
+    The basis NAMES the figure beside it, which is why they travel together
+    and why neither is printed with the other term's half: nothing inside the
+    integer says whether it is money or a count, and `fmt_exposure` reads
+    `RatingBasis.monetary` off THIS basis to decide (350 power units printed
+    to a client as "$3.50", 2026-08-25).
+    """
+    exposure_text = fmt_exposure(exposure, basis_key) if exposure is not None else ""
+    return " ".join(part for part in (basis_label, exposure_text) if part)
 
 
 def _row_cells(
@@ -1758,6 +1863,24 @@ def _subjectivity_cells(row: SubjectivityRow) -> dict[str, str]:
     }
 
 
+def _note_row(block: ReportBlock, width: int) -> tuple[tuple[str, ...], ...]:
+    """The line's client note as its own row, or no row at all.
+
+    A SPREADSHEET ROW, NOT A HEADING CLAUSE: the heading is a fixed run of
+    labelled figures and prose of any length inside it pushes them out of
+    sight. `("Note", "<the text>", "", …)` puts the word in the first column,
+    where every other labelled row on this sheet puts its label (the premium
+    bridge's four lines do exactly this), and the note in the second, which is
+    the widest.
+
+    An empty note renders NOTHING — not a row labelled Note with a blank
+    beside it, which reads to a client as something that failed to print.
+    """
+    if not block.client_note:
+        return ()
+    return (("Note", block.client_note) + ("",) * (width - 2),)
+
+
 def to_sections(report: MarketingReport) -> list[SheetSection]:
     """One section per line of coverage. A line with no approaches says so IN
     WORDS: an empty table is ambiguous, and a client cannot tell a line nobody
@@ -1766,15 +1889,22 @@ def to_sections(report: MarketingReport) -> list[SheetSection]:
     width = len(columns(audience))
     sections: list[SheetSection] = []
     for block in report.blocks:
+        # THE NOTE LEADS THE SECTION, on both copies. It is written FOR the
+        # client (`PlacementLine.client_note`), and it is context for reading
+        # the rows underneath — "TIV excludes the Ohio site" changes how every
+        # premium below it is read, so it cannot sit after them. The broker's
+        # copy carries it too: it is not a secret, it is a thing they wrote.
+        note = _note_row(block, width)
         if block.is_empty:
             sections.append(
                 SheetSection(
                     _block_label(block),
-                    (("No markets approached on this line yet.",) + ("",) * (width - 1),),
+                    note
+                    + (("No markets approached on this line yet.",) + ("",) * (width - 1),),
                 )
             )
             continue
-        rows = [_row_cells(row, audience, report.window) for row in block.rows]
+        rows = [*note, *(_row_cells(row, audience, report.window) for row in block.rows)]
         if block.bridge is not None:
             bridge = block.bridge
             blank = ("",) * (width - 3)

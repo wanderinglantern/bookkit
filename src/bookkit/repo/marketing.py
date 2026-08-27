@@ -850,6 +850,18 @@ def set_placement_line(
     """Create or update the line's expectations. One row per (placement, line)
     — the unique index holds it, and this is the only writer that respects it."""
     existing = placement_line(conn, placement_id, line_id)
+    # ONE WAY TO SAY NOTHING. Both surfaces clear this field by sending an
+    # empty box — the web's textarea parses to "", MCP's argument arrives as
+    # "" — and storing that leaves the column with two representations of
+    # "there is no note", which every later reader has to remember to test for
+    # both of. The renderers happen to use `if not note` today; the first one
+    # that writes `is not None` prints an empty Note row on a client's
+    # workbook. Normalised HERE because repo/ is where a guard on what a
+    # stored value means belongs, so every surface inherits it (`_basis_guard`
+    # above, and name uniqueness in repo/team.py).
+    if not (fields.get("client_note") or "").strip():
+        if "client_note" in fields:
+            fields["client_note"] = None
     _basis_guard(existing, fields)
     _rate_per_guard(existing, fields)
     _expiring_rate_guard(existing, fields)

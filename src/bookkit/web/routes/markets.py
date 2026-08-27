@@ -719,6 +719,12 @@ async def alias_create(request: Request, ref: str) -> Response:
 
 
 # --- merge (list `x`) --------------------------------------------------------
+#
+# TWO STEPS AND TWO REQUIRED ANSWERS: which other market, and which of the two
+# survives. The direction was implicit until 2026-08-27 — the page's own market
+# always died — which made one direction reachable only by navigating to the
+# other market first, with nothing on the form saying so, under a button that
+# read "Merge duplicate…" and therefore promised the reverse.
 
 
 def _merge_targets(conn: sqlite3.Connection, source: Org) -> list[Org]:
@@ -741,16 +747,45 @@ def _merge_form(
     )
 
 
-def _merge_target(request: Request, source: Org) -> Org:
-    """The target named in ?target=… — validated against the freshly queried
-    list of OTHER live markets, the same rule checked_option applies to a
-    scoped select: membership in the scoped query IS the check, and it also
+def _merge_other(request: Request, market: Org) -> Org:
+    """The OTHER market named in ?target=… — validated against the freshly
+    queried list of OTHER live markets, the same rule checked_option applies to
+    a scoped select: membership in the scoped query IS the check, and it also
     refuses a market merged or deleted since the page rendered."""
     target_id = request.query_params.get("target", "")
-    for candidate in _merge_targets(_conn(request), source):
+    for candidate in _merge_targets(_conn(request), market):
         if candidate.id == target_id:
             return candidate
-    raise MergeError("pick which market to merge into")
+    raise MergeError("pick the other market")
+
+
+def _merge_pair(request: Request, market: Org) -> tuple[Org, Org]:
+    """(loser, survivor) — WHICH WAY ROUND IS ASKED, NEVER ASSUMED.
+
+    This page's market used to be the loser by construction: the form said
+    "merge X into which market?" and X always died. That is backwards from
+    what the control promises — the button reads "Merge duplicate…" on the
+    page of the record that will BE the duplicate — and it left one direction
+    reachable only by navigating to the other market first, with nothing
+    saying so. Grant, 2026-08-27: "I have AIG Environmental that was setup
+    before AIG. Now there is a prompt to merge AIG into AIG Environmental but
+    technically I need it the other way around."
+
+    RANK IT BY WHAT THE WRITE DOES. This is not a picker printing two options
+    that read alike; it soft-deletes an org, moves every contact, submission,
+    request and alias off it, and turns its NAME into an alias of the other.
+    Getting the direction wrong is the wrong record surviving, undone only by
+    reverting a batch nobody knows to revert. So there is no default and no
+    convention to remember: the survivor is a required choice with a blank
+    option, checked here and not only in the markup (the data-entry rules).
+    """
+    other = _merge_other(request, market)
+    survivor = request.query_params.get("survivor", "")
+    if survivor == "this":
+        return other, market
+    if survivor == "other":
+        return market, other
+    raise MergeError("say which of the two survives")
 
 
 @router.get("/markets/{ref}/merge", response_class=HTMLResponse)
@@ -765,11 +800,14 @@ def merge_confirm(request: Request, ref: str) -> HTMLResponse:
     the merge safe for towers — the duplicate's NAME becomes an alias of the
     survivor, so every tower spelling keeps resolving."""
     conn = _conn(request)
-    source = _market(request, ref)
+    market = _market(request, ref)
     try:
-        target = _merge_target(request, source)
+        source, target = _merge_pair(request, market)
     except MergeError as exc:
-        return _merge_form(request, source, error=str(exc))
+        return _merge_form(request, market, error=str(exc))
+    # THE COUNTS ARE THE LOSER'S, whichever of the two that is — they say what
+    # MOVES, and after the direction became a choice reading them off the page's
+    # own market would have described the other merge.
     counts = {
         "contacts": len(contacts_repo.for_org(conn, source.id)),
         "appetite": len(orgs_repo.appetite_for_market(conn, source.id)),
@@ -779,7 +817,10 @@ def merge_confirm(request: Request, ref: str) -> HTMLResponse:
     return TEMPLATES.TemplateResponse(
         request,
         "markets/_merge_confirm.html",
-        {"market": source, "target": target, "counts": counts},
+        {
+            "market": source, "target": target, "counts": counts,
+            "page": market, "survivor": request.query_params.get("survivor", ""),
+        },
     )
 
 
@@ -790,16 +831,16 @@ def merge_execute(request: Request, ref: str) -> Response:
     action_merge_market). Success redirects to the SURVIVOR: the source page
     this confirm rendered on no longer exists."""
     conn = _conn(request)
-    source = _market(request, ref)
+    market = _market(request, ref)
     try:
-        target = _merge_target(request, source)
+        source, target = _merge_pair(request, market)
         with batches_svc.open_batch(
             conn, source="web", tool="merge_markets",
             summary="merged two markets", org_id=target.id,
         ):
             result = merge_markets(conn, source.id, target.id)
     except MergeError as exc:
-        return _merge_form(request, source, error=str(exc))
+        return _merge_form(request, market, error=str(exc))
     return _refresh(request, f"/markets/{result.target.ref}")
 
 

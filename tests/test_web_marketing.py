@@ -3851,3 +3851,83 @@ def test_typing_a_rate_replaces_the_derived_one_and_drops_the_mark(
     back = _tab(client, org)
     assert "10.05" in back
     assert '<span class="tag-derived">derived</span>' in back
+
+
+def test_the_client_note_is_a_cell_on_the_header_that_says_who_reads_it(
+    client_and_org,
+):
+    """THE LABEL IS THE MARKING — the `decline_reason` /
+    `decline_reason_public` rule one table over, where a single field guarded
+    by a "safe to share" tick fails the first time somebody forgets to tick
+    it. This is the one thing on the header a client reads in the broker's own
+    words, so every place it is typed says so."""
+    client, org = client_and_org
+    conn, placement = _with_expiring(client, org)
+
+    html = _tab(client, org)
+    assert "the client reads this" in html
+    assert 'data-field="client_note"' in html
+
+    note = "TIV excludes the Ohio site, added mid-term."
+    saved = client.post(
+        _line_cell_url(org, placement, GL, "client_note"),
+        data={"client_note": note},
+    )
+    assert saved.status_code == 200
+
+    from bookkit.repo import marketing
+
+    assert marketing.placement_line(conn, placement.id, GL).client_note == note
+    assert note in _tab(client, org)
+
+
+def test_the_note_cell_renders_prose_and_not_money(client_and_org):
+    """Every other cell on this header is money, a count or a rate and falls
+    through to `format_cents`. A note reaching that renders as a dollar figure
+    or raises, depending on what was typed."""
+    client, org = client_and_org
+    _, placement = _with_expiring(client, org)
+    client.post(
+        _line_cell_url(org, placement, GL, "client_note"),
+        data={"client_note": "12 month policy"},
+    )
+    cell = client.get(_line_cell_url(org, placement, GL, "client_note"))
+    assert "12 month policy" in cell.text
+    assert "$12" not in cell.text
+
+
+def test_the_header_says_what_the_division_gives_when_a_typed_rate_disagrees(
+    client_and_org,
+):
+    """NOT A REFUSAL. The typed figure is still what every reader uses — a
+    rate off a policy outranks the division and always did — so this states
+    the arithmetic and its answer and stops. The broker is the only one who
+    knows which of the two is wrong."""
+    client, org = client_and_org
+    conn, placement = _with_expiring(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(
+        conn, placement.id, GL, expiring_rate_micros=9_500_000
+    )
+
+    html = _tab(client, org)
+    assert "9.50" in html
+    assert "premium &divide; exposure = 10.05" in html
+    # it is not the derived case, and must not read as one
+    assert "tag-derived" not in html
+
+
+def test_a_rounded_entry_carries_no_marker(client_and_org):
+    """A marker on every correctly-entered line is a marker nobody reads."""
+    client, org = client_and_org
+    conn, placement = _with_expiring(client, org)
+    from bookkit.repo import marketing
+
+    marketing.set_placement_line(
+        conn, placement.id, GL, expiring_rate_micros=10_050_000
+    )
+
+    html = _tab(client, org)
+    assert "10.05" in html
+    assert "tag-disagrees" not in html

@@ -1234,6 +1234,17 @@ table.rows td.mono {
   color: var(--muted);
 }
 
+/* THE TYPED RATE AND THE DIVISION DO NOT AGREE. Warning weight, not danger:
+   nothing is refused and the typed figure is still what every reader uses —
+   what is wanted is that the broker looks. It carries the arithmetic in
+   words, so the colour is never the only signal. */
+.tag-disagrees {
+  margin-left: 0.375rem;
+  font-family: var(--sans);
+  font-size: var(--hint-size);
+  color: var(--warn);
+}
+
 /* an overdue due date carries the word, not just the colour */
 .tag-overdue {
   margin-left: 0.375rem;

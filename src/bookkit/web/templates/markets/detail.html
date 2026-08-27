@@ -22,7 +22,11 @@
             hx-target="#market-head-host" hx-swap="innerHTML">Nest under…</button>
     <button type="button" class="row-action-btn"
             hx-get="/markets/{{ market.ref }}/merge"
-            hx-target="#market-head-host" hx-swap="innerHTML">Merge duplicate…</button>
+            {# "Merge duplicate…" promised the opposite of what it did: it sat
+               on the page of the record that would BE the duplicate. The
+               direction is a choice on the form now, so the label names the
+               act and not one side of it (Grant, 2026-08-27). #}
+            hx-target="#market-head-host" hx-swap="innerHTML">Merge with…</button>
   </div>
 
   <div class="markets-body">

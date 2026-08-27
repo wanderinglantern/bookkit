@@ -988,6 +988,17 @@ LINE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "expiring_basis", "expiring_exposure",
         "expiring_premium", "expiring_rate_micros",
     )),
+    # ITS OWN GROUP, because it is a different KIND of fact from the nine
+    # figures above it — proximity is what tells a reader where one kind ends
+    # (the layer details row, 2026-08-20), and prose filed among figures reads
+    # as one more expectation of the line.
+    #
+    # The group label does NOT repeat the field's. Both said "the client's
+    # copy" first, and a group of one whose heading restates its only label is
+    # the same words twice on one line. The marking lives on the FIELD, where
+    # it has to (it is the cell editor's aria-label, and a group heading is not
+    # announced); the group says what kind of thing follows.
+    ("note", ("client_note",)),
 )
 
 LINE_KEYS: tuple[str, ...] = tuple(k for _, keys in LINE_GROUPS for k in keys)
@@ -1102,6 +1113,11 @@ def line_display_value(source: Any, key: str) -> str:
     field = line_fields(source)[key]
     if field.kind == "rate":
         return marketing_report.fmt_rate(value) or NOT_SET
+    if field.kind in ("text", "textarea"):
+        # PROSE IS NOT A FIGURE. Everything else on this header is money, a
+        # count or a rate and falls through to `format_cents`; a note reaching
+        # that renders as "$0.00" or raises, depending on what was typed.
+        return str(value) or NOT_SET
     return format_cents(value)
 
 
@@ -1135,8 +1151,23 @@ def line_cell_suffix(source: Any, key: str) -> str:
     came from, and a reader deciding whether to trust it against a policy
     needs that beside the digits.
     """
-    if key == "expiring_rate_micros" and expiring_rate_of(source).derived:
+    if key != "expiring_rate_micros":
+        return ""
+    rate = expiring_rate_of(source)
+    if rate.derived:
         return '<span class="tag-derived">derived</span>'
+    if rate.disagrees and rate.computed is not None:
+        # THE ARITHMETIC AND ITS ANSWER, and nothing else (Grant, 2026-08-27:
+        # no explainers in output). A typed rate the premium and exposure
+        # beside it do not support is two figures where one is a lie, and the
+        # broker is the only one who knows which — so this states what the
+        # division gives and stops. It is not a refusal: the typed figure is
+        # still what every reader uses, because a rate off a policy outranks
+        # the division and always did.
+        return (
+            '<span class="tag-disagrees">premium &divide; exposure = '
+            f"{marketing_report.fmt_rate(rate.computed)}</span>"
+        )
     return ""
 
 

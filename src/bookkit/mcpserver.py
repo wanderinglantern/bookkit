@@ -1028,6 +1028,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         rate_per: str | None = None,
         limit_sought: str | None = None,
         attach_sought: str | None = None,
+        client_note: str | None = None,
     ) -> dict[str, Any]:
         """State what one line of coverage on one placement is expected to do —
         the expiring figures the client's comparison is measured against, and
@@ -1050,7 +1051,13 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         leaves the comparison blank instead of assuming exposure was flat.
         `attach_sought` is where the
         cover being asked for starts — blank means primary, which is the
-        ordinary case, so state it only for an excess layer."""
+        ordinary case, so state it only for an excess layer.
+
+        `client_note` IS READ BY THE CLIENT, verbatim, under this line's
+        heading on the workbook — freeform prose for something the figures
+        cannot say ("TIV excludes the Ohio site, added mid-term"). It is not
+        the place for anything a market told us in confidence; pass an empty
+        string to clear it."""
         return _set_placement_line(
             rw, placement_ref, line,
             expiring_premium=expiring_premium,
@@ -1062,6 +1069,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
             rate_per=rate_per,
             limit_sought=limit_sought,
             attach_sought=attach_sought,
+            client_note=client_note,
         )
 
     @server.tool()
@@ -4333,6 +4341,7 @@ def _set_placement_line(
     rate_per: str | None = None,
     limit_sought: str | None = None,
     attach_sought: str | None = None,
+    client_note: str | None = None,
 ) -> dict[str, Any]:
     """What ONE line of coverage on ONE placement is expected to do: the
     expiring figures a client's comparison is built on, and the exposure and
@@ -4381,13 +4390,15 @@ def _set_placement_line(
         fields["rate_per"] = _clean_typed("int", "rate_per", rate_per)
     if limit_sought is not None:
         fields["limit_sought"] = _clean_typed("money", "limit_sought", limit_sought)
-    if attach_sought is not None:
-        fields["attach_sought"] = _clean_typed("money", "attach_sought", attach_sought)
+    if client_note is not None:
+        # FREEFORM, AND THE CLIENT READS IT. Empty string clears it, which is
+        # how every other nullable text field on this server is cleared.
+        fields["client_note"] = _clean_typed("textarea", "client_note", client_note)
     if not fields:
         raise ValueError(
             "set_placement_line was given nothing to set — pass at least one "
             "expiring figure, an expected exposure, a basis, a rate_per, a "
-            "limit sought or an attach sought"
+            "limit sought, an attach sought or a client note"
         )
 
     with _open_batch(
@@ -4419,12 +4430,19 @@ def _set_placement_line(
         # the assistant can tell a division from a figure off a policy.
         "expiring_rate_micros": _expiring.micros,
         "expiring_rate_derived": _expiring.derived,
+        # WHAT PREMIUM / EXPOSURE GIVES, beside what is stored. Where a rate
+        # was TYPED and these two differ by more than a rounding, one of them
+        # is wrong and only the broker knows which — the assistant can see it
+        # here rather than reporting a figure it has no way to doubt.
+        "expiring_rate_computed": _expiring.computed,
+        "expiring_rate_disagrees": _expiring.disagrees,
         "expiring_basis": row.expiring_basis,
         "expected_exposure": row.expected_exposure,
         "rating_basis": row.rating_basis,
         "rate_per": row.rate_per,
         "limit_sought": row.limit_sought,
         "attach_sought": row.attach_sought,
+        "client_note": row.client_note,
         "batch": batch.ref,
     }
 

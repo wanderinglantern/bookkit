@@ -312,6 +312,23 @@ def test_set_placement_line_upserts_one_row_per_line(conn) -> None:
     assert out["expiring_rate_derived"] is False
 
 
+def test_the_assistant_can_write_the_note_the_client_reads(conn) -> None:
+    """A SCHEMA CHANGE IS NOT DONE UNTIL AN AGENT CAN SEE IT (CLAUDE.md). The
+    note prints under the line's heading on the client's own workbook, so a
+    tool that could not write or read it would leave the assistant unable to
+    say what the broker just said in the browser."""
+    _, placement = _book(conn)
+    note = "TIV excludes the Ohio site, added mid-term."
+    out = mcpserver._set_placement_line(
+        conn, placement.ref, "GL", client_note=note
+    )
+    assert out["client_note"] == note
+    # cleared the way every other nullable text field on this server is
+    assert mcpserver._set_placement_line(
+        conn, placement.ref, "GL", client_note=""
+    )["client_note"] is None
+
+
 def test_the_tool_answers_with_the_composite_rate_the_browser_shows(conn) -> None:
     """A SCHEMA CHANGE IS NOT DONE UNTIL AN AGENT CAN SEE IT (CLAUDE.md).
 

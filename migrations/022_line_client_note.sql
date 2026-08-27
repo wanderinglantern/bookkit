@@ -1,0 +1,37 @@
+-- 022 — a line of coverage can carry a note the client reads.
+--
+-- Grant, 2026-08-27: "I would also like to add a notes field to be able to
+-- make notes on a line that would be present for a client in the table - just
+-- a freeform area to make those."
+--
+-- A NEW COLUMN AND NOT `placement_line.notes`, WHICH ALREADY EXISTS AND IS
+-- DEAD. That column has been on the table since 015, is on the model, and no
+-- surface has ever read or written it. Reusing it would have cost nothing
+-- today and would have been the bug: every other `notes` in this book is
+-- INTERNAL. `market_response.notes` prints only on the broker's copy;
+-- `submission_subjectivity.notes` is "the broker's own"; `rfi_item.notes` is
+-- the same. Two columns named `notes` inside one report, one client-safe and
+-- one not, is the second copy that quietly differs — and the day somebody
+-- files an underwriter's aside in the wrong one it is on a client's workbook.
+--
+-- THE NAME IS THE MARKING, which is the rule `decline_reason_public` /
+-- `decline_reason` already settled one table over: "Real decline reasons are
+-- routinely unusable verbatim, and a single field guarded by a checkbox fails
+-- the first time somebody forgets to tick it." So this is not `notes` with a
+-- flag; it is a column whose name can only be read one way, and the field
+-- LABEL a broker types under says the same thing again.
+--
+-- ADDITIVE ONLY. One nullable TEXT column on one table. Nothing existing is
+-- read, rewritten or constrained differently by this file, and every row
+-- starts NULL — which reads as "nothing to say about this line", where every
+-- line recorded before today honestly stands. No backfill, no rewrite, and
+-- `placement_line.notes` is left exactly as it is: removing a column is a
+-- destructive migration, and a dead one costs nothing but this comment.
+--
+-- FREEFORM ON PURPOSE, and the one field on this header that is. Every other
+-- expectation is a figure or a picker, because a knowable set of options is a
+-- picker (the data-entry rules). This is prose a broker writes for one client
+-- about one line — "TIV excludes the Ohio site, added mid-term" — and there is
+-- no set to constrain it to.
+
+ALTER TABLE placement_line ADD COLUMN client_note TEXT;

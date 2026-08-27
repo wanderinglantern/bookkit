@@ -199,3 +199,170 @@ def test_a_line_with_no_exposure_still_says_there_is_no_expiring_rate(
     block = next(b for b in report.blocks if b.line_id == GL)
     assert block.expiring_rate.micros is None
     assert block.rows[0].rate_move.note == marketing_report.NO_EXPIRING_RATE
+
+
+# --- what the heading says, and the note under it --------------------------
+
+
+def test_a_line_with_only_its_expiring_side_still_states_the_basis_and_the_value(
+    conn: sqlite3.Connection,
+) -> None:
+    """Grant, 2026-08-27: "I would like to provide the basis value ... GL:
+    Basis: Total Insured Value: $10,000, Expiring Premium: $1,000, Rate: $1.00
+    per $1,000".
+
+    The heading read the basis and the exposure off THIS TERM's columns while
+    the premium and rate beside them came off the EXPIRING ones — so the shape
+    the composite rate makes ordinary (an expiring premium and exposure, and
+    nothing about this term yet) printed `expiring $100,000 at 100.00`: a rate
+    with no basis, no denominator and no exposure to divide by. On a client's
+    workbook."""
+    _, placement, _ = _line(
+        conn, expiring_basis="tiv", expiring_exposure=1_000_000_00,
+        expiring_premium=100_000_00, rating_basis=None,
+    )
+    _quote(conn, placement.id, rate_micros=11_053_658, premium=45_320_000)
+    report = marketing_report.compose(conn, placement.id, TODAY)
+    label = marketing_report.to_sections(report)[0].label
+
+    assert "Total insured value $1,000,000" in label
+    assert "premium $100,000" in label
+    # 100,000 / 1,000,000 x 1,000 = 100.00 — and the reader can now do that
+    # division, which is the whole point of naming the exposure beside it.
+    assert "rate 100.00 per $1,000" in label
+
+
+def test_a_clause_never_borrows_the_other_term_s_basis(
+    conn: sqlite3.Connection,
+) -> None:
+    """AN AXIS NOBODY STATED IS NOT AN AXIS THAT AGREES — the same reading
+    `_rate_move` makes, in prose, where no guard can see it. A heading that
+    filled last year's basis in from this year's would state a measurement
+    nobody made."""
+    _, placement, _ = _line(
+        conn, expiring_basis="payroll", rating_basis="gross_sales",
+        expected_exposure=4_850_000_000,
+    )
+    _quote(conn, placement.id, rate_micros=11_053_658, premium=45_320_000)
+    label = marketing_report.to_sections(
+        marketing_report.compose(conn, placement.id, TODAY)
+    )[0].label
+
+    assert "this term: Gross sales $48,500,000" in label
+    assert "expiring: Payroll $41,000,000" in label
+
+
+def test_the_client_note_leads_the_section_on_both_copies(
+    conn: sqlite3.Connection,
+) -> None:
+    """Grant, 2026-08-27: "a notes field to be able to make notes on a line
+    that would be present for a client in the table".
+
+    It is a ROW and not a heading clause — prose of any length inside the
+    heading pushes the labelled figures out of the cell — and it comes FIRST,
+    because it is context for reading the rows under it."""
+    note = "TIV excludes the Ohio site, added mid-term."
+    _, placement, _ = _line(conn, client_note=note)
+    _quote(conn, placement.id, rate_micros=11_053_658, premium=45_320_000)
+
+    for audience in (marketing_report.CLIENT, marketing_report.INTERNAL):
+        report = marketing_report.compose(conn, placement.id, TODAY, audience)
+        section = marketing_report.to_sections(report)[0]
+        assert section.rows[0][0] == "Note", audience
+        assert section.rows[0][1] == note, audience
+        assert len(section.rows[0]) == len(marketing_report.columns(audience))
+        # and it did not leak into the heading, which is figures only
+        assert note not in section.label
+
+
+def test_a_line_with_no_note_renders_no_note_row(conn: sqlite3.Connection) -> None:
+    """A row labelled Note with a blank beside it reads to a client as
+    something that failed to print."""
+    _, placement, _ = _line(conn)
+    _quote(conn, placement.id, rate_micros=11_053_658, premium=45_320_000)
+    section = marketing_report.to_sections(
+        marketing_report.compose(conn, placement.id, TODAY)
+    )[0]
+    assert section.rows[0][0] != "Note"
+
+
+def test_a_note_on_a_line_nobody_has_marketed_still_prints(
+    conn: sqlite3.Connection,
+) -> None:
+    """The empty-block branch is a second renderer of the same section and it
+    forgot the bridge once already. A line nobody has approached is exactly
+    where a note explaining WHY belongs."""
+    note = "Not going to market — renewing with the incumbent."
+    _, placement, _ = _line(conn, client_note=note)
+    section = marketing_report.to_sections(
+        marketing_report.compose(conn, placement.id, TODAY)
+    )[0]
+    assert section.rows[0][:2] == ("Note", note)
+    assert "No markets approached" in section.rows[1][0]
+
+
+def test_clearing_the_note_stores_nothing_rather_than_an_empty_string(
+    conn: sqlite3.Connection,
+) -> None:
+    """ONE WAY TO SAY NOTHING. Both surfaces clear this by sending an empty
+    box, and a column holding both NULL and "" is one every later reader has
+    to remember to test twice — the first one that writes `is not None` prints
+    an empty Note row on a client's workbook."""
+    _, placement, _ = _line(conn, client_note="something")
+    line = marketing.set_placement_line(
+        conn, placement.id, GL, client_note="   "
+    )
+    assert line.client_note is None
+
+
+# --- a typed rate the two figures beside it do not support ------------------
+
+
+def test_a_typed_rate_that_contradicts_the_division_is_flagged(
+    conn: sqlite3.Connection,
+) -> None:
+    """Grant, 2026-08-27, asked for this after it was first reported as a
+    design cost. A typed rate that premium / exposure does not support is two
+    figures where one is a lie, and the Rate delta a client reads is composed
+    from the typed one."""
+    _, _, line = _line(conn, expiring_rate_micros=9_500_000)
+    got = expiring_rate(line)
+
+    assert got.micros == 9_500_000       # the typed figure still wins
+    assert got.derived is False
+    assert got.computed == EXPIRING_RATE  # and the division is carried beside it
+    assert got.disagrees is True
+
+
+def test_a_rounded_entry_is_not_a_disagreement(conn: sqlite3.Connection) -> None:
+    """412,000 / 41,000 is 10.0488 and goes on the file as 10.05. A marker
+    that fired on that would be on every correctly-entered line in the book,
+    which is how a warning stops being read."""
+    _, _, line = _line(conn, expiring_rate_micros=10_050_000)
+    got = expiring_rate(line)
+
+    assert got.micros == 10_050_000
+    assert got.computed == EXPIRING_RATE
+    assert got.disagrees is False
+
+
+def test_a_derived_rate_can_never_disagree_with_itself(
+    conn: sqlite3.Connection,
+) -> None:
+    _, _, line = _line(conn)
+    assert expiring_rate(line).derived is True
+    assert expiring_rate(line).disagrees is False
+
+
+def test_nothing_to_divide_by_means_nothing_to_disagree_with(
+    conn: sqlite3.Connection,
+) -> None:
+    """The state the stored column exists for: a rate off last year's policy
+    and no exposure ever captured. There is no second figure, so there is no
+    contradiction to report — and a marker here would be permanent."""
+    _, _, line = _line(conn, expiring_exposure=None, expiring_rate_micros=9_500_000)
+    got = expiring_rate(line)
+
+    assert got.micros == 9_500_000
+    assert got.computed is None
+    assert got.disagrees is False

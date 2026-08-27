@@ -59,6 +59,24 @@ def _break_it(conn, placement) -> None:
     twin = dict(top)
     twin["id"] = top["id"] + "-twin"
     twin["name"] = top["name"] + " (second carrier)"
+    # THE TWIN DOES NOT FOLLOW UNDERLYING, and it has to be said out loud
+    # because the seeded top layer now does (it spans GL and AL, and a
+    # spanning slab carries no pinned attachment). towerkit's overlap check
+    # EXEMPTS a follows layer as the upper of the pair — `_check_line_stack`,
+    # `and not above.follows_underlying` — because such a layer's `attach` is
+    # the maximum across its columns and comparing it naively would report
+    # overlaps that are not there.
+    #
+    # THAT EXEMPTION IS TOO BROAD AND IS A REAL HOLE: two IDENTICAL
+    # follows-underlying layers on one line validate clean and draw on top of
+    # each other, which is precisely the failure `line-overlap` exists to
+    # catch, in its follows costume (measured 2026-08-27; reported to Grant,
+    # not fixed here — the fix is in `Program.underlying_tops`, which cannot
+    # see follows layers at all, and that reaches every drawing).
+    #
+    # This fixture is about the PAGE saying what is wrong, so it makes an
+    # overlap towerkit actually reports rather than riding on that hole.
+    twin["followsUnderlying"] = False
     data["layers"].append(twin)
     path.write_text(json.dumps(data, indent=2))
     sync.project(conn, path, placement_id=placement.id)

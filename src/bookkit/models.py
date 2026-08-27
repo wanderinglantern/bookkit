@@ -927,6 +927,15 @@ class PlacementLine(Row):
     rate_per: int | None = None
     attach_sought: int | None = None
     limit_sought: int | None = None
+    # THE ONE FIELD ON THIS ROW A CLIENT READS AS WRITTEN. It prints under the
+    # line's heading on BOTH workbooks, so the label everywhere a broker types
+    # it says so — the `decline_reason_public` / `decline_reason` rule, one
+    # table over: the name and the label are the marking, never a "safe to
+    # share" tick somebody forgets.
+    client_note: str | None = None
+    # DEAD SINCE 015 and left that way deliberately (migration 022): no
+    # surface reads or writes it, and every other `notes` in this book is the
+    # broker's own. Removing a column is a destructive migration for no gain.
     notes: str | None = None
     created_at: str
     updated_at: str

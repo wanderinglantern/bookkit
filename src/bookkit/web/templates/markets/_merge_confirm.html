@@ -3,6 +3,10 @@
    makes a market merge safe for towers leads the list: the duplicate's NAME
    becomes an alias of the survivor, so every tower spelling that created
    the duplicate keeps resolving (services.merge.merge_markets). #}
+{# `market` is the LOSER and `target` the survivor, whichever way round the
+   form was answered — `page` is the market whose page this is, which is only
+   the route's address now that the direction is a choice. Every sentence below
+   names both by name, so a reader never has to know which is which. #}
 <div class="confirm-remove" role="alertdialog"
      aria-label="Merge {{ market.name }} into {{ target.name }}">
   <p class="confirm-remove-title">
@@ -20,7 +24,7 @@
   </ul>
   <div class="form-actions">
     <button type="button" class="btn-danger"
-            hx-post="/markets/{{ market.ref }}/merge/confirm?target={{ target.id }}"
+            hx-post="/markets/{{ page.ref }}/merge/confirm?target={{ (target if survivor == 'this' else market).id }}&amp;survivor={{ survivor }}"
             hx-target="closest .form-host" hx-swap="innerHTML">Merge markets</button>
     <button type="button" class="btn-cancel" data-form-cancel>Cancel</button>
   </div>
