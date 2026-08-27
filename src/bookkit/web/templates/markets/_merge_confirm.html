@@ -22,6 +22,18 @@
     <li>{{ market.name }} is then soft-deleted. The merge lands as one
         change that can be reverted.</li>
   </ul>
+  {# THE ADJACENT VERB, NAMED WHERE THE DECISION IS MADE. The alias is what
+     makes a merge safe for towers, and it is also what makes it WRONG for two
+     markets that are genuinely different: "AIG Environmental" resolving to AIG
+     for ever is right for a duplicate record and a loss of a real underwriting
+     unit. The distinction is the broker's and nothing in the data can make it,
+     so the control that fits the other reading is named here rather than left
+     to be remembered (Grant, 2026-08-27, on exactly that pair). #}
+  <p class="confirm-remove-aside">
+    If {{ market.name }} is a real underwriting unit of {{ target.name }} rather
+    than a second record for it, <strong>Nest under…</strong> is the control —
+    it keeps both markets and records the family.
+  </p>
   <div class="form-actions">
     <button type="button" class="btn-danger"
             hx-post="/markets/{{ page.ref }}/merge/confirm?target={{ (target if survivor == 'this' else market).id }}&amp;survivor={{ survivor }}"
