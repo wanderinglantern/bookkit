@@ -4740,3 +4740,155 @@ def test_the_labels_come_from_one_declaration(app_and_org):
     for key in keys:
         if key.startswith("layer."):
             assert key in _PLACED, f"{key} is not a field this page can edit"
+
+
+# --- the umbrella that had no door -----------------------------------------
+
+
+def _umbrella_placement(client, org, tmp_path):
+    """The two-line program plus an umbrella sitting on its own line from the
+    ground — the shape Grant's MCP-built program arrived in."""
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    assert sync.add_line(
+        conn, placement.id, "Umbrella", layer_name="Umbrella Liability",
+        limit_cents=10_000_000_00,
+    ).ok
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "Umbrella Liability"
+    )
+    return placement, layer_id
+
+
+def test_the_overlap_refusal_offers_the_verb_that_seats_the_umbrella(
+    app_and_org, tmp_path
+):
+    """Grant, 2026-08-27: "it is not clear how to do this at all in the
+    interface". The refusal now names the fix AND carries the button that
+    applies it, because `follows underlying` is a phrase a broker who does
+    not already know it cannot search for."""
+    client, org = app_and_org
+    placement, layer_id = _umbrella_placement(client, org, tmp_path)
+    path = Path(placement.program_path)
+    before = path.read_bytes()
+
+    refused = client.post(
+        f"{_layer_base(org, placement, layer_id)}/applies-to", data={"line": "gl"}
+    )
+
+    assert refused.status_code == 200
+    assert path.read_bytes() == before, "a refusal wrote to the file"
+    assert "OVERLAP" in refused.text
+    assert "seat Umbrella Liability on the underlying tower" in refused.text
+    assert "&#34;follows&#34;: &#34;true&#34;" in refused.text
+
+
+def test_pressing_that_button_widens_and_seats_it_in_one_write(
+    app_and_org, tmp_path
+):
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer_id = _umbrella_placement(client, org, tmp_path)
+
+    done = client.post(
+        f"{_layer_base(org, placement, layer_id)}/applies-to",
+        data={"line": "gl", "follows": "true"},
+    )
+
+    assert done.status_code == 200
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer_id
+    )
+    assert sorted(layer["applies_to"]) == ["gl", "umbrella"]
+    assert layer["follows_underlying"] is True
+    # And the refusal is gone rather than merely hidden.
+    assert "OVERLAP" not in done.text
+
+
+def test_a_refusal_following_underlying_cannot_fix_offers_no_button(
+    app_and_org, tmp_path
+):
+    """A DOOR THAT DOES NOT OPEN IS WORSE THAN NO DOOR. Dropping a slab's last
+    line is refused for a reason the seating verb has nothing to do with, and
+    the message stands alone exactly as it always did."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id)
+        if ly["applies_to"] == ["gl"]
+    )
+
+    refused = client.post(
+        f"{_layer_base(org, placement, layer['id'])}/applies-to", data={"line": "gl"}
+    )
+
+    assert refused.status_code == 200
+    assert "ws-error-fix" not in refused.text
+
+
+def test_a_slab_at_a_different_height_over_each_line_names_every_seat(
+    app_and_org, tmp_path
+):
+    """THE POSITION SENTENCE WAS PRINTING TWO COLUMNS' TRUTHS AS ONE. It named
+    the slab beneath on the layer's FIRST line and the attachment off
+    `layer.attach`, which for a follows layer is the MAX across every line it
+    covers — so an umbrella seated on a $2,000,000 GL primary and a
+    $5,000,000 IM primary read "Sits on Primary GL → attaches at $5,000,000",
+    inventing a $3,000,000 band over GL that it actually covers."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer_id = _umbrella_placement(client, org, tmp_path)
+    # a taller primary on the third line, so the two seats DIFFER
+    assert sync.update_layer(
+        conn, placement.id, "primary-cy", limit_cents=5_000_000_00
+    ).ok
+    client.post(
+        f"{_layer_base(org, placement, layer_id)}/applies-to",
+        data={"line": "gl", "follows": "true"},
+    )
+    done = client.post(
+        f"{_layer_base(org, placement, layer_id)}/applies-to",
+        data={"line": "cy", "follows": "true"},
+    )
+
+    assert done.status_code == 200
+    assert "Follows underlying — one seat per line" in done.text
+    # $0 at the base of its own column, $2,000,000 over GL, $5,000,000 over CY
+    for figure in ("$0", "$2,000,000", "$5,000,000"):
+        assert figure in done.text
+    assert "Sits on" not in done.text.split("ws-position")[1][:400]
+
+
+def test_a_single_line_follows_layer_keeps_the_sentence(app_and_org, tmp_path):
+    """AN EXCESS THAT FOLLOWS ITS OWN PRIMARY IS THE ORDINARY CASE, and it has
+    exactly one seat — the sentence is already true there, and a list of one
+    would be noise where prose reads. Only a slab spanning SEVERAL lines has
+    no single attachment."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement = _two_line_placement(client, org, tmp_path)
+    added = client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers",
+        data={"name": "GL Excess", "line": "gl",
+              "limit_cents": "3,000,000", "premium_cents": ""},
+    )
+    assert added.status_code == 200
+    layer_id = next(
+        ly["id"] for ly in sync.layer_details(conn, placement.id)
+        if ly["name"] == "GL Excess"
+    )
+
+    on = client.post(
+        f"{_layer_base(org, placement, layer_id)}/follows",
+        data={"follows": "true"},
+    )
+
+    assert on.status_code == 200
+    layer = next(
+        ly for ly in sync.layer_details(conn, placement.id) if ly["id"] == layer_id
+    )
+    assert layer["follows_underlying"] is True
+    assert "one seat per line" not in on.text
+    assert "Sits on" in on.text

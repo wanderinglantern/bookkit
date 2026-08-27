@@ -1324,3 +1324,79 @@ class TestTheScaffoldIsFilled:
         assert sync.is_untouched_scaffold(load_program(dest))
         assert sync.add_line(conn, placement.id, "Cyber").ok
         assert not sync.is_untouched_scaffold(load_program(dest))
+
+
+# --- an umbrella over several lines ----------------------------------------
+#
+# Grant, 2026-08-27, on a program built through MCP: assigning an umbrella to
+# cover GL and Auto raised `OVERLAP ... at $1,000,000 vs $0`, and "it is not
+# clear how to do this at all in the interface". The $0 is the umbrella's OWN
+# attachment — a layer carries one across every line it covers — and
+# `follows_underlying` is the concept that seats it at a DIFFERENT height over
+# each line. towerkit modelled that all along; nothing said so.
+
+
+def _umbrella(conn, placement) -> str:
+    """An umbrella on its own line, from the ground — the shape an MCP-built
+    program arrives in."""
+    assert sync.add_line(
+        conn, placement.id, "Umbrella", layer_name="Umbrella Liability",
+        limit_cents=10_000_000_00,
+    ).ok
+    program = load_program(Path(placement.program_path))
+    return next(ly.id for ly in program.layers if ly.name == "Umbrella Liability")
+
+
+def test_widening_an_umbrella_over_a_placed_line_is_refused_and_says_why(
+    linked,
+) -> None:
+    conn, _, placement, path = linked
+    layer_id = _umbrella(conn, placement)
+    before = path.read_bytes()
+
+    diags = sync.set_applies_to(conn, placement.id, layer_id, ["umbrella", "gl"])
+
+    assert not diags.ok
+    message = " ".join(d.message for d in diags.errors)
+    assert "OVERLAP" in message
+    # towerkit names the verb; without it a broker cannot search for the fix.
+    assert "follow underlying" in message
+    assert path.read_bytes() == before
+
+
+def test_seating_the_umbrella_widens_it_in_one_act(linked) -> None:
+    """ONE MUTATION, ONE UNDO UNIT. Two sequential calls cannot do this:
+    whichever ran first would be refused on its own, so the pair is
+    unreachable and the broker is left at a wall with no door."""
+    conn, _, placement, path = linked
+    layer_id = _umbrella(conn, placement)
+
+    diags = sync.set_applies_to(
+        conn, placement.id, layer_id, ["umbrella", "gl"], follows=True
+    )
+
+    assert diags.ok, [d.message for d in diags.errors]
+    program = load_program(path)
+    layer = next(ly for ly in program.layers if ly.id == layer_id)
+    assert layer.follows_underlying is True
+    assert sorted(layer.applies_to) == ["gl", "umbrella"]
+    # THE POINT OF THE WHOLE THING: a different height over each line — $0 at
+    # the base of its own column, on top of the $2,000,000 GL primary.
+    assert program.underlying_tops(layer) == {"umbrella": 0, "gl": 2_000_000}
+
+
+def test_the_dry_run_says_whether_the_door_opens(linked) -> None:
+    """A surface must never offer a button that fails. The predicate is a dry
+    run of the exact write the button makes."""
+    conn, _, placement, path = linked
+    layer_id = _umbrella(conn, placement)
+    before = path.read_bytes()
+
+    assert sync.follows_would_seat(
+        conn, placement.id, layer_id, ["umbrella", "gl"]
+    )
+    # An empty scope is refused for a reason following underlying cannot touch,
+    # so the door stays shut and the message stands on its own.
+    assert not sync.follows_would_seat(conn, placement.id, layer_id, [])
+    # NOTHING WAS WRITTEN by either question — byte for byte.
+    assert path.read_bytes() == before

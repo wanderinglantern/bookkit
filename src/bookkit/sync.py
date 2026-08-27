@@ -2158,8 +2158,32 @@ def premium_clear_preview(
     }
 
 
+def _rescope(
+    layer_id: str, line_ids: list[str], *, follows: bool
+) -> Callable[[Program], None]:
+    """The rescope mutation, shared by the write and its dry run so the two
+    cannot describe different towers (`rescope_preview`'s own rule)."""
+    from towerkit.edit import set_applies_to as edit_set_applies_to
+    from towerkit.edit import set_follows_underlying as edit_set_follows
+
+    def mutate(program: Program) -> None:
+        try:
+            edit_set_applies_to(program, layer_id, list(line_ids))
+            if follows:
+                edit_set_follows(program, layer_id, True)
+        except KeyError as exc:
+            raise ValueError(str(exc).strip("\"'")) from exc
+
+    return mutate
+
+
 def set_applies_to(
-    conn: sqlite3.Connection, placement_id: str, layer_id: str, line_ids: list[str]
+    conn: sqlite3.Connection,
+    placement_id: str,
+    layer_id: str,
+    line_ids: list[str],
+    *,
+    follows: bool = False,
 ) -> Diagnostics:
     """Re-scope a layer onto a different set of lines, through towerkit.edit.
 
@@ -2168,16 +2192,39 @@ def set_applies_to(
     WriteConflict into diagnostics — so without this the refusal escaped as an
     unhandled exception and reached the browser as a 500 instead of a message
     naming the line.
+
+    `follows` SEATS THE SLAB IN THE SAME ACT, and is why this takes the flag
+    rather than leaving the caller to make two calls. A layer carries ONE
+    attachment across every line it covers, so widening an umbrella onto a
+    column that already has cover from the ground up is refused as an overlap
+    against its own $0 — and `follows_underlying` is the verb that seats it at
+    a different height over each line (towerkit's `underlying_tops`). Two
+    sequential calls cannot do it: whichever runs first is refused on its own,
+    so the pair is unreachable and the broker is left at a wall with no door
+    (Grant, 2026-08-27: "it is not clear how to do this at all in the
+    interface"). One mutation is also ONE undo unit.
+
+    NEVER SET OFF. A single-line excess follows underlying too, and narrowing a
+    spanning slab back down is no reason to pin its attachment — the same
+    set-only rule `_reseat_column` follows.
     """
-    from towerkit.edit import set_applies_to as edit_set_applies_to
+    return _mutate(conn, placement_id, _rescope(layer_id, line_ids, follows=follows))
 
-    def mutate(program: Program) -> None:
-        try:
-            edit_set_applies_to(program, layer_id, list(line_ids))
-        except KeyError as exc:
-            raise ValueError(str(exc).strip("\"'")) from exc
 
-    return _mutate(conn, placement_id, mutate)
+def follows_would_seat(
+    conn: sqlite3.Connection, placement_id: str, layer_id: str, line_ids: list[str]
+) -> bool:
+    """Would this rescope go through if the slab followed underlying?
+
+    A DRY RUN OF THE EXACT WRITE THE BUTTON MAKES, so a surface never offers a
+    door that does not open. `write_through` refuses on ANY error, standing
+    ones included, so `ok` is the honest predicate: it answers "pressing this
+    will work", not "this fixes the overlap".
+    """
+    _, diags = preview(
+        conn, placement_id, _rescope(layer_id, line_ids, follows=True)
+    )
+    return bool(diags.ok)
 
 
 # --- the derived field seam ----------------------------------------------------
@@ -2916,8 +2963,6 @@ def rescope_preview(
     is reported unchanged, because towerkit does not re-rate and this
     refuses to guess. Nothing here writes.
     """
-    from towerkit.edit import set_applies_to as edit_set_applies_to
-
     linked = linked_program(conn, placement_id)
     before: TkModelLayer | None = None
     if linked.program is not None:
@@ -2929,13 +2974,12 @@ def rescope_preview(
         [lid for lid in before.applies_to if lid not in line_ids] if before else []
     )
 
-    def mutation(program: Program) -> None:
-        try:
-            edit_set_applies_to(program, layer_id, list(line_ids))
-        except KeyError as exc:
-            raise ValueError(str(exc).strip("\"'")) from exc
-
-    program, diags = preview(conn, placement_id, mutation)
+    # `_rescope`, NOT a second copy of it — the docstring above promises this
+    # is a dry run of the SAME call the commit makes, and two copies of one
+    # mutation is how that promise quietly stops being true.
+    program, diags = preview(
+        conn, placement_id, _rescope(layer_id, list(line_ids), follows=False)
+    )
     if program is None or before is None:
         return {"ok": False, "errors": [d.message for d in diags.errors]}
     labels = {line.id: line.label for line in program.lines}
