@@ -458,6 +458,42 @@ def outstanding_subjectivity_rows_for_org(
     ).fetchall()
 
 
+def subjectivity_rows_for_placement(
+    conn: sqlite3.Connection, placement_id: str
+) -> list[sqlite3.Row]:
+    """Every subjectivity recorded against every live submission on a
+    placement, with the market that asked for it and the lines of coverage
+    that package answered on.
+
+    ONE QUERY, EVERY STATUS. The marketing workbook's Subj. column prints how
+    many are OUTSTANDING (`open_subjectivity_counts`), and its own sheet lists
+    them all with their status beside them: a client reading "3 outstanding"
+    needs to see the two that are already met to know the list is complete,
+    and a met condition removed from the page reads as a condition nobody ever
+    asked for.
+
+    THE LINES ARE GROUP_CONCAT'd, and they can be EMPTY. A subjectivity hangs
+    off the PACKAGE, not off a response, so one condition can be a condition
+    of three lines of coverage at once — and on a package whose line nobody
+    has recorded yet, of none. The sheet prints what this returns and never
+    invents a line.
+    """
+    return conn.execute(
+        f"""
+        SELECT sj.*, s.market_org_id AS market_org_id,
+               (SELECT GROUP_CONCAT(DISTINCT r.line_id)
+                  FROM market_response r
+                 WHERE r.submission_id = s.id AND {base.alive('r')}) AS line_ids
+        FROM submission_subjectivity sj
+        JOIN submission s ON s.id = sj.submission_id
+        WHERE s.placement_id = ? AND {base.alive('sj')} AND {base.alive('s')}
+        ORDER BY sj.status <> '{SUBJECTIVITY_OPEN_STATUS}',
+                 sj.due_on IS NULL, sj.due_on, sj.created_at
+        """,
+        (placement_id,),
+    ).fetchall()
+
+
 def sent_dates_for_placement(
     conn: sqlite3.Connection, placement_id: str
 ) -> dict[str, str]:

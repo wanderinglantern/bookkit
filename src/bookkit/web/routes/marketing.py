@@ -1129,6 +1129,130 @@ async def marketing_assign_line(
     return _section(request, ref, org, placement_id)
 
 
+# --- an approach recorded in error -------------------------------------------
+#
+# THE PACKAGE, NOT AN ANSWER. `_REMOVE` above takes back what a market SAID and
+# leaves the approach standing, because the package did go out. This takes back
+# the going-out, and it is the control the "line of coverage not recorded"
+# block had no counterpart for: a package could be created on three surfaces
+# and unmade on none (Grant, 2026-08-27: "nor just remove entirely").
+
+_PACKAGE_REMOVE = (
+    "/accounts/{ref}/program/{placement_id}/marketing/submissions"
+    "/{submission_id}/remove"
+)
+
+
+def _package_confirm_html(
+    request: Request,
+    conn: sqlite3.Connection,
+    ref: str,
+    placement_id: str,
+    submission: Any,
+    error: str | None = None,
+) -> str:
+    open_count, total = submissions_repo.subjectivity_counts(conn, submission.id)
+    base = _PACKAGE_REMOVE.format(
+        ref=ref, placement_id=placement_id, submission_id=submission.id
+    )
+    return TEMPLATES.env.get_template(
+        "account/_package_remove_confirm.html"
+    ).render(
+        submission_id=submission.id,
+        who=_market_name(conn, submission),
+        sent_on=submission.sent_on,
+        # TOTAL, NOT THE OUTSTANDING COUNT. What goes with the package is every
+        # subjectivity recorded against it, met ones included — the grid's
+        # Subj. column counts only what is still outstanding, and quoting that
+        # figure here would understate what disappears.
+        subjectivities=total,
+        remove_url=base,
+        keep_url=base.removesuffix("/remove") + "/row",
+        # ONE FEWER COLUMN THAN THE GRID ABOVE. This confirm stands in for a
+        # PROVISIONAL row, and that block walks `PROVISIONAL_COLUMNS`; using
+        # the full `COLUMNS` count here would make the confirm cell wider than
+        # its own table and stretch it (the same class of bug the pinned-column
+        # offset comment in marketing-grid.js is about).
+        span=len(marketing_grid.PROVISIONAL_COLUMNS) + 1,
+        error=error,
+    )
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/marketing/submissions"
+    "/{submission_id}/row",
+    response_class=HTMLResponse,
+)
+def package_row(
+    request: Request, ref: str, placement_id: str, submission_id: str
+) -> HTMLResponse:
+    """WHAT [keep] ON THE REMOVE CONFIRM FETCHES — the section again, unchanged.
+
+    IT ANSWERS WITH THE SECTION where `response_row` answers with a row, and
+    the difference is not an oversight: a provisional row is composed by
+    `marketing_grid.provisional_view` out of the whole report (it needs the
+    line-of-coverage options the picker offers, which are a fact about the
+    BOOK), so a row-sized fragment route would be a second composition of it.
+    Backing out of a confirm is a rare click; a second composer is a permanent
+    second home for the same rules.
+    """
+    org, _ = _placement(request, ref, placement_id)
+    _owned_submission(_conn(request), org, placement_id, submission_id)
+    return _section(request, ref, org, placement_id)
+
+
+@router.get(_PACKAGE_REMOVE, response_class=HTMLResponse)
+def package_remove_confirm(
+    request: Request, ref: str, placement_id: str, submission_id: str
+) -> HTMLResponse:
+    """The question, in the row's own place. WRITES NOTHING — only the POST
+    below writes, which is the split every confirm in this app makes."""
+    org, _ = _placement(request, ref, placement_id)
+    conn = _conn(request)
+    submission = _owned_submission(conn, org, placement_id, submission_id)
+    return HTMLResponse(
+        _package_confirm_html(request, conn, ref, placement_id, submission)
+    )
+
+
+@router.post(_PACKAGE_REMOVE, response_class=HTMLResponse)
+def package_remove(
+    request: Request, ref: str, placement_id: str, submission_id: str
+) -> HTMLResponse:
+    """Take the approach back, in one revertible act.
+
+    IT ANSWERS WITH THE SECTION, for the reason `response_remove` does one
+    level down: the provisional block can VANISH with its last row, and a
+    block-targeted answer then retargets onto an element that is not there and
+    comes back 404 — which reads as nothing having happened, on the one control
+    whose success and whose failure look identical.
+    """
+    org, _ = _placement(request, ref, placement_id)
+    conn = _conn(request)
+    submission = _owned_submission(conn, org, placement_id, submission_id)
+    try:
+        with batches_svc.open_batch(
+            conn, source="web", tool="submission_remove",
+            summary=(
+                f"removed the approach to {_market_name(conn, submission)}, "
+                f"recorded in error"
+            ),
+            org_id=org.id,
+        ):
+            marketing_entry.remove_package(conn, submission_id)
+    except Exception as exc:  # a refused delete is a message, never a 500
+        # THE CONFIRM AGAIN, CARRYING THE REFUSAL. Answering with the section
+        # would put the reader back where they started with no sign anything
+        # had happened — "a refusal says something", on the control whose
+        # failure destroys nothing and therefore looks exactly like success.
+        return HTMLResponse(
+            _package_confirm_html(
+                request, conn, ref, placement_id, submission, _house(exc)
+            )
+        )
+    return _section(request, ref, org, placement_id)
+
+
 def _owned_submission(
     conn: sqlite3.Connection, org: Any, placement_id: str, submission_id: str
 ) -> Any:

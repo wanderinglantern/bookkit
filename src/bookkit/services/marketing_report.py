@@ -428,6 +428,13 @@ class ReportRow:
     # a second composition of the same rows and would differ the first time two
     # markets shared a name (Grant, 2026-08-25).
     response_id: str
+    # THE PACKAGE THIS ANSWER HANGS OFF. Subjectivities are recorded against
+    # the SUBMISSION, not the response — one condition can be a condition of
+    # every line that package answered on — so a surface that wants to show a
+    # row WHICH conditions its market attached has to be able to get from the
+    # row to the package. Without it the marketing grid could print the count
+    # (which arrives pre-summed) and nothing else.
+    submission_id: str
     line_id: str
     market: str
     via: str | None
@@ -612,6 +619,46 @@ class ProvisionalRow:
 
 
 @dataclass(frozen=True)
+class SubjectivityRow:
+    """ONE CONDITION A MARKET REQUIRES BEFORE ITS QUOTE IS BINDABLE.
+
+    ITS OWN SHEET, NOT A CELL (Grant, 2026-08-27: "subjectivities are often a
+    large list which has not enough room in the table nor the export"). A
+    market's list runs to eight or ten lines of prose. There is no width on a
+    twenty-column comparison grid that holds that: squeezed into the Subj.
+    cell it either clips — the conditions the client has to satisfy, silently
+    truncated on the document that tells them what to satisfy — or drives the
+    row ten lines tall and takes every other column's height with it. The
+    figure a reader compares markets on is HOW MANY are still outstanding, and
+    that stays in the grid; the words go where they have room.
+
+    IT BELONGS TO THE PACKAGE, NOT TO A LINE OF COVERAGE. `lines` is what that
+    package answered on and it can be EMPTY — one condition can be a condition
+    of three lines at once, or of a package whose line nobody has recorded.
+    Naming a single line here would be inventing one.
+
+    THE CLIENT'S COPY CARRIES ONLY THE PACKAGES THAT COPY SHOWS. An empty
+    `lines` is precisely the package the client's Marketing sheet no longer
+    prints, so a condition of one would be an instruction to satisfy something
+    for cover the reader cannot find anywhere in the book they are holding.
+    `compose` does the filtering, off the same `answered` set `provisional` is
+    built from.
+    """
+
+    # WHICH PACKAGE ASKED, so a surface can group these under the row that
+    # carries the count. The sheet does not print it — a client reads the
+    # market's name — and the grid keys on it.
+    submission_id: str
+    market: str
+    lines: str
+    description: str
+    status: str
+    due_on: str | None
+    satisfied_on: str | None
+    notes: str
+
+
+@dataclass(frozen=True)
 class MarketingReport:
     account: str
     program: str
@@ -632,6 +679,12 @@ class MarketingReport:
     # Empty on a placement whose every submission has been answered by line,
     # which is the state the whole feature is trying to reach.
     provisional: tuple[ProvisionalRow, ...] = ()
+    # WHAT EACH MARKET STILL WANTS BEFORE IT WILL BIND. Its own field for the
+    # same reason `provisional` is one: it is not a row of the comparison grid
+    # and no renderer of blocks should be able to reach it by accident. The
+    # grid prints the COUNT of the outstanding ones in its Subj. column and
+    # discloses this list under the row; the workbook gives it a sheet.
+    subjectivities: tuple[SubjectivityRow, ...] = ()
 
 
 # --- composition -----------------------------------------------------------
@@ -836,6 +889,7 @@ def compose(
     vocabulary = {line.id: line for line in lines_repo.all_lines(conn)}
 
     responses = marketing.responses_for_placement(conn, placement_id)
+    subjectivity_rows = submissions.subjectivity_rows_for_placement(conn, placement_id)
     # EVERY SUBMISSION ON THE PLACEMENT, not only the answered ones. The ones
     # with no response row are what `_provisional` is built from, and reading
     # them here rather than in a second pass keeps the org lookup below a
@@ -918,7 +972,85 @@ def compose(
             subjectivities=subjectivities,
             audience=audience,
         ),
+        subjectivities=_subjectivities(
+            subjectivity_rows,
+            names=names,
+            vocabulary=vocabulary,
+            conn=conn,
+            audience=audience,
+            # THE CLIENT SHEET WITHHOLDS A CONDITION WHOSE PACKAGE IT
+            # WITHHOLDS. Found by rendering both books after the provisional
+            # block came off the client copy on 2026-08-27: the conditions
+            # sheet went on listing four of Beazley's, with a blank line of
+            # coverage, for a market whose row appears nowhere else in that
+            # workbook — a client told to satisfy conditions for cover they
+            # cannot find. `answered` is the SAME gate `provisional` is built
+            # from one field down, so a package is on both sheets or on
+            # neither and cannot fall between them.
+            packages=None if audience == INTERNAL else answered,
+        ),
     )
+
+
+def _subjectivities(
+    rows: list[Any],
+    *,
+    names: dict[str, str],
+    vocabulary: dict[str, LineOfCoverage],
+    conn: sqlite3.Connection,
+    audience: str,
+    packages: set[str] | None = None,
+) -> tuple[SubjectivityRow, ...]:
+    """Every condition a market has attached to this placement, in the order
+    `repo.submissions` returns them: outstanding first, then by due date.
+
+    THE NOTES ARE INTERNAL. `submission_subjectivity.notes` is the broker's own
+    running commentary on the chase — "left a voicemail", "underwriter says
+    they will waive it" — and is guarded by nothing at all, which is exactly
+    the reading `PUBLIC_DECLINE_REASONS` gives for why an unguarded free-text
+    field may not reach a client. The DESCRIPTION is the condition itself and
+    is what we quote back to the client either way.
+
+    RETIRED LINES ARE NAMED HERE TOO (`get_any` behind the living vocabulary),
+    for the reason the blocks do it: retiring a line of coverage does not
+    unsay a condition a market attached to a quote on it.
+    """
+    built: list[SubjectivityRow] = []
+    internal = audience == INTERNAL
+    for row in rows:
+        # `packages` is the set of submissions THIS AUDIENCE'S Marketing sheet
+        # shows, or None for all of them — see the call site for why the
+        # client's is the answered set.
+        if packages is not None and str(row["submission_id"]) not in packages:
+            continue
+        ids = [i for i in str(row["line_ids"] or "").split(",") if i]
+        labels = []
+        for line_id in ids:
+            line = vocabulary.get(line_id) or lines_repo.get_any(conn, line_id)
+            labels.append(line.name if line is not None else line_id)
+        built.append(
+            SubjectivityRow(
+                submission_id=str(row["submission_id"]),
+                market=names.get(str(row["market_org_id"] or ""), "")
+                or "market not on file",
+                # EMPTY IS AN ANSWER, and it is the package whose line of
+                # coverage nobody has recorded. The sheet prints nothing here
+                # rather than a guess.
+                lines=", ".join(sorted(labels)),
+                description=str(row["description"] or ""),
+                # THE STORED WORD, and there is no label map to read it
+                # through. `models.SUBJECTIVITY_STATUSES` is already the three
+                # words a person reads — "outstanding", "met", "waived" — so a
+                # map here would be a second copy of a vocabulary that says
+                # the same thing, which is the duplication the DRY rule names
+                # rather than the drift it prevents.
+                status=str(row["status"] or ""),
+                due_on=row["due_on"],
+                satisfied_on=row["satisfied_on"],
+                notes=(str(row["notes"] or "") if internal else ""),
+            )
+        )
+    return tuple(built)
 
 
 def _provisional(
@@ -1000,6 +1132,7 @@ def _row(
             clearance = f"also reached via {others}"
     return ReportRow(
         response_id=response.id,
+        submission_id=response.submission_id,
         line_id=response.line_id,
         market=market,
         via=via,
@@ -1093,58 +1226,122 @@ def _block(
 
 # (header, width, right-aligned). Width is the renderer's, not a guess: a
 # money column that wraps is unreadable and a client will not widen it.
-_CLIENT_COLUMNS: tuple[tuple[str, float, bool], ...] = (
-    ("Market", 30.0, False),
-    ("Best", 9.0, False),
-    ("Layer", 20.0, False),
-    ("Status", 14.0, False),
-    # SENT, THEN REPLIED, in the order they happened.
+#
+# ONE ORDERED SPEC, KEYED, AND THE CELLS ARE BUILT BY WALKING IT. It used to
+# be two tuples — a client list and an internal list appended to it — with
+# `_row_cells` returning a POSITIONAL tuple that had to agree with them by
+# eye. Two orderings of one thing is the second copy that quietly differs
+# (CLAUDE.md, DRY), and the failure it makes is silent: every figure one
+# column to the left of its header, on a document a client is sent. The cells
+# are keyed now, so a column moved, dropped or made internal-only moves its
+# own figures with it and a key with no cell raises rather than shifts.
+#
+# `audience=INTERNAL` is a column the CLIENT SHEET DOES NOT CARRY, printed in
+# its own place rather than appended at the end — Sent and Replied are read
+# with each other and with the Status beside them, and pushing them past
+# Exposure to keep the old append-only shape would have made the internal
+# sheet unreadable to buy one line of code.
+@dataclass(frozen=True)
+class SheetColumn:
+    key: str
+    header: str
+    width: float
+    right: bool = False
+    # None: both audiences. INTERNAL: the broker's own copy only.
+    audience: str | None = None
+
+
+_SHEET_COLUMNS: tuple[SheetColumn, ...] = (
+    SheetColumn("market", "Market", 30.0),
+    SheetColumn("best", "Best", 9.0),
+    SheetColumn("layer", "Layer", 20.0),
+    SheetColumn("status", "Status", 14.0),
+    # SENT AND REPLIED ARE THE BROKER'S OWN CLOCK, not the client's (Grant,
+    # 2026-08-27: "completely drop the sent date from the client .xlsx
+    # deliverable as well as the replied date").
     #
-    # IT WAS COLLAPSED INTO THE BLOCK HEADING and therefore printed only when
-    # every package on the line happened to go out the same day — a
-    # coincidence of values, not a block fact. On a line marketed over two
-    # days the heading fell silent and there was no column to fall back on, so
-    # the CLIENT's workbook carried NO send date at all while the broker's own
-    # grid had one (D6, found 2026-08-26). "The panel is the report" was false
-    # in that column. The heading no longer prints it, so nothing is stated
-    # twice — the same un-collapsing, and the same reason, as the grid's.
-    ("Sent", 10.0, False),
-    ("Replied", 10.0, False),
-    ("Rate", 9.0, True),
+    # They were added to this sheet on 2026-08-26 because the block heading
+    # had collapsed the send date into a coincidence of values and the client
+    # workbook could end up carrying no date at all. That defect was real and
+    # the un-collapsing was right; what was wrong was the audience. The
+    # workbook a client reads is a POINT-IN-TIME COMPARISON of what the
+    # markets said — the same reading `Expires` has always had (GRID_ONLY in
+    # tests/test_marketing_gates.py) — and how long a market took to answer is
+    # a fact about how this book chases paper, not about the cover on offer.
+    # They stay on the internal copy, in their own place and in the order they
+    # happened, and they stay editable on the web grid, which is the one
+    # surface that can correct them.
+    SheetColumn("sent", "Sent", 10.0, audience=INTERNAL),
+    SheetColumn("replied", "Replied", 10.0, audience=INTERNAL),
+    SheetColumn("rate", "Rate", 9.0, right=True),
     # THE DENOMINATOR THIS ROW'S RATE IS STATED PER, where the heading's is
     # not it. Left-aligned and blank on the ordinary row: it is a unit in
     # words, not a figure, and it speaks only where the heading would mislead
-    # (`ReportRow.rate_per_override`). The `Basis` column at the end of this
+    # (`ReportRow.rate_per_override`). The `Basis` column near the end of this
     # tuple is the same rule on the other axis, and the pair is why a reader
     # can trust the heading everywhere else.
-    ("Rate per", 11.0, False),
+    SheetColumn("rate_per", "Rate per", 11.0),
     # WIDE ENOUGH FOR THE REFUSAL, not just for the percentage. This column
     # prints "-19.4%" most of the time and a SENTENCE the rest of it — "basis
     # changed", "denominator changed", "no expiring rate recorded" — and at
     # 11.0 the sentence was clipped by the populated cell beside it, which is
     # the one case where the words are the whole message.
-    ("Rate Δ", max(11.0, max(len(n) for n in REFUSAL_NOTES) + 1.0), True),
-    ("Est. premium", 15.0, True),
-    ("TRIA", 12.0, True),
-    ("Total est. cost", 16.0, True),
-    ("Subj.", 7.0, True),
-    ("Reason", 22.0, False),
-    ("Basis", 15.0, False),
-    ("Exposure", 17.0, True),
+    SheetColumn(
+        "rate_move",
+        "Rate Δ",
+        max(11.0, max(len(n) for n in REFUSAL_NOTES) + 1.0),
+        right=True,
+    ),
+    SheetColumn("premium", "Est. premium", 15.0, right=True),
+    SheetColumn("tria", "TRIA", 12.0, right=True),
+    SheetColumn("total_cost", "Total est. cost", 16.0, right=True),
+    # THE COUNT, AND THE LIST IS ITS OWN SHEET. A market's subjectivities run
+    # to eight or ten lines of prose and there is no width on a comparison
+    # grid that can hold them — squeezed into this cell they either clip (the
+    # conditions a client has to satisfy, silently truncated) or drive the row
+    # eight lines tall and take every other column's row height with them
+    # (Grant, 2026-08-27). The figure a reader compares markets on is HOW MANY
+    # are still outstanding; the words belong where they have room, which is
+    # `SUBJECTIVITY_SHEET_TITLE` — and the count says which sheet to turn to.
+    SheetColumn("subj", "Subj.", 7.0, right=True),
+    SheetColumn("reason", "Reason", 22.0),
+    SheetColumn("basis", "Basis", 15.0),
+    SheetColumn("exposure", "Exposure", 17.0, right=True),
+    SheetColumn("internal_reason", "Decline reason", 36.0, audience=INTERNAL),
+    SheetColumn("commission", "Commission", 12.0, right=True, audience=INTERNAL),
+    SheetColumn("clearance", "Clearance", 26.0, audience=INTERNAL),
+    SheetColumn("notes", "Notes", 32.0, audience=INTERNAL),
 )
-_INTERNAL_EXTRA: tuple[tuple[str, float, bool], ...] = (
-    ("Decline reason", 36.0, False),
-    ("Commission", 12.0, True),
-    ("Clearance", 26.0, False),
-    ("Notes", 32.0, False),
-)
+
+
+def sheet_columns(audience: str) -> tuple[SheetColumn, ...]:
+    """The columns this audience's sheet carries, in order — the ONE place
+    that decides, read by the header row and by every cell walk below it."""
+    return tuple(
+        column
+        for column in _SHEET_COLUMNS
+        if column.audience is None or column.audience == audience
+    )
 
 
 def columns(audience: str) -> tuple[tuple[str, float, bool], ...]:
     """The column spec, so the sheet and any other rendering of these rows
-    cannot disagree about how many there are or what they are called."""
-    extra = _INTERNAL_EXTRA if audience == INTERNAL else ()
-    return _CLIENT_COLUMNS + extra
+    cannot disagree about how many there are or what they are called.
+
+    The (header, width, right) shape is what the renderer and the MCP tool
+    already read; `sheet_columns` above is the same list with the keys the
+    cell walks need."""
+    return tuple((c.header, c.width, c.right) for c in sheet_columns(audience))
+
+
+def _walk(cells: dict[str, str], audience: str) -> tuple[str, ...]:
+    """One row's cells in this audience's column order.
+
+    KEYED, NOT POSITIONAL, and it raises on a missing key rather than filling
+    a blank: a cell builder that has not been told about a new column is a
+    sheet with a silently empty column, and a client cannot tell that from a
+    fact nobody recorded."""
+    return tuple(cells[column.key] for column in sheet_columns(audience))
 
 
 def _block_label(block: ReportBlock) -> str:
@@ -1169,38 +1366,55 @@ def _block_label(block: ReportBlock) -> str:
 
 
 def _row_cells(
-    row: ReportRow, internal: bool, window: DateWindow | None = None
+    row: ReportRow, audience: str, window: DateWindow | None = None
 ) -> tuple[str, ...]:
-    cells = (
-        row.market_cell,
-        row.best,
-        row.layer,
-        row.status,
-        fmt_date(row.submitted_on, window),
-        fmt_date(row.responded_on, window),
-        fmt_rate(row.rate_micros),
-        row.rate_per_override,
-        row.rate_move.cell,
-        format_cents(row.premium) if row.premium is not None else "",
-        format_cents(row.tria) if row.tria is not None else "",
-        format_cents(row.total_cost) if row.total_cost is not None else "",
-        str(row.open_subjectivities) if row.open_subjectivities else "",
-        row.public_reason,
-        row.basis_override,
-        row.exposure_override,
-    )
-    if not internal:
-        return cells
-    return cells + (
-        row.internal_reason,
-        f"{row.commission_bps / 100:.1f}%" if row.commission_bps else "",
-        row.clearance,
-        row.notes,
+    """One response row, KEYED BY COLUMN and flattened in the audience's own
+    order. The internal-only keys are always built — `_walk` drops what this
+    audience's sheet does not carry, so there is one cell builder rather than
+    a client one and an internal one that can disagree about what a column
+    holds."""
+    return _walk(
+        {
+            "market": row.market_cell,
+            "best": row.best,
+            "layer": row.layer,
+            "status": row.status,
+            "sent": fmt_date(row.submitted_on, window),
+            "replied": fmt_date(row.responded_on, window),
+            "rate": fmt_rate(row.rate_micros),
+            "rate_per": row.rate_per_override,
+            "rate_move": row.rate_move.cell,
+            "premium": format_cents(row.premium) if row.premium is not None else "",
+            "tria": format_cents(row.tria) if row.tria is not None else "",
+            "total_cost": (
+                format_cents(row.total_cost) if row.total_cost is not None else ""
+            ),
+            "subj": str(row.open_subjectivities) if row.open_subjectivities else "",
+            "reason": row.public_reason,
+            "basis": row.basis_override,
+            "exposure": row.exposure_override,
+            "internal_reason": row.internal_reason,
+            "commission": (
+                f"{row.commission_bps / 100:.1f}%" if row.commission_bps else ""
+            ),
+            "clearance": row.clearance,
+            "notes": row.notes,
+        },
+        audience,
     )
 
 
-def _provisional_cells(row: ProvisionalRow, internal: bool) -> tuple[str, ...]:
+def _provisional_cells(row: ProvisionalRow, audience: str) -> tuple[str, ...]:
     """One provisional row, in the SAME columns as every other row.
+
+    INTERNAL ONLY SINCE 2026-08-27 — `to_sections` does not build this section
+    for a client (Grant: "remove the 'line of coverage not recorded' from the
+    client deliverable"). The reasoning is the same one that took Sent and
+    Replied off the client sheet: the workbook is what the markets said about
+    the cover on offer, and a package whose line of coverage nobody has typed
+    yet is an unfinished piece of THIS BOOK'S record-keeping, not a fact about
+    the client's programme. It stays on the internal copy, where it is a
+    worklist, and it stays on the web grid, where it can be fixed.
 
     WHAT IS BLANK IS BLANK BECAUSE IT IS NOT KNOWN, and every one of them is a
     fact that belongs to a LINE OF COVERAGE this package has not been given:
@@ -1214,45 +1428,138 @@ def _provisional_cells(row: ProvisionalRow, internal: bool) -> tuple[str, ...]:
     plus TRIA plus fees plus tax and no submission column carries the last
     three, so a total printed here would be a premium wearing a total's name
     on the one column a client compares two quotes on.
-
-    THE REASON COLUMN IS EMPTY ON THE CLIENT SHEET even where a reason was
-    recorded. `submission.decline_reason` is free text and has no client-safe
-    counterpart — models.PUBLIC_DECLINE_REASONS explains why a single
-    unguarded field may never reach a client — so it prints in the INTERNAL
-    audience's own Decline reason column and nowhere else.
     """
-    cells = (
-        row.market,
-        row.best,
-        # THE LIMIT QUOTED, printed as money and as nothing else. `_layer_label`
-        # would read a limit with no attachment as "primary", which is a claim
-        # about where in a tower this sits that no one has made.
-        format_cents(row.lim) if row.lim is not None else "",
-        row.status,
-        fmt_date(row.submitted_on),
-        fmt_date(row.responded_on),
-        "",  # rate — stated per unit of exposure on a line
-        "",  # rate per — the denominator that rate would be stated against
-        "",  # rate Δ — nothing to compare, and no expiring side to compare to
-        format_cents(row.premium) if row.premium is not None else "",
-        "",  # TRIA — no submission column carries it
-        "",  # total est. cost — three of its four parts are unknown
-        str(row.open_subjectivities) if row.open_subjectivities else "",
-        "",  # reason — see the docstring: internal only on these rows
-        "",  # basis — an override of a block heading there isn't one of
-        "",  # exposure — the same
+    return _walk(
+        {
+            "market": row.market,
+            "best": row.best,
+            # THE LIMIT QUOTED, printed as money and as nothing else.
+            # `_layer_label` would read a limit with no attachment as
+            # "primary", which is a claim about where in a tower this sits
+            # that no one has made.
+            "layer": format_cents(row.lim) if row.lim is not None else "",
+            "status": row.status,
+            "sent": fmt_date(row.submitted_on),
+            "replied": fmt_date(row.responded_on),
+            "rate": "",  # stated per unit of exposure on a line
+            "rate_per": "",  # the denominator that rate would be stated against
+            "rate_move": "",  # nothing to compare, and no expiring side to it
+            "premium": format_cents(row.premium) if row.premium is not None else "",
+            "tria": "",  # no submission column carries it
+            "total_cost": "",  # three of its four parts are unknown
+            "subj": str(row.open_subjectivities) if row.open_subjectivities else "",
+            "reason": "",  # `decline_reason` is free text; internal only
+            "basis": "",  # an override of a block heading there isn't one of
+            "exposure": "",  # the same
+            "internal_reason": row.internal_reason,
+            "commission": "",
+            "clearance": "",
+            "notes": "",
+        },
+        audience,
     )
-    if not internal:
-        return cells
-    return cells + (row.internal_reason, "", "", "")
+
+
+# --- the conditions sheet ---------------------------------------------------
+#
+# A SECOND SHEET, BECAUSE A CONDITION IS PROSE AND A COMPARISON IS A GRID
+# (Grant, 2026-08-27). "Satisfactory inspection of the Fremont location within
+# 60 days of binding, with any recommendations completed" is one subjectivity
+# out of ten on one of six markets. There is no column width on the Marketing
+# sheet that holds it: at 7.0 it clips, and wide enough to read it pushes the
+# comparison off the page. Both audiences get this sheet — a client cannot
+# satisfy conditions nobody has told them about — and both keep the COUNT in
+# the Marketing sheet's Subj. column, which is the figure markets are compared
+# on.
+
+SUBJECTIVITY_SHEET_TITLE = "Subjectivities"
+
+SUBJECTIVITY_SECTION_LABEL = (
+    "What each market requires before its quote can be bound — the Subj. "
+    "column on the Marketing sheet counts the outstanding ones"
+)
+
+# WIDE ENOUGH FOR THE SENTENCE. The description is the whole point of this
+# sheet and it is the one column that must never be the reason a reader widens
+# a cell by hand.
+_SUBJECTIVITY_COLUMNS: tuple[SheetColumn, ...] = (
+    SheetColumn("market", "Market", 30.0),
+    # PLURAL, AND IT CAN BE EMPTY. A subjectivity hangs off the package, so one
+    # condition can belong to three lines of coverage at once — and on a
+    # package whose line nobody has recorded, to none.
+    SheetColumn("lines", "Line of coverage", 26.0),
+    SheetColumn("description", "Subjectivity", 72.0),
+    SheetColumn("status", "Status", 13.0),
+    SheetColumn("due_on", "Due", 11.0),
+    SheetColumn("satisfied_on", "Satisfied", 11.0),
+    SheetColumn("notes", "Notes", 32.0, audience=INTERNAL),
+)
+
+
+def subjectivity_columns(audience: str) -> tuple[tuple[str, float, bool], ...]:
+    """The conditions sheet's columns, in the (header, width, right) shape the
+    renderer reads — the same seam `columns()` gives the Marketing sheet."""
+    return tuple(
+        (c.header, c.width, c.right)
+        for c in _SUBJECTIVITY_COLUMNS
+        if c.audience is None or c.audience == audience
+    )
+
+
+def to_subjectivity_sections(report: MarketingReport) -> list[SheetSection]:
+    """The conditions sheet's one section, or a sentence saying there is
+    nothing on it.
+
+    IT SAYS SO IN WORDS when the list is empty, for the reason a line with no
+    approaches does: a blank sheet cannot be told from a rendering fault, and
+    "no subjectivities recorded" is a fact a client can act on while an empty
+    page is a question."""
+    keys = [
+        c.key
+        for c in _SUBJECTIVITY_COLUMNS
+        if c.audience is None or c.audience == report.audience
+    ]
+    width = len(keys)
+    if not report.subjectivities:
+        return [
+            SheetSection(
+                SUBJECTIVITY_SECTION_LABEL,
+                (
+                    ("No subjectivities recorded against any market on this "
+                     "placement.",)
+                    + ("",) * (width - 1),
+                ),
+            )
+        ]
+    rows = tuple(
+        tuple(_subjectivity_cells(row)[key] for key in keys)
+        for row in report.subjectivities
+    )
+    return [SheetSection(SUBJECTIVITY_SECTION_LABEL, rows)]
+
+
+def _subjectivity_cells(row: SubjectivityRow) -> dict[str, str]:
+    """KEYED, like every other cell walk in this module — see `_walk`."""
+    return {
+        "market": row.market,
+        "lines": row.lines,
+        "description": row.description,
+        "status": row.status,
+        # THE DATES CARRY THEIR YEAR. A subjectivity's due date is not tied to
+        # the marketing window the grid's dates are read against — a condition
+        # can be due after binding — so there is no window to drop it against.
+        "due_on": fmt_date(row.due_on) or "",
+        "satisfied_on": fmt_date(row.satisfied_on) or "",
+        "notes": row.notes,
+    }
 
 
 def to_sections(report: MarketingReport) -> list[SheetSection]:
     """One section per line of coverage. A line with no approaches says so IN
     WORDS: an empty table is ambiguous, and a client cannot tell a line nobody
     has gone to market on from a rendering bug."""
-    internal = report.audience == INTERNAL
-    width = len(columns(report.audience))
+    audience = report.audience
+    width = len(columns(audience))
     sections: list[SheetSection] = []
     for block in report.blocks:
         if block.is_empty:
@@ -1263,7 +1570,7 @@ def to_sections(report: MarketingReport) -> list[SheetSection]:
                 )
             )
             continue
-        rows = [_row_cells(row, internal, report.window) for row in block.rows]
+        rows = [_row_cells(row, audience, report.window) for row in block.rows]
         if block.bridge is not None:
             bridge = block.bridge
             blank = ("",) * (width - 3)
@@ -1273,11 +1580,19 @@ def to_sections(report: MarketingReport) -> list[SheetSection]:
             rows.append(("Exposure effect", "", format_cents(bridge.exposure_effect)) + blank)
             rows.append((f"{bridge.market}", "", format_cents(bridge.quoted_premium)) + blank)
         sections.append(SheetSection(_block_label(block), tuple(rows)))
-    if report.provisional:
+    if report.provisional and audience == INTERNAL:
+        # THE INTERNAL COPY ONLY (Grant, 2026-08-27). A package whose line of
+        # coverage nobody has recorded is unfinished record-keeping of OURS,
+        # and a client sheet that carries it hands the client our worklist
+        # under a heading that reads as a gap in their cover. It is a worklist
+        # on the broker's copy, where it belongs, and the web grid is where it
+        # gets fixed — `marketing_grid.provisional_view` is the one surface
+        # that can put a line of coverage on it.
+        #
         # LAST, and it is the one ordering decision this block gets. The line
-        # blocks are what the client is choosing between; this is the marketing
-        # nobody has finished recording, and putting it above a line of
-        # coverage would lead the sheet with its least certain rows.
+        # blocks are what a reader is comparing; this is the marketing nobody
+        # has finished recording, and putting it above a line of coverage
+        # would lead the sheet with its least certain rows.
         #
         # ITS DATES CARRY THEIR YEAR (`fmt_date` with no window): a submission
         # with no line of coverage has nothing tying it to this placement's
@@ -1286,7 +1601,9 @@ def to_sections(report: MarketingReport) -> list[SheetSection]:
         sections.append(
             SheetSection(
                 PROVISIONAL_LABEL,
-                tuple(_provisional_cells(row, internal) for row in report.provisional),
+                tuple(
+                    _provisional_cells(row, audience) for row in report.provisional
+                ),
             )
         )
     return sections
@@ -1333,6 +1650,22 @@ def write(
             for header, width, right in columns(audience)
         ],
         [TableSection(s.label, s.rows) for s in to_sections(report)],
+        theme=theme,
+    )
+    # THE CONDITIONS, ON THEIR OWN SHEET AND ALWAYS PRESENT. Rendered even
+    # when the list is empty, because a workbook whose second tab appears and
+    # disappears with the data cannot be checked: a client who received one
+    # last month and none this month has no way to tell "nothing outstanding"
+    # from "the export dropped it". `to_subjectivity_sections` says the empty
+    # case in words.
+    conditions = wb.create_sheet(sanitize_sheet_title(SUBJECTIVITY_SHEET_TITLE))
+    render_table_sheet(
+        conditions,
+        [
+            TableColumn(header, width, align="right" if right else "left")
+            for header, width, right in subjectivity_columns(audience)
+        ],
+        [TableSection(s.label, s.rows) for s in to_subjectivity_sections(report)],
         theme=theme,
     )
     return finalize_workbook(wb, out_path)

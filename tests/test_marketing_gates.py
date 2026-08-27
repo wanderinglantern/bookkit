@@ -581,8 +581,6 @@ CLIENT_COLUMN_UNIT: dict[str, str] = {
     "Best": UNITLESS,
     "Layer": UNIT_IN_CELL,          # format_cents prints "$"
     "Status": UNITLESS,
-    "Sent": UNITLESS,
-    "Replied": UNITLESS,
     "Rate": UNIT_IN_BLOCK,          # claims: the block heading's denominator
     # The denominator IS a unit, printed as words — and printed only where the
     # heading is not the answer, which is what keeps the claim above true.
@@ -608,8 +606,6 @@ WORKBOOK_TO_GRID: dict[str, tuple[str, ...]] = {
     # "$5M xs $5M" is derived from two figures nobody can type as a sentence.
     "Layer": ("attach", "lim"),
     "Status": ("status",),
-    "Sent": ("sent_on",),
-    "Replied": ("responded_on",),
     "Rate": ("rate",),
     "Rate per": ("rate_per",),
     "Rate Δ": ("rate_move",),
@@ -628,6 +624,26 @@ WORKBOOK_TO_GRID: dict[str, tuple[str, ...]] = {
 # Grid columns with no workbook counterpart, each with the reason it is the
 # broker's own and not the client's.
 GRID_ONLY: dict[str, str] = {
+    # THE THREE DATES ARE ONE RULE, and `quote_expires_on` was the first of
+    # them. The client's workbook is a POINT-IN-TIME COMPARISON of what the
+    # markets said about the cover on offer; when a package went out, when the
+    # market answered and when its terms lapse are facts about how this book
+    # chases paper. All three stay on the web grid, which is the one surface
+    # that can CORRECT them, and on the internal copy of the workbook, which
+    # is the broker's own.
+    "sent_on": (
+        "the day WE sent the package — the broker's own clock. It reached the "
+        "client sheet on 2026-08-26 to fix a real defect (the block heading "
+        "had collapsed it into a coincidence of values, so a line marketed "
+        "over two days carried no send date anywhere) and the un-collapsing "
+        "was right; the audience was not. Grant, 2026-08-27: 'completely drop "
+        "the sent date from the client .xlsx deliverable'"
+    ),
+    "responded_on": (
+        "how long a market took to answer us — the other half of `sent_on`, "
+        "and the same reading. Grant, 2026-08-27: 'as well as the replied "
+        "date'"
+    ),
     "quote_expires_on": (
         "the broker's chase clock, not a term of the quote. The workbook is a "
         "point-in-time comparison of what the markets said; when the terms "
@@ -931,18 +947,43 @@ def test_g3_the_workbook_and_the_grid_are_one_report_and_state_their_units(
             f"row says which denominator it is stated against"
         )
 
-    # THE SEND DATE. It is a column on the grid (`sent_on`); the workbook
-    # collapses it into the block heading — which `_block_label` can only do
-    # when every package on the line went out the same day. Two days here, so
-    # the heading is silent and there is no column to fall back on.
+    # THE SEND DATE, ON THE SURFACES THAT CARRY IT. Grant took it off the
+    # client sheet on 2026-08-27 along with Replied, so what this walk holds
+    # inverted: the client sheet must NOT state it, and the two surfaces that
+    # do — the web grid and the BROKER'S copy of the workbook — must both
+    # still have it. The original defect this checked for is still checked,
+    # one audience over: `_block_label` can only collapse a send date into a
+    # heading when every package on the line agrees, and these two packages
+    # went out on different days, so the internal sheet must be carrying a
+    # COLUMN rather than relying on the heading.
     assert "2026-08-06" != "2026-08-13"  # the two packages above
-    if "submitted" not in section.label and not any("Sent" in h for h in headers):
+    if "submitted" in section.label or any(
+        h in ("Sent", "Replied") for h in headers
+    ):
         failures.append(
-            "the workbook prints NO send date for a line marketed over two "
-            "days: `_block_label` collapses it into the heading only when "
-            "every package agrees, and there is no Sent column to fall back "
-            "on — the grid has one (`sent_on`)"
+            "the CLIENT workbook states when a package went out or was "
+            "answered — the broker's own clock on a document that leaves the "
+            "building (Grant, 2026-08-27). GRID_ONLY names both dates"
         )
+    internal_headers = [
+        h for h, _, _ in marketing_report.columns(marketing_report.INTERNAL)
+    ]
+    for header, key in (("Sent", "sent_on"), ("Replied", "responded_on")):
+        if header not in internal_headers:
+            failures.append(
+                f"the INTERNAL workbook has no {header!r} column — the date "
+                f"has to survive somewhere a reader can compare it against "
+                f"the rest of the row, or `_block_label`'s collapse (which "
+                f"only fires when every package agrees) is the only record "
+                f"and a line marketed over two days has none"
+            )
+        if key not in grid_keys:
+            failures.append(
+                f"the web grid has no {key!r} column — it is the ONE surface "
+                f"that can correct this date, and `_reply_guard` refuses a "
+                f"reply dated before a mistyped send while naming that "
+                f"correction as the fix"
+            )
 
     _named(
         failures,
@@ -1355,6 +1396,17 @@ NAMED_FIX: dict[str, dict[str, str]] = {
     "this package was already withdrawn": {
         "web": "/accounts/{ref}/pipeline/submissions/{submission_id}/reinstate",
         "mcp": "submission_reinstate",
+    },
+    # `remove_package`'s one refusal. NOT a retype: the caller is being sent to
+    # a DIFFERENT control — the answers come off one at a time, each with its
+    # own confirm and its own undo unit — so both surfaces have to be named,
+    # and both are the remove that already exists on a response row.
+    "answer(s) recorded against it, so it is marketing that happened": {
+        "web": (
+            "/accounts/{ref}/program/{placement_id}/marketing"
+            "/responses/{response_id}/remove"
+        ),
+        "mcp": "market_response_remove",
     },
     "this package is not withdrawn, so there is nothing to put back": {
         # What a market said is corrected where it prints, on the Marketing

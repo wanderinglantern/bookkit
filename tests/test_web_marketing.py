@@ -2534,11 +2534,19 @@ def test_a_seeded_placement_with_no_responses_renders_its_markets(seeded):
 
 
 def test_the_seeded_workbook_carries_the_marketing_that_has_no_line(seeded):
-    """AN EMPTY WORKBOOK OVER LIVE MARKETING is the failure this exists to end.
+    """AN EMPTY WORKBOOK OVER LIVE MARKETING is the failure this exists to end
+    — and since 2026-08-27 the workbook that must not be empty is the
+    INTERNAL one (Grant: "remove the 'line of coverage not recorded' from the
+    client deliverable").
 
-    Driven through the DOWNLOAD ROUTE and read back out of the rendered .xlsx,
-    not off `to_sections`: the composer producing rows proves nothing about
-    what a client opens, and the file is what leaves the building.
+    Both halves are driven, because the pair is the decision: the broker's copy
+    carries these rows and the client's carries neither the heading nor the
+    figures. Dropping them from the client sheet is only safe while they are
+    somewhere, and this is what says where.
+
+    Driven through the DOWNLOAD ROUTES and read back out of the rendered
+    .xlsx, not off `to_sections`: the composer producing rows proves nothing
+    about what somebody opens, and the file is what leaves the building.
     """
     import openpyxl
 
@@ -2546,26 +2554,41 @@ def test_the_seeded_workbook_carries_the_marketing_that_has_no_line(seeded):
     conn = client.app.state.conn
     from bookkit.repo import submissions
 
-    got = client.get(f"/accounts/{org.ref}/program/{placement.id}/export/marketing.xlsx")
-    assert got.status_code == 200
+    def printed(audience: str) -> str:
+        got = client.get(
+            f"/accounts/{org.ref}/program/{placement.id}"
+            f"/export/marketing.xlsx?audience={audience}"
+        )
+        assert got.status_code == 200
+        book = openpyxl.load_workbook(BytesIO(got.content))
+        sheet = book.active
+        return " | ".join(
+            str(c)
+            for row in sheet.iter_rows(values_only=True)
+            if any(row)
+            for c in row
+            if c is not None
+        )
 
-    book = openpyxl.load_workbook(BytesIO(got.content))
-    sheet = book.active
-    rows = [
-        [c for c in row if c is not None]
-        for row in sheet.iter_rows(values_only=True)
-        if any(row)
-    ]
-    printed = " | ".join(str(c) for row in rows for c in row)
-
-    assert "Line of coverage not recorded" in printed
     quoted = next(
         p for p in submissions.for_placement(conn, placement.id)
         if p.quoted_premium is not None
     )
-    assert format_cents(quoted.quoted_premium) in printed, (
-        "the client workbook carries no row for a submission quoted at "
-        f"{format_cents(quoted.quoted_premium)}"
+    money = format_cents(quoted.quoted_premium)
+
+    broker = printed("internal")
+    assert "Line of coverage not recorded" in broker
+    assert money in broker, (
+        "the broker's workbook carries no row for a submission quoted at "
+        f"{money} — dropping these rows from the client sheet is only safe "
+        "while they are somewhere"
+    )
+
+    theirs = printed("client")
+    assert "Line of coverage not recorded" not in theirs
+    assert money not in theirs, (
+        "the client workbook prints a figure from a package whose line of "
+        "coverage nobody has recorded"
     )
 
 

@@ -1214,6 +1214,17 @@ _BATCHED_WRITES = {
             mcpserver._submission_reinstate(rw, sub),
         )[1]
     )(_an_approach(rw)["submission_id"]),
+    # THE ANSWER COMES OFF FIRST, because that is the ONLY way to reach this
+    # verb: `remove_package` refuses while any response speaks for the package,
+    # and driving it any other way would be exercising a path no caller has.
+    # The first call is `market_response_remove`'s own batch (covered above);
+    # the batch this row checks is the second.
+    "submission_remove": lambda rw, tmp: (
+        lambda a: (
+            mcpserver._market_response_remove(rw, a["response_id"]),
+            mcpserver._submission_remove(rw, a["submission_id"]),
+        )[1]
+    )(_an_approach(rw)),
     "set_placement_line": lambda rw, tmp: mcpserver._set_placement_line(
         rw, _a_marketed_placement(rw).ref, "GL",
         expiring_premium="100,000", rating_basis="gross_sales",
@@ -1303,6 +1314,10 @@ _TOUCHES = {
     # five figures beside it are recomputed, all on the submission — the rows
     # themselves never move.
     "submission_reinstate": {"submission"},
+    # THE PACKAGE ALONE, and it can only BE alone: the verb refuses while a
+    # response row still speaks for it, so a market_response event in this
+    # batch would mean the guard had been bypassed.
+    "submission_remove": {"submission"},
     "set_placement_line": {"placement_line"},
     "program_layer_add": {"placement"},
     "program_bind": {"placement"},

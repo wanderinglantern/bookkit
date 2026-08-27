@@ -66,6 +66,7 @@ from ..models import (
     MARKET_RESPONSE_STATUS_LABELS,
     PUBLIC_DECLINE_REASON_LABELS,
     RATE_PER_LABELS,
+    SUBJECTIVITY_OPEN_STATUS,
     rating_basis,
 )
 from ..money import format_cents
@@ -548,6 +549,83 @@ def cell_class(key: str, response: Any) -> str:
     return _column_class(column, {"pill": pill, "tone": tone})
 
 
+# --- what a market still wants, under the row that counts them ---------------
+#
+# THE COUNT IS THE COMPARISON; THE WORDS ARE THE WORK (Grant, 2026-08-27:
+# "subjectivities are often a large list which has not enough room in the table
+# nor the export"). "Satisfactory inspection of the Fremont location within 60
+# days of binding" is one condition out of ten on one of six markets. No column
+# on a twenty-column grid holds that: at the Subj. column's width it clips —
+# the conditions somebody has to satisfy, silently truncated — and wide enough
+# to read it takes the comparison off the screen.
+#
+# SO THE FIGURE STAYS IN THE CELL AND THE LIST OPENS UNDER THE ROW, which is
+# the same answer `_layer_details.html` gives to the same question: density is
+# not the enemy, undifferentiated density is. The list is rendered WITH the row
+# and hidden, not fetched — there is no second route, no loading state, and
+# nothing to lose when a write answers with the whole section.
+#
+# THEY BELONG TO THE PACKAGE, NOT THE LINE. One condition can be a condition of
+# every line that submission answered on, so two rows in two different blocks
+# can disclose the same list — and that is correct rather than duplication: the
+# market really is asking for it on both.
+
+
+def _conditions_by_package(
+    report: marketing_report.MarketingReport,
+) -> dict[str, list[marketing_report.SubjectivityRow]]:
+    """`report.subjectivities` regrouped under the submission that asked.
+
+    Composed ONCE per panel and handed down, rather than filtered inside each
+    row: a list comprehension per row over every condition on the placement is
+    quadratic in the thing most likely to be long here, and the composer has
+    already sorted them (outstanding first, then by due date) so the grouping
+    only has to preserve that order.
+    """
+    grouped: dict[str, list[marketing_report.SubjectivityRow]] = {}
+    for row in report.subjectivities:
+        grouped.setdefault(row.submission_id, []).append(row)
+    return grouped
+
+
+def _conditions_summary(rows: list[marketing_report.SubjectivityRow]) -> str:
+    """What the disclosure says before it is opened.
+
+    IT COUNTS WHAT THE Subj. COLUMN COUNTS — the outstanding ones — so the two
+    figures on one row can never disagree; the total is beside it because
+    "2 of 6 outstanding" and "2 of 2 outstanding" are different states of a
+    chase and the column has room for one number. A count somebody can read is
+    a summary; an unlabelled triangle is a thing you have to open to find out
+    about, which is the whole difference between grouping and hiding.
+    """
+    open_count = sum(1 for row in rows if row.status == SUBJECTIVITY_OPEN_STATUS)
+    if not open_count:
+        return f"{len(rows)} subjectivit{'y' if len(rows) == 1 else 'ies'}, all met"
+    return f"{open_count} of {len(rows)} outstanding"
+
+
+def _conditions_view(
+    rows: list[marketing_report.SubjectivityRow],
+) -> list[dict[str, str]]:
+    """The disclosed list, as the template prints it.
+
+    EVERY STATUS, not only the outstanding ones. The cell above counts what is
+    still owed; a list that showed only those would make a market with three
+    met and one outstanding look like a market that only ever asked for one —
+    and "met" beside a condition is how a broker sees the chase is working.
+    """
+    return [
+        {
+            "description": row.description,
+            "status": row.status,
+            "tone": "is-warn" if row.status == "outstanding" else "is-good",
+            "due_on": row.due_on or "",
+            "satisfied_on": row.satisfied_on or "",
+        }
+        for row in rows
+    ]
+
+
 def row_view(
     request: Any,
     row: marketing_report.ReportRow,
@@ -555,6 +633,7 @@ def row_view(
     ref: str,
     placement_id: str,
     window: marketing_report.DateWindow | None = None,
+    conditions: dict[str, list[marketing_report.SubjectivityRow]] | None = None,
 ) -> dict[str, Any]:
     """One rendered grid row.
 
@@ -592,6 +671,14 @@ def row_view(
     return {
         "id": row.response_id,
         "cells": built,
+        # WHAT THIS MARKET STILL WANTS, disclosed under the row. See
+        # `_conditions_by_package` for why the words are not in the cell.
+        "conditions": _conditions_view(
+            (conditions or {}).get(row.submission_id, [])
+        ),
+        "conditions_summary": _conditions_summary(
+            (conditions or {}).get(row.submission_id, [])
+        ),
         # THE "NO FEES OR TAXES APPLY" AFFORDANCE, offered only while it would
         # DO something. NULL is "nobody has told us" and 0 is "we asked, there
         # is none"; only 0 contributes to a total, so without a one-click way
@@ -635,35 +722,66 @@ def row_view(
 # ordinary row in an ordinary block and every cell on it is editable.
 
 
+# THE COLUMNS A SUBMISSION CAN ACTUALLY STATE, and no others.
+#
+# THE ASSIGN CONTROL WAS OFF THE SCREEN (Grant, 2026-08-27: "there is no way
+# to directly record the line nor just remove entirely"). Measured on the
+# running app at a 1600px window: the twenty-column grid asked for 1953px in a
+# 1264px scroller, and the row's control sat at x=1630 — 689px past the right
+# edge of its own container, reachable only by scrolling a table horizontally
+# to its end. The markup had it; nobody could see it, which is "built but not
+# accessible" on the one control this block exists for.
+#
+# THE FIX IS NOT A NARROWER CONTROL, IT IS FEWER COLUMNS. Eleven of those
+# twenty were permanently blank or a house dash on every provisional row and
+# always will be: a rate, its denominator and its movement are stated per unit
+# of exposure ON A LINE, the basis and exposure cells are overrides of a block
+# heading this block does not have, TRIA/fees/tax have no submission column,
+# and the access point is a fact about a RESPONSE. Printing them bought
+# alignment with the block above — and the blocks are separate tables in
+# separate scrollers, so that alignment only ever held at scroll position
+# zero, which is where the control was not.
+#
+# DERIVED FROM `COLUMNS`, never a second list. The header words, the numeric
+# flag, the prose flag and the pin all come off the same Column objects the
+# grid above is built from, so a column renamed once is renamed here too.
+PROVISIONAL_KEYS: tuple[str, ...] = (
+    "market",
+    "best",
+    "lim",
+    "status",
+    "sent_on",
+    "responded_on",
+    "quote_expires_on",
+    "premium",
+    "subjectivities",
+    "internal_reason",
+)
+
+PROVISIONAL_COLUMNS: tuple[Column, ...] = tuple(
+    column for column in COLUMNS if column.key in PROVISIONAL_KEYS
+)
+
+
 def _provisional_cells(
     row: marketing_report.ProvisionalRow,
     window: marketing_report.DateWindow | None,
 ) -> dict[str, dict[str, Any]]:
-    """One provisional row's cells, keyed by the SAME COLUMNS the grid above
-    it walks — so the two tables line up column for column, and a column added
-    to `COLUMNS` raises here rather than shifting these cells one place left.
+    """One provisional row's cells, keyed by the columns `PROVISIONAL_COLUMNS`
+    walks — every one of them a fact the SUBMISSION itself carries.
 
-    WHAT PRINTS THE HOUSE DASH IS WHAT IS NOT KNOWN; what prints nothing at
-    all is what could not be known of a package with no line of coverage. Rate,
-    denominator, rate movement, basis and exposure are all facts stated per
-    unit of exposure ON A LINE, and a dash there would read as a figure
-    somebody could go and fetch. They are left EMPTY, and the block's own
-    heading says in words why.
+    WHAT IS NOT HERE IS NOT A GAP. Rate, its denominator, its movement, the
+    access point, TRIA, fees, tax, the total, the client-facing reason, the
+    basis and the exposure are all absent from this block entirely rather than
+    printed empty: not one of them is a fact a package can state before its
+    line of coverage is recorded, and a column of house dashes reads as a
+    figure somebody could go and fetch. `PROVISIONAL_KEYS` says the same thing
+    one level up, and this dict raising on an unknown key is what keeps the
+    two in step.
     """
     return {
         "market": _cell(row.market),
-        # EMPTY, NOT `direct`. A submission has no intermediary column at all
-        # — the access point is a fact about a RESPONSE — so "direct" here
-        # would be a claim nobody made about a package that has not been
-        # recorded against a line of coverage yet. This is the same reading
-        # the rate and basis cells below take: what could not be known of a
-        # package like this is left blank, and the block heading says why.
-        "access": _cell(""),
         "best": _cell(row.best or DASH),
-        # NO ATTACHMENT AND NO "PRIMARY". A submission states a limit, never a
-        # band, and `PRIMARY` in this cell would claim the quote sits at the
-        # bottom of a tower nobody has drawn.
-        "attach": _cell(DASH),
         "lim": _cell(_money(row.lim)),
         "status": _cell(
             row.status, tone=_SUBMISSION_TONE.get(row.status_key, ""), pill=True
@@ -675,23 +793,22 @@ def _provisional_cells(
         "quote_expires_on": _cell(
             marketing_report.fmt_date(row.quote_expires_on, window) or DASH
         ),
-        "rate": _cell(""),
-        "rate_per": _cell(""),
-        "rate_move": _cell(""),
         "premium": _cell(_money(row.premium)),
-        "tria": _cell(DASH),
-        "fees": _cell(DASH),
-        "sl_tax": _cell(DASH),
-        "total_cost": _cell(DASH),
         "subjectivities": _cell(
             str(row.open_subjectivities) if row.open_subjectivities else DASH,
             tone="is-warn" if row.open_subjectivities else "",
         ),
-        "reason": _cell(DASH),
-        "basis_override": _cell(""),
-        "exposure_override": _cell(""),
         "internal_reason": _cell(row.internal_reason or DASH),
     }
+
+
+def provisional_remove_action(ref: str, placement_id: str, submission_id: str) -> str:
+    """Where the confirm is fetched from and where the removal posts — ONE
+    formula, the way `response_base` is one for a response row."""
+    return (
+        f"/accounts/{ref}/program/{placement_id}"
+        f"/marketing/submissions/{submission_id}/remove"
+    )
 
 
 def assign_action(ref: str, placement_id: str, submission_id: str) -> str:
@@ -729,22 +846,53 @@ def provisional_row_view(
     ref: str,
     placement_id: str,
     window: marketing_report.DateWindow | None = None,
+    conditions: dict[str, list[marketing_report.SubjectivityRow]] | None = None,
 ) -> dict[str, Any]:
-    """One row of the provisional block, built by walking COLUMNS."""
+    """One row of the provisional block, built by walking
+    `PROVISIONAL_COLUMNS` — this block's own narrower set, and not `COLUMNS`.
+    See that tuple for why the two differ."""
     cells = _provisional_cells(row, window)
     built = []
-    for column in COLUMNS:
+    for column in PROVISIONAL_COLUMNS:
         cell = dict(cells[column.key])
         cell["class"] = _column_class(column, cell)
         built.append(cell)
     return {
         "id": row.submission_id,
         "cells": built,
+        # THE SAME DISCLOSURE THE ORDINARY ROW HAS. A package with no line of
+        # coverage can carry subjectivities like any other — they are recorded
+        # against the SUBMISSION — and hiding them here would put a count on
+        # the row with no way to read it.
+        "conditions": _conditions_view(
+            (conditions or {}).get(row.submission_id, [])
+        ),
+        "conditions_summary": _conditions_summary(
+            (conditions or {}).get(row.submission_id, [])
+        ),
         # WITHDRAWN PACKAGES KEEP THEIR ROW AND LOSE THEIR CONTROL. The
         # marketing happened and stays reported; what is withheld is a write
         # that would leave the row permanently mis-stated (see `WITHDRAWN`).
         "can_assign": row.status_key != WITHDRAWN,
         "assign_url": assign_action(ref, placement_id, row.submission_id),
+        # A PACKAGE RECORDED IN ERROR (Grant, 2026-08-27: "nor just remove
+        # entirely"). Until now a submission could be created on every surface
+        # and taken back on none: the response rows have had a remove since
+        # 2026-08-26, and the package underneath them had nothing anywhere —
+        # not a panel control, not an MCP verb. A mistyped market or a
+        # duplicate approach was therefore permanent, and it prints on the
+        # internal workbook and in the SLA queue for ever.
+        #
+        # ALWAYS OFFERED, WITHDRAWN ROWS INCLUDED, where `assign` is not.
+        # Withholding assign protects a fact (`roll_up_submission` will not
+        # recompute a withdrawn package, so a response created under one would
+        # hang off a parent that can never speak for it); there is no fact to
+        # protect from a removal of the whole row, and a withdrawn package
+        # recorded against the wrong client is exactly the one somebody wants
+        # gone.
+        "remove_url": provisional_remove_action(
+            ref, placement_id, row.submission_id
+        ),
     }
 
 
@@ -767,12 +915,20 @@ def provisional_view(
     """
     if not report.provisional:
         return None
+    conditions = _conditions_by_package(report)
     return {
         "id": f"mprov-{placement_id}",
         "label": marketing_report.PROVISIONAL_LABEL,
+        # ITS OWN COLUMNS, handed to the macro rather than looked up there.
+        # The template renders whatever it is given; deciding the column set
+        # in the markup would put a second copy of `PROVISIONAL_KEYS` where no
+        # test and no type checker can see it go stale (CLAUDE.md, DRY — the
+        # retention-types-in-a-Jinja-template mistake).
+        "columns": PROVISIONAL_COLUMNS,
         "rows": [
             provisional_row_view(
-                row, ref=ref, placement_id=placement_id, window=report.window
+                row, ref=ref, placement_id=placement_id, window=report.window,
+                conditions=conditions,
             )
             for row in report.provisional
         ],
@@ -1196,6 +1352,7 @@ def block_view(
     base: str,
     window: marketing_report.DateWindow | None = None,
     sorts: dict[str, tuple[str, bool]] | None = None,
+    conditions: dict[str, list[marketing_report.SubjectivityRow]] | None = None,
 ) -> dict[str, Any]:
     """One line-of-coverage block, rendered.
 
@@ -1236,7 +1393,8 @@ def block_view(
         # walk, printed under the same heading.
         "rows": [
             row_view(
-                request, row, ref=ref, placement_id=placement_id, window=window
+                request, row, ref=ref, placement_id=placement_id, window=window,
+                conditions=conditions,
             )
             for row in marketing_report.order_rows(
                 block.rows, *(sorts or {}).get(block.line_id, ("", False))
@@ -1327,10 +1485,14 @@ def panel(
     # the page claiming an order it is not in — and carrying that claim into
     # every later write.
     sorts = parse_sorts(sort_spec)
+    # GROUPED ONCE FOR THE WHOLE SECTION. Every block reads from the same map,
+    # because a package can answer on several lines of coverage and its
+    # conditions are the package's — see `_conditions_by_package`.
+    conditions = _conditions_by_package(report)
     blocks = [
         block_view(
             request, block, ref=ref, placement_id=placement_id, base=base,
-            window=report.window, sorts=sorts,
+            window=report.window, sorts=sorts, conditions=conditions,
         )
         for block in report.blocks
     ]

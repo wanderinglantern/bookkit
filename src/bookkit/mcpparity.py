@@ -332,6 +332,27 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "the report\'s own \'Line of coverage not recorded\' block, and "
         "market_assign_line takes their ids.",
     ),
+    ("submission", "delete"): (
+        ("submission_remove",),
+        "AN APPROACH RECORDED IN ERROR, and ONLY that — the pair "
+        "market_response/delete already has, one level up. THIS SUPERSEDES A "
+        "DEFERRAL which said: 'a submission that went out is a fact about the "
+        "market and probably should never be removable anyway; withdrawn is "
+        "already a status.' That is right about every package this book "
+        "actually sent, and the tool refuses nothing but says so in its own "
+        "description. What it did not cover is the package that NEVER went "
+        "out — a mistyped carrier, a duplicate approach, one filed against "
+        "the wrong placement — and there is no status for that, because every "
+        "status is a claim that we went to that market. Until 2026-08-27 a "
+        "package could be created on three surfaces and unmade on none: the "
+        "panel had no control, there was no tool, and the row printed on the "
+        "internal workbook and in the SLA queue for ever (Grant: 'nor just "
+        "remove entirely'). Refused while any response speaks for it, and the "
+        "refusal names market_response_remove as the verb that clears the way "
+        "— answers come off one at a time, each its own undo unit. Soft and "
+        "revertible; the subjectivities go with it and come back with it, "
+        "because every reader of them reaches them through their package."
+    ),
     ("market_response", "delete"): (
         ("market_response_remove",),
         "A ROW RECORDED IN ERROR, and ONLY that. Every other way a market "
@@ -641,11 +662,6 @@ DEFERRED: dict[tuple[str, str], str] = {
         "adds an item to a request that already exists — so an underwriter's "
         "follow-up question cannot be filed against the request it belongs "
         "to. The TUI has this ('a' on the items table)."
-    ),
-    ("submission", "delete"): (
-        "Same as submission/create. A submission that went out is a fact "
-        "about the market and probably should never be removable anyway; "
-        "'withdrawn' is already a status."
     ),
     ("opportunity", "delete"): (
         "A deal that went nowhere is marked lost through opportunity_stage, "

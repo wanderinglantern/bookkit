@@ -12,6 +12,11 @@
      Both need a measurement or an event, which is why they are not in
      app.css beside the rules they complete. #}
   <script src="/static/marketing-grid.js?v={{ asset_version }}" defer></script>
+  {# A SWAP MUST NOT MOVE THE READER. Last, so the pinned-column measurement
+     above has run before a scroll position is written back. Global rather than
+     the marketing grid's own: thirty-two templates render `.table-scroll` and
+     not one of them restored anything. #}
+  <script src="/static/scroll-keep.js?v={{ asset_version }}" defer></script>
 </head>
 <body>
   <main id="main">{% block content %}{% endblock %}</main>

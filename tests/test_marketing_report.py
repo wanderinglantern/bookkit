@@ -250,19 +250,26 @@ def test_the_section_label_carries_the_header_facts(conn) -> None:
     report = marketing_report.compose(conn, placement.id, TODAY)
     label = marketing_report.to_sections(report)[0].label
     assert "General Liability" in label
-    # THE SEND DATE IS NOT IN THE HEADING ANY MORE. It collapsed into the
-    # label only when every package on the line went out the same day and
-    # printed NOWHERE otherwise, so the client's workbook lost it on any line
-    # marketed over more than one day (D6, 2026-08-26). It is a `Sent` column
-    # on the row now — the same un-collapsing the grid did — and the row
-    # assertion below is what holds it.
+    # THE SEND DATE IS NOT IN THE HEADING. It collapsed into the label only
+    # when every package on the line went out the same day and printed NOWHERE
+    # otherwise, so a line marketed over more than one day carried no send date
+    # at all (D6, 2026-08-26). It is a `Sent` COLUMN now — on the web grid,
+    # which is where it can be corrected, and on the BROKER'S copy of the
+    # workbook. The client's copy carries neither the heading fact nor the
+    # column (Grant, 2026-08-27), so both halves are asserted below.
     assert "submitted" not in label
     assert "Gross sales" in label
     assert "+18.3%" in label
     assert "expiring $412,000 at 10.05" in label
 
-    headers = [h for h, _, _ in marketing_report.columns(marketing_report.CLIENT)]
-    section = marketing_report.to_sections(report)[0]
+    client_headers = [h for h, _, _ in marketing_report.columns(marketing_report.CLIENT)]
+    assert "Sent" not in client_headers and "Replied" not in client_headers
+
+    internal = marketing_report.compose(
+        conn, placement.id, TODAY, marketing_report.INTERNAL
+    )
+    headers = [h for h, _, _ in marketing_report.columns(marketing_report.INTERNAL)]
+    section = marketing_report.to_sections(internal)[0]
     assert section.rows[0][headers.index("Sent")] == "7 Jul"
 
 
@@ -507,9 +514,14 @@ def test_a_date_outside_the_placement_s_own_window_prints_its_year(
     conn, tmp_path
 ) -> None:
     """"12 Aug" was every date this report printed, so 2001, 2027 and 2099 all
-    rendered identically — on the grid AND in the client's workbook. The year
-    prints where it is news: outside the window this placement's marketing can
-    honestly fall in.
+    rendered identically. The year prints where it is news: outside the window
+    this placement's marketing can honestly fall in.
+
+    DRIVEN THROUGH THE INTERNAL WORKBOOK since 2026-08-27, because the client
+    workbook no longer carries a date column at all — Sent and Replied are the
+    broker's own clock now. The window rule itself is unchanged and still binds
+    on both surfaces that print a date: this sheet, and the web grid (where
+    `marketing_grid._sent_text` and `fmt_date` read the same window).
     """
     _, placement = _book(conn)  # 2027-09-01 to 2028-09-01
     ordinary = _approach(
@@ -524,10 +536,13 @@ def test_a_date_outside_the_placement_s_own_window_prints_its_year(
 
     assert report.window.holds(ordinary.responded_on)
     text = _sheet_text(
-        marketing_report.write(conn, placement.id, tmp_path / "dates.xlsx", TODAY)
+        marketing_report.write(
+            conn, placement.id, tmp_path / "dates.xlsx", TODAY,
+            audience=marketing_report.INTERNAL,
+        )
     )
     assert "21 Jul" in text and "21 Jul 2027" not in text
-    assert "12 Aug 2099" in text, "a mistyped year is invisible on the client sheet"
+    assert "12 Aug 2099" in text, "a mistyped year is invisible on the sheet"
 
 
 def test_a_reply_cannot_predate_the_submission_it_answers(conn) -> None:
