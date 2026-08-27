@@ -887,3 +887,130 @@ def test_the_assistant_can_rule_a_market_out_on_price(conn) -> None:
     assert marketing.get_response(
         conn, approach["response_id"]
     ).decline_reason_public == "minimum_premium"
+
+
+# --- one ask, three markets: the agent's half --------------------------------
+#
+# A CHANGE THAT LANDS ON THE WEB AND NOT ON MCP HAS SHIPPED TO TWO THIRDS OF ITS
+# USERS. Subjectivities had no MCP tools at all before 2026-08-27 — all four
+# verbs deferred — so an assistant asked "what is blocking the Delta renewal"
+# could not answer and an assistant told "AIG wants loss runs" could record
+# nothing.
+
+
+def _blocked(conn):
+    """A placement with one market condition nobody has asked the client for."""
+    _, placement = _book(conn)
+    _market(conn, "Travelers")
+    approach = mcpserver._market_approach(
+        conn, placement.ref, "GL", market="Travelers", sent_on="2026-07-07"
+    )
+    condition = mcpserver._subjectivity_add(
+        conn, approach["submission_id"], "5-year loss runs, currently valued"
+    )
+    return placement, approach, condition
+
+
+def test_blocking_list_says_nobody_has_asked_the_client_yet(conn) -> None:
+    """The state the ask verb exists to change, and the one a model has to be
+    able to SEE before it can act on it."""
+    placement, _, condition = _blocked(conn)
+
+    out = mcpserver._blocking_list(conn, placement.ref)
+
+    rows = [r for r in out["blocking"] if r["kind"] == "condition"]
+    assert len(rows) == 1
+    assert rows[0]["subjectivity_ref"] == condition["subjectivity_ref"]
+    assert rows[0]["asked_as"] is None
+    assert rows[0]["waiting_on"] == "Travelers"
+
+
+def test_asking_twice_attaches_rather_than_writing_a_second_ask(conn) -> None:
+    """ONE ASK, THREE MARKETS — the whole point, through the tool."""
+    _, approach, first = _blocked(conn)
+    second = mcpserver._subjectivity_add(
+        conn, approach["submission_id"], "Loss runs, 5 yrs"
+    )
+
+    made = mcpserver._subjectivity_ask_client(
+        conn, first["subjectivity_ref"], prompt="Loss runs — 5 years"
+    )
+    joined = mcpserver._subjectivity_ask_client(
+        conn, second["subjectivity_ref"], item_ref=made["item_ref"]
+    )
+
+    assert made["created_a_new_ask"] is True
+    assert made["also_waiting"] == 0
+    assert joined["created_a_new_ask"] is False
+    assert joined["item_ref"] == made["item_ref"]
+    assert joined["also_waiting"] == 1, (
+        "the figure that tells a model it has just avoided writing a second email"
+    )
+
+
+def test_received_names_what_it_unblocks_without_claiming_it(conn) -> None:
+    """RECEIVED IS NOT MET. A model that did not pass `met` still has to be able
+    to tell the broker which markets are now waiting to be told."""
+    _, _, condition = _blocked(conn)
+    made = mcpserver._subjectivity_ask_client(
+        conn, condition["subjectivity_ref"], prompt="Loss runs"
+    )
+
+    out = mcpserver._request_item_received(conn, made["item_ref"])
+
+    assert out["marked_met"] == 0
+    assert [u["subjectivity_ref"] for u in out["unblocks"]] == [
+        condition["subjectivity_ref"]
+    ]
+    from bookkit.repo import submissions as submissions_repo
+
+    still = submissions_repo.get_subjectivity(conn, condition["subjectivity_ref"])
+    assert still.status == "outstanding"
+
+
+def test_received_with_met_settles_them_in_one_batch(conn) -> None:
+    _, _, condition = _blocked(conn)
+    made = mcpserver._subjectivity_ask_client(
+        conn, condition["subjectivity_ref"], prompt="Loss runs"
+    )
+
+    out = mcpserver._request_item_received(conn, made["item_ref"], met=True)
+
+    from bookkit.repo import submissions as submissions_repo
+
+    assert out["marked_met"] == 1
+    assert submissions_repo.get_subjectivity(
+        conn, condition["subjectivity_ref"]
+    ).status == "met"
+
+
+def test_a_missing_condition_names_the_read_that_has_the_ids(conn) -> None:
+    """A MISSING VERB IS NOT A REFUSAL, IT IS A WRONG WRITE — and a refusal that
+    names no read is what sends a model looking for the nearest wrong door."""
+    with pytest.raises(ValueError, match="blocking_list"):
+        mcpserver._resolve_subjectivity(conn, "01NOSUCHTHING")
+
+
+def test_an_item_can_be_added_to_a_request_that_already_exists(conn) -> None:
+    """The REAL GAP mcpparity named: request_create took its items at creation
+    and nothing added one afterwards, so an underwriter's follow-up had nowhere
+    to be filed."""
+    orgs.create(conn, name="Acme", kind="client")
+    made = mcpserver._request_create(conn, "Acme", "Sompo questions", ["loss runs"])
+
+    added = mcpserver._request_item_add(
+        conn, made["request_ref"], "Schedule of vehicles", kind="document"
+    )
+
+    assert added["request_ref"] == made["request_ref"]
+    assert added["kind"] == "document"
+    items = mcpserver._request_items(conn, made["request_ref"])
+    assert len(items["items"]) == 2
+
+
+def test_an_item_kind_the_book_does_not_have_is_refused(conn) -> None:
+    orgs.create(conn, name="Acme", kind="client")
+    made = mcpserver._request_create(conn, "Acme", "Sompo questions", ["loss runs"])
+
+    with pytest.raises(ValueError, match="kind must be one of"):
+        mcpserver._request_item_add(conn, made["request_ref"], "X", kind="telepathy")

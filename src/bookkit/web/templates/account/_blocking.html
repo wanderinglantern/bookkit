@@ -1,0 +1,84 @@
+{# WHAT IS BLOCKING THIS PLACEMENT — every market condition still outstanding
+   and every client ask still open, in ONE list ordered by what runs out first.
+
+   Until 2026-08-27 this question had no single answer: the conditions sat under
+   the marketing packages, the asks sat under the requests panel, and the only
+   thing holding them together was the broker. Chasing these IS the three weeks
+   between a quote arriving and a policy being bound.
+
+   IT OWNS NO WRITES. Every row links to the surface that already owns it, for
+   the reason routes/items.py gives about itself — those routes answer with the
+   cell alone and are therefore correct on any page that renders them. One
+   parser, one guard, one batch, one refusal path. A control here would be a
+   second copy of each.
+
+   NOTHING AT ALL WHEN NOTHING IS BLOCKING. An empty frame under a heading that
+   promises a list reads as a broken panel, and "nothing is blocking this
+   placement" is a real and welcome answer that deserves saying in words. #}
+<section class="blocking" id="blocking-{{ placement.id }}">
+  {# NAMED, NOT EXPLAINED (Grant, 2026-08-27: "stop putting explainers all over
+     the place"). The heading is "Blocking" and the rows say who is waiting on
+     what — a sentence under it telling a broker what blocking means is noise on
+     a working surface they read every day. #}
+  <header class="blocking-head">
+    <h3 class="blocking-title">Blocking</h3>
+  </header>
+
+  {% if blocking %}
+    <div class="table-scroll">
+      <table class="blocking-table">
+        <thead>
+          <tr>
+            <th>waiting on</th>
+            <th>what</th>
+            <th>status</th>
+            <th class="num">due</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in blocking %}
+            <tr class="blocking-row">
+              <td>
+                {# WHOSE MOVE IT IS, never blank. A market requires a CONDITION
+                   and we have asked the client a QUESTION; a row that cannot
+                   say which door to knock on cannot be worked. #}
+                <span class="market-pill {{ 'is-warn' if b.kind == 'condition' else '' }}"
+                  >{{ b.who }}</span>
+              </td>
+              <td><a href="{{ b.href }}">{{ b.what }}</a></td>
+              <td>
+                {% if b.answer_in_hand %}
+                  {# THE STATE THIS WHOLE FEATURE EXISTS TO SURFACE. No longer
+                     waiting on the client, still outstanding to the market —
+                     RECEIVED IS NOT MET, and the work left is forwarding it. #}
+                  <span class="market-pill is-good">answer in hand</span>
+                {% elif b.asked_as %}
+                  <span class="detail-label">asked: {{ b.asked_as }}</span>
+                {% elif b.kind == 'condition' %}
+                  {# NOBODY HAS ASKED THE CLIENT. The one row on this list that
+                     is nobody's move yet, so it says so in words rather than
+                     leaving a blank a reader has to interpret. #}
+                  <span class="detail-label blocking-unasked">not asked yet</span>
+                {% elif b.carries %}
+                  <span class="detail-label"
+                    >{{ b.carries }} market{{ 's' if b.carries != 1 }} waiting on this</span>
+                {% endif %}
+              </td>
+              {# UNDATED IS UNMEASURED, NEVER 0d. A blocker with no date is not
+                 due today and not overdue, and a zero here would render as the
+                 most urgent row on the page. The house em dash instead. #}
+              <td class="num">
+                {% if b.due_on %}
+                  <span class="{{ 'is-overdue' if b.days_remaining < 0 }}"
+                    >{{ b.due_on }}</span>
+                {% else %}—{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="blocking-clear">Nothing is blocking this placement.</p>
+  {% endif %}
+</section>

@@ -72,6 +72,7 @@ from ..models import (
 from ..money import format_cents
 from ..repo import lines as lines_repo
 from ..repo import marketing as marketing_repo
+from ..services import blocking as blocking_svc
 from ..services import marketing_report
 from .forms_render import render_cell_display
 
@@ -606,7 +607,7 @@ def _conditions_summary(rows: list[marketing_report.SubjectivityRow]) -> str:
 
 def _conditions_view(
     rows: list[marketing_report.SubjectivityRow],
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """The disclosed list, as the template prints it.
 
     EVERY STATUS, not only the outstanding ones. The cell above counts what is
@@ -621,6 +622,19 @@ def _conditions_view(
             "tone": "is-warn" if row.status == "outstanding" else "is-good",
             "due_on": row.due_on or "",
             "satisfied_on": row.satisfied_on or "",
+            # --- the ask that will answer it (2026-08-27) -------------------
+            "id": row.subjectivity_id,
+            "asked_as": row.asked_as,
+            # THREE STATES, NOT TWO, and the third is the one worth building
+            # for. "answer in hand" is the client having sent it and the market
+            # not having been told: nothing left to chase, something to
+            # forward. It was invisible before this row existed.
+            "answer_in_hand": row.answer_in_hand,
+            # ASK ONLY WHAT IS STILL OWED. A met or waived condition has
+            # nothing left to ask the client for, and `services.rfi.promote`
+            # refuses it — so the control is not offered rather than offered
+            # and refused.
+            "can_ask": bool(row.subjectivity_id) and row.status == "outstanding",
         }
         for row in rows
     ]
@@ -919,6 +933,12 @@ def provisional_view(
     return {
         "id": f"mprov-{placement_id}",
         "label": marketing_report.PROVISIONAL_LABEL,
+        # A PACKAGE WITH NO LINE OF COVERAGE STILL CARRIES CONDITIONS, and a
+        # market waiting on one of those is as blocked as any other. The
+        # control belongs here for the same reason the disclosure does.
+        "subj_ask_url": (
+            f"/accounts/{ref}/program/{placement_id}/marketing/subjectivities/ask"
+        ),
         # ITS OWN COLUMNS, handed to the macro rather than looked up there.
         # The template renders whatever it is given; deciding the column set
         # in the markup would put a second copy of `PROVISIONAL_KEYS` where no
@@ -1485,6 +1505,11 @@ def block_view(
         # the same `hx-vals` override, carrying this line's pin away and
         # leaving its column alone. No route of its own, because it is not a
         # different act: both are "render the section in this order".
+        # WHERE "ask the client" POSTS. On the block rather than threaded
+        # through three macro signatures, the same way `marketing_id` is —
+        # `base` is right here and a second formula for it is a second thing to
+        # keep in step.
+        "subj_ask_url": f"{base}/subjectivities/ask",
         "release_url": sort_action(ref, placement_id),
         "release_vals": json.dumps(
             {
@@ -1596,6 +1621,16 @@ def panel(
     ]
     return {
         "id": f"marketing-{placement_id}",
+        # WHAT IS BLOCKING THIS PLACEMENT, composed here so it rides INSIDE the
+        # element every write answers with. It lived above the section for one
+        # afternoon and went stale on the first ask: the row a broker had just
+        # asked the client for went on reading "not asked yet" until the tab was
+        # reloaded, which is the worst shape for a control whose whole job is to
+        # say whose move it is. Gluing a second fragment with `hx-swap-oob` is
+        # the destroyed-panel bug (CLAUDE.md); one element is the rule.
+        "blocking": blocking_svc.for_placement(
+            conn, placement_id, ref, today
+        ),
         # THE MARKETING WITH NO LINE OF COVERAGE YET, in its own block below
         # the lines. None when every package on the placement has been answered
         # by line — which is what the assign control below each row is for.
@@ -1647,3 +1682,29 @@ def panel(
         # docstring for what is dropped and, more importantly, what is not.
         "line_options": line_add_options(conn, placement_id),
     }
+
+
+def candidate_says(candidate: Any) -> str:
+    """What one ask in the picker MEANS, in words a broker acts on.
+
+    NOT THE RAW STATUS. "received" is a fact about our record; "the client has
+    already sent this" is the sentence that tells somebody there is nothing left
+    to chase. Three readings, because the join creates three states.
+
+    HERE AND NOT IN THE ROUTE. It decides what an option SAYS, which is the same
+    job `_conditions_view` and `header_cells` do — and routes/marketing.py is
+    walked by the refusal gate (tests/test_marketing_gates.py G5), which read
+    these option labels as refusals naming a fix. They are not refusals: nothing
+    is being refused, and a picker label is presentation.
+    """
+    waiting = candidate.already_waiting
+    carried = (
+        f" · {waiting} market{'s' if waiting != 1 else ''} already waiting"
+        if waiting
+        else ""
+    )
+    if candidate.state == "received":
+        return f"the client has already sent this{carried}"
+    if candidate.state == "waived":
+        return f"waived on that ask — check it still applies{carried}"
+    return f"already asked, still outstanding{carried}"

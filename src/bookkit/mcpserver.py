@@ -447,7 +447,7 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
 
     @server.tool()
     async def request_item_received(
-        item_ref: str, response: str | None = None
+        item_ref: str, response: str | None = None, met: bool = False
     ) -> dict[str, Any]:
         """Record that ONE item on an information request came back: marks it
         received and dates it today, event-logged. `item_ref` MUST be the
@@ -456,8 +456,116 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         Pass `response` to store the client's actual answer alongside it (a
         document just arriving needs no response). Returns the parent
         request's remaining open_count/total_count, so you can report "3 of 12
-        still outstanding" without a second call."""
-        return _request_item_received(rw, item_ref, response=response)
+        still outstanding" without a second call.
+
+        RECEIVED IS NOT MET. `unblocks` lists the market conditions waiting on
+        this ask — the client sending loss runs does NOT satisfy AIG's
+        condition; AIG having them and accepting them does. Pass
+        `met=true` ONLY when the markets have actually been given it, which
+        marks every listed condition met in one revertible act. Leave it off
+        and they stay outstanding to the market with the answer in hand, which
+        is the honest state and the one blocking_list is built to show."""
+        return _request_item_received(rw, item_ref, response=response, met=met)
+
+    @server.tool()
+    async def blocking_list(placement_ref: str) -> dict[str, Any]:
+        """WHAT IS BLOCKING THIS PLACEMENT — every market condition still
+        outstanding and every client ask still open, in ONE list ordered by
+        what runs out first. This is the read to make before answering "where
+        is this renewal stuck": the two halves used to live on different tabs
+        and nothing joined them.
+
+        Each `condition` row carries `subjectivity_ref` (the exact id
+        subjectivity_ask_client takes), the market that requires it, and
+        `asked_as` — the wording of the client ask it is waiting on, or null
+        when nobody has asked yet, which is the state to fix.
+        `answer_in_hand` true means the client HAS sent it and the market has
+        not been told: nothing to chase from the client, something to forward.
+
+        Each `ask` row carries `item_ref` and `carries` — how many market
+        conditions that one ask would clear. Chase the ask carrying three
+        before the ask carrying none."""
+        return _blocking_list(rw, placement_ref)
+
+    @server.tool()
+    async def subjectivity_add(
+        submission_ref: str,
+        description: str,
+        due_on: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Record something a market REQUIRES before its quote is bindable — a
+        signed application, five-year loss runs, a completed inspection.
+        `submission_ref` is the exact package id from marketing_report.
+
+        A CONDITION, NOT A TASK. It hangs off the PACKAGE, so one condition
+        can be a condition of every line of coverage that package answered on.
+        Chasing these is the three weeks between a quote arriving and a policy
+        being bound. Once recorded, subjectivity_ask_client turns it into an
+        ask to the client — and will attach it to an ask already out rather
+        than writing a second one."""
+        return _subjectivity_add(
+            rw, submission_ref, description, due_on=due_on, notes=notes
+        )
+
+    @server.tool()
+    async def subjectivity_ask_client(
+        subjectivity_ref: str,
+        item_ref: str | None = None,
+        prompt: str | None = None,
+        due_on: str | None = None,
+    ) -> dict[str, Any]:
+        """ASK THE CLIENT for what a market requires — once, however many
+        markets require it. `subjectivity_ref` is the exact id from
+        blocking_list.
+
+        CHECK blocking_list FIRST. Three markets wanting five-year loss runs
+        is ONE question to the client, and the whole point of this verb is
+        that the second and third markets ATTACH to the ask already out
+        instead of generating a second and third email. Pass `item_ref` to
+        attach to an existing ask — including one already RECEIVED, which
+        means the document is in hand and this market simply needs telling.
+        Pass `prompt` only when no ask on this placement covers it.
+
+        Exactly one of `item_ref` / `prompt`. Refused when the condition is
+        already met or waived, and when the ask named belongs to a different
+        placement — an ask from another renewal is a document from another
+        year. Attaching does NOT mark anything met: the client sending a
+        document does not satisfy the market's condition, and
+        request_item_received is where that offer is made."""
+        return _subjectivity_ask_client(
+            rw, subjectivity_ref, item_ref=item_ref, prompt=prompt, due_on=due_on
+        )
+
+    @server.tool()
+    async def subjectivity_unlink(subjectivity_ref: str) -> dict[str, Any]:
+        """Take a market's condition back off the client ask it was attached
+        to — the pair subjectivity_ask_client needs, for when the wrong ask
+        was picked. The ask itself is untouched: it may be answering three
+        other markets, and this cannot un-send a question the client already
+        has. Revertible."""
+        return _subjectivity_unlink(rw, subjectivity_ref)
+
+    @server.tool()
+    async def request_item_add(
+        request_ref: str,
+        prompt: str,
+        kind: str = "question",
+        detail: str | None = None,
+        due_on: str | None = None,
+    ) -> dict[str, Any]:
+        """Add ONE ask to an information request that already exists — an
+        underwriter's follow-up filed against the request it belongs to,
+        rather than opening a second conversation with the same client.
+        `request_ref` is an RFI ref (RFI-0007) or its exact id.
+
+        `kind` is 'question' or 'document'. Use subjectivity_ask_client
+        instead when the ask exists because a MARKET requires it: that verb
+        makes the item AND records which market is waiting on it, so
+        blocking_list can say the answer clears three markets at once."""
+        return _request_item_add(
+            rw, request_ref, prompt, kind=kind, detail=detail, due_on=due_on
+        )
 
     @server.tool()
     async def request_create(
@@ -2590,8 +2698,223 @@ def _enrich_field(
             "batch": batch.ref}
 
 
+def _due_or_refuse(typed: str, label: str) -> str:
+    """A typed date, or the house refusal. `parse_human_date` refuses a bare
+    1-2 digit input on purpose (CLAUDE.md: a bare number is not a date), and
+    `date_refusal` is the one wording every surface gives for a miss."""
+    from .dates import parse_human_date
+    from .forms.spec import date_refusal
+
+    parsed = parse_human_date(typed)
+    if parsed is None:
+        raise ValueError(f"{label}: {date_refusal(typed)}")
+    return str(parsed.isoformat())
+
+
+def _resolve_subjectivity(conn: sqlite3.Connection, subjectivity_ref: str) -> Any:
+    """A market condition by its exact id, with the refusal naming where an id
+    comes from. Like a submission it has no human-typable REF: it is an
+    internal row a report hands back, so the message names the read rather
+    than pretending there is a handle to guess."""
+    from .repo import submissions as submissions_repo
+
+    try:
+        return submissions_repo.get_subjectivity(conn, subjectivity_ref)
+    except KeyError:
+        raise ValueError(
+            f"no subjectivity {subjectivity_ref!r} — read blocking_list for the "
+            f"exact ids of what a market is waiting on"
+        ) from None
+
+
+def _blocking_list(conn: sqlite3.Connection, placement_ref: str) -> dict[str, Any]:
+    """The web's Blocking block, for an agent — ONE composition, both surfaces.
+
+    services/blocking.py owns what counts as blocking and in what order, so a
+    tool and a browser cannot disagree about whether a renewal is stuck. The
+    `href` each Blocker carries is dropped here: a URL is the browser's answer
+    to "where do I work this", and the tool's answer is the ref beside it.
+    """
+    from .repo import orgs
+    from .services import blocking as blocking_svc
+
+    placement = _resolve_placement(conn, placement_ref)
+    org = orgs.get(conn, placement.org_id)
+    rows = blocking_svc.for_placement(
+        conn, placement.id, org.ref, date.today()
+    )
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        common = {
+            "kind": row.kind,
+            "what": row.what,
+            "waiting_on": row.who,
+            "due_on": row.due_on,
+            "days_remaining": row.days_remaining,
+        }
+        if row.kind == blocking_svc.CONDITION:
+            out.append({
+                **common,
+                "subjectivity_ref": row.id,
+                "asked_as": row.asked_as,
+                "answer_in_hand": row.answer_in_hand,
+            })
+        else:
+            out.append({**common, "item_ref": row.id, "carries": row.carries})
+    return {
+        "placement_ref": placement.ref,
+        "account": org.name,
+        "blocking": out,
+        "count": len(out),
+    }
+
+
+def _subjectivity_add(
+    conn: sqlite3.Connection,
+    submission_ref: str,
+    description: str,
+    *,
+    due_on: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Record a market's condition. A THIN CALL over a service already on main
+    — the deferral this replaces said exactly that, and said the only reason
+    it was absent was that the surface was being restructured elsewhere.
+
+    IT HAD TO COME WITH THE ASK VERB. `subjectivity_ask_client` operates on a
+    condition that already exists, so without a create door an assistant told
+    "AIG wants loss runs" could record nothing and the whole MCP half of this
+    feature would be unreachable for anything the browser had not made first.
+    """
+    from .repo import submissions as submissions_repo
+
+    submission = _resolve_submission(conn, submission_ref)
+    org_id, market_name = _submission_org_and_market(conn, submission)
+    if due_on:
+        due_on = _due_or_refuse(due_on, "a subjectivity due date")
+    with _open_batch(
+        conn, tool="subjectivity_add", org_id=org_id,
+        summary=f"recorded a condition from {market_name}: {description[:60]}",
+    ) as batch:
+        subjectivity = submissions_repo.add_subjectivity(
+            conn, submission.id, description,
+            **{k: v for k, v in (("due_on", due_on), ("notes", notes)) if v},
+        )
+        _provenance(conn, "submission_subjectivity", subjectivity.id)
+    return {
+        "subjectivity_ref": subjectivity.id,
+        "market": market_name,
+        "description": subjectivity.description,
+        "due_on": subjectivity.due_on,
+        "status": subjectivity.status,
+        "batch": batch.ref,
+    }
+
+
+def _subjectivity_ask_client(
+    conn: sqlite3.Connection,
+    subjectivity_ref: str,
+    *,
+    item_ref: str | None = None,
+    prompt: str | None = None,
+    due_on: str | None = None,
+) -> dict[str, Any]:
+    """ONE ASK, THREE MARKETS — the MCP half of the web's "ask the client".
+
+    `services.rfi.promote` owns every rule, so the sentence an assistant reads
+    on a refusal is the sentence a broker reads. What this adds is the answer
+    shape: `also_waiting` is how many OTHER markets are on the same ask, and
+    it is the figure that tells a model it has just avoided writing a second
+    email rather than that it wrote one.
+    """
+    from .services import rfi as rfi_svc
+
+    subjectivity = _resolve_subjectivity(conn, subjectivity_ref)
+    if item_ref is not None:
+        _resolve_rfi_item(conn, item_ref)  # refused here, so the message names the read
+    if due_on:
+        due_on = _due_or_refuse(due_on, "a client ask due date")
+    promotion = rfi_svc.promote(
+        conn, subjectivity.id, source="mcp",
+        item_id=item_ref, prompt=prompt, due_on=due_on,
+    )
+    return {
+        "subjectivity_ref": promotion.subjectivity_id,
+        "item_ref": promotion.item_id,
+        "request_ref": promotion.request_ref,
+        "asked_as": promotion.prompt,
+        "item_status": promotion.state,
+        "created_a_new_ask": promotion.created_item,
+        "also_waiting": promotion.also_waiting,
+        "batch": promotion.batch,
+    }
+
+
+def _subjectivity_unlink(
+    conn: sqlite3.Connection, subjectivity_ref: str
+) -> dict[str, Any]:
+    from .services import rfi as rfi_svc
+
+    subjectivity = _resolve_subjectivity(conn, subjectivity_ref)
+    batch = rfi_svc.unlink(conn, subjectivity.id, source="mcp")
+    return {
+        "subjectivity_ref": subjectivity.id,
+        "description": subjectivity.description,
+        "batch": batch,
+    }
+
+
+def _request_item_add(
+    conn: sqlite3.Connection,
+    request_ref: str,
+    prompt: str,
+    *,
+    kind: str = "question",
+    detail: str | None = None,
+    due_on: str | None = None,
+) -> dict[str, Any]:
+    """Add one ask to an existing request — the REAL GAP mcpparity named.
+
+    `request_create` took its items at creation and nothing added one
+    afterwards, so an underwriter's follow-up had nowhere to be filed. A model
+    that cannot file it does not stop; it opens a SECOND request to the same
+    client about the same renewal, which is the duplication the whole
+    information-request feature exists to prevent.
+    """
+    from .models import RFI_ITEM_KINDS
+    from .repo import rfi as rfi_repo
+
+    request = _resolve_request(conn, request_ref)
+    if kind not in RFI_ITEM_KINDS:
+        raise ValueError(
+            f"kind must be one of {', '.join(RFI_ITEM_KINDS)} — {kind!r} is not"
+        )
+    if due_on:
+        due_on = _due_or_refuse(due_on, "a client ask due date")
+    with _open_batch(
+        conn, tool="request_item_add", org_id=request.org_id,
+        summary=f"added an item to {request.ref}: {prompt[:60]}",
+    ) as batch:
+        item = rfi_repo.add_item(
+            conn, request.id, prompt, kind=kind,
+            **{k: v for k, v in (("detail", detail), ("due_on", due_on)) if v},
+        )
+        _provenance(conn, "rfi_item", item.id)
+    return {
+        "item_ref": item.id,
+        "request_ref": request.ref,
+        "prompt": item.prompt,
+        "kind": item.kind,
+        "due_on": item.due_on,
+        "batch": batch.ref,
+    }
+
+
 def _request_item_received(
-    conn: sqlite3.Connection, item_ref: str, response: str | None = None
+    conn: sqlite3.Connection,
+    item_ref: str,
+    response: str | None = None,
+    met: bool = False,
 ) -> dict[str, Any]:
     """Status flip (plus an optional answer) on ONE item. item_ref must be an
     exact id the model READ from request_items/open_items — no fuzzy prompt
@@ -2606,11 +2929,24 @@ def _request_item_received(
         org_id=rfi_repo.get_request(conn, found.request_id).org_id,
         summary=f"received an item: {found.prompt[:60]}",
     ) as batch:
+        # READ BEFORE THE WRITE. These are the conditions still OUTSTANDING,
+        # and marking them met below would empty the list the answer is
+        # supposed to name.
+        unblocks = rfi_svc.unblocked_by(conn, item_ref)
         item = rfi_svc.mark_received(conn, item_ref, date.today().isoformat())
         if response:
             item = rfi_repo.update_item(conn, item.id, response=response)
         _provenance(conn, "rfi_item", item.id)
         request = rfi_repo.get_request(conn, item.request_id)
+        settled = 0
+        if met and unblocks:
+            # INSIDE THIS BATCH, so one `u` puts the arrival AND the markets
+            # it settled back together — they were one act by the broker.
+            settled = rfi_svc.mark_met(
+                conn, [s.id for s in unblocks],
+                on=date.today().isoformat(), source="mcp",
+                org_id=request.org_id,
+            )
         open_count = rfi_repo.open_item_count(conn, request.id)
         total_count = rfi_repo.item_count(conn, request.id)
     return {
@@ -2621,6 +2957,14 @@ def _request_item_received(
         "request_ref": request.ref,
         "open_count": open_count,
         "total_count": total_count,
+        # WHAT THIS ANSWER CLEARS, named whether or not it was acted on: a
+        # model that did not pass `met` still has to be able to tell the
+        # broker which three markets are now waiting to be told.
+        "unblocks": [
+            {"subjectivity_ref": s.id, "description": s.description}
+            for s in unblocks
+        ],
+        "marked_met": settled,
         "batch": batch.ref,
     }
 

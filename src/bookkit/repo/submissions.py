@@ -422,6 +422,56 @@ def delete_subjectivity(conn: sqlite3.Connection, subj_id: str) -> None:
     base.soft_delete(conn, "submission_subjectivity", subj_id)
 
 
+def subjectivities_waiting_on(
+    conn: sqlite3.Connection, rfi_item_id: str
+) -> list[Subjectivity]:
+    """Every live condition waiting on ONE ask (migration 021).
+
+    THE READ THE LINK EXISTS FOR. An answer arriving is the moment a broker
+    needs to know which markets it clears, and the join is many-to-one
+    precisely so that this list can be longer than one — the whole point of
+    asking the client once for the loss runs three markets wanted.
+
+    OUTSTANDING ONLY IS **NOT** WHAT THIS RETURNS, deliberately. A condition
+    already marked met still points at the ask that answered it, and hiding it
+    here would make `mark_received`'s own confirm unable to say "these three,
+    and that one you already handled". Callers filter; this states the link.
+    """
+    rows = conn.execute(
+        f"""SELECT * FROM submission_subjectivity
+            WHERE rfi_item_id = ? AND {base.alive()}
+            ORDER BY status <> '{SUBJECTIVITY_OPEN_STATUS}',
+                     due_on IS NULL, due_on, created_at""",
+        (rfi_item_id,),
+    ).fetchall()
+    return [Subjectivity.from_row(r) for r in rows]
+
+
+def unlink_rfi_item(conn: sqlite3.Connection, rfi_item_id: str) -> list[str]:
+    """Take every condition off one ask, and say which ones moved.
+
+    AN ASK THAT GOES AWAY MUST NOT LEAVE A CONDITION POINTING AT IT. Both
+    tables are soft-deleted, so the row survives and the link would still
+    resolve — a subjectivity would go on reading "asked 19 Aug" against an ask
+    nobody can see or answer. `services.rfi.remove_item` calls this inside its
+    own batch so the unlink is part of that one undo unit and comes back with
+    it.
+
+    Returns the ids it changed rather than a count, because the caller's
+    message names them and a number cannot.
+    """
+    waiting = subjectivities_waiting_on(conn, rfi_item_id)
+    for subjectivity in waiting:
+        base.update(
+            conn,
+            "submission_subjectivity",
+            subjectivity.id,
+            {"rfi_item_id": None},
+            "the ask this was waiting on was removed",
+        )
+    return [s.id for s in waiting]
+
+
 def subjectivity_counts(conn: sqlite3.Connection, submission_id: str) -> tuple[int, int]:
     """(still outstanding, total). Zero of zero means nobody has recorded any,
     which reads differently from 0 of 4 — every surface prints both numbers."""

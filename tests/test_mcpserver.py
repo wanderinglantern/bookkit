@@ -994,7 +994,13 @@ def _registered_write_tools(tmp_path) -> set[str]:
 
 # Registered on the rw connection but read-only: they need the writable
 # connection for nothing but proximity to the verbs they serve refs to.
-_NON_MUTATING = {"recent_activity", "program_layers", "list_batches"}
+_NON_MUTATING = {
+    "recent_activity", "program_layers", "list_batches",
+    # WHAT IS BLOCKING THIS PLACEMENT is a read: it composes
+    # services/blocking.py and writes nothing, the same way the browser's
+    # Blocking block owns no writes.
+    "blocking_list",
+}
 
 # The two reverts, deliberately unbatched: a revert's own writes carry
 # note='revert' and NO batch_id, so a revert cannot itself be batch-reverted
@@ -1018,6 +1024,16 @@ def _a_request_item(rw):
     out = mcpserver._request_create(rw, "Acme", "Sompo questions", ["loss runs"])
     items = mcpserver._request_items(rw, out["request_ref"])
     return items["items"][0]["item_ref"]
+
+
+def _a_condition(rw):
+    """A market condition on a marketed placement — what every subjectivity
+    verb operates on. Made through the tool rather than the repo, so the
+    fixture exercises the create door the same way an assistant would."""
+    approach = _an_approach(rw)
+    return mcpserver._subjectivity_add(
+        rw, approach["submission_id"], "5-year loss runs, currently valued"
+    )["subjectivity_ref"]
 
 
 def _an_assignment(rw):
@@ -1225,6 +1241,27 @@ _BATCHED_WRITES = {
             mcpserver._submission_remove(rw, a["submission_id"]),
         )[1]
     )(_an_approach(rw)),
+    "subjectivity_add": lambda rw, tmp: (
+        lambda a: mcpserver._subjectivity_add(
+            rw, a["submission_id"], "signed application")
+    )(_an_approach(rw)),
+    "subjectivity_ask_client": lambda rw, tmp: mcpserver._subjectivity_ask_client(
+        rw, _a_condition(rw), prompt="Five-year loss runs, currently valued"),
+    "subjectivity_unlink": lambda rw, tmp: (
+        lambda c: (
+            mcpserver._subjectivity_ask_client(rw, c, prompt="Loss runs"),
+            mcpserver._subjectivity_unlink(rw, c),
+        )[1]
+    )(_a_condition(rw)),
+    "request_item_add": lambda rw, tmp: (
+        _acme(rw),
+        mcpserver._request_item_add(
+            rw,
+            mcpserver._request_create(
+                rw, "Acme", "Sompo questions", ["loss runs"])["request_ref"],
+            "Schedule of vehicles",
+        ),
+    )[1],
     "set_placement_line": lambda rw, tmp: mcpserver._set_placement_line(
         rw, _a_marketed_placement(rw).ref, "GL",
         expiring_premium="100,000", rating_basis="gross_sales",
@@ -1318,6 +1355,17 @@ _TOUCHES = {
     # response row still speaks for it, so a market_response event in this
     # batch would mean the guard had been bypassed.
     "submission_remove": {"submission"},
+    "subjectivity_add": {"submission_subjectivity"},
+    # THREE TABLES, because asking the client for something no ask covers yet
+    # opens the ENVELOPE as well as writing the line in it: one request per
+    # renewal, made on demand (services.rfi._request_for_placement). All three
+    # in one batch, so `u` puts the whole act back rather than leaving a
+    # request with nothing in it.
+    "subjectivity_ask_client": {
+        "submission_subjectivity", "rfi_item", "rfi_request",
+    },
+    "subjectivity_unlink": {"submission_subjectivity"},
+    "request_item_add": {"rfi_item"},
     "set_placement_line": {"placement_line"},
     "program_layer_add": {"placement"},
     "program_bind": {"placement"},

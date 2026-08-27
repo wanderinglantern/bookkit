@@ -40,6 +40,7 @@ from ..models import (
 from ..money import RATE_SCALE, format_cents, format_rate_micros
 from ..repo import lines as lines_repo
 from ..repo import marketing, orgs, placements, submissions
+from ..repo import rfi as rfi_repo
 from .export_open_items import SheetSection
 
 CLIENT = "client"
@@ -715,6 +716,27 @@ class SubjectivityRow:
     due_on: str | None
     satisfied_on: str | None
     notes: str
+    # --- the ask that will answer this, where one has been made (2026-08-27) --
+    #
+    # INTERNAL ONLY, all three. Which of OUR asks a market's condition is
+    # waiting on is a fact about how this brokerage runs its chase; the client
+    # reads the condition and satisfies it. `compose` blanks them for the
+    # client audience the same way `notes` is blanked, and for the same reason.
+    #
+    # THE ID IS HERE SO THE GRID CAN POST. Every other field on this row is
+    # something to read; this one is what the "ask the client" control needs to
+    # address, and the alternative was the panel re-querying the conditions and
+    # pairing them back up by description — a second composition that would
+    # differ the first time two markets worded one condition the same way.
+    subjectivity_id: str = ""
+    # The wording of the ask, or empty when nobody has asked the client yet —
+    # which is the state the control exists to change.
+    asked_as: str = ""
+    # THE ANSWER IS IN HAND AND THE MARKET HAS NOT BEEN TOLD. Not "met": the
+    # client sending a document does not satisfy a market's condition, and this
+    # is the third state that distinction creates — the one that was invisible
+    # before this field existed.
+    answer_in_hand: bool = False
 
 
 @dataclass(frozen=True)
@@ -1082,6 +1104,16 @@ def _subjectivities(
         # client's is the answered set.
         if packages is not None and str(row["submission_id"]) not in packages:
             continue
+        # THE ASK THIS CONDITION IS WAITING ON. One read per linked condition
+        # and none at all for the unlinked, which is most of them on a book
+        # that has just started using the join — the alternative is a second
+        # bulk query for a column that is empty on nearly every row.
+        asked = None
+        if internal and row["rfi_item_id"]:
+            try:
+                asked = rfi_repo.get_item(conn, str(row["rfi_item_id"]))
+            except KeyError:  # removed under us; the condition is simply unasked
+                asked = None
         ids = [i for i in str(row["line_ids"] or "").split(",") if i]
         labels = []
         for line_id in ids:
@@ -1107,6 +1139,11 @@ def _subjectivities(
                 due_on=row["due_on"],
                 satisfied_on=row["satisfied_on"],
                 notes=(str(row["notes"] or "") if internal else ""),
+                subjectivity_id=(str(row["id"]) if internal else ""),
+                asked_as=(asked.prompt if internal and asked else ""),
+                answer_in_hand=bool(
+                    internal and asked and asked.status == "received"
+                ),
             )
         )
     return tuple(built)
@@ -1533,10 +1570,12 @@ def _provisional_cells(row: ProvisionalRow, audience: str) -> tuple[str, ...]:
 
 SUBJECTIVITY_SHEET_TITLE = "Subjectivities"
 
-SUBJECTIVITY_SECTION_LABEL = (
-    "What each market requires before its quote can be bound — the Subj. "
-    "column on the Marketing sheet counts the outstanding ones"
-)
+# THE SHEET IS NAMED, NOT EXPLAINED (Grant, 2026-08-27: "stop putting
+# explainers all over the place ... You don't need to say 'What each market
+# requires before its quote can be bound'"). A broker and a client both know
+# what a subjectivity is; a sentence telling them is noise on a document they
+# are about to send on. The label is the heading and nothing else.
+SUBJECTIVITY_SECTION_LABEL = "Subjectivities"
 
 # WIDE ENOUGH FOR THE SENTENCE. The description is the whole point of this
 # sheet and it is the one column that must never be the reason a reader widens

@@ -1,0 +1,66 @@
+{# ASK THE CLIENT for what a market requires — once, however many markets
+   require it.
+
+   SWAPPED OVER THE CONDITION'S OWN LINE, so the question sits exactly where the
+   answer will land — the shape `_response_remove_confirm.html` and
+   `_package_remove_confirm.html` take, and never a modal somewhere else on the
+   page.
+
+   THE EXISTING ASKS COME FIRST AND THE NEW ONE IS LAST, and that ordering is
+   the feature rather than a layout choice. The duplication worth removing is
+   the one the CLIENT experiences: three markets wanting five-year loss runs is
+   ONE email. Put "a new ask" at the top and every condition writes its own,
+   which is exactly what this exists to stop.
+
+   NOTHING IS PRE-SELECTED. The radio group opens with none chosen, which is the
+   house rule for every picker (EVERY SELECT RENDERS A BLANK OPTION) and matters
+   more here than anywhere else: the candidates are ranked by a FUZZY SCORE, and
+   a wrong attach does not fail loudly — it says a market's condition is
+   answered by a document that does not answer it, and that surfaces at the
+   bind. The order is a suggestion; the choice is the broker's. #}
+<li class="marketing-subj-item marketing-subj-ask" id="msubjrow-{{ subjectivity.id }}">
+  <form hx-post="{{ action }}" hx-target="closest .marketing-subj-ask"
+        hx-swap="outerHTML" class="subj-ask-form">
+    <input type="hidden" name="subjectivity" value="{{ subjectivity.id }}">
+
+    <p class="subj-ask-what">Ask the client for
+      <strong>{{ subjectivity.description }}</strong></p>
+
+    {% if error %}
+      {# THE REFUSAL WHERE THE CHOICE WAS MADE, holding what was typed. #}
+      <p class="cell-error" role="alert">{{ error }}</p>
+    {% endif %}
+
+    {% if candidates %}
+      <fieldset class="subj-ask-choices">
+        <legend>Asks already out</legend>
+        {% for c in candidates %}
+          <label class="subj-ask-choice">
+            <input type="radio" name="item" value="{{ c.id }}">
+            <span class="subj-ask-prompt">{{ c.prompt }}</span>
+            {# WHAT THIS CANDIDATE MEANS, in words a broker acts on — "the
+               client has already sent this" is the sentence that says there is
+               nothing left to chase, which the raw status does not. #}
+            <span class="detail-label">{{ c.says }} · {{ c.request_ref }}</span>
+          </label>
+        {% endfor %}
+      </fieldset>
+    {% endif %}
+
+    <label class="subj-ask-new">
+      {% if candidates %}…or ask something new{% else %}Ask the client{% endif %}
+      {# NOT PRE-FILLED FROM THE CONDITION. A market's wording is written to an
+         underwriter and a client ask is written to a client, and people do not
+         check prefills — the same rule that keeps a figure off a template.
+         Empty, and the broker writes what they would actually send. #}
+      <input type="text" name="prompt" placeholder="what to ask the client for">
+    </label>
+
+    <div class="subj-ask-actions">
+      <button type="submit" class="button-primary">Ask</button>
+      <button type="button" class="row-action-btn"
+              hx-get="{{ cancel }}" hx-target="closest .marketing-subj-ask"
+              hx-swap="outerHTML">keep as it is</button>
+    </div>
+  </form>
+</li>

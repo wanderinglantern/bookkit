@@ -51,6 +51,14 @@
               <td class="num">
                 <span class="status-{{ row.status }}">{{ row.status }}</span>
                 {% if row.received_on %}{{ row.received_on }}{% endif %}
+                {# ONE ASK, THREE MARKETS — said where a broker decides what to
+                   chase. An ask carrying three market conditions is worth a
+                   phone call that an ask carrying none is not, and before this
+                   line the two looked identical. #}
+                {% if row.waiting %}
+                  <span class="detail-label"
+                    >{{ row.waiting }} market{{ 's' if row.waiting != 1 }} waiting</span>
+                {% endif %}
               </td>
               {{ row.response_cell | safe }}
               {# Two doors onto the answer, and they are not alternatives: the
@@ -66,8 +74,31 @@
                         hx-target="#items-panel .form-host" hx-swap="innerHTML">Answer</button>
                 {% if row.status == "outstanding" %}
                   <button type="button" class="row-action-btn"
+                          {# RECEIVED IS NOT MET. An ask markets are waiting on
+                             goes through the confirm, which names them and asks
+                             which have actually been sent it; an ask nobody is
+                             behind posts straight, because a confirm with one
+                             option and no consequence is friction with no
+                             decision inside it. #}
+                          {% if row.waiting %}
+                          hx-get="/accounts/{{ header.org.ref }}/requests/{{ rfi_request.id }}/items/{{ row.id }}/received"
+                          {% else %}
                           hx-post="/accounts/{{ header.org.ref }}/requests/{{ rfi_request.id }}/items/{{ row.id }}/received"
+                          {% endif %}
                           hx-target="#items-panel" hx-swap="outerHTML">Mark received</button>
+                {# THE OTHER DIRECTION. A broker writing an ask is as likely to
+                   think "that covers what AIG wanted" as to start from AIG's
+                   condition — both doors, so neither becomes the one people
+                   learn to avoid. Offered only while the ask is still open:
+                   attaching a market to an answered ask is the "answer in hand"
+                   case and belongs on the condition, where the forwarding is. #}
+                {% if row.status == 'outstanding' %}
+                  <button type="button" class="row-action-btn"
+                          hx-get="/accounts/{{ header.org.ref }}/requests/{{ rfi_request.id }}/items/{{ row.id }}/covers"
+                          hx-target="#items-panel" hx-swap="outerHTML"
+                          title="say which market conditions this ask answers"
+                    >answers a market</button>
+                {% endif %}
                 {% endif %}
                 {# For an ask filed in ERROR. An ask that is simply not coming
                    is WAIVED, which keeps the row and says so — deleting that
