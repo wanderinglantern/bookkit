@@ -1,7 +1,7 @@
 # 2026-08-27 — The composite rate, and the umbrella that had no door
 
-**Status: MERGED AND PUSHED.** bookkit `main` = `origin/main` = `9fa1bf7`;
-towerkit `main` = `origin/main` = `d090d86`. Nothing ahead on any branch, both
+**Status: MERGED AND PUSHED.** bookkit `main` = `origin/main` = `1625b18`;
+towerkit `main` = `origin/main` = `58d8dad`. Nothing ahead on any branch, both
 feature worktrees removed. Gates green on both repos (bookkit 2,751 tests,
 towerkit 1,268; mypy + ruff clean).
 
@@ -81,17 +81,50 @@ sentence (guarded, and that guard has its own test).
 
 ---
 
+---
+
+## Piece 3 — the heading, the note, and the two follow-ups (`bae9aa4`)
+
+Grant asked for two more things the same afternoon and said yes to both open
+items above; all four landed together.
+
+- **The heading names the basis AND its value.** It read basis+exposure off
+  THIS TERM while premium+rate came off EXPIRING, so a line with only its
+  expiring side printed `expiring $100,000 at 100.00`. One clause per term,
+  each true on its own, and neither borrows the other's basis.
+  `_block_label` / `_term_clause` in `services/marketing_report.py`.
+- **`placement_line.client_note`** (migration 022) — NOT the dead `notes`
+  column; every other `notes` here is internal. Renders as its own ROW leading
+  the section, on both copies. Reachable on web and MCP; blank normalises to
+  NULL in `repo/marketing.set_placement_line`.
+- **`ExpiringRate.computed` / `.disagrees`** — a typed rate the division does
+  not support is marked `premium ÷ exposure = N`. `_BRIDGE_SLACK_BPS` became
+  `_ROUNDING_SLACK_BPS`, one tolerance for both checks.
+- **`sync.heal_spanning_seats`**, beside `heal_follows` in `write_through` and
+  `preview`. Fires only where seating the slab moves nothing on every line.
+  DO NOT make it unconditional (see the umbrella section above), and DO NOT
+  drop the `attach <= 0` guard — that is what keeps a primary a primary.
+
+## Piece 4 — the merge direction (`507864a`)
+
+`routes/markets._merge_pair` returns `(loser, survivor)` from a REQUIRED
+`survivor` param. The page's market used to die by construction. The confirm's
+counts are the loser's; the detail button is "Merge with…".
+
 ## Open, reported not fixed
 
-1. **A typed expiring rate that disagrees with premium ÷ exposure is not
-   flagged.** `_reconciles` already drops the bridge when the walk misses by
-   >1%, which is where it would reach a client. Grant's call whether the cell
-   should say so too.
-2. **A spanning slab widened onto a line whose top happens to match keeps a
-   PINNED attach** (no follows). Raising a limit underneath then refuses every
-   later edit — the wedge shape. Pre-existing; the seeded Atomic umbrella was in
-   that state.
-3. Six worktrees from earlier sessions sit in `.claude/worktrees/`, all level
+1. **Two IDENTICAL follows-underlying layers on one line validate clean** and
+   draw on top of each other — `_check_line_stack` exempts a follows layer as
+   the upper of the pair and the exemption is too broad. The fix is in
+   `Program.underlying_tops`, which cannot see follows layers at all, and it
+   reaches every drawing. Written up beside
+   `tests/test_web_program_diagnostics.py::_break_it`, which met it.
+2. **There is no MCP merge tool** for markets or placements. A missing verb is
+   not a refusal (CLAUDE.md); `mcpparity.py` is where its absence should show.
+3. **Merge makes the loser's name an ALIAS of the survivor.** If a market like
+   "AIG Environmental" is a real sub-unit rather than a duplicate record,
+   `Nest under…` is the control, not merge. Worth saying to Grant each time.
+4. Six worktrees from earlier sessions sit in `.claude/worktrees/`, all level
    with main, awaiting Grant's go-ahead to remove.
 
 ## Verification notes
