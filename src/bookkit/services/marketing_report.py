@@ -442,6 +442,89 @@ def _premium_from(
     return round(cents if monetary else cents * 100)
 
 
+def _rate_from(
+    premium_cents: int, exposure: int, rate_per: int, *, monetary: bool
+) -> int:
+    """Micros, from a premium and an exposure — the EXACT INVERSE of
+    `_premium_from`, and it lives here so the two can never drift apart.
+
+    `monetary` carries the same weight it does above and for the same reason:
+    on a monetary basis the exposure is CENTS and the hundred cancels, and on
+    a COUNT basis rate x count is DOLLARS, so the premium has to come DOWN to
+    dollars before it is divided. Getting that backwards is the hundredfold
+    error `_premium_from` already ate an afternoon on (D7, 2026-08-26), in the
+    other direction.
+    """
+    dollars_or_cents = premium_cents if monetary else premium_cents / 100
+    return round(dollars_or_cents * _MICROS * rate_per / exposure)
+
+
+@dataclass(frozen=True)
+class ExpiringRate:
+    """What a line's expiring rate IS, and whether anybody typed it.
+
+    A COMPOSITE RATE THE BOOK CAN WORK OUT IS NOT ASKED FOR A THIRD TIME
+    (Grant, 2026-08-27). The expiring premium and the expiring exposure are
+    both recorded on the block header, and premium / exposure IS the rate —
+    so a broker who has entered both has already stated the third figure and
+    `expiring_rate_micros` becomes the answer to a question nobody needs to
+    be asked (CLAUDE.md, DRY: a fact the user has already given is not asked
+    for twice).
+
+    THE COLUMN STILL EXISTS AND STILL WINS. Deriving it needs the expiring
+    EXPOSURE, which is a separate fact nobody may have recorded — that is why
+    the column was stored rather than derived in the first place
+    (migrations/015_marketing.sql), and nothing here changes it. A typed rate
+    is what the broker read off last year's paper and it OUTRANKS the
+    division, exactly as a market stating its own premium outranks share x
+    layer premium (`stated-market-premium`). `derived` is how every surface
+    says which of the two it is showing, because a figure the book worked out
+    and a figure a person read off a policy are not the same claim.
+
+    An exposure of ZERO, a basis nobody recorded, or no denominator means the
+    rate is UNKNOWN and NOT zero — a zero here would print as a 100% rate
+    reduction on a client's own workbook.
+    """
+
+    micros: int | None
+    derived: bool
+
+
+def expiring_rate(line: PlacementLine | None) -> ExpiringRate:
+    """The ONE definition of a line's expiring rate, for every reader.
+
+    `line.expiring_rate_micros` is the stored column and is now only half the
+    answer; reading it raw is how a surface comes to print a rate in one cell
+    while the cell beside it says "no expiring rate recorded". The G7 gate in
+    tests/test_marketing_gates.py refuses a raw read outside this function,
+    for the reason `Layer.premium_for` exists one repo over: a surface that
+    keeps doing the arithmetic itself cannot see the stated figure, and a
+    surface that reads only the column cannot see the derived one.
+    """
+    if line is None:
+        return ExpiringRate(None, False)
+    if line.expiring_rate_micros is not None:
+        return ExpiringRate(line.expiring_rate_micros, False)
+    if line.expiring_premium is None or not line.expiring_exposure:
+        return ExpiringRate(None, False)
+    if line.expiring_basis is None or not line.rate_per:
+        # The denominator is what makes the digits mean anything (1.42 per
+        # $100 is ten times 1.42 per $1,000) and the basis is what says
+        # whether the exposure is money or a count. Neither is guessable, and
+        # `repo.marketing._expiring_rate_guard` refuses to STORE a rate
+        # without a denominator for the same reason.
+        return ExpiringRate(None, False)
+    return ExpiringRate(
+        _rate_from(
+            line.expiring_premium,
+            line.expiring_exposure,
+            line.rate_per,
+            monetary=rating_basis(line.expiring_basis).monetary,
+        ),
+        True,
+    )
+
+
 @dataclass(frozen=True)
 class Move:
     """A change against expiring — the percentage, or the reason there isn't
@@ -609,7 +692,18 @@ class ReportBlock:
     # across two rating bases (see `_exposure_move`).
     exposure_move: Move
     expiring_premium: int | None
-    expiring_rate_micros: int | None
+    # THE RATE THIS LINE EXPIRES AT, AND WHO SAID SO — the shape and not the
+    # bare integer, the same call `exposure_move` makes one field up. `.micros`
+    # is what every renderer prints and is the COMPOSITE rate when nobody typed
+    # one; `.derived` says which, and it is not decoration. A figure the book
+    # divided out and a figure a broker read off last year's policy are
+    # different claims, and a header that showed them identically would invite
+    # the reader to treat a derivation as a source document — and the EDITOR
+    # to pre-fill a derivation as though somebody had stated it.
+    # The stored column is recoverable and deliberately has no field of its
+    # own: it is `None if derived else micros`, so no renderer can reach for a
+    # second name for one figure and pick the wrong one.
+    expiring_rate: ExpiringRate
     # THE EXPIRING SIDE'S OWN TWO FACTS, beside the current side's. Both are
     # on the block because the Program tab EDITS this header where it prints
     # it, and a surface that had only the current basis could not tell whether
@@ -780,8 +874,15 @@ def _rate_move(response: MarketResponse, line: PlacementLine | None) -> Move:
     from a real one on the page (Grant, 2026-08-25)."""
     if response.rate_micros is None:
         return Move(None)
-    if line is None or line.expiring_rate_micros is None:
+    # THE LINE'S EXPIRING RATE, typed or worked out — never the column.
+    # A block whose premium and exposure are both recorded HAS an expiring
+    # rate; reading the column here would print one figure in the header
+    # and "no expiring rate recorded" in the Rate cell beside it, on the
+    # same row, off the same two numbers.
+    expiring = expiring_rate(line)
+    if expiring.micros is None:
         return Move(None, NO_EXPIRING_RATE)
+    assert line is not None  # expiring_rate(None) has no micros
     quoted_basis = response.rating_basis or (line.rating_basis if line else None)
     # AN AXIS NOBODY STATED IS NOT AN AXIS THAT AGREES. Both halves used to be
     # guarded by `and`, so a missing basis on either side skipped the check
@@ -818,9 +919,9 @@ def _rate_move(response: MarketResponse, line: PlacementLine | None) -> Move:
         # refusal about the same column, and a reader who has met one has met
         # both.
         return Move(None, DENOMINATOR_CHANGED)
-    if not line.expiring_rate_micros:
+    if not expiring.micros:
         return Move(None, NO_EXPIRING_RATE)
-    pct = (response.rate_micros / line.expiring_rate_micros - 1) * 100
+    pct = (response.rate_micros / expiring.micros - 1) * 100
     return Move(pct)
 
 
@@ -899,7 +1000,12 @@ def _bridge(response: MarketResponse, line: PlacementLine | None, market: str) -
         return None
     if line.expiring_premium is None or line.expiring_exposure is None:
         return None
-    if line.expiring_rate_micros is None:
+    # THE SAME READING `_rate_move` MAKES. A bridge needs the expiring
+    # premium and the expiring exposure already (both checked above), so
+    # every walk this unlocks is one where the rate was the only figure
+    # missing and the book could work it out from the other two.
+    expiring = expiring_rate(line)
+    if expiring.micros is None:
         return None
     # BOTH AXES KNOWN, NOT MERELY NOT-CONTRADICTORY. `and`-guarded equality
     # read an unstated basis as agreement and walked a bridge across two
@@ -919,7 +1025,7 @@ def _bridge(response: MarketResponse, line: PlacementLine | None, market: str) -
     # above, so one lookup answers for both sides of the walk.
     monetary = rating_basis(line.rating_basis).monetary
     rate_effect = _premium_from(
-        response.rate_micros - line.expiring_rate_micros,
+        response.rate_micros - expiring.micros,
         line.expiring_exposure,
         rate_per,
         monetary=monetary,
@@ -1307,7 +1413,7 @@ def _block(
         exposure=exposure,
         exposure_move=_exposure_move(expectation),
         expiring_premium=expectation.expiring_premium if expectation else None,
-        expiring_rate_micros=expectation.expiring_rate_micros if expectation else None,
+        expiring_rate=expiring_rate(expectation),
         expiring_exposure=expectation.expiring_exposure if expectation else None,
         expiring_basis=expectation.expiring_basis if expectation else None,
         limit_sought=expectation.limit_sought if expectation else None,
@@ -1455,8 +1561,8 @@ def _block_label(block: ReportBlock) -> str:
         parts.append(f"exposure {exposure}")
     if block.expiring_premium is not None:
         expiring = f"expiring {format_cents(block.expiring_premium)}"
-        if block.expiring_rate_micros:
-            expiring += f" at {fmt_rate(block.expiring_rate_micros)}"
+        if block.expiring_rate.micros:
+            expiring += f" at {fmt_rate(block.expiring_rate.micros)}"
         parts.append(expiring)
     return " · ".join(parts)
 

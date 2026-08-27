@@ -1040,10 +1040,15 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         in the same call — pass `rating_basis` (or `expiring_basis` for the
         expiring side) from the rating-basis vocabulary, which refuses with its
         list. `rate_per` is the denominator a rate is quoted against (100,
-        1000, or 1 per unit). `expiring_rate` is stored rather than derived:
-        deriving it needs the expiring exposure, which is a separate fact
-        nobody may have recorded, and the report leaves the comparison blank
-        instead of assuming exposure was flat. `attach_sought` is where the
+        1000, or 1 per unit). `expiring_rate` is OPTIONAL where the
+        expiring premium and exposure are both recorded: the book returns
+        their quotient as `expiring_rate_micros` with
+        `expiring_rate_derived: true`, which is the same composite rate the
+        browser's header shows. State it only for a figure read off last
+        year's policy — a stated rate outranks the division for good. With no
+        expiring exposure recorded there is nothing to divide, and the report
+        leaves the comparison blank instead of assuming exposure was flat.
+        `attach_sought` is where the
         cover being asked for starts — blank means primary, which is the
         ordinary case, so state it only for an excess layer."""
         return _set_placement_line(
@@ -4395,13 +4400,25 @@ def _set_placement_line(
             conn, placement.id, coverage.id, **fields
         )
 
+    from .services import marketing_report as _mr
+
+    _expiring = _mr.expiring_rate(row)
     return {
         "placement_ref": placement.ref,
         "line": coverage.name,
         "line_id": coverage.id,
         "expiring_premium": row.expiring_premium,
         "expiring_exposure": row.expiring_exposure,
-        "expiring_rate_micros": row.expiring_rate_micros,
+        # THE RATE THE LINE EXPIRES AT, typed or worked out — the same figure
+        # the browser's header shows, through the same one definition. A tool
+        # that answered with the raw column would tell Grant there is no
+        # expiring rate on a line whose premium and exposure are both recorded
+        # and whose Rate delta is being computed off it two screens away
+        # (CLAUDE.md: a change that lands on the web and not on MCP has
+        # shipped to two thirds of its users). `expiring_rate_derived` is how
+        # the assistant can tell a division from a figure off a policy.
+        "expiring_rate_micros": _expiring.micros,
+        "expiring_rate_derived": _expiring.derived,
         "expiring_basis": row.expiring_basis,
         "expected_exposure": row.expected_exposure,
         "rating_basis": row.rating_basis,

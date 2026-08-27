@@ -902,11 +902,18 @@ class PlacementLine(Row):
     expiring figures a client compares against, and the exposure and basis
     every market response inherits unless it overrides them.
 
-    `expiring_rate_micros` is stored rather than derived because deriving it
-    needs `expiring_exposure`, which is a fact nobody may have recorded. When
-    it is missing the report leaves the rate comparison BLANK — it does not
-    assume exposure was flat, because that assumption puts a number in front
-    of a client that looks like rate change and is not."""
+    `expiring_rate_micros` is a COLUMN AND NOT THE WHOLE ANSWER. It is stored
+    because deriving a rate needs `expiring_exposure`, which is a fact nobody
+    may have recorded, and when it is missing the report leaves the rate
+    comparison BLANK — it does not assume exposure was flat, because that
+    assumption puts a number in front of a client that looks like rate change
+    and is not. But where the premium AND the exposure ARE both recorded, the
+    rate IS their quotient and the broker is not asked for it a third time
+    (Grant, 2026-08-27; CLAUDE.md's DRY rule pointed at data entry).
+    `services.marketing_report.expiring_rate` is the ONE definition of what a
+    line expires at — a typed figure outranks the division and the surface
+    says which it is showing — and reading this column raw is a defect the G7
+    gate in tests/test_marketing_gates.py refuses."""
 
     id: str
     placement_id: str

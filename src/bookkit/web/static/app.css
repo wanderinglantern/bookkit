@@ -1211,6 +1211,18 @@ table.rows td.mono {
   color: var(--muted);
 }
 
+/* a figure the book worked out rather than one somebody typed. The word is
+   the whole signal — greyed and small so it never competes with the digits it
+   qualifies, but present, because a composite rate and a rate read off last
+   year's policy are different claims and the header is where a broker decides
+   which one to trust. */
+.tag-derived {
+  margin-left: 0.375rem;
+  font-family: var(--sans);
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
 /* an overdue due date carries the word, not just the colour */
 .tag-overdue {
   margin-left: 0.375rem;

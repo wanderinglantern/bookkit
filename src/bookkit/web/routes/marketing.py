@@ -1364,7 +1364,14 @@ def _line_cell(
             render_cell_display(
                 request, field,
                 marketing_grid.line_display_value(line, key),
+                # THE SAME BADGE THE PANEL DRAWS. This route re-renders one
+                # header cell after a save and the panel renders all nine, and
+                # a `derived` mark on only one of the two paths means the tag
+                # vanishes the moment the cell is touched — the reader would
+                # then read a composite rate as a figure off a policy, which is
+                # the one thing the mark exists to prevent.
                 action, tag="dd", extra_class=css,
+                suffix=marketing_grid.line_cell_suffix(line, key),
             )
         )
     value = (

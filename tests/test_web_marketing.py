@@ -3738,3 +3738,116 @@ def test_a_row_approached_since_the_hold_falls_to_the_end(client_and_org):
         "a bound, cheapest row would lead the default order; pinned rows keep "
         "their places and the new one goes last"
     )
+
+
+# --- the composite rate on the header --------------------------------------
+
+
+def _with_expiring(client, org, **extra):
+    """A line whose expiring premium and exposure are both recorded and whose
+    rate is not: the state the composite rate exists for."""
+    from bookkit.repo import marketing
+
+    conn = client.app.state.conn
+    placement = _linked(client, org)
+    marketing.set_placement_line(
+        conn, placement.id, GL,
+        expiring_premium=41_200_000, expiring_exposure=4_100_000_000,
+        expiring_basis="gross_sales", rating_basis="gross_sales",
+        expected_exposure=4_850_000_000, rate_per=1000, **extra,
+    )
+    return conn, placement
+
+
+def test_the_header_shows_a_rate_the_book_worked_out_and_marks_it_derived(
+    client_and_org,
+):
+    """$412,000 over $41.0M per $1,000 is 10.05, and the broker is not asked
+    to type it (Grant, 2026-08-27). The word `derived` rides in the cell
+    because a composite rate and a rate read off last year's policy are
+    different claims."""
+    client, org = client_and_org
+    conn, placement = _with_expiring(client, org)
+
+    html = _tab(client, org)
+    assert "10.05" in html
+    assert '<span class="tag-derived">derived</span>' in html
+    # NOTHING WAS WRITTEN. The column stays empty; the figure is worked out
+    # on every read, so correcting the premium corrects the rate.
+    from bookkit.repo import marketing
+
+    assert marketing.placement_line(conn, placement.id, GL).expiring_rate_micros is None
+
+
+def test_the_derived_rate_cell_opens_empty_so_a_stray_tab_cannot_store_it(
+    client_and_org,
+):
+    """BLUR COMMITS (CLAUDE.md), so a pre-filled derivation is one stray tab
+    from becoming a stated rate — and a stated rate outranks the division for
+    good. Typing is how a broker states the figure off paper; the empty box is
+    what says that is the act."""
+    client, org = client_and_org
+    _, placement = _with_expiring(client, org)
+
+    editor = client.get(
+        _line_cell_url(org, placement, GL, "expiring_rate_micros") + "/edit"
+    )
+    assert editor.status_code == 200
+    assert 'value=""' in editor.text or "value=''" in editor.text
+    assert "10.05" not in editor.text
+
+    # The exposure beside it, which IS a stored figure, still pre-fills — or
+    # this test would pass on an editor that pre-fills nothing at all.
+    other = client.get(
+        _line_cell_url(org, placement, GL, "expiring_exposure") + "/edit"
+    )
+    assert "41,000,000" in other.text
+
+
+def test_the_cell_route_and_the_panel_say_the_same_thing_about_a_derived_rate(
+    client_and_org,
+):
+    """Two renderers, one cell. The panel renders all nine header cells off a
+    ReportBlock and this route re-renders one off the PlacementLine, and a
+    badge on only one of the two paths vanishes the moment the cell is
+    touched."""
+    client, org = client_and_org
+    _, placement = _with_expiring(client, org)
+
+    cell = client.get(_line_cell_url(org, placement, GL, "expiring_rate_micros"))
+    assert cell.status_code == 200
+    assert "10.05" in cell.text
+    assert '<span class="tag-derived">derived</span>' in cell.text
+
+
+def test_typing_a_rate_replaces_the_derived_one_and_drops_the_mark(
+    client_and_org,
+):
+    """The typed figure wins and the surface stops claiming it worked one
+    out — the `stated-market-premium` shape, one column over."""
+    client, org = client_and_org
+    conn, placement = _with_expiring(client, org)
+
+    saved = client.post(
+        _line_cell_url(org, placement, GL, "expiring_rate_micros"),
+        data={"expiring_rate_micros": "9.50"},
+    )
+    assert saved.status_code == 200
+
+    from bookkit.repo import marketing
+
+    assert (
+        marketing.placement_line(conn, placement.id, GL).expiring_rate_micros
+        == 9_500_000
+    )
+    html = _tab(client, org)
+    assert "9.50" in html
+    assert "tag-derived" not in html
+    # And clearing it hands the line back to the division.
+    client.post(
+        _line_cell_url(org, placement, GL, "expiring_rate_micros"),
+        data={"expiring_rate_micros": ""},
+    )
+    back = _tab(client, org)
+    assert "10.05" in back
+    assert '<span class="tag-derived">derived</span>' in back
