@@ -165,6 +165,19 @@ class TestTheAuditableCell:
         client, org = app_and_org
         conn = client.app.state.conn
         placement, layer_id = _statutory_layer(conn, org)
+        # RECORDED FIRST, so the grouping is visible to measure. Since
+        # 2026-08-27 the worksheet shows the facts somebody has recorded and
+        # collapses the rest behind one disclosure, so document order only
+        # reflects the GROUPS when the facts being compared are on the same
+        # side of that split. Recording them puts all four on the face, which
+        # is the state this test is about.
+        base = f"/accounts/{org.ref}/program/{placement.id}/layers/{layer_id}"
+        client.post(f"{base}/cell/policy_number", data={"policy_number": "WC-1"})
+        client.post(f"{base}/cell/period_to", data={"period_to": "2027-09-01"})
+        client.post(
+            f"{base}/field/layer/limitsDetail?at={layer_id}",
+            data={"layer.limitsDetail": "statutory benefits"},
+        )
         row = _details(client, org, placement, layer_id)
 
         assert 'data-field="layer.auditable"' in row

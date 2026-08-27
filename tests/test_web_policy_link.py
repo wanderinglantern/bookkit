@@ -108,6 +108,18 @@ class TestTheControl:
         client, org = app_and_org
         conn = client.app.state.conn
         placement, mine, _ = _two_layers(conn, org)
+        # RECORDED FIRST, so the grouping is visible to measure. Since
+        # 2026-08-27 the worksheet shows what somebody has recorded and
+        # collapses the rest behind one disclosure, so document order reflects
+        # the GROUPS only when the facts being compared are on the same side of
+        # that split. The linker follows the policy group either way — it is a
+        # fact about the policy, which is what this test is about.
+        base = f"/accounts/{org.ref}/program/{placement.id}/layers/{mine}"
+        client.post(f"{base}/cell/policy_number", data={"policy_number": "GL-1"})
+        client.post(
+            f"{base}/field/layer/limitsDetail?at={mine}",
+            data={"layer.limitsDetail": "$5M each occurrence"},
+        )
 
         row = _details(client, org, placement, mine)
         assert (
