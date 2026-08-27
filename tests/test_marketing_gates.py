@@ -1900,3 +1900,81 @@ def test_g6_a_date_that_witnesses_an_act_is_refused_in_the_future(
         "a date that records what already happened was accepted in the future "
         "(parse_human_date reads a bare month and day as NEXT year):",
     )
+
+
+# ===========================================================================
+# G7. A FIGURE THAT CAN BE DERIVED IS NOT READ RAW.
+# ===========================================================================
+#
+# `expiring_rate_micros` is a COLUMN and, since 2026-08-27, only half the
+# answer: where the expiring premium and the expiring exposure are both
+# recorded and nobody typed a rate, the rate IS premium / exposure and
+# `services.marketing_report.expiring_rate` is the one place that decides.
+#
+# THE FAILURE A RAW READ MAKES IS SILENT AND SPLIT-SCREEN. A surface reading
+# the column while the one beside it reads the accessor prints a rate in one
+# cell and "no expiring rate recorded" in the next, off the same two numbers,
+# on the same row — and a client's workbook is composed from both. It is the
+# `Layer.premium_for` failure one repo over in the other direction: there a
+# surface that kept doing the arithmetic could not see the stated figure;
+# here a surface that reads only the column cannot see the derived one.
+#
+# The walk is over ATTRIBUTE ACCESS, because that is what reads a
+# PlacementLine. A string `"expiring_rate_micros"` is a field key, a column
+# name or a form key and is not a read of the value — repo/, forms/ and the
+# cell routes all use it that way, and none of them is this bug.
+
+# file -> the enclosing function that may read the column, with the reason.
+_MAY_READ_THE_COLUMN: dict[str, dict[str, str]] = {
+    "services/marketing_report.py": {
+        "expiring_rate": "the accessor itself — the stored figure outranks the division",
+    },
+    "repo/marketing.py": {
+        # These guard what is STORED, not what is shown: a denominator cannot
+        # be swapped out from under a rate already in the column, and a rate
+        # cannot be written without one. A derived rate has no denominator to
+        # protect and cannot be swapped, so the accessor is the wrong reader
+        # here — the column is exactly the subject.
+        "_rate_per_guard": "guards the DENOMINATOR under a stored rate",
+    },
+}
+
+
+def _enclosing(tree: ast.AST, lineno: int) -> str:
+    best = ""
+    best_line = -1
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            if node.lineno <= lineno and node.lineno > best_line:
+                best, best_line = node.name, node.lineno
+    return best
+
+
+def test_g7_a_rate_the_book_can_derive_is_never_read_off_the_column() -> None:
+    failures: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        rel = str(path.relative_to(SRC))
+        if rel.startswith("tui/"):
+            continue  # retired surface (CLAUDE.md); frozen, not extended
+        tree = ast.parse(path.read_text())
+        allowed = _MAY_READ_THE_COLUMN.get(rel, {})
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Attribute)
+                and node.attr == "expiring_rate_micros"
+            ):
+                continue
+            where = _enclosing(tree, node.lineno)
+            if where in allowed:
+                continue
+            failures.append(
+                f"{rel}:{node.lineno} ({where or '<module>'}) reads "
+                f".expiring_rate_micros directly — call "
+                f"services.marketing_report.expiring_rate(line) so the "
+                f"composite rate is visible here too"
+            )
+    _named(
+        failures,
+        "the expiring rate was read off the stored column, which cannot see "
+        "the rate the book works out of the premium and the exposure:",
+    )

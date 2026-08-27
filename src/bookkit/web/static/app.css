@@ -1155,6 +1155,17 @@ table.rows td.mono {
   color: var(--danger);
 }
 
+/* THE DOOR A REFUSAL NAMED, directly under the message that named it. It sits
+   in the flow rather than inline because the refusal is a sentence and this is
+   an act — a broker must not be able to read past it, which is exactly what
+   happened when the only way out was a toggle three fact-blocks down the pane
+   (Grant, 2026-08-27). Sized like every other row action; the danger colour
+   stays on the message, because pressing this is the SAFE direction. */
+.ws-error-fix {
+  display: inline-block;
+  margin: 0.375rem 0 0.75rem;
+}
+
 /* the discoverability affordance for an editable value at rest */
 .is-editable {
   border-bottom: 1px dashed var(--edit-underline);
@@ -1207,6 +1218,18 @@ table.rows td.mono {
   margin-left: 0.375rem;
   font-family: var(--mono);
   font-variant-ligatures: none;
+  font-size: var(--hint-size);
+  color: var(--muted);
+}
+
+/* a figure the book worked out rather than one somebody typed. The word is
+   the whole signal — greyed and small so it never competes with the digits it
+   qualifies, but present, because a composite rate and a rate read off last
+   year's policy are different claims and the header is where a broker decides
+   which one to trust. */
+.tag-derived {
+  margin-left: 0.375rem;
+  font-family: var(--sans);
   font-size: var(--hint-size);
   color: var(--muted);
 }

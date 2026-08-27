@@ -1009,6 +1009,26 @@ EXPOSURE_BASIS: dict[str, str] = {
 _BLOCK_ALIAS = {"rating_basis": "basis_key", "expected_exposure": "exposure"}
 
 
+def expiring_rate_of(source: Any) -> marketing_report.ExpiringRate:
+    """This line's expiring rate, off EITHER of the two things that render a
+    header cell — a ReportBlock (the panel) or a PlacementLine (the cell
+    routes, which answer with the cell alone after a save).
+
+    THE TWO SOURCES HAVE TO AGREE. A composite rate shown on the panel and a
+    blank shown by the route that re-renders that same cell after a save is
+    one cell with two answers, and the one a broker would believe is whichever
+    was drawn last. The block carries what the composer already worked out;
+    the line is asked directly. One definition either way
+    (`marketing_report.expiring_rate`).
+    """
+    if source is None:
+        return marketing_report.ExpiringRate(None, False)
+    got = getattr(source, "expiring_rate", None)
+    if isinstance(got, marketing_report.ExpiringRate):
+        return got
+    return marketing_report.expiring_rate(source)
+
+
 def stored(source: Any, key: str) -> Any:
     """The value behind a header cell, off a PlacementLine OR a ReportBlock —
     or off NOTHING, which is an ordinary state and not an error.
@@ -1022,6 +1042,15 @@ def stored(source: Any, key: str) -> Any:
     from the browser: reached by pressing `u` on "started marketing …", and by
     MCP's `market_approach`, which writes a response and no row (2026-08-25).
     """
+    if key == "expiring_rate_micros":
+        # THE ONE HEADER CELL WHOSE VALUE IS NOT ALWAYS A COLUMN. Where the
+        # expiring premium and the expiring exposure are both recorded and
+        # nobody typed a rate, the rate IS premium / exposure and this cell
+        # shows it — so the display, the "not set" wording and the
+        # `is-unset` class all follow from one read. `line_editor_value` is
+        # the deliberate exception: a derivation is not pre-filled as though
+        # somebody had stated it.
+        return expiring_rate_of(source).micros
     if source is None:
         return None
     if hasattr(source, key):
@@ -1081,8 +1110,34 @@ def line_editor_value(source: Any, key: str) -> str:
     form its own parser accepts back, never the display string. That equality
     is what makes opening a cell to READ it cost nothing: inline-cell.js
     compares the input against what it opened with, and `base.update` only
-    logs what actually changes."""
-    return initial_text(line_fields(source)[key], stored(source, key))
+    logs what actually changes.
+
+    A DERIVED EXPIRING RATE OPENS EMPTY, and it is the one place this does not
+    pre-fill what the cell prints. Blur commits (CLAUDE.md), so a pre-filled
+    derivation is one stray tab away from being STORED — and a stored rate
+    outranks the division for good (`marketing_report.expiring_rate`), so the
+    book would quietly stop tracking the premium and exposure beside it with
+    nobody having decided that. Typing here is how a broker states the rate off
+    last year's paper; the empty box is what says that is the act.
+    """
+    value = stored(source, key)
+    if key == "expiring_rate_micros" and expiring_rate_of(source).derived:
+        value = None
+    return initial_text(line_fields(source)[key], value)
+
+
+def line_cell_suffix(source: Any, key: str) -> str:
+    """`derived`, inside the rate cell's own <dd> — the name of the thing and
+    nothing else (Grant, 2026-08-27: no explainers in output).
+
+    It marks the CELL and not the label, because the label is the same fact
+    either way ("expiring rate"); what differs is where this particular figure
+    came from, and a reader deciding whether to trust it against a policy
+    needs that beside the digits.
+    """
+    if key == "expiring_rate_micros" and expiring_rate_of(source).derived:
+        return '<span class="tag-derived">derived</span>'
+    return ""
 
 
 def line_cell_class(source: Any, key: str) -> str:
@@ -1109,6 +1164,7 @@ def line_cell_html(
         line_cell_action(ref, placement_id, line_id, key),
         tag="dd",
         extra_class=line_cell_class(source, key),
+        suffix=line_cell_suffix(source, key),
     )
 
 

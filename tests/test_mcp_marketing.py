@@ -306,6 +306,32 @@ def test_set_placement_line_upserts_one_row_per_line(conn) -> None:
     assert out["expected_exposure"] == 4_850_000_000
     assert out["expiring_rate_micros"] == 1_610_000
     assert len(marketing.placement_lines(conn, placement.id)) == 1
+    # A TYPED RATE IS NOT A DERIVED ONE, and the tool says which — an
+    # assistant reading this back has to be able to tell a figure off a
+    # policy from a division the book did.
+    assert out["expiring_rate_derived"] is False
+
+
+def test_the_tool_answers_with_the_composite_rate_the_browser_shows(conn) -> None:
+    """A SCHEMA CHANGE IS NOT DONE UNTIL AN AGENT CAN SEE IT (CLAUDE.md).
+
+    The browser's header works the expiring rate out of the premium and the
+    exposure; a tool that answered with the raw column would tell Grant there
+    is no expiring rate on a line whose Rate delta is being computed off one
+    two screens away. $412,000 over $41.0M per $1,000 is 10.0488."""
+    _, placement = _book(conn)
+    out = mcpserver._set_placement_line(
+        conn, placement.ref, "GL", rating_basis="gross_sales", rate_per="1000",
+        expiring_basis="gross_sales", expiring_premium="412,000",
+        expiring_exposure="41,000,000",
+    )
+    assert out["expiring_rate_micros"] == 10_048_780
+    assert out["expiring_rate_derived"] is True
+    # NOTHING WAS STORED. The column stays empty and the figure is worked out
+    # on every read, so correcting the premium corrects the rate.
+    assert marketing.placement_line(
+        conn, placement.id, "general-liability"
+    ).expiring_rate_micros is None
 
 
 # --- the report ------------------------------------------------------------

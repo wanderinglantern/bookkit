@@ -11,7 +11,20 @@
    writes answer the whole section, retargeted; a structural refusal renders
    at the top of this pane in `worksheet_error`, file untouched. #}
 <div class="worksheet" data-layer-row="{{ ws.id }}">
-  {% if ws.error %}<p class="cell-error-msg" role="alert">{{ ws.error }}</p>{% endif %}
+  {% if ws.error %}
+    <p class="cell-error-msg" role="alert">{{ ws.error }}</p>
+    {# A REFUSAL THAT HAS A DOOR RENDERS THE DOOR, beside the message that
+       named it. An umbrella widened onto a line that already carries cover
+       is refused as an overlap against its own $0, and the verb that answers
+       it — follows underlying — is a phrase a broker cannot search for
+       (Grant, 2026-08-27). The route offers this only when a dry run of the
+       exact write says it will go through, so the button never fails. #}
+    {% if ws.error_action %}
+      <button type="button" class="btn ws-error-fix"
+              hx-post="{{ ws.error_action.url }}"
+              hx-vals='{{ ws.error_action.vals }}'>{{ ws.error_action.label }}</button>
+    {% endif %}
+  {% endif %}
 
   <div class="ws-title">
     <h3 class="ws-name">{{ ws.name_cell | safe }}</h3>
@@ -25,6 +38,18 @@
     {% if ws.statutory %}
       Statutory cover — benefits, not a dollar limit; towerkit draws it off-scale.
       Covers <strong>{{ ws.covers_label }}</strong>.
+    {% elif ws.seats %}
+      {# A SLAB THAT SITS AT A DIFFERENT HEIGHT OVER EACH LINE HAS NO SINGLE
+         ATTACHMENT, and the one-figure sentence printed one column's slab
+         beside another column's number. That is what following underlying IS
+         — it is what an umbrella is — so every seat is named. See
+         routes/program.py::_per_line_seats. #}
+      Follows underlying — one seat per line:
+      {% for seat in ws.seats %}
+        <strong>{{ seat.line }}</strong>
+        <span class="mono ws-figure">{{ seat.attach }}</span> →
+        <span class="mono ws-figure">{{ seat.top }}</span>{% if not loop.last %} · {% endif %}
+      {% endfor %}
     {% else %}
       Sits on <strong>{{ ws.below_name if ws.below_name else "the ground ($0)" }}</strong>
       → attaches at <span class="mono ws-figure">{{ ws.attach }}</span>,

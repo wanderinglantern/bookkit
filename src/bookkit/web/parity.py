@@ -421,8 +421,10 @@ SYNC_VERBS: dict[str, dict[str, str]] = {
         "mcp": "DEFERRED — same call as add_named_limit",
     },
     "set_applies_to": {
-        "web": "the details row's applies-to chips — the verb's first caller "
-        "ever (POST .../layers/{layer_id}/applies-to)",
+        "web": "the worksheet's covers pills (POST .../layers/{layer_id}"
+        "/applies-to); widening onto a line that already carries cover is "
+        "refused as an overlap and the refusal carries the button that seats "
+        "the slab (`follows=true`, one write)",
         "tui": "via o -> towerkit's editor",
         "mcp": "DEFERRED — structure from an assistant is undecided",
     },

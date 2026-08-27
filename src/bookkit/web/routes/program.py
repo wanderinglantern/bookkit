@@ -18,6 +18,7 @@ the tab badge counted the placements it was claiming did not exist.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Callable
@@ -489,6 +490,55 @@ def _default_selection(
     return None
 
 
+def _per_line_seats(
+    program: Any, layer: dict[str, Any], label_of: dict[str, str]
+) -> list[dict[str, str]] | None:
+    """Where a FOLLOWS-UNDERLYING slab sits on each line it covers — or None
+    for every other layer, which keeps the ordinary sentence it always had.
+
+    THE POSITION SENTENCE WAS PRINTING TWO COLUMNS' TRUTHS AS ONE. It names
+    the slab beneath on the layer's FIRST line and the figure off
+    `layer.attach`, and for a follows layer that figure is the MAX across
+    every line it covers (`towerkit.edit.heal_follows`). The seeded umbrella
+    over GL, AL and IM read "Sits on Primary GL → attaches at $5,000,000" —
+    Primary GL tops at $2,000,000, and the $5,000,000 belongs to Inland
+    Marine. A broker reading that sees a $3,000,000 band over GL that the
+    umbrella actually covers.
+
+    A slab sitting at a different height over each line is the WHOLE POINT of
+    following underlying (it is what an umbrella is), so the honest rendering
+    is every seat, not one of them. towerkit's own drawing does the same thing
+    — `layout.py` asks `underlying_tops` per follows layer rather than reading
+    `attach`.
+
+    Whole DOLLARS in, cents out: towerkit files carry dollars and every figure
+    bookkit prints is cents (CLAUDE.md's money boundary), and `format_cents`
+    is the only renderer.
+    """
+    from ...money import dollars_to_cents
+
+    if program is None or not layer.get("follows_underlying"):
+        return None
+    if len(layer["applies_to"]) < 2:
+        # One line, one seat: the ordinary sentence is already true, and a
+        # list of one would be noise where a sentence reads.
+        return None
+    found = next((ly for ly in program.layers if ly.id == layer["id"]), None)
+    if found is None:
+        return None
+    tops = program.underlying_tops(found)
+    return [
+        {
+            "line": label_of.get(lid, lid),
+            "attach": format_cents(dollars_to_cents(tops.get(lid, found.attach))),
+            "top": format_cents(
+                dollars_to_cents(tops.get(lid, found.attach) + found.limit)
+            ),
+        }
+        for lid in layer["applies_to"]
+    ]
+
+
 def _worksheet_ctx(
     request: Request,
     ref: str,
@@ -496,6 +546,7 @@ def _worksheet_ctx(
     layer: dict[str, Any],
     layers: list[dict[str, Any]],
     error: str | None = None,
+    error_action: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """One layer's whole worksheet — the pane's single context builder, for
     the section render and every structure write's answer alike, so the pane
@@ -545,6 +596,7 @@ def _worksheet_ctx(
 
     named = sync.layer_named_limits(linked.program, layer_id)
     spans = len(layer["applies_to"])
+    seats = _per_line_seats(linked.program, layer, label_of)
     signed = layer["signed_pct"]
     open_pct = layer["open_pct"]
     participants = layer["participants"]
@@ -552,6 +604,10 @@ def _worksheet_ctx(
         "id": layer_id,
         "base": base,
         "error": error,
+        # A REFUSAL THAT HAS A DOOR RENDERS THE DOOR. `{label, url, vals}`, or
+        # None — which is every refusal but one today, and those read exactly
+        # as they did.
+        "error_action": error_action,
         "name_cell": cell("name"),
         "spans": spans if spans > 1 else 0,
         "buffer": layer["buffer"],
@@ -559,6 +615,9 @@ def _worksheet_ctx(
         "below_name": below["name"] if below else None,
         "attach": format_cents(layer["attach_cents"]),
         "top": format_cents(layer["top_cents"]),
+        # A SPANNING FOLLOWS SLAB HAS NO SINGLE ATTACHMENT, so it does not get
+        # the single sentence. See `_per_line_seats`.
+        "seats": seats,
         "covers_label": " · ".join(
             label_of.get(lid, lid) for lid in layer["applies_to"]
         ),
@@ -646,6 +705,7 @@ def _section_html(
     refocus: str | None = None,
     selected: str | None = None,
     worksheet_error: str | None = None,
+    worksheet_error_action: dict[str, str] | None = None,
 ) -> str:
     """ONE renderer for a program section, for every caller.
 
@@ -688,7 +748,7 @@ def _section_html(
         try:
             worksheet = _worksheet_ctx(
                 request, ref, placement.id, selected_layer, layers,
-                error=worksheet_error,
+                error=worksheet_error, error_action=worksheet_error_action,
             )
         except Exception as exc:  # noqa: BLE001 - logged, then shown
             logging.getLogger(__name__).exception(
@@ -2164,6 +2224,11 @@ async def layer_applies_to_toggle(
     form = await request.form()
     line = str(form.get("line", ""))
     intent = str(form.get("intent", ""))
+    # THE DOOR THE REFUSAL NAMED, arriving on the SAME route the refusal came
+    # from — the button under the message posts exactly what the pill posted
+    # plus this flag, so the widen and the seating are one write and one undo
+    # unit (sync.set_applies_to's `follows`).
+    follows = str(form.get("follows", "")) == "true"
     current = list(layer["applies_to"])
     if intent == "drop" and line not in current:
         # The confirm was stale — another window already dropped it. A
@@ -2193,13 +2258,34 @@ async def layer_applies_to_toggle(
             conn, placement,
             tool="program_layer_edit",
             summary=f"rescoped {layer['name']}",
-            mutate=lambda: sync.set_applies_to(conn, placement_id, layer_id, wanted),
+            mutate=lambda: sync.set_applies_to(
+                conn, placement_id, layer_id, wanted, follows=follows
+            ),
             open_batch=_open_batch_web,
         )
     except Exception as exc:
+        # A REFUSAL SAYS SOMETHING, AND WHERE IT CAN, IT OFFERS THE FIX.
+        # Widening an umbrella onto a line that already carries cover from the
+        # ground up is refused as an overlap against the slab's own $0 — a
+        # layer carries ONE attachment across every line it covers — and the
+        # verb that answers it is `follows underlying`, which a broker who does
+        # not know the phrase cannot find (Grant, 2026-08-27: "it is not clear
+        # how to do this at all in the interface"). The button is offered only
+        # when a DRY RUN of the exact write says it will go through, so the
+        # surface never shows a door that does not open.
+        action = None
+        if not follows and sync.follows_would_seat(
+            conn, placement_id, layer_id, wanted
+        ):
+            action = {
+                "label": f"seat {layer['name']} on the underlying tower",
+                "url": f"/accounts/{ref}/program/{placement_id}"
+                       f"/layers/{layer_id}/applies-to",
+                "vals": json.dumps({"line": line, "follows": "true"}),
+            }
         return _panel(
             request, ref, org, placement_id, selected=layer_id,
-            worksheet_error=str(exc),
+            worksheet_error=str(exc), worksheet_error_action=action,
         )
     forget_program_reads(request)
     _, fresh = _owned_layer(request, org, placement_id, layer_id)
@@ -2703,6 +2789,7 @@ def _panel(
     refocus: str | None = None,
     selected: str | None = None,
     worksheet_error: str | None = None,
+    worksheet_error_action: dict[str, str] | None = None,
 ) -> HTMLResponse:
     """Re-render this placement's whole panel, AND retarget the swap onto it.
 
@@ -2757,6 +2844,7 @@ def _panel(
         _section_html(
             request, ref, org, placement,
             refocus=refocus, selected=selected, worksheet_error=worksheet_error,
+            worksheet_error_action=worksheet_error_action,
         )
     )
     response.headers["HX-Retarget"] = f"#program-{placement_id}"
