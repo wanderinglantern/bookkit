@@ -1230,6 +1230,60 @@ def format_sorts(sorts: dict[str, tuple[str, bool]]) -> str:
     )
 
 
+# `<line_id>:<id>.<id>.<id>`, comma-joined between lines — the SAME road the
+# sort spec takes, for the same reason: one inherited `hx-vals` on the section,
+# so a write from anywhere inside it carries the order that is on screen.
+#
+# `.` separates the ids because they are ULIDs (Crockford base32, so no dot and
+# no comma can appear in one) and because `:` is already the pair separator
+# above. Asserted in tests/test_marketing_gates.py beside the sort spec's own
+# separator test rather than trusted.
+_HOLD_ROW = "."
+
+
+def parse_holds(spec: str) -> dict[str, tuple[str, ...]]:
+    """`{line_id: (response_id, ...)}` off the wire — the order on screen.
+
+    DEFENSIVE, the same way `parse_sorts` is and for the same reason: this
+    arrives in a URL. A malformed entry is DROPPED rather than refused, and an
+    id naming a row this block no longer has is simply not found by
+    `order_rows`, which puts what it cannot place at the end. There is nothing
+    a bad hold can do except fail to hold.
+
+    NOT VALIDATED AGAINST THE DATABASE HERE. A pin is a claim about what was
+    RENDERED, not about what exists, and the only thing it can affect is the
+    order of rows the composer already produced — so it needs no more
+    authority than that.
+    """
+    out: dict[str, tuple[str, ...]] = {}
+    for part in spec.split(_SPEC_SEP):
+        bits = part.strip().split(_SPEC_PAIR)
+        if len(bits) != 2:
+            continue
+        line_id, joined = (b.strip() for b in bits)
+        rows = tuple(r for r in joined.split(_HOLD_ROW) if r)
+        if not line_id or not rows:
+            continue
+        out[line_id] = rows
+    return out
+
+
+def format_holds(holds: dict[str, tuple[str, ...]]) -> str:
+    """The order on screen, back on the wire, so the next write can hold it.
+
+    THE SURFACE ECHOES WHAT IT RENDERED. Nothing on the server remembers what
+    a reader is looking at, and nothing should — so the block publishes the
+    order it just drew and the next request hands it back. Sorted by line id
+    for the same reason `format_sorts` is: an attribute that reshuffles on
+    every render is a diff nobody can read.
+    """
+    return _SPEC_SEP.join(
+        f"{line_id}{_SPEC_PAIR}{_HOLD_ROW.join(rows)}"
+        for line_id, rows in sorted(holds.items())
+        if rows
+    )
+
+
 def cycled(
     sorts: dict[str, tuple[str, bool]], line_id: str, column: str
 ) -> dict[str, tuple[str, bool]]:
@@ -1262,6 +1316,7 @@ def header_cells(
     *,
     ref: str,
     placement_id: str,
+    holds: dict[str, tuple[str, ...]] | None = None,
 ) -> list[dict[str, Any]]:
     """One block's column headers, each carrying what it would do if clicked.
 
@@ -1271,6 +1326,7 @@ def header_cells(
     not look like anything.
     """
     column, descending = sorts.get(block.line_id, ("", False))
+    holds = holds or {}
     cells = []
     for spec in COLUMNS:
         active = spec.sortable and spec.key == column
@@ -1305,8 +1361,19 @@ def header_cells(
                 # `hx-vals` overrides an ancestor's for the same key, which is
                 # exactly the relationship these two have: the section says
                 # where the grid IS, the header says where it is GOING.
+                # AND THE HOLD GOES WITH IT. Clicking a header is a reader
+                # asking for an order out loud, which is the one thing that
+                # outranks the order they happened to be looking at — so this
+                # line's pin is dropped here, by the same override. Only this
+                # line's: a sort on General Liability says nothing about how
+                # the reader wants Auto held.
                 "vals": json.dumps(
-                    {"sort": format_sorts(cycled(sorts, block.line_id, spec.key))}
+                    {
+                        "sort": format_sorts(cycled(sorts, block.line_id, spec.key)),
+                        "hold": format_holds(
+                            {k: v for k, v in holds.items() if k != block.line_id}
+                        ),
+                    }
                 )
                 if spec.sortable
                 else "",
@@ -1352,6 +1419,7 @@ def block_view(
     base: str,
     window: marketing_report.DateWindow | None = None,
     sorts: dict[str, tuple[str, bool]] | None = None,
+    holds: dict[str, tuple[str, ...]] | None = None,
     conditions: dict[str, list[marketing_report.SubjectivityRow]] | None = None,
 ) -> dict[str, Any]:
     """One line-of-coverage block, rendered.
@@ -1362,6 +1430,9 @@ def block_view(
     one level down and `_section_html` follows one level up: a key added to one
     caller's copy and not the other's goes missing on writes.
     """
+    column, descending = (sorts or {}).get(block.line_id, ("", False))
+    pinned = (holds or {}).get(block.line_id, ())
+    ordered = marketing_report.order_rows(block.rows, column, descending, pinned)
     return {
         # The DOM id a header cell save retargets onto, and what every id
         # inside the block is scoped by.
@@ -1381,7 +1452,8 @@ def block_view(
         "clearance": _clearance(block),
         # THE COLUMN HEADERS, each carrying what clicking it would do.
         "headers": header_cells(
-            block, sorts or {}, ref=ref, placement_id=placement_id
+            block, sorts or {}, ref=ref, placement_id=placement_id,
+            holds=holds or {},
         ),
         # ORDERED HERE, AFTER THE BLOCK WAS COMPOSED, and that ordering is
         # exactly what makes the BRIDGE stay honest. The bridge walks the
@@ -1396,10 +1468,32 @@ def block_view(
                 request, row, ref=ref, placement_id=placement_id, window=window,
                 conditions=conditions,
             )
-            for row in marketing_report.order_rows(
-                block.rows, *(sorts or {}).get(block.line_id, ("", False))
-            )
+            for row in ordered
         ],
+        # THE ORDER THIS BLOCK JUST DREW, echoed so the next write can hold it.
+        # Taken from `ordered` rather than from `pinned`, so a hold that has
+        # gone stale — a market approached since, a row removed — is corrected
+        # by the render that noticed rather than carried forward for ever.
+        "hold": tuple(row.response_id for row in ordered),
+        # WHETHER THE HOLD IS HIDING A MOVE, which is what the header says out
+        # loud. False on a fresh render and False again once the canonical
+        # order agrees, so the marker clears itself.
+        "held": marketing_report.out_of_order(
+            block.rows, column, descending, pinned
+        ),
+        # RELEASING IS A SORT CLICK WITHOUT THE SORT — the same action URL and
+        # the same `hx-vals` override, carrying this line's pin away and
+        # leaving its column alone. No route of its own, because it is not a
+        # different act: both are "render the section in this order".
+        "release_url": sort_action(ref, placement_id),
+        "release_vals": json.dumps(
+            {
+                "sort": format_sorts(sorts or {}),
+                "hold": format_holds(
+                    {k: v for k, v in (holds or {}).items() if k != block.line_id}
+                ),
+            }
+        ),
         "bridge": _bridge(block.bridge),
         "add_url": f"{base}/lines/{block.line_id}/approaches",
     }
@@ -1451,6 +1545,7 @@ def panel(
     provisional_error: str | None = None,
     provisional_row: str | None = None,
     sort_spec: str = "",
+    hold_spec: str = "",
 ) -> dict[str, Any]:
     """The whole Marketing section for one placement.
 
@@ -1485,6 +1580,9 @@ def panel(
     # the page claiming an order it is not in — and carrying that claim into
     # every later write.
     sorts = parse_sorts(sort_spec)
+    # THE ORDER ON SCREEN, same treatment: parsed in, and republished below
+    # from what the blocks ACTUALLY DREW rather than echoed through.
+    holds = parse_holds(hold_spec)
     # GROUPED ONCE FOR THE WHOLE SECTION. Every block reads from the same map,
     # because a package can answer on several lines of coverage and its
     # conditions are the package's — see `_conditions_by_package`.
@@ -1492,7 +1590,7 @@ def panel(
     blocks = [
         block_view(
             request, block, ref=ref, placement_id=placement_id, base=base,
-            window=report.window, sorts=sorts, conditions=conditions,
+            window=report.window, sorts=sorts, holds=holds, conditions=conditions,
         )
         for block in report.blocks
     ]
@@ -1518,6 +1616,14 @@ def panel(
         # answers with this whole section and would otherwise rebuild every
         # block in the composer's default order.
         "sort": format_sorts(sorts),
+        # THE ORDER ON SCREEN, on the section beside the sort and for the same
+        # reason — one inherited `hx-vals`, so a cell save, an added market or
+        # a Sent cell (which answers with this WHOLE section) all carry it.
+        # Built from what every block just drew, never from what arrived: a
+        # pin naming a row that has since been removed corrects itself on the
+        # first render that notices, and a market approached since is in the
+        # order from then on rather than falling to the end for ever.
+        "hold": format_holds({b["line_id"]: b["hold"] for b in blocks}),
         "blocks": blocks,
         "add_fields": market_approach_fields(conn),
         # A VISIBLE default, not a browser-chosen one. Both are values a

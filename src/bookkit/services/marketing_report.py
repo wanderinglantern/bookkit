@@ -18,7 +18,7 @@ recommends the wrong one.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -148,7 +148,10 @@ def _default_key(row: ReportRow) -> tuple[Any, ...]:
 
 
 def order_rows(
-    rows: tuple[ReportRow, ...], column: str = "", descending: bool = False
+    rows: tuple[ReportRow, ...],
+    column: str = "",
+    descending: bool = False,
+    pinned: Sequence[str] = (),
 ) -> tuple[ReportRow, ...]:
     """One block's rows in the order a reader asked for, or the default.
 
@@ -167,14 +170,70 @@ def order_rows(
     reachable from a URL, and a view parameter nobody recognises is not worth
     a 500 (the grid re-renders its own header from what it actually applied,
     so nothing then claims to be sorted when it is not).
+
+    ENTRY ORDER IS NOT READING ORDER, and `pinned` is that rule (Grant,
+    2026-08-27: "as I am updating status, the grid moves with the item which
+    makes it difficult to update multiple records"). The default order is
+    STATUS FIRST, and `status` re-composes the whole block — so setting one
+    market's status re-sorts the block under the hand that is setting it.
+    Measured on the running app, nine markets on one line: one status write
+    moved SIX of nine rows, the edited row travelling from position 8 to
+    position 3.
+
+    That is not a comfort problem. Working down the column, each entry pulls
+    the finished row UP and pushes the untouched rows DOWN, so the row under
+    the cursor when the broker goes to click the next one is A DIFFERENT
+    MARKET — a wrong-record write on a field that is a market's status.
+
+    `pinned` is the order that is currently ON SCREEN, echoed back by the
+    surface that rendered it (web/marketing_grid.format_holds). Rows it names
+    come back in its order; rows it does not — a market approached since, or a
+    pin from a stale page — fall to the end in whatever order the column or
+    the default would have given them, which is the same "an unknown figure is
+    last" rule one level up.
+
+    IT WINS OVER THE COLUMN, because it is a snapshot OF the column: a reader
+    sorted by Expires who then edits an expiry is being held in the Expires
+    order they were reading, and re-sorting under them is the same defect
+    wearing the sorted order instead of the default one. Dropping the hold is
+    an explicit act at the surface (clicking a header, or `reorder`), never
+    something inferred here.
     """
     key = SORT_KEYS.get(column)
     if key is None:
-        return tuple(sorted(rows, key=_default_key))
-    known = [r for r in rows if key(r) is not UNKNOWN]
-    unknown = [r for r in rows if key(r) is UNKNOWN]
-    known.sort(key=key, reverse=descending)
-    return tuple(known + unknown)
+        ordered: tuple[ReportRow, ...] = tuple(sorted(rows, key=_default_key))
+    else:
+        known = [r for r in rows if key(r) is not UNKNOWN]
+        unknown = [r for r in rows if key(r) is UNKNOWN]
+        known.sort(key=key, reverse=descending)
+        ordered = tuple(known + unknown)
+    if not pinned:
+        return ordered
+    rank = {response_id: i for i, response_id in enumerate(pinned)}
+    held = [r for r in ordered if r.response_id in rank]
+    rest = [r for r in ordered if r.response_id not in rank]
+    held.sort(key=lambda r: rank[r.response_id])
+    return tuple(held + rest)
+
+
+def out_of_order(
+    rows: tuple[ReportRow, ...], column: str, descending: bool, pinned: Sequence[str]
+) -> bool:
+    """Whether holding the order is currently hiding a move.
+
+    A HELD ORDER IS SAID OUT LOUD, never silently applied — a surface that
+    quietly stops doing what the reader asked it to do is the `line-gap`
+    mistake in another costume. This answers the one question the block header
+    needs: would releasing the hold move anything? A pin that happens to agree
+    with the canonical order is not worth a marker, and the marker must
+    disappear on its own once it does.
+    """
+    if not pinned:
+        return False
+    held = order_rows(rows, column, descending, pinned)
+    return [r.response_id for r in held] != [
+        r.response_id for r in order_rows(rows, column, descending)
+    ]
 
 # READ, not declared: models.py owns both vocabularies now, because the
 # Program tab's status picker and decline-reason picker have to offer the very

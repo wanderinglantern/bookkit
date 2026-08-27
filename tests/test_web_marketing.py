@@ -14,7 +14,9 @@ legitimate entry, and an underwriter's private opinion reaching a client.
 
 from __future__ import annotations
 
+import json
 import re
+from html import unescape
 from io import BytesIO
 from pathlib import Path
 
@@ -3378,9 +3380,9 @@ def test_a_sorted_header_offers_the_NEXT_order_not_the_one_it_is_in(client_and_o
     # UNESCAPED, because Jinja escapes the quotes inside the attribute and the
     # browser hands htmx the decoded value back — reading the raw source here
     # would be testing the escaping rather than the contract.
-    from html import unescape
+    offered = json.loads(re.search(r"hx-vals='([^']*)'", unescape(button)).group(1))
 
-    assert f'{{"sort": "{GL}:premium:desc"}}' in unescape(button), (
+    assert offered["sort"] == f"{GL}:premium:desc", (
         "an ascending column must offer descending, not the order it is in"
     )
     url = re.search(r'hx-get="([^"]*)"', button).group(1)
@@ -3392,16 +3394,33 @@ def test_a_sorted_header_offers_the_NEXT_order_not_the_one_it_is_in(client_and_o
 
 def test_the_section_publishes_the_order_it_is_actually_in(client_and_org):
     """The other side of the same contract: the SECTION says where the grid IS
-    (so a cell save carries it) and the HEADER says where it is going."""
+    (so a cell save carries it) and the HEADER says where it is going.
+
+    AN UNSORTED SECTION STILL PUBLISHES A HOLD, and that is the 2026-08-27
+    change rather than a leak. `sort` is empty until a reader asks for a
+    column — nobody needs to read it before then — but `hold` is the order on
+    screen, which exists from the first render and is what stops the grid
+    re-sorting under an edit. This asserts both halves, because "the section
+    publishes nothing" was the old shape of this claim and the difference is
+    exactly what a reader of this test needs to see.
+    """
     client, org, placement = _priced(client_and_org)
 
     plain = _tab(client, org)
     sorted_html = _sorted_html(client, org, placement, f"{GL}:premium:desc")
 
-    assert "hx-vals" not in plain.split('<section class="marketing"')[1][:400], (
-        "an unsorted section must not publish an order at all"
+    unsorted = json.loads(
+        re.search(
+            r'<section class="marketing"[^>]*hx-vals=\'([^\']*)\'', unescape(plain)
+        ).group(1)
     )
-    section = sorted_html.split('<section class="marketing"', 1)[1][:400]
+    assert unsorted["sort"] == "", "nothing is sorted, so nothing claims to be"
+    assert unsorted["hold"].startswith(f"{GL}:"), (
+        "the order on screen is published from the first render, or the very "
+        "first edit re-sorts the grid under the hand making it"
+    )
+
+    section = unescape(sorted_html).split('<section class="marketing"', 1)[1][:600]
     assert f'{GL}:premium:desc' in section
 
 
@@ -3519,3 +3538,203 @@ def test_every_placement_gets_its_own_named_section(client_and_org):
     assert html.count('class="marketing-placement"') == len(placements)
     for placement in placements:
         assert placement.program_name in html
+
+
+# --- entry order is not reading order ---------------------------------------
+#
+# Grant, 2026-08-27: "as I am updating status, the grid moves with the item
+# which makes it difficult to update multiple records or be quick about updates
+# with the screen jumping around."
+#
+# The default order is STATUS FIRST and `status` is a block cell, so setting one
+# market's status re-composes the block and re-sorts it under the hand that is
+# setting it. Measured on the running app, nine markets on one line: one status
+# write moved SIX of nine rows and the edited row travelled from position 8 to
+# position 3. Working down the column, that puts a DIFFERENT MARKET under the
+# cursor for the next click — a wrong-record write, not a comfort problem.
+
+
+def _hold_spec(html: str) -> str:
+    """The order the section just published, off its `hx-vals`.
+
+    UNESCAPED, for the reason `test_a_sorted_header_offers_the_NEXT_order...`
+    gives: Jinja escapes the quotes inside the attribute and the browser hands
+    htmx the decoded value back, so reading the raw source would be testing the
+    escaping rather than the contract."""
+    vals = re.search(
+        r'<section class="marketing"[^>]*hx-vals=\'([^\']*)\'', unescape(html)
+    )
+    return str(json.loads(vals.group(1))["hold"]) if vals else ""
+
+
+def _row_ids(html: str, block_id: str) -> list[str]:
+    block = html.split(f'id="{block_id}"', 1)[1].split("</article>", 1)[0]
+    body = block.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    return [r.split('"', 1)[0] for r in body.split('<tr id="mrow-')[1:]]
+
+
+def test_a_status_write_does_not_move_the_row_being_written(client_and_org):
+    """THE ONE THAT MATTERS. This is the exact keystroke Grant reported: the
+    grid is in its default order, a broker sets the status of a row near the
+    bottom, and the row jumps to the top because the default order is status
+    first — taking the five rows between with it."""
+    client, org, placement = _priced(client_and_org)
+    conn = client.app.state.conn
+    from bookkit.repo import marketing as mrepo
+
+    # PRICED, and priced CHEAPEST. An unpriced row sorts last among the quoted
+    # as well (premium None is last in both directions), so setting one to
+    # quoted moves nothing and would prove nothing here.
+    _approach(conn, placement.id, _market(conn, "Hartford"), status="pending",
+              premium=1_00)
+    before = _tab(client, org)
+    order_before = _market_order(before, _gl_block(placement))
+    assert order_before[-1] == "Hartford", "the pending row starts last"
+
+    hartford = next(
+        r for r in mrepo.responses_for_placement(conn, placement.id)
+        if r.line_id == GL and r.market_org_id == _market(conn, "Hartford").id
+    )
+    saved = client.post(
+        _cell_url(org, placement, hartford, "status"),
+        data={"status": "quoted", "hold": _hold_spec(before)},
+    )
+
+    assert saved.status_code == 200
+    assert _market_order(saved.text, _gl_block(placement)) == order_before, (
+        "the grid re-sorted under the write — the row the broker just set "
+        "moved, and every row between moved with it"
+    )
+
+
+def test_without_the_hold_the_grid_still_sorts_itself(client_and_org):
+    """THE HOLD IS THE ONLY THING SUPPRESSING THE RE-SORT, and this says so —
+    a test that passed whether or not the pin was applied would prove nothing.
+    The same write with no pin re-orders, which is what a fresh page load
+    (and `reorder`) must still do."""
+    client, org, placement = _priced(client_and_org)
+    conn = client.app.state.conn
+    from bookkit.repo import marketing as mrepo
+
+    _approach(conn, placement.id, _market(conn, "Hartford"), status="pending",
+              premium=1_00)
+    order_before = _market_order(_tab(client, org), _gl_block(placement))
+
+    hartford = next(
+        r for r in mrepo.responses_for_placement(conn, placement.id)
+        if r.line_id == GL and r.market_org_id == _market(conn, "Hartford").id
+    )
+    saved = client.post(
+        _cell_url(org, placement, hartford, "status"), data={"status": "quoted"}
+    )
+
+    assert saved.status_code == 200
+    assert _market_order(saved.text, _gl_block(placement)) != order_before
+
+
+def test_the_held_order_is_said_out_loud_and_offers_the_way_out(client_and_org):
+    """A SURFACE THAT QUIETLY STOPS DOING WHAT THE READER ASKED IT TO DO is the
+    `line-gap` mistake in another costume. The marker appears only while the
+    hold is actually hiding a move, and carries the control that releases it."""
+    client, org, placement = _priced(client_and_org)
+    conn = client.app.state.conn
+    from bookkit.repo import marketing as mrepo
+
+    _approach(conn, placement.id, _market(conn, "Hartford"), status="pending",
+              premium=1_00)
+    fresh = _tab(client, org)
+    assert "order held while you work" not in fresh, (
+        "a fresh render holds nothing and must not say it does"
+    )
+
+    hartford = next(
+        r for r in mrepo.responses_for_placement(conn, placement.id)
+        if r.line_id == GL and r.market_org_id == _market(conn, "Hartford").id
+    )
+    saved = client.post(
+        _cell_url(org, placement, hartford, "status"),
+        data={"status": "quoted", "hold": _hold_spec(fresh)},
+    )
+
+    assert "order held while you work" in saved.text
+    assert ">reorder</button>" in saved.text
+
+
+def test_reorder_releases_only_its_own_line_of_coverage(client_and_org):
+    """A HOLD ON GENERAL LIABILITY SAYS NOTHING ABOUT AUTO. Releasing is a
+    per-line act because the reader worked one line, and dropping every pin
+    would re-sort blocks they never touched."""
+    client, org, placement = _priced(client_and_org)
+    conn = client.app.state.conn
+    _approach(conn, placement.id, _market(conn, "Hartford"), line_id=AUTO,
+              status="pending", premium=5_000_00)
+
+    from bookkit.web.marketing_grid import format_holds, parse_holds
+
+    spec = format_holds({GL: ("a", "b"), AUTO: ("c",)})
+    released = parse_holds(spec)
+    released.pop(GL)
+
+    assert format_holds(released) == f"{AUTO}:c"
+    assert GL not in released and AUTO in released
+
+
+def test_a_sort_click_outranks_the_order_being_held(client_and_org):
+    """CLICKING A HEADER IS A READER ASKING FOR AN ORDER OUT LOUD, which is the
+    one thing that beats the order they happened to be looking at. The button
+    carries this line's pin away in its own `hx-vals`, the same override that
+    already carries the new sort."""
+    client, org, placement = _priced(client_and_org)
+    html = _tab(client, org)
+    block = unescape(html).split(f'id="{_gl_block(placement)}"', 1)[1]
+    button = block.split('class="col-sort', 1)[1].split(">", 1)[0]
+    vals = json.loads(re.search(r"hx-vals='([^']*)'", button).group(1))
+
+    assert GL not in vals["hold"], (
+        "the sort button re-sent the pin it is meant to release, so the column "
+        "would sort once and then never move again"
+    )
+
+
+def test_the_section_republishes_the_order_it_actually_drew(client_and_org):
+    """NEVER ECHOED THROUGH. A pin naming a row that has since been removed —
+    or missing one approached since — corrects itself on the first render that
+    notices, rather than being carried forward for ever."""
+    client, org, placement = _priced(client_and_org)
+    conn = client.app.state.conn
+    _approach(conn, placement.id, _market(conn, "Hartford"), status="pending")
+
+    stale = f"{GL}:01NOSUCHROW"
+    got = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/marketing/sort?hold={stale}"
+    )
+
+    assert got.status_code == 200
+    published = _hold_spec(got.text)
+    assert published, "the section published no order at all"
+    assert "01NOSUCHROW" not in published
+    assert set(_row_ids(got.text, _gl_block(placement))) == set(
+        published.split(":", 1)[1].split(".")
+    )
+
+
+def test_a_row_approached_since_the_hold_falls_to_the_end(client_and_org):
+    """THE SAME RULE AS AN UNKNOWN FIGURE, one level up. A pin is a claim about
+    what was rendered, so a market approached after it was taken cannot be
+    placed by it — and inventing a position would be worse than the honest
+    one."""
+    client, org, placement = _priced(client_and_org)
+    conn = client.app.state.conn
+    held = _hold_spec(_tab(client, org))
+
+    _approach(conn, placement.id, _market(conn, "Hartford"), status="bound",
+              premium=1_00)
+    got = client.get(
+        f"/accounts/{org.ref}/program/{placement.id}/marketing/sort?hold={held}"
+    )
+
+    order = _market_order(got.text, _gl_block(placement))
+    assert order[-1] == "Hartford", (
+        "a bound, cheapest row would lead the default order; pinned rows keep "
+        "their places and the new one goes last"
+    )

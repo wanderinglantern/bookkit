@@ -81,11 +81,17 @@ async def _remember_sort(request: Request) -> None:
     page left claiming an order it is not in.
     """
     spec = str(request.query_params.get("sort", ""))
+    hold = str(request.query_params.get("hold", ""))
     if request.method == "POST":
-        typed = (await request.form()).get("sort")
+        form = await request.form()
+        typed = form.get("sort")
         if typed is not None:
             spec = str(typed)
+        pinned = form.get("hold")
+        if pinned is not None:
+            hold = str(pinned)
     request.state.sort_spec = spec
+    request.state.hold_spec = hold
 
 
 def _sorted_by(request: Request) -> str:
@@ -93,6 +99,17 @@ def _sorted_by(request: Request) -> str:
     module's helpers are also called from routes/program.py's first render of
     the tab, which is a different router and never ran that dependency."""
     return str(getattr(request.state, "sort_spec", "") or "")
+
+
+def _held_by(request: Request) -> str:
+    """The order currently ON SCREEN, off the same dependency as the sort.
+
+    ENTRY ORDER IS NOT READING ORDER (Grant, 2026-08-27). It rides the same
+    road as the sort spec and is defaulted for the same reason — an empty
+    string is "nothing is being held", which is what routes/program.py's first
+    render of the tab should always be.
+    """
+    return str(getattr(request.state, "hold_spec", "") or "")
 
 
 # EVERY ROUTE IN THIS MODULE READS THE ORDER, whether it thinks it needs to or
@@ -365,7 +382,7 @@ def _row_response(
     conn = _conn(request)
     report = marketing_grid.panel(
         request, conn, placement_id, today=date.today(), ref=ref,
-        sort_spec=_sorted_by(request),
+        sort_spec=_sorted_by(request), hold_spec=_held_by(request),
     )
     row = next(
         (
@@ -774,7 +791,7 @@ def _section(
         error=error, pending=pending, refocus=refocus,
         line_values=line_values, line_add_preserve=not its_own,
         provisional_error=provisional_error, provisional_row=provisional_row,
-        sort_spec=_sorted_by(request),
+        sort_spec=_sorted_by(request), hold_spec=_held_by(request),
     )
     html = TEMPLATES.env.get_template("account/_marketing_panel.html").render(
         placement=placement, marketing=context
@@ -814,7 +831,7 @@ def _block_response(
     """
     context = marketing_grid.panel(
         request, _conn(request), placement_id, today=date.today(), ref=ref,
-        sort_spec=_sorted_by(request),
+        sort_spec=_sorted_by(request), hold_spec=_held_by(request),
     )
     block = next(
         (b for b in context["blocks"] if b["line_id"] == line_id), None

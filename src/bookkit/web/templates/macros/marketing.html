@@ -479,6 +479,25 @@
         <span class="marketing-retired" role="status">line of coverage retired
           — kept here because the marketing below it happened</span>
       {% endif %}
+      {# A HELD ORDER IS SAID OUT LOUD. The rows are being kept where the
+         reader last saw them instead of re-sorting under the edit that just
+         happened — right while they are working the column, and wrong to do
+         silently: a surface that quietly stops doing what the reader asked it
+         to do is the `line-gap` mistake in another costume.
+
+         IT STATES THE MODE, NOT A COUNT. "6 rows out of order" is a number
+         that changes on every keystroke, which is the eye-catching movement
+         this whole feature exists to stop. `b.held` is False on a fresh
+         render and False again the moment the canonical order agrees, so the
+         marker clears itself without anybody dismissing it. #}
+      {% if b.held %}
+        <span class="marketing-held" role="status">order held while you work
+          <button type="button" class="row-action-btn"
+                  hx-get="{{ b.release_url }}" hx-vals='{{ b.release_vals }}'
+                  hx-target="#{{ marketing_id }}" hx-swap="outerHTML"
+                  title="re-sort this line of coverage now">reorder</button>
+        </span>
+      {% endif %}
       {# THE SEND DATE IS A CELL IN THE GRID BELOW, not a line here. It could
          only be printed here when every package on the line went out on the
          same day, which is a coincidence of values rather than a fact about
