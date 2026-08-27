@@ -238,7 +238,7 @@
 {% endmacro %}
 
 
-{% macro conditions_row(r, columns) %}
+{% macro conditions_row(r, columns, subj_ask_url="") %}
   {# WHAT THIS MARKET STILL WANTS, under the row that counts them.
 
      ITS OWN <tr>, AND `row()` ABOVE STILL EMITS EXACTLY ONE. That split is
@@ -268,11 +268,35 @@
           <summary>{{ r.conditions_summary }}</summary>
           <ul class="marketing-subj-list">
             {% for c in r.conditions %}
-              <li class="marketing-subj-item">
+              <li class="marketing-subj-item" id="msubjrow-{{ c.id }}">
                 <span class="market-pill {{ c.tone }}">{{ c.status }}</span>
                 <span class="marketing-subj-text">{{ c.description }}</span>
                 {% if c.due_on %}<span class="detail-label">due {{ c.due_on }}</span>{% endif %}
                 {% if c.satisfied_on %}<span class="detail-label">satisfied {{ c.satisfied_on }}</span>{% endif %}
+                {# WHOSE MOVE IS IT. Three states, and the middle one is the
+                   whole reason this join exists:
+
+                     nothing        nobody has asked the client — the control
+                     asked          asked, waiting on the client
+                     answer in hand the client HAS sent it and this market has
+                                    not been told: nothing left to chase,
+                                    something to forward
+
+                   RECEIVED IS NOT MET, so "answer in hand" sits beside a
+                   status that still says outstanding rather than replacing
+                   it. The two are different facts about different people. #}
+                {% if c.answer_in_hand %}
+                  <span class="market-pill is-good">answer in hand</span>
+                  <span class="detail-label">{{ c.asked_as }}</span>
+                {% elif c.asked_as %}
+                  <span class="detail-label">asked: {{ c.asked_as }}</span>
+                {% elif c.can_ask %}
+                  <button type="button" class="row-action-btn"
+                          hx-get="{{ subj_ask_url }}?subjectivity={{ c.id }}"
+                          hx-target="#msubjrow-{{ c.id }}" hx-swap="outerHTML"
+                          title="ask the client for this — reusing an ask already out where one covers it"
+                    >ask the client</button>
+                {% endif %}
               </li>
             {% endfor %}
           </ul>
@@ -440,7 +464,7 @@
                coverage it answers on — they hang off the SUBMISSION — so a
                count printed here with no way to read the list would be the
                same half-a-control this block was fixed for. #}
-            {{ conditions_row(r, columns) }}
+            {{ conditions_row(r, columns, b.subj_ask_url) }}
           {% endfor %}
         </tbody>
       </table>
@@ -593,7 +617,7 @@
         </thead>
         <tbody>
           {% for r in b.rows %}
-            {{ row(r, columns) }}{{ conditions_row(r, columns) }}
+            {{ row(r, columns) }}{{ conditions_row(r, columns, b.subj_ask_url) }}
           {% else %}
             {# IN WORDS. An empty table cannot be told from a rendering bug,
                and "nobody has gone to market on this line" is a real and

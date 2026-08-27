@@ -53,6 +53,7 @@ from ...repo import placements as placements_repo
 from ...repo import submissions as submissions_repo
 from ...services import batches as batches_svc
 from ...services import consistency, marketing_entry, marketing_report
+from ...services import rfi as rfi_svc
 from .. import marketing_grid
 from ..app import TEMPLATES
 from ..forms_render import render_cell, render_cell_display
@@ -1973,3 +1974,155 @@ def _add_row(
         )
     )
     return HTMLResponse(html)
+
+
+# --- asking the client for what a market requires ----------------------------
+#
+# ONE ASK, THREE MARKETS (Grant, 2026-08-27). Three markets wanting five-year
+# loss runs is ONE question to the client, and the control below exists to make
+# reusing the ask already out the path of least resistance rather than a thing a
+# careful broker remembers to do.
+
+_SUBJ_ASK = "/accounts/{ref}/program/{placement_id}/marketing/subjectivities/ask"
+
+
+def _ask_form_html(
+    request: Request,
+    conn: sqlite3.Connection,
+    ref: str,
+    placement_id: str,
+    subjectivity: Any,
+    *,
+    error: str | None = None,
+) -> str:
+    """The picker, swapped over the condition's own line.
+
+    IN PLACE, never a modal somewhere else on the page — the same shape every
+    other question on this grid takes (`_response_remove_confirm`,
+    `_package_remove_confirm`). The broker is reading a market's conditions when
+    they decide to ask; the question belongs where they are looking.
+    """
+    found = rfi_svc.candidates(conn, subjectivity.id)
+    template = TEMPLATES.env.get_template("account/_subjectivity_ask.html")
+    return str(
+        template.render(
+            subjectivity=subjectivity,
+            action=_SUBJ_ASK.format(ref=ref, placement_id=placement_id),
+            cancel=(
+                f"/accounts/{ref}/program/{placement_id}"
+                f"/marketing/subjectivities/{subjectivity.id}/row"
+            ),
+            candidates=[
+                {
+                    "id": c.item.id,
+                    "prompt": c.item.prompt,
+                    "request_ref": c.request.ref,
+                    "state": c.state,
+                    "already_waiting": c.already_waiting,
+                    # THE STATE IS WHAT DECIDES THE PICK. "received 19 Aug" and
+                    # "outstanding, due 2 Sep" mean completely different things
+                    # about what is left to do, and a picker that printed only
+                    # the wording would hide the best answer it had.
+                    "says": marketing_grid.candidate_says(c),
+                }
+                for c in found
+            ],
+            error=error,
+        )
+    )
+
+
+@router.get(_SUBJ_ASK, response_class=HTMLResponse)
+def subjectivity_ask_form(
+    request: Request, ref: str, placement_id: str, subjectivity: str
+) -> HTMLResponse:
+    """The picker. WRITES NOTHING — only the POST below writes."""
+    org, _ = _placement(request, ref, placement_id)
+    conn = _conn(request)
+    found = _owned_subjectivity(conn, org, placement_id, subjectivity)
+    return HTMLResponse(_ask_form_html(request, conn, ref, placement_id, found))
+
+
+@router.get(
+    "/accounts/{ref}/program/{placement_id}/marketing/subjectivities/{subjectivity_id}/row",
+    response_class=HTMLResponse,
+)
+def subjectivity_row(
+    request: Request, ref: str, placement_id: str, subjectivity_id: str
+) -> HTMLResponse:
+    """The condition's line, back as it was — what [keep] answers with.
+
+    THE SECTION, not the line. A condition has no fragment route of its own and
+    inventing one would be a second composition of a row the panel already
+    builds — the same call `_package_remove_confirm`'s [keep] makes, and for the
+    same reason.
+    """
+    org, _ = _placement(request, ref, placement_id)
+    _owned_subjectivity(_conn(request), org, placement_id, subjectivity_id)
+    return _section(request, ref, org, placement_id)
+
+
+@router.post(_SUBJ_ASK, response_class=HTMLResponse)
+async def subjectivity_ask(
+    request: Request, ref: str, placement_id: str
+) -> HTMLResponse:
+    """Ask the client — attaching to an ask already out, or writing a new one.
+
+    THE REFUSAL COMES BACK IN THE FORM, holding what was typed. A wrong attach
+    is the mistake this control makes easiest and the refusals
+    `services.rfi.promote` raises are the ones worth reading, so they are shown
+    where the choice was made rather than as a message somewhere above.
+    """
+    org, _ = _placement(request, ref, placement_id)
+    conn = _conn(request)
+    form = await request.form()
+    subjectivity_id = str(form.get("subjectivity") or "")
+    found = _owned_subjectivity(conn, org, placement_id, subjectivity_id)
+    chosen = str(form.get("item") or "")
+    typed = str(form.get("prompt") or "").strip()
+
+    # MARKUP CONSTRAINS A MOUSE AND NOTHING ELSE. The picker's options are
+    # re-derived here and the posted id checked against them, so a stale page —
+    # or anything else that can make a request — cannot attach a condition to an
+    # ask this control never offered.
+    if chosen and chosen not in {c.item.id for c in rfi_svc.candidates(conn, found.id)}:
+        return HTMLResponse(
+            _ask_form_html(
+                request, conn, ref, placement_id, found,
+                error=(
+                    "that ask is not one of the ones offered for this condition "
+                    "— the page may have moved on; close this and open it again"
+                ),
+            )
+        )
+    try:
+        rfi_svc.promote(
+            conn, found.id, source="web",
+            item_id=chosen or None, prompt=typed or None,
+        )
+    except ValueError as exc:
+        return HTMLResponse(
+            _ask_form_html(
+                request, conn, ref, placement_id, found, error=_house(exc)
+            )
+        )
+    return _section(request, ref, org, placement_id)
+
+
+def _owned_subjectivity(
+    conn: sqlite3.Connection, org: Any, placement_id: str, subjectivity_id: str
+) -> Any:
+    """A condition on THIS placement, or a 404.
+
+    THREE ids and every one of them a claim, checked through the PACKAGE that
+    carries the condition — the same shape `_owned_submission` settles one level
+    up, and the same 404 for "no such id" and for "someone else's id",
+    deliberately: telling them apart is how a guessable id becomes a membership
+    oracle.
+    """
+    try:
+        subjectivity = submissions_repo.get_subjectivity(conn, subjectivity_id)
+    except KeyError:
+        raise _not_here("subjectivity", subjectivity_id, org) from None
+    _owned_submission(conn, org, placement_id, subjectivity.submission_id)
+    return subjectivity

@@ -1,0 +1,53 @@
+{# THIS ASK ANSWERS A MARKET'S CONDITION — the reverse of "ask the client".
+
+   Only the conditions NOBODY HAS ASKED FOR YET are offered. One already
+   attached is not moved from here: re-pointing a market's condition at a
+   different document is a two-step act (take it off, then choose again) on
+   purpose, because doing it in one click is how a condition ends up silently
+   answered by the wrong file.
+
+   NOTHING IS TICKED BY DEFAULT, for the reason the other picker gives: the
+   consequence of ticking wrongly is a market's condition recorded as answered
+   by a document that does not answer it, found at the bind. #}
+<div class="confirm-card" id="item-covers">
+  <form hx-post="{{ action }}" hx-target="#items-panel" hx-swap="outerHTML">
+    <p class="confirm-what">
+      <strong>{{ item.prompt }}</strong> answers…
+    </p>
+
+    {% if error %}<p class="cell-error" role="alert">{{ error }}</p>{% endif %}
+
+    {% if not on_a_placement %}
+      {# A REQUEST WITH NO PLACEMENT HAS NO RENEWAL TO SCOPE TO, and same
+         placement is the hard filter. Said in words rather than shown as an
+         empty list, which reads as "no conditions exist". #}
+      {# STILL A SENTENCE, and it stays: this is a REFUSAL saying why the
+         control is empty and what to do, not a caption explaining a heading.
+         An empty list here would read as "no conditions exist". #}
+      <p class="detail-label">Not on a placement — link it to one first.</p>
+    {% elif unasked %}
+      <fieldset class="confirm-choices">
+        <legend>Not yet asked for</legend>
+        {% for c in unasked %}
+          <label class="confirm-choice">
+            <input type="checkbox" name="covers" value="{{ c.id }}">
+            <span class="market-pill is-warn">{{ c.market }}</span>
+            <span>{{ c.description }}</span>
+            {% if c.due_on %}<span class="detail-label">due {{ c.due_on }}</span>{% endif %}
+          </label>
+        {% endfor %}
+      </fieldset>
+    {% else %}
+      <p class="detail-label">Nothing left to attach.</p>
+    {% endif %}
+
+    <div class="confirm-actions">
+      {% if unasked and on_a_placement %}
+        <button type="submit" class="button-primary">Attach</button>
+      {% endif %}
+      <button type="button" class="row-action-btn"
+              hx-get="{{ cancel }}" hx-target="#items-panel" hx-swap="outerHTML"
+        >cancel</button>
+    </div>
+  </form>
+</div>

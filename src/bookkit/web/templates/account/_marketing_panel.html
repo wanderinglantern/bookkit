@@ -51,10 +51,16 @@
    in the block header, a sort click, or a reload — and the block header says
    so whenever the hold is actually hiding a move. #}
 <section class="marketing" id="{{ marketing.id }}"{% if marketing.sort or marketing.hold %} hx-vals='{"sort": "{{ marketing.sort }}", "hold": "{{ marketing.hold }}"}'{% endif %}{% if marketing.refocus %} data-refocus="{{ marketing.refocus }}"{% endif %}>
+  {# BLOCKING FIRST, AND INSIDE THIS SECTION. It is what is stopping the
+     marketing below it finishing, and it has to be inside the element every
+     write answers with or it goes stale the moment somebody asks the client
+     for something — see `panel`'s own note. #}
+  {% with placement = placement, blocking = marketing.blocking %}
+    {% include "account/_blocking.html" %}
+  {% endwith %}
+
   <header class="marketing-head">
     <h3 class="marketing-title">Marketing</h3>
-    <span class="marketing-caption">What each market has said, by line of
-      coverage — the same grid the marketing workbook downloads.</span>
 
     {# A LINE NOBODY HAS STARTED YET, and a line THE BOOK HAS NEVER CARRIED.
        Without the first the add-market row is unreachable on a fresh

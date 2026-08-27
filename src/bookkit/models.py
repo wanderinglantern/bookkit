@@ -484,6 +484,18 @@ class Subjectivity(Row):
     notes: str | None = None
     created_at: str
     updated_at: str
+    # Migration 021: THE ASK THAT WILL ANSWER THIS CONDITION, where one has
+    # been made. NULL is "nobody has been asked for this yet", which is where
+    # every row recorded before 2026-08-27 honestly starts — the same shape 014
+    # used for `line_id`.
+    #
+    # MANY SUBJECTIVITIES POINT AT ONE ITEM, and the column sits on this side
+    # for that reason: three markets wanting five-year loss runs is ONE
+    # question to the client. RECEIVED IS NOT MET — this records what a
+    # condition is WAITING ON, never that it is satisfied; the client sending
+    # the document does not satisfy the market's condition, and services/rfi.py
+    # owns that distinction.
+    rfi_item_id: str | None = None
     deleted_at: str | None = None
 
 

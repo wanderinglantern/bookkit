@@ -353,6 +353,57 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "revertible; the subjectivities go with it and come back with it, "
         "because every reader of them reaches them through their package."
     ),
+    ("submission_subjectivity", "create"): (
+        ("subjectivity_add",),
+        "WHAT A MARKET REQUIRES BEFORE ITS QUOTE IS BINDABLE. The deferral "
+        "this replaces was right that it is a thin call over a service already "
+        "on main, and right about why it was absent — the surface was being "
+        "restructured elsewhere. It had to arrive WITH subjectivity_ask_client "
+        "on 2026-08-27: that verb promotes a condition that already exists, so "
+        "without a create door an assistant told 'AIG wants loss runs' could "
+        "record nothing, and the whole MCP half of the feature would be "
+        "reachable only for conditions the browser had made first."
+    ),
+    ("submission_subjectivity", "read"): (
+        ("blocking_list",),
+        "WHAT IS BLOCKING THIS PLACEMENT, which is the question a subjectivity "
+        "is an answer to. The deferral said the read 'would be quotes_expiring, "
+        "since a subjectivity matters when the quote under it is running out' — "
+        "that was the right instinct pointed at the wrong list. What a broker "
+        "needs is every condition AND every client ask together, ordered by "
+        "what runs out first, because the interesting row is the condition "
+        "whose answer is already in hand. services/blocking.py composes it once "
+        "for the browser and this tool alike."
+    ),
+    ("submission_subjectivity", "update"): (
+        ("subjectivity_ask_client", "subjectivity_unlink", "request_item_received"),
+        "THREE WRITERS, ONE FIELD EACH, and none of them a generic setter. "
+        "subjectivity_ask_client attaches the condition to the client ask that "
+        "will answer it and subjectivity_unlink takes it back off — the pair "
+        "exists because the picker behind it is ranked by a fuzzy score and a "
+        "wrong attach reads as 'answered', so the way back has to be one act. "
+        "request_item_received settles the ones an arriving answer unblocks, "
+        "as a batch the broker confirms: RECEIVED IS NOT MET, the client "
+        "sending a document does not satisfy a market's condition, so the "
+        "answer surfaces the list and never decides. "
+        "STILL MISSING, and named so it stays visible: settling ONE condition "
+        "on its own, with no ask behind it — the inspection that happened, the "
+        "warranty somebody signed. That is the `settle_subjectivity` verb the "
+        "old deferral described and it is still not built."
+    ),
+    ("rfi_item", "create"): (
+        ("request_item_add", "subjectivity_ask_client"),
+        "THE REAL GAP THE DEFERRAL NAMED, closed 2026-08-27. request_create "
+        "took its items at creation and nothing added one afterwards, so an "
+        "underwriter's follow-up had nowhere to be filed — and a model that "
+        "cannot file it does not stop, it opens a SECOND request to the same "
+        "client about the same renewal, which is the duplication the whole "
+        "feature exists to prevent. Two doors on purpose: request_item_add is "
+        "the plain one, and subjectivity_ask_client is the one to use when the "
+        "ask exists because a MARKET requires it, because that one also records "
+        "WHICH markets are waiting so blocking_list can say the answer clears "
+        "three at once."
+    ),
     ("market_response", "delete"): (
         ("market_response_remove",),
         "A ROW RECORDED IN ERROR, and ONLY that. Every other way a market "
@@ -636,32 +687,10 @@ DEFERRED: dict[tuple[str, str], str] = {
         "Audit rank 10. The body in particular had no way to be corrected on "
         "ANY surface until the TUI's interaction_form was added (review F33)."
     ),
-    ("submission_subjectivity", "create"): (
-        "Not built on purpose: the quote work that created this table was told "
-        "to add no MCP tool, because the surface was being restructured in a "
-        "parallel branch. add_subjectivity is the shape, and it is a thin call "
-        "over services already on main."
-    ),
-    ("submission_subjectivity", "read"): (
-        "Reachable only through the account's Pipeline tab today. quotes_expiring "
-        "is the read that would carry these, since a subjectivity matters when "
-        "the quote under it is running out."
-    ),
-    ("submission_subjectivity", "update"): (
-        "Settling one writes status and satisfied_on together — a transition, "
-        "not a field edit, so it wants its own verb (settle_subjectivity) "
-        "rather than an edit_field kind. Same rule as rfi_item.status."
-    ),
     ("submission_subjectivity", "delete"): (
         "No path anywhere, including the TUI, which offers 'waived' instead — "
         "a subjectivity that stopped applying is a fact worth keeping, not a "
         "row to remove."
-    ),
-    ("rfi_item", "create"): (
-        "REAL GAP. request_create takes its items at creation and nothing "
-        "adds an item to a request that already exists — so an underwriter's "
-        "follow-up question cannot be filed against the request it belongs "
-        "to. The TUI has this ('a' on the items table)."
     ),
     ("opportunity", "delete"): (
         "A deal that went nowhere is marked lost through opportunity_stage, "

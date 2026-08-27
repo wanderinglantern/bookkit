@@ -529,11 +529,18 @@ def _item_row(
             extra_class=_ITEM_CELL_CLASS.get(key, ""), suffix=suffix,
         )
 
+    # HOW MANY MARKETS ARE WAITING ON THIS ASK. Two things read it: the row
+    # prints it, so a broker deciding what to chase can see that one answer
+    # clears three markets; and `Mark received` routes through the confirm
+    # rather than writing straight, because RECEIVED IS NOT MET and the markets
+    # have to be named before anything claims they are satisfied.
+    waiting = len(rfi_svc.unblocked_by(_conn(request), item.id))
     return {
         "id": item.id,
         "kind": item.kind,
         "status": item.status,
         "received_on": item.received_on,
+        "waiting": waiting,
         "prompt_cell": cell("prompt"),
         "category_cell": cell("category"),
         "due_cell": cell("due_on", suffix=_item_due_suffix(item, request_row)),
@@ -594,6 +601,98 @@ async def item_create(request: Request, ref: str, request_id: str) -> HTMLRespon
         lambda values: apply_rfi_item(conn, values, request_id),
     )
     return refused or _items_panel(request, org, request_id, oob=True)
+
+
+# --- the other direction: this ask answers a market's condition ---------------
+#
+# Grant, 2026-08-27, on whether the RFI side gets the reverse control: "Yes.
+# That makes sense." `promote` starts from the condition and finds the ask; this
+# starts from the ask and finds the conditions, because a broker writing an item
+# is just as likely to think "that covers what AIG wanted". Both doors, so
+# neither becomes the one people learn to avoid.
+
+_COVERS = "/accounts/{ref}/requests/{request_id}/items/{item_id}/covers"
+
+
+def _covers_html(
+    request: Request, org: Org, request_id: str, item: Any, *, error: str = ""
+) -> HTMLResponse:
+    conn = _conn(request)
+    request_row = rfi_repo.get_request(conn, request_id)
+    unasked = (
+        rfi_svc.unasked_on(conn, request_row.placement_id)
+        if request_row.placement_id
+        else []
+    )
+    return TEMPLATES.TemplateResponse(
+        request, "account/_item_covers.html",
+        {
+            "header": {"org": org},
+            "item": item,
+            # NAMED BY THE MARKET THAT WANTS IT. "AIG — five-year loss runs" is
+            # what a broker recognises; the description alone reads as a list of
+            # documents with no owner.
+            "unasked": [
+                {"id": s.id, "description": s.description, "market": market,
+                 "due_on": s.due_on or ""}
+                for s, market in unasked
+            ],
+            "on_a_placement": request_row.placement_id is not None,
+            "action": _COVERS.format(
+                ref=org.ref, request_id=request_id, item_id=item.id
+            ),
+            "cancel": f"/accounts/{org.ref}/requests/{request_id}",
+            "error": error,
+        },
+    )
+
+
+@router.get(_COVERS, response_class=HTMLResponse)
+def item_covers_form(
+    request: Request, ref: str, request_id: str, item_id: str
+) -> HTMLResponse:
+    """Which market conditions this ask answers. Writes NOTHING."""
+    org = _org(request, ref)
+    item = _owned_item(_conn(request), org, request_id, item_id)
+    return _covers_html(request, org, request_id, item)
+
+
+@router.post(_COVERS, response_class=HTMLResponse)
+async def item_covers(
+    request: Request, ref: str, request_id: str, item_id: str
+) -> HTMLResponse:
+    """Attach the ticked conditions to this ask, as ONE undo unit.
+
+    Every id goes through `services.rfi.promote`, so the same-placement filter
+    and the refusal on an already-met condition hold identically whichever door
+    was used — a picker that wrote directly would be a second copy of those.
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    item = _owned_item(conn, org, request_id, item_id)
+    form = await request.form()
+    request_row = rfi_repo.get_request(conn, request_id)
+    # RE-DERIVED AND CHECKED. Markup constrains a mouse and nothing else, and
+    # this one writes onto a market's condition.
+    offered = {
+        s.id
+        for s, _ in (
+            rfi_svc.unasked_on(conn, request_row.placement_id)
+            if request_row.placement_id
+            else []
+        )
+    }
+    ticked = [str(v) for v in form.getlist("covers") if str(v) in offered]
+    if not ticked:
+        return _covers_html(
+            request, org, request_id, item,
+            error="nothing was ticked — pick at least one, or cancel",
+        )
+    try:
+        rfi_svc.attach(conn, item_id, ticked, source="web", org_id=org.id)
+    except ValueError as exc:
+        return _covers_html(request, org, request_id, item, error=str(exc))
+    return _items_panel(request, org, request_id)
 
 
 @router.get(
@@ -746,18 +845,74 @@ async def item_cell_save(
     "/accounts/{ref}/requests/{request_id}/items/{item_id}/received",
     response_class=HTMLResponse,
 )
-def item_received(request: Request, ref: str, request_id: str, item_id: str) -> HTMLResponse:
+async def item_received(
+    request: Request, ref: str, request_id: str, item_id: str
+) -> HTMLResponse:
     """Received, dated, in one batch. mark_received writes status AND
-    received_on; the batch is what makes the pair revert together."""
+    received_on; the batch is what makes the pair revert together.
+
+    RECEIVED IS NOT MET (2026-08-27). When market conditions are waiting on
+    this ask, arriving does NOT satisfy them: the client sending loss runs does
+    not satisfy AIG's condition — AIG having them and accepting them does. So
+    the GET below asks first and names every market it would clear, and the
+    broker ticks the ones that have actually been told. Marking them happens
+    INSIDE this batch, because confirming that one document clears three
+    markets was one act and `u` has to put all three back.
+
+    THE PLAIN PATH IS UNCHANGED. An ask no market is waiting on posts straight
+    here with no `met` at all, which is most of them — most RFIs are submission
+    prep, made before a single market saw the risk.
+    """
     org = _org(request, ref)
     conn = _conn(request)
     existing = _owned_item(conn, org, request_id, item_id)
+    form = await request.form()
+    # WHICH CONDITIONS THE BROKER TICKED. Re-checked against what is actually
+    # waiting rather than trusted: markup constrains a mouse and nothing else,
+    # and this one writes "met" onto a market's condition.
+    waiting = {s.id for s in rfi_svc.unblocked_by(conn, item_id)}
+    ticked = [str(v) for v in form.getlist("met") if str(v) in waiting]
     with batches_svc.open_batch(
         conn, source="web", tool="task_done",
         summary=f"received {existing.prompt}", org_id=org.id,
     ):
         rfi_svc.mark_received(conn, item_id, date.today().isoformat())
+        if ticked:
+            rfi_svc.mark_met(
+                conn, ticked, on=date.today().isoformat(), source="web",
+                org_id=org.id,
+            )
     return _items_panel(request, org, request_id)
+
+
+@router.get(
+    "/accounts/{ref}/requests/{request_id}/items/{item_id}/received",
+    response_class=HTMLResponse,
+)
+def item_received_confirm(
+    request: Request, ref: str, request_id: str, item_id: str
+) -> HTMLResponse:
+    """WHAT THIS ANSWER CLEARS, asked before it is claimed. Writes NOTHING.
+
+    Only reached when something is waiting: an ask no market is behind posts
+    straight to the route above, because a confirm with one option and no
+    consequence is friction with no decision inside it.
+    """
+    org = _org(request, ref)
+    conn = _conn(request)
+    existing = _owned_item(conn, org, request_id, item_id)
+    return TEMPLATES.TemplateResponse(
+        request, "account/_item_received_confirm.html",
+        {
+            "header": {"org": org},
+            "item": existing,
+            "waiting": rfi_svc.unblocked_by(conn, item_id),
+            "action": (
+                f"/accounts/{org.ref}/requests/{request_id}/items/{item_id}/received"
+            ),
+            "cancel": f"/accounts/{org.ref}/requests/{request_id}",
+        },
+    )
 
 
 # --- taking back an ask filed in error ----------------------------------------

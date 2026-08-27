@@ -1,0 +1,40 @@
+{# THE ANSWER ARRIVED — AND WHAT IT DOES NOT DO ON ITS OWN.
+
+   RECEIVED IS NOT MET. The client sending five-year loss runs does not satisfy
+   AIG's condition; AIG having them and accepting them does. So this asks which
+   markets have actually been given it, rather than deciding — the market that
+   has not got the file yet is a real case, and the broker is the only one who
+   knows which one that is.
+
+   NOTHING IS TICKED BY DEFAULT, and that is the same rule as every other
+   picker in this book: a value nobody chose is not an answer. The cost of
+   leaving one unticked is one more click later; the cost of ticking it wrongly
+   is a market's condition recorded as satisfied by a document it never
+   received, discovered at the bind. #}
+<div class="confirm-card" id="item-received-confirm">
+  <form hx-post="{{ action }}" hx-target="#items-panel" hx-swap="outerHTML">
+    <p class="confirm-what">
+      Record <strong>{{ item.prompt }}</strong> as received.
+    </p>
+
+    <fieldset class="confirm-choices">
+      <legend>Which markets now have it</legend>
+      {% for s in waiting %}
+        <label class="confirm-choice">
+          <input type="checkbox" name="met" value="{{ s.id }}">
+          <span>{{ s.description }}</span>
+          {% if s.due_on %}
+            <span class="detail-label">due {{ s.due_on }}</span>
+          {% endif %}
+        </label>
+      {% endfor %}
+    </fieldset>
+
+    <div class="confirm-actions">
+      <button type="submit" class="button-primary">Received</button>
+      <button type="button" class="row-action-btn"
+              hx-get="{{ cancel }}" hx-target="#items-panel" hx-swap="outerHTML"
+        >cancel</button>
+    </div>
+  </form>
+</div>
