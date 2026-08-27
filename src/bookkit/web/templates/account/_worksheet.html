@@ -174,45 +174,91 @@
     </div>
   </div>
 
-  <div class="ws-facts">
-    <div class="ws-fact-block">
-      <span class="detail-label">policy</span>
-      <div class="detail-inline">
-        <span class="pair"><span class="pair-k">no</span>{{ ws.policy_cell | safe }}</span>
-        <span class="pair"><span class="pair-k">effective</span>{{ ws.from_cell | safe }}</span>
-        <span class="pair"><span class="pair-k">expiry</span>{{ ws.to_cell | safe }}</span>
-        <span class="pair"><span class="pair-k"
-              title="the carrier audits at expiry and trues the premium up against actual payroll or sales"
-              >auditable</span>{{ ws.tower_cells.auditable | safe }}</span>
-        {% if ws.policy_link_options %}
-          <label class="pair"
-                 title="two layers of one issued policy — WC Part A and Part B are the standard case">
-            <span class="pair-k">same policy as</span>
-            <select class="policy-link" name="policy_group"
-                    aria-label="same policy as"
-                    hx-post="{{ ws.policy_link_action }}"
-                    hx-trigger="change">
-              <option value="">not linked</option>
-              {% for value, name in ws.policy_link_options %}
-                <option value="{{ value }}"
-                        {% if ws.policy_linked_to and value == ws.policy_linked_to[0][0] %}selected{% endif %}>{{ name }}</option>
-              {% endfor %}
-            </select>
-          </label>
-        {% endif %}
-      </div>
-    </div>
+  {# WHAT THIS LAYER SAYS, AND WHAT NOBODY HAS SAID YET — two different
+     things, shown differently since 2026-08-27. This pane holds 17 editable
+     cells and rendered 9 of them as an em-dash with a dashed underline: 53% of
+     the widest column on the page was things nobody had recorded, at the same
+     size and with the same affordance as the figures that decide what a client
+     is covered for. The reader was doing the sorting the page should have done.
 
-    <div class="ws-fact-block">
-      <span class="detail-label">coverage</span>
-      <div class="detail-stack">
-        <span class="pair-k">limits</span>{{ ws.tower_cells.limitsDetail | safe }}
-        <span class="pair-k">retention</span>{{ ws.tower_cells.retentionDetail | safe }}
-        <span class="pair-k" title="the word a ZERO premium prints">premium</span>{{ ws.tower_cells.premiumDetail | safe }}
-        <span class="pair-k" title="statutory jurisdictions — towerkit refuses these on a dollar-limited layer">states</span>{{ ws.tower_cells.states | safe }}
-        <span class="pair-k">notes</span>{{ ws.tower_cells.notes | safe }}
-      </div>
-    </div>
+     THE LABELS COME FROM `_WORKSHEET_FACTS`, not from this file. They were
+     hand-written here beside `ws.tower_cells.<name>` — a second copy of a
+     vocabulary the cell already knows, and the reason the two halves could not
+     be told apart without one. #}
+  <div class="ws-facts">
+    {% for group in ws.facts %}
+      {% set recorded = group.facts | selectattr("recorded") | list %}
+      {% if recorded %}
+        <div class="ws-fact-block">
+          <span class="detail-label">{{ group.label }}</span>
+          <div class="detail-inline">
+            {% for fact in recorded %}
+              <span class="pair"><span class="pair-k"
+                    {% if fact.title %}title="{{ fact.title }}"{% endif %}
+                    >{{ fact.label }}</span>{{ fact.html | safe }}</span>
+            {% endfor %}
+            {% if group.label == "policy" and ws.policy_link_options %}
+              <label class="pair"
+                     title="two layers of one issued policy — WC Part A and Part B are the standard case">
+                <span class="pair-k">same policy as</span>
+                <select class="policy-link" name="policy_group"
+                        aria-label="same policy as"
+                        hx-post="{{ ws.policy_link_action }}"
+                        hx-trigger="change">
+                  <option value="">not linked</option>
+                  {% for value, name in ws.policy_link_options %}
+                    <option value="{{ value }}"
+                            {% if ws.policy_linked_to and value == ws.policy_linked_to[0][0] %}selected{% endif %}>{{ name }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+    {% endfor %}
+
+    {% set blank = ws.facts | map(attribute="facts") | sum(start=[])
+                            | rejectattr("recorded") | list %}
+    {% if blank %}
+      {# IT SAYS HOW MANY AND WHICH, and that is the whole difference between
+         grouping and hiding. A count somebody can read is a summary; an
+         unlabelled chevron is a thing you have to open to find out about. Every
+         cell inside is the same live cell it always was — one click away
+         instead of none, which is the cost, stated. #}
+      <details class="ws-unrecorded">
+        <summary>
+          <span class="ws-unrecorded-count mono">{{ blank | length }}</span>
+          not recorded —
+          <span class="ws-unrecorded-names">
+            {{ blank | map(attribute="label") | join(", ") }}</span>
+        </summary>
+        <div class="ws-unrecorded-body">
+          {% for fact in blank %}
+            <span class="pair"><span class="pair-k"
+                  {% if fact.title %}title="{{ fact.title }}"{% endif %}
+                  >{{ fact.label }}</span>{{ fact.html | safe }}</span>
+          {% endfor %}
+          {% if ws.policy_link_options and not (ws.facts | map(attribute="facts") | sum(start=[]) | selectattr("recorded") | list) %}
+            {# The linker follows the policy group when that group has nothing
+               recorded to sit under, so it is never stranded. #}
+            <label class="pair">
+              <span class="pair-k">same policy as</span>
+              <select class="policy-link" name="policy_group"
+                      aria-label="same policy as"
+                      hx-post="{{ ws.policy_link_action }}"
+                      hx-trigger="change">
+                <option value="">not linked</option>
+                {% for value, name in ws.policy_link_options %}
+                  <option value="{{ value }}"
+                          {% if ws.policy_linked_to and value == ws.policy_linked_to[0][0] %}selected{% endif %}>{{ name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+          {% endif %}
+        </div>
+      </details>
+    {% endif %}
 
     <div class="ws-fact-block">
       <span class="detail-label">named limits</span>

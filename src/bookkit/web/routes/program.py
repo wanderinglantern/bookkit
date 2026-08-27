@@ -601,6 +601,13 @@ def _worksheet_ctx(
         "policy_link_action": f"{base}/policy",
         "policy_link_options": _policy_link_options(layers, layer_id, line_named),
         "policy_linked_to": sync.policy_partners_of(linked.program, layer_id),
+        # THE FACTS, PARTITIONED. The recorded ones print where they always
+        # did; the rest collapse behind one disclosure that says how many and
+        # which (`_worksheet_facts`). `tower_cells` stays because the named
+        # limits and the structure row still read it by name.
+        "facts": _worksheet_facts(
+            request, placement_id, layer, cell, tower_cell, _addr(layer_id, None)
+        ),
         "tower_cells": {
             key.split(".", 1)[1]: tower_cell(
                 "layer", key.split(".", 1)[1], _addr(layer_id, None)
@@ -5054,6 +5061,95 @@ _PLACED: dict[str, _Placed] = {
     "program.render.colorBy": _Placed(tag="span"),
     "program.render.soiSchematic": _Placed(tag="span"),
 }
+
+# --- what this layer says, and what nobody has said yet ---------------------
+#
+# EMPTY WAS BEING DISPLAYED AS PROMINENTLY AS FULL. Measured on the running app
+# (2026-08-27): this pane holds 17 editable cells and renders 9 of them as an
+# em-dash with a dashed underline — 53% of the widest column on the page is
+# things nobody has recorded, shown at the same size, in the same column, with
+# the same affordance as the figures that decide what a client is covered for.
+# The reader was doing the sorting the page should have done.
+#
+# So the recorded facts print where they always did, and the rest collapse
+# behind ONE disclosure that SAYS HOW MANY AND WHICH. That last part is the
+# whole difference between grouping and hiding: a count you can read is a
+# summary, an unlabelled chevron is a thing you have to open to find out about.
+#
+# THE LABELS LIVE HERE NOW. They were hand-written in the template beside
+# `ws.tower_cells.<name>`, which is a second copy of a vocabulary the cell
+# already knows — and it is why the two halves could not be partitioned
+# without one. One declaration, and the template walks it.
+_WORKSHEET_FACTS: tuple[tuple[str, tuple[tuple[str, str, str], ...]], ...] = (
+    (
+        "policy",
+        (
+            ("policy_number", "no", ""),
+            ("period_from", "effective", ""),
+            ("period_to", "expiry", ""),
+            (
+                "layer.auditable",
+                "auditable",
+                "the carrier audits at expiry and trues the premium up "
+                "against actual payroll or sales",
+            ),
+        ),
+    ),
+    (
+        "coverage",
+        (
+            ("layer.limitsDetail", "limits", ""),
+            ("layer.retentionDetail", "retention", ""),
+            ("layer.premiumDetail", "premium", "the word a ZERO premium prints"),
+            (
+                "layer.states",
+                "states",
+                "statutory jurisdictions — towerkit refuses these on a "
+                "dollar-limited layer",
+            ),
+            ("layer.notes", "notes", ""),
+        ),
+    ),
+)
+
+
+def _worksheet_facts(
+    request: Request, placement_id: str, layer: dict[str, Any],
+    cell: Any, tower_cell: Any, addr: str,
+) -> list[dict[str, Any]]:
+    """Each fact with its cell AND whether anybody has recorded it.
+
+    `recorded` is read from the STORED value, never from the rendered cell: a
+    cell prints an em-dash for empty and "no" for a false boolean, and deciding
+    emptiness by looking at the markup would make `auditable: no` — a real
+    answer somebody gave — collapse as though it had never been asked.
+    """
+    groups = []
+    for label, entries in _WORKSHEET_FACTS:
+        facts = []
+        for key, name, title in entries:
+            if key.startswith("layer."):
+                field = key.split(".", 1)[1]
+                value = _field_value(
+                    request, placement_id, "layer", field, layer["id"], None
+                )
+                html = tower_cell("layer", field, addr)
+            else:
+                value = layer.get(key)
+                html = cell(key)
+            facts.append({
+                "key": key,
+                "label": name,
+                "title": title,
+                "html": html,
+                # A LIST IS EMPTY WHEN IT HOLDS NOTHING and False is an ANSWER:
+                # `states` is a list and `auditable` is a bool, so `if value`
+                # alone would have collapsed every "no" ever typed.
+                "recorded": value not in (None, "", [], ()),
+            })
+        groups.append({"label": label, "facts": facts})
+    return groups
+
 
 # --- the facts that arrive together ----------------------------------------
 #

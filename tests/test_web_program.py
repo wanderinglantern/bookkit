@@ -4631,3 +4631,112 @@ def test_the_worksheet_offers_the_form_as_its_one_primary_action(app_and_org):
     assert strip.index("btn-primary") < strip.index("move up"), (
         "the primary action leads the strip"
     )
+
+
+# --- what this layer says, and what nobody has said yet --------------------
+#
+# Measured on the running app (2026-08-27): the worksheet held 17 editable
+# cells and rendered 9 of them as an em-dash with a dashed underline — 53% of
+# the widest column on the page was things nobody had recorded, shown at the
+# same size, in the same column, with the same affordance as the figures that
+# decide what a client is covered for.
+
+
+def _worksheet_of(html: str) -> str:
+    return html.split('class="worksheet"', 1)[1].split('class="ws-controls"', 1)[0] \
+        if 'class="ws-controls"' in html else html
+
+
+def _summary(html: str) -> str:
+    import re
+
+    m = re.search(r'<details class="ws-unrecorded">(.*?)</summary>', html, re.S)
+    assert m, "no unrecorded disclosure on the worksheet"
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()
+
+
+def test_the_unrecorded_facts_collapse_and_say_how_many_and_which(app_and_org):
+    """A COUNT SOMEBODY CAN READ IS A SUMMARY; an unlabelled chevron is a thing
+    you have to open to find out about. That is the whole difference between
+    grouping and hiding, and it is the cost this move has to pay for."""
+    client, org = app_and_org
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    summary = _summary(page)
+
+    assert "not recorded" in summary
+    # every unrecorded fact is NAMED, not just counted
+    for name in ("no", "effective", "expiry"):
+        assert name in summary, f"{name} is collapsed without being named"
+    import re
+
+    count = int(re.search(r"(\d+) not recorded", summary).group(1))
+    assert count >= 1
+
+
+def test_a_collapsed_fact_is_still_a_live_cell(app_and_org):
+    """ONE CLICK AWAY INSTEAD OF NONE — never unreachable. Each cell inside the
+    disclosure is the same cell it always was, posting to the same route."""
+    import re
+
+    client, org = app_and_org
+    page = client.get(f"/accounts/{org.ref}/program").text
+
+    body = re.search(
+        r'<div class="ws-unrecorded-body">(.*?)</details>', page, re.S
+    ).group(1)
+    cells = re.findall(r'data-cell-action="([^"]+)"', body)
+    assert cells, "the disclosure holds no editable cells"
+    for action in cells[:3]:
+        assert client.get(action + "/edit").status_code == 200
+
+
+def test_a_recorded_fact_prints_where_it_always_did(app_and_org):
+    """Only the EMPTY half moves. A fact somebody recorded stays in its group,
+    at full size, because that is the half the page is for."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    client.post(_record_url(org, placement, layer), data=_policy())
+
+    # THE LAYER THAT WAS RECORDED, selected. The worksheet shows one layer at a
+    # time and the default is not necessarily the one this test wrote to.
+    page = client.get(f"/accounts/{org.ref}/program?layer={layer['id']}").text
+
+    shown = page.split('class="ws-facts"', 1)[1].split("ws-unrecorded", 1)[0]
+    assert "GL-99-1234" in shown, "a recorded policy number is not on the face"
+    assert "$25,000 SIR" in shown
+
+
+def test_false_is_an_answer_and_does_not_collapse(app_and_org):
+    """THE TRAP THIS DESIGN HAD TO AVOID. `auditable` is a bool and `states` is
+    a list, so deciding emptiness with a bare truth test would have collapsed
+    every "no" anybody ever typed — an answer somebody gave, filed as a
+    question nobody asked."""
+    client, org = app_and_org
+    conn = client.app.state.conn
+    placement, layer = _first_layer(conn, org)
+    # towerkit publishes auditable as a bool; `false` is a real recorded answer
+    client.post(
+        f"/accounts/{org.ref}/program/{placement.id}/layers/{layer['id']}/record",
+        data=_policy(**{"layer.auditable": "false"}),
+    )
+
+    page = client.get(f"/accounts/{org.ref}/program?layer={layer['id']}").text
+
+    assert "auditable" not in _summary(page), (
+        "a recorded 'no' was collapsed as though it had never been asked"
+    )
+
+
+def test_the_labels_come_from_one_declaration(app_and_org):
+    """They were hand-written in the template beside `ws.tower_cells.<name>` —
+    a second copy of a vocabulary the cell already knows, and the reason the
+    two halves could not be told apart without one."""
+    from bookkit.web.routes.program import _PLACED, _WORKSHEET_FACTS
+
+    keys = [key for _group, entries in _WORKSHEET_FACTS for key, _l, _t in entries]
+    assert len(keys) == len(set(keys)), "a fact is declared twice"
+    for key in keys:
+        if key.startswith("layer."):
+            assert key in _PLACED, f"{key} is not a field this page can edit"
