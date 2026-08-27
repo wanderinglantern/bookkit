@@ -1,7 +1,7 @@
 # 2026-08-27 — The composite rate, and the umbrella that had no door
 
-**Status: MERGED AND PUSHED.** bookkit `main` = `origin/main` = `1625b18`;
-towerkit `main` = `origin/main` = `58d8dad`. Nothing ahead on any branch, both
+**Status: MERGED AND PUSHED.** bookkit `main` = `origin/main` = `238de71`;
+towerkit `main` = `origin/main` = `c3d65d5`. Nothing ahead on any branch, both
 feature worktrees removed. Gates green on both repos (bookkit 2,751 tests,
 towerkit 1,268; mypy + ruff clean).
 
@@ -111,21 +111,41 @@ items above; all four landed together.
 `survivor` param. The page's market used to die by construction. The confirm's
 counts are the loser's; the detail button is "Merge with…".
 
-## Open, reported not fixed
+---
 
-1. **Two IDENTICAL follows-underlying layers on one line validate clean** and
-   draw on top of each other — `_check_line_stack` exempts a follows layer as
-   the upper of the pair and the exemption is too broad. The fix is in
-   `Program.underlying_tops`, which cannot see follows layers at all, and it
-   reaches every drawing. Written up beside
-   `tests/test_web_program_diagnostics.py::_break_it`, which met it.
-2. **There is no MCP merge tool** for markets or placements. A missing verb is
-   not a refusal (CLAUDE.md); `mcpparity.py` is where its absence should show.
-3. **Merge makes the loser's name an ALIAS of the survivor.** If a market like
-   "AIG Environmental" is a real sub-unit rather than a duplicate record,
-   `Nest under…` is the control, not merge. Worth saying to Grant each time.
-4. Six worktrees from earlier sessions sit in `.claude/worktrees/`, all level
-   with main, awaiting Grant's go-ahead to remove.
+## Piece 5 — the two open items, closed (`3141087`, `9fd9b0c`, towerkit `c3d65d5`)
+
+Grant: *"Fix what needs to be fixed."*
+
+**`line-follows-shared`** (towerkit). Two layers that both follow underlying
+occupy the same band ALWAYS — `underlying_tops` is built from the non-following
+layers alone, so neither can be seated on the other. The old exemption was for
+the upper LAYER where it should have been for the PAIR, and narrowing it
+uncovered a second real overlap it had hidden (a buffer pinned inside the band
+a following umbrella seats into). `underlying_tops` did NOT need changing,
+which is what kept this off every drawing.
+
+**The interaction to remember:** `heal_spanning_seats` runs on every write, and
+turning a slab's follows OFF is how a program already in the refused state is
+corrected. Without its new guard the heal put the flag straight back on and the
+file could never be edited again. A HEAL MUST NEVER RE-CREATE WHAT THE
+VALIDATOR REFUSES.
+
+**`market_merge` on MCP.** `keep` / `fold_in`, never source/target. Batch
+stamped `merge_markets` like the other two surfaces — declared as a named
+exception in `test_mcpserver._BATCH_TOOL` rather than left to be found. Revert
+driven end to end: the alias comes back with the restored org because it lands
+as a `carrier_alias` event on the survivor, which is what `_TOUCHES` records.
+
+**The merge confirm names nesting.** The alias is what makes a merge safe for
+towers and what makes it wrong for a real sub-unit; nothing in the data can
+tell those apart, so the other door is named where the decision is made.
+
+## Open
+
+Nothing from this round. All worktrees removed; 67 merged local branches remain
+in bookkit (all at 0 ahead of main) and could be pruned with `git branch -d` —
+not done, because it was not asked for.
 
 ## Verification notes
 
