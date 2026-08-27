@@ -844,6 +844,27 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         )
 
     @server.tool()
+    async def market_merge(keep: str, fold_in: str) -> dict[str, Any]:
+        """Fold a duplicate market record into the real one. Both are the
+        exact name or ref from markets_list, and BOTH must be given: `keep`
+        survives, `fold_in` is soft-deleted and everything on it moves —
+        contacts, appetite, submissions, information requests, interactions,
+        documents and aliases.
+
+        THE FOLDED-IN NAME BECOMES AN ALIAS of the one kept, so every tower
+        spelling that created the duplicate keeps resolving. That is what makes
+        the merge safe, and it is also the reason NOT to use this on two
+        markets that are genuinely different: if 'AIG Environmental' is a real
+        underwriting unit rather than a second record for AIG, the verb is
+        nesting — set its parent with edit_field(kind='org',
+        field='parent_org_id') — which keeps both and records the family.
+
+        It lands as ONE change that `revert` undoes, which is the only way back:
+        there is no confirm step on this surface. Say the two names back to
+        Grant before calling it."""
+        return _market_merge(rw, keep, fold_in)
+
+    @server.tool()
     async def market_approach(
         placement_ref: str,
         line: str,
@@ -3863,6 +3884,51 @@ def _market_edit(
         "market_ref": target.ref,
         "name": target.name,
         **_market_facts(orgs.get_market_profile(conn, target.id)),
+        "batch": batch.ref,
+    }
+
+
+def _market_merge(conn: sqlite3.Connection, keep: str, fold_in: str) -> dict[str, Any]:
+    """Fold one market record into another. NAMED FOR THE DIRECTION, both of
+    them, because that is the only thing about this call that can be got wrong
+    in a way nothing catches.
+
+    `mcpparity` says twice that MERGE is the honest verb for retiring a market
+    — under ('org', 'delete') and under ('market_profile', 'delete') — and
+    there was no tool for it. A MISSING VERB IS NOT A REFUSAL, IT IS A WRONG
+    WRITE (CLAUDE.md): a model asked to tidy two records for one carrier does
+    not stop at a wall the way a person does, it finds the nearest door, and
+    the nearest doors here are renaming one of them (which strands nothing but
+    leaves two rows a lookup can land on) or deactivating it (which strands
+    every submission, response and appetite row pointing at it).
+
+    `source`/`target` would have been the wrong argument names for the same
+    reason the browser's form stopped assuming a direction on 2026-08-27: this
+    soft-deletes an org and moves everything off it, and which one dies is not
+    something to infer from a position.
+    """
+    from .services.merge import merge_markets
+
+    survivor = _resolve_market(conn, keep)
+    doomed = _resolve_market(conn, fold_in)
+    if survivor.id == doomed.id:
+        raise ValueError(
+            f"{survivor.name} cannot be merged into itself — `keep` and "
+            f"`fold_in` must name two different markets"
+        )
+    with _open_batch(
+        conn, tool="merge_markets", org_id=survivor.id,
+        summary="merged two markets",
+    ) as batch:
+        result = merge_markets(conn, doomed.id, survivor.id)
+    return {
+        "market_ref": result.target.ref,
+        "kept": result.target.name,
+        "folded_in": result.alias_added,
+        "alias_added": result.alias_added,
+        "moved_contacts": result.moved_contacts,
+        "moved_appetite": result.moved_appetite,
+        "moved_submissions": result.moved_submissions,
         "batch": batch.ref,
     }
 

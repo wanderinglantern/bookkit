@@ -1057,3 +1057,76 @@ def test_an_item_kind_the_book_does_not_have_is_refused(conn) -> None:
 
     with pytest.raises(ValueError, match="kind must be one of"):
         mcpserver._request_item_add(conn, made["request_ref"], "X", kind="telepathy")
+
+
+# --- merging two records for one market ------------------------------------
+
+
+def test_market_merge_folds_one_into_the_other_and_keeps_the_name_resolving(
+    conn,
+) -> None:
+    """A MISSING VERB IS NOT A REFUSAL, IT IS A WRONG WRITE (CLAUDE.md). The
+    ledger said twice that MERGE is the honest verb for retiring a market and
+    there was no tool for it — so an assistant asked to tidy two records for
+    one carrier had only renaming one (which leaves two rows a lookup can land
+    on) or deactivating it (which strands every submission pointing at it)."""
+    from bookkit.repo import aliases, orgs
+
+    mcpserver._market_create(conn, "Hartwell Mutual")
+    mcpserver._market_create(conn, "Hartwell Mut.")
+
+    out = mcpserver._market_merge(
+        conn, keep="Hartwell Mutual", fold_in="Hartwell Mut."
+    )
+
+    keeper = orgs.find_market(conn, "Hartwell Mutual")
+    assert keeper is not None
+    assert out["kept"] == "Hartwell Mutual"
+    assert out["folded_in"] == "Hartwell Mut."
+    assert orgs.find_market(conn, "Hartwell Mut.") is None
+    # THE FOLDED-IN NAME BECOMES AN ALIAS, which is what makes the merge safe
+    # for towers: every spelling that created the duplicate keeps resolving.
+    assert aliases.resolve(conn, "Hartwell Mut.") == keeper.id
+    assert out["batch"].startswith("MCP-")
+
+
+def test_market_merge_names_the_direction_and_refuses_a_self_merge(conn) -> None:
+    """`keep` and `fold_in`, never source/target — which of the two dies is
+    the only thing about this call that can be got wrong in a way nothing
+    catches, and it is not something to infer from a position."""
+    mcpserver._market_create(conn, "Hartwell Mutual")
+
+    with pytest.raises(ValueError, match="cannot be merged into itself"):
+        mcpserver._market_merge(
+            conn, keep="Hartwell Mutual", fold_in="Hartwell Mutual"
+        )
+
+
+def test_market_merge_refuses_a_name_the_book_does_not_know(conn) -> None:
+    """The refusal names the door, the same as every other market miss."""
+    mcpserver._market_create(conn, "Hartwell Mutual")
+
+    with pytest.raises(ValueError, match="no market matching"):
+        mcpserver._market_merge(conn, keep="Hartwell Mutual", fold_in="Nobody Re")
+
+
+def test_reverting_a_merge_hands_the_name_back(conn) -> None:
+    """ONE CALL, ONE UNDO UNIT — and it has to be whole. Restoring the emptied
+    market while its NAME still resolved to the one it was folded into would
+    leave every later lookup landing on the wrong org."""
+    from bookkit.repo import aliases, orgs
+    from bookkit.services import batches
+
+    mcpserver._market_create(conn, "Hartwell Mutual")
+    mcpserver._market_create(conn, "Hartwell Mut.")
+    out = mcpserver._market_merge(
+        conn, keep="Hartwell Mutual", fold_in="Hartwell Mut."
+    )
+
+    # `now` is a STRING here and never the wall clock — services.batches.revert
+    # takes the timestamp it stamps its own writes with.
+    batches.revert(conn, out["batch"], "2026-08-27T09:00:00+00:00")
+
+    restored = orgs.find_market(conn, "Hartwell Mut.")
+    assert restored is not None
+    assert aliases.resolve(conn, "Hartwell Mut.") == restored.id

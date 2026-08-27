@@ -2213,8 +2213,27 @@ def heal_spanning_seats(program: Program) -> None:
     narrowing a spanning slab is no reason to pin it (the same set-only rule
     `_reseat_column` follows).
     """
+    # WHICH LINES ALREADY CARRY A FOLLOWING SLAB. Seating a second one onto
+    # any of them is refused by towerkit (`line-follows-shared`): two layers
+    # that both follow are seated on the same figure and occupy the same band,
+    # because `underlying_tops` is built from the NON-following layers alone.
+    #
+    # WITHOUT THIS THE HEAL UNDOES ITS OWN FIX. Turning a slab's
+    # follows-underlying OFF is exactly how a program already in that state is
+    # corrected — and that correction is a write, and this runs on every
+    # write, and it would put the flag straight back on. The file could then
+    # never be edited again, which is the `line-gap` wedge in another costume
+    # (CLAUDE.md). A heal must never re-create the thing the validator refuses.
+    taken = {
+        lid
+        for ly in program.layers
+        if ly.follows_underlying and ly.limit > 0 and not ly.statutory
+        for lid in ly.applies_to
+    }
     for layer in program.layers:
         if layer.follows_underlying or len(layer.applies_to) < 2:
+            continue
+        if any(lid in taken for lid in layer.applies_to):
             continue
         if layer.attach <= 0 or layer.statutory:
             # A SLAB AT THE GROUND IS NOT SEATED ON ANYTHING. At $0 the pin
