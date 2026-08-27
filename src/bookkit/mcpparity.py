@@ -50,13 +50,24 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "candidates. An account is never fuzzy-matched into a write.",
     ),
     ("org", "update"): (
-        ("edit_field", "enrich_field"),
+        ("edit_field", "enrich_field", "market_merge"),
         "edit_field is compare-and-set over the derived field set "
         "(mcpsurface); enrich_field is the same set, fill-blanks-only. "
         "org.kind is denied — see mcpsurface.DENIED. `name` became writable "
         "with the derivation and arrived with no duplicate guard, which let "
         "a rename point _resolve_client at the wrong account; repo/orgs."
-        "guard_name owns that now, so the TUI and the web inherit it too.",
+        "guard_name owns that now, so the TUI and the web inherit it too. "
+        "`market_merge` is an update and not a delete, and belongs here for "
+        "that reason: it moves every child of one market onto another and "
+        "soft-deletes the emptied row, which is what the two DEFERRED delete "
+        "cells below already call 'the honest verb'. It was missing entirely "
+        "until 2026-08-27 — and a missing verb is not a refusal, it is a "
+        "wrong write (CLAUDE.md): asked to tidy two records for one carrier, "
+        "the nearest doors were renaming one (leaving two rows a lookup can "
+        "land on) or deactivating it (stranding every submission pointing at "
+        "it). Named for the DIRECTION, `keep` and `fold_in`, because which "
+        "one dies is not something to infer from a position — the same "
+        "correction the browser's form took the same day.",
     ),
     # --- market_profile: what a market IS ---
     #
@@ -594,7 +605,8 @@ DEFERRED: dict[tuple[str, str], str] = {
         "the org's own id (migration 017) — so deleting it means retiring the "
         "market, which strands every submission, response, appetite row and "
         "underwriter pointing at it. The honest verb there is MERGE, which "
-        "moves the references first. (`market_edit` sets these two facts and does "
+        "moves the references first, and it exists now: `market_merge`. "
+        "(`market_edit` sets these two facts and does "
         "not clear either back to blank — an omitted argument means 'leave it "
         "alone', which is the reading a partial update needs; unsetting one is "
         "a real gap and a small one.)"
@@ -659,8 +671,9 @@ DEFERRED: dict[tuple[str, str], str] = {
     ("org", "delete"): (
         "DECISION, not a gap. Removing an account cascades through "
         "placements, programs, contacts and history, and the TUI has no "
-        "delete either (merge is the closest thing). Nothing should be able "
-        "to do this in one call."
+        "delete either. Nothing should be able to do this in one call. The "
+        "closest honest thing is `market_merge`, filed under ('org', "
+        "'update'), which moves the references before the emptied row goes."
     ),
     ("placement", "create"): (
         "DECISION. Placements are read-only to the assistant; a program is "

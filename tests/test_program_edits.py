@@ -1536,3 +1536,94 @@ def test_a_statutory_bar_over_two_lines_is_never_seated() -> None:
     sync.heal_spanning_seats(program)
 
     assert program.layers[0].follows_underlying is False
+
+
+def test_the_heal_never_seats_a_second_slab_onto_a_following_line() -> None:
+    """A HEAL MUST NEVER RE-CREATE WHAT THE VALIDATOR REFUSES.
+
+    towerkit refuses two layers that both follow underlying on one line
+    (`line-follows-shared`): neither can be seated on the other, because
+    `underlying_tops` is built from the non-following layers alone, so both
+    land on the same figure and draw over each other.
+
+    Turning a slab's follows-underlying OFF is exactly how a program already
+    in that state is corrected — and that correction is a write, and this heal
+    runs on every write. Without the guard it would put the flag straight back
+    on and the file could never be edited again: the `line-gap` wedge in
+    another costume."""
+    from datetime import date
+
+    from towerkit.model import Layer, Line, Period, Program
+    from towerkit.model import Placement as TkPlacement
+
+    def umbrella(id: str, follows: bool) -> Layer:
+        return Layer(
+            id=id, name=id, applies_to=["gl", "al"], attach=2_000_000,
+            limit=25_000_000, follows_underlying=follows, participants=[],
+        )
+
+    program = Program(
+        insured="Test Client, Inc.", program="Casualty",
+        placement=TkPlacement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="gl", name="GL"), Line(id="al", name="Auto")],
+        layers=[
+            Layer(id="pgl", name="Primary GL", applies_to=["gl"], attach=0,
+                  limit=2_000_000, participants=[]),
+            Layer(id="pal", name="Primary Auto", applies_to=["al"], attach=0,
+                  limit=2_000_000, participants=[]),
+            umbrella("umb-1", follows=True),
+            # the one just corrected: spanning, seats where it already sits,
+            # and every other condition for the heal is met
+            umbrella("umb-2", follows=False),
+        ],
+    )
+
+    sync.heal_spanning_seats(program)
+
+    fixed = next(ly for ly in program.layers if ly.id == "umb-2")
+    assert fixed.follows_underlying is False, "the heal undid the fix"
+    # ...and the program towerkit would be handed is one it accepts
+    from towerkit.validate import validate_program
+
+    assert not [
+        d for d in validate_program(program).errors
+        if d.code == "line-follows-shared"
+    ]
+
+
+def test_a_file_arriving_with_two_following_slabs_is_refused_by_name() -> None:
+    """It cannot be reached through bookkit — every write validates — so the
+    door it comes through is a hand-edited or externally-authored file, and
+    the refusal has to say what is wrong rather than just failing to adopt."""
+    from datetime import date
+
+    from towerkit.model import Layer, Line, Participant, Period, Program
+    from towerkit.model import Placement as TkPlacement
+    from towerkit.validate import validate_program
+
+    def umbrella(id: str, carrier: str) -> Layer:
+        return Layer(
+            id=id, name=id, applies_to=["gl"], attach=2_000_000, limit=25_000_000,
+            follows_underlying=True,
+            participants=[Participant(carrier=carrier, share_bps=10_000)],
+        )
+
+    program = Program(
+        insured="Test Client, Inc.", program="Casualty",
+        placement=TkPlacement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="gl", name="General Liability")],
+        layers=[
+            Layer(id="pgl", name="Primary GL", applies_to=["gl"], attach=0,
+                  limit=2_000_000,
+                  participants=[Participant(carrier="Zurich", share_bps=10_000)]),
+            umbrella("umb-1", "Swiss Re"),
+            umbrella("umb-2", "Chubb"),
+        ],
+    )
+
+    errors = validate_program(program).errors
+    shared = [d for d in errors if d.code == "line-follows-shared"]
+    assert len(shared) == 1
+    assert "umb-1" in shared[0].message and "umb-2" in shared[0].message

@@ -1201,6 +1201,14 @@ _BATCHED_WRITES = {
         mcpserver._market_edit(
             rw, "Hartwell Mutual", market_type="carrier", am_best_rating="A-"),
     )[1],
+    # TWO MARKETS, both real, folded one way round. `keep` and `fold_in` are
+    # named for the DIRECTION because which of the two dies is the only thing
+    # about this call that can be got wrong in a way nothing catches.
+    "market_merge": lambda rw, tmp: (
+        mcpserver._market_create(rw, "Hartwell Mutual"),
+        mcpserver._market_create(rw, "Hartwell Mut."),
+        mcpserver._market_merge(rw, keep="Hartwell Mutual", fold_in="Hartwell Mut."),
+    )[2],
     "market_approach": lambda rw, tmp: _an_approach(rw),
     "market_assign_line": lambda rw, tmp: mcpserver._market_assign_line(
         rw, _a_bare_package(rw), "General Liability"),
@@ -1321,6 +1329,14 @@ _TOUCHES = {
     # `market_profile`, which is the whole reason this is a verb and not two
     # more edit_field columns (mcpsurface.NOT_A_COLUMN says so by name).
     "market_edit": {"market_profile"},
+    # ORG ONLY, and that is the answer rather than an omission. A merge does
+    # write the alias that keeps every tower spelling resolving, but it lands
+    # as a `carrier_alias` event on the SURVIVING ORG, not on the alias table
+    # — which is what makes the revert whole: undoing the batch restores the
+    # emptied market AND hands the name back to it (driven end to end,
+    # 2026-08-27; without the org-side event the restored market would keep
+    # resolving to the one it was folded into).
+    "market_merge": {"org"},
     # the submission is filed by the same call — see mcpparity's submission
     # cells, which say why that is a consequence and not a submission verb
     "market_approach": {"submission", "market_response"},
@@ -1389,6 +1405,17 @@ def test_the_write_tool_roster_is_accounted_for(tmp_path):
     assert set(_TOUCHES) == set(_BATCHED_WRITES), "write tool with no _TOUCHES entry"
 
 
+# MCP tool name -> the batch's `tool`, where the two deliberately differ.
+#
+# ONE ACT, ONE NAME IN THE CHANGE LOG. A market merge is reachable from three
+# surfaces and the changes list is read by one person; naming the batch after
+# whichever door was used would put two names on one act. The web route and
+# tui/screens/markets.py both stamp `merge_markets`, so MCP does too — and the
+# exception is declared here rather than left to be discovered, which is what
+# this roster is for.
+_BATCH_TOOL = {"market_merge": "merge_markets"}
+
+
 @pytest.mark.parametrize("tool", sorted(_BATCHED_WRITES))
 def test_every_write_tool_returns_a_batch_ref(tool, server_db, tmp_path):
     """One MCP call is one undo unit, on all twenty-six of them. This checked
@@ -1402,7 +1429,7 @@ def test_every_write_tool_returns_a_batch_ref(tool, server_db, tmp_path):
     # a real row, stamped by this surface, not a string that merely looks right
     batch = batches_repo.get_by_ref(rw, out["batch"])
     assert batch.source == "mcp"
-    assert batch.tool == tool
+    assert batch.tool == _BATCH_TOOL.get(tool, tool)
 
 
 @pytest.mark.parametrize("tool", sorted(_BATCHED_WRITES))
