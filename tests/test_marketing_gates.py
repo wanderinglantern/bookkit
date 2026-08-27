@@ -797,11 +797,15 @@ def test_g3e_a_line_of_coverage_id_cannot_break_the_sort_spec(conn) -> None:
         [
             f"line id {made!r} contains a sort-spec separator — a typed "
             f"name reached the wire format"
-            for sep in (":", ",")
+            for sep in (":", ",", ".")
             if sep in made
         ],
         "a line of coverage id can break the sort spec:",
     )
+    # `.` joins the row ids in the HOLD spec, which shares this attribute and
+    # this parser's shape. A line id carrying one would split a pin into two
+    # lines nobody named — asserted here rather than in its own test, because
+    # it is the same claim about the same slug.
 
 
 def _client_headers() -> tuple[str, ...]:

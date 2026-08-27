@@ -33,8 +33,24 @@
 
    `marketing_grid.panel` re-formats it from what it actually APPLIED, never
    from what arrived, so this attribute cannot claim an order the grid is not
-   in. #}
-<section class="marketing" id="{{ marketing.id }}"{% if marketing.sort %} hx-vals='{"sort": "{{ marketing.sort }}"}'{% endif %}{% if marketing.refocus %} data-refocus="{{ marketing.refocus }}"{% endif %}>
+   in.
+
+   `hold` RIDES THE SAME ATTRIBUTE and is the order that is on screen right
+   now — the rows, by id, in the order this render drew them. THE GRID
+   RE-SORTS WHEN YOU LOAD IT, NOT WHILE YOU USE IT (Grant, 2026-08-27: "as I
+   am updating status, the grid moves with the item"). The default order is
+   status-first and a status write re-composes the whole block, so without
+   this, setting one market's status re-sorts the block under the hand setting
+   it — measured at six of nine rows moving on a single write, the edited row
+   travelling from position 8 to position 3.
+
+   It is published on EVERY render rather than only while something is being
+   worked, because the server cannot tell "reading" from "working" and does
+   not need to: a page load is the read, and everything after it is work. A
+   reader who wants the new order asks for it out loud — the `reorder` control
+   in the block header, a sort click, or a reload — and the block header says
+   so whenever the hold is actually hiding a move. #}
+<section class="marketing" id="{{ marketing.id }}"{% if marketing.sort or marketing.hold %} hx-vals='{"sort": "{{ marketing.sort }}", "hold": "{{ marketing.hold }}"}'{% endif %}{% if marketing.refocus %} data-refocus="{{ marketing.refocus }}"{% endif %}>
   <header class="marketing-head">
     <h3 class="marketing-title">Marketing</h3>
     <span class="marketing-caption">What each market has said, by line of

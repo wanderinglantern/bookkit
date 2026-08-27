@@ -353,7 +353,16 @@
     if (!row) return;
     var cell = row.querySelector('.cell[data-field="' + CSS.escape(field) + '"]');
     if (cell) {
-      cell.focus();
+      // WITHOUT MOVING THE READER. A bare `focus()` scrolls the element into
+      // view, and on the marketing grid the cell it is putting the caret back
+      // on may have MOVED — the row it lives in gets re-ordered by the very
+      // write that is being answered (services.marketing_report.order_rows).
+      // So the caret going home dragged the viewport after it, which is
+      // exactly the "screen jumping around" this and the order hold were
+      // reported together as (Grant, 2026-08-27). scroll-keep.js puts the
+      // window back afterwards either way; not scrolling in the first place
+      // is the difference between a jump that gets corrected and no jump.
+      cell.focus({ preventScroll: true });
       if (wrote) flashSaved(cell);
     }
   }

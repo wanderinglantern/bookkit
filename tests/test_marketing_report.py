@@ -9,6 +9,7 @@ Six markets, one of them reached through a wholesaler, covering every status.
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import fields
 from datetime import date
 
 import pytest
@@ -872,3 +873,101 @@ def test_the_rate_column_is_wide_enough_for_the_words_it_prints() -> None:
     )
     longest = max(len(note) for note in marketing_report.REFUSAL_NOTES)
     assert width >= longest, "the column clips the sentence it exists to print"
+
+
+# --- holding the order while it is being worked ------------------------------
+
+
+def _rows(*pairs: tuple[str, str]) -> tuple[marketing_report.ReportRow, ...]:
+    """Report rows carrying only what `order_rows` reads: an id and a status."""
+    made = []
+    for response_id, status_key in pairs:
+        made.append(
+            marketing_report.ReportRow(
+                **{
+                    **{f.name: None for f in fields(marketing_report.ReportRow)},
+                    "response_id": response_id,
+                    "submission_id": f"sub-{response_id}",
+                    "line_id": "general-liability",
+                    "market": response_id,
+                    "status_key": status_key,
+                    "status": status_key,
+                }
+            )
+        )
+    return tuple(made)
+
+
+def test_a_pinned_order_survives_the_write_that_would_re_sort_it() -> None:
+    """ENTRY ORDER IS NOT READING ORDER. The default order is status first, so
+    the row whose status was just set leaps to the top and drags every row
+    between with it — under the hand that is setting it."""
+    rows = _rows(("a", "pending"), ("b", "quoted"), ("c", "pending"))
+
+    assert [r.response_id for r in marketing_report.order_rows(rows)] == [
+        "b", "a", "c"
+    ], "the default really is status first — the premise of the whole rule"
+
+    held = marketing_report.order_rows(rows, pinned=("a", "b", "c"))
+
+    assert [r.response_id for r in held] == ["a", "b", "c"]
+
+
+def test_a_pin_outranks_the_column_because_it_is_a_snapshot_of_it() -> None:
+    """A reader sorted by a column who then edits that column is being held in
+    the order they were reading. Re-sorting under them is the same defect
+    wearing the sorted order instead of the default one."""
+    rows = _rows(("a", "pending"), ("b", "quoted"))
+
+    sorted_only = marketing_report.order_rows(rows, "status", False)
+    held = marketing_report.order_rows(rows, "status", False, pinned=("a", "b"))
+
+    assert [r.response_id for r in sorted_only] == ["b", "a"]
+    assert [r.response_id for r in held] == ["a", "b"]
+
+
+def test_a_row_the_pin_never_saw_falls_to_the_end() -> None:
+    """THE SAME RULE AS AN UNKNOWN FIGURE. A pin is a claim about what was
+    RENDERED, so it cannot place a row approached since — and inventing a
+    position for it would be worse than the honest one."""
+    rows = _rows(("a", "pending"), ("b", "bound"), ("c", "pending"))
+
+    held = marketing_report.order_rows(rows, pinned=("c", "a"))
+
+    assert [r.response_id for r in held] == ["c", "a", "b"], (
+        "the bound row would LEAD the default order; pinned rows keep their "
+        "places and the one the pin never saw goes last"
+    )
+
+
+def test_a_stale_id_in_a_pin_is_simply_not_found() -> None:
+    """Nothing a bad pin can do except fail to hold. It arrives in a URL, so
+    anything can send anything — and it only ever reorders rows the composer
+    already produced."""
+    rows = _rows(("a", "pending"), ("b", "quoted"))
+
+    held = marketing_report.order_rows(rows, pinned=("gone", "a", "b"))
+
+    assert [r.response_id for r in held] == ["a", "b"]
+
+
+def test_a_hold_that_agrees_with_the_order_is_not_worth_a_marker() -> None:
+    """THE MARKER CLEARS ITSELF. `held` is False on a fresh render and False
+    again the moment the canonical order agrees, so nobody has to dismiss it."""
+    rows = _rows(("a", "quoted"), ("b", "pending"))
+
+    assert marketing_report.out_of_order(rows, "", False, ()) is False
+    assert marketing_report.out_of_order(rows, "", False, ("a", "b")) is False
+    assert marketing_report.out_of_order(rows, "", False, ("b", "a")) is True
+
+
+def test_the_hold_spec_round_trips_and_drops_what_it_cannot_read() -> None:
+    from bookkit.web.marketing_grid import format_holds, parse_holds
+
+    spec = format_holds({"auto": ("c",), "general-liability": ("a", "b")})
+
+    assert spec == "auto:c,general-liability:a.b", "sorted by line id, stably"
+    assert parse_holds(spec) == {"auto": ("c",), "general-liability": ("a", "b")}
+    assert parse_holds("nonsense") == {}
+    assert parse_holds("auto:") == {}
+    assert parse_holds("") == {}

@@ -3246,6 +3246,31 @@ tr:hover .market .chip-remove {
   color: var(--warn);
 }
 
+/* THE ORDER IS BEING HELD, said where the order is — in the block header,
+   beside the line of coverage whose rows are held. Muted rather than warned:
+   holding the order is the CORRECT behaviour while a broker works the column,
+   not a fault to be alarmed about, and a marker that shouts would be its own
+   version of the movement this feature exists to stop. The `reorder` button
+   beside it is the way out and takes the accent on hover like every other
+   row action. */
+.marketing-held {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.375rem;
+}
+
+/* WHAT IS INTERACTIVE LOOKS INTERACTIVE. `reorder` sits inside a sentence, so
+   without a rule under it the control reads as the last word of the sentence —
+   "order held while you work reorder" — and the one way out of the hold is
+   invisible. Underlined rather than coloured at rest for the reason the row
+   actions are muted: this is a quiet marker, not a warning. */
+.marketing-held .row-action-btn {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
 /* The header facts are a GROUP, one kind of fact, so they sit on their own
    line under the line-of-coverage name rather than running on from it —
    proximity is what tells a reader where one kind of fact ends (the layer
