@@ -163,7 +163,13 @@
        2026-08-26). A submission with no response rows is real marketing that
        happened, and it renders here. #}
     {% if marketing.provisional %}
-      {{ provisional_block(marketing.provisional, marketing.columns) }}
+      {# ITS OWN COLUMNS, NOT THE GRID'S. `marketing.columns` is the
+         twenty-column comparison set; a package with no line of coverage can
+         state ten of them and the other ten were printed blank, which pushed
+         this block's row controls 689px past the right edge of their own
+         scroller at a 1600px window — measured on the running app, 2026-08-27.
+         `marketing_grid.PROVISIONAL_COLUMNS` says the rest. #}
+      {{ provisional_block(marketing.provisional, marketing.provisional.columns) }}
     {% endif %}
   {% else %}
     {# NOT `.panel-empty`, whose 2.5rem of air is right for a tab body that

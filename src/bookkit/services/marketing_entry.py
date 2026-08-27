@@ -522,3 +522,59 @@ def reinstate(conn: sqlite3.Connection, submission_id: str) -> Submission:
     # from the rows like any other package's. A no-op where nothing moved.
     marketing.roll_up_submission(conn, submission_id)
     return submissions_repo.get(conn, submission_id)
+
+
+# --- an approach recorded in error -------------------------------------------
+#
+# THE PAIR THE RESPONSE ROW ALREADY HAS, one level up. `market_response_remove`
+# erases a row that records marketing which did not happen; this erases the
+# PACKAGE that records an approach which did not happen. Everything that
+# distinguishes the two from a status is the same argument: 'declined' is what
+# a market said, 'not_viable' is what we decided, `withdraw` is that we pulled
+# it — every one of them a claim that we went to that market — and a mistyped
+# carrier, a duplicate approach or a package filed against the wrong client is
+# none of those, because no marketing occurred.
+#
+# IT SUPERSEDES A DEFERRAL, and the deferral was right about what it was
+# looking at: mcpparity's ("submission", "delete") said "a submission that went
+# out is a fact about the market and probably should never be removable
+# anyway; 'withdrawn' is already a status". That holds for every package this
+# book actually sent. What it did not cover is the one that was never sent —
+# and until now there was no verb for it on ANY surface: the panel had no
+# control, there was no MCP tool, and the row printed on the internal workbook
+# and in the SLA queue for ever (Grant, 2026-08-27: "nor just remove
+# entirely").
+
+
+def remove_package(conn: sqlite3.Connection, submission_id: str) -> None:
+    """TAKE BACK AN APPROACH RECORDED IN ERROR. Soft, revertible, one act.
+
+    REFUSED WHILE ANY RESPONSE STILL SPEAKS FOR IT. A response row is a market
+    answering THIS package; removing the package under it would leave rows
+    whose parent is gone — the roll-up could never recompute them, and the
+    marketing grid composes its blocks from responses, so the answers would go
+    on printing under a line of coverage with no approach behind them. The
+    fix the refusal names is the control that already exists: take the answers
+    off one at a time (each its own undo unit, each with its own confirm), and
+    the package then stands alone in "line of coverage not recorded" where
+    this verb reaches it. That ordering is deliberate — it makes removing a
+    package with real marketing under it a sequence of deliberate acts rather
+    than one click.
+
+    THE SUBJECTIVITIES ARE LEFT WHERE THEY ARE, not cascaded. Every reader of
+    `submission_subjectivity` reaches it through its package and filters on a
+    live one (`repo.submissions.outstanding_subjectivity_rows_for_org`,
+    `subjectivity_rows_for_placement`), so they disappear with it and come
+    back with it — which is what a revert has to mean. Deleting them too would
+    put N more rows in the batch for no visible difference and make the revert
+    depend on their order.
+    """
+    rows = marketing.responses_for_submission(conn, submission_id)
+    if rows:
+        raise ValueError(
+            f"this approach has {len(rows)} answer(s) recorded against it, so "
+            f"it is marketing that happened — remove each answer on its own "
+            f"row first (they are separate undo units), or pull the package "
+            f"with Withdraw if we simply stopped chasing it"
+        )
+    submissions_repo.delete(conn, submission_id)

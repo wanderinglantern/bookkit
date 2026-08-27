@@ -504,23 +504,44 @@ def test_the_provisional_block_carries_no_line_of_coverage_facts(conn) -> None:
         )
 
 
-def test_the_client_workbook_carries_the_rows_with_no_line(conn) -> None:
-    """AN EMPTY WORKBOOK OVER LIVE MARKETING is the failure this ends."""
+def test_the_rows_with_no_line_are_the_broker_s_copy_only(conn) -> None:
+    """THE INTERNAL WORKBOOK CARRIES THEM AND THE CLIENT'S DOES NOT (Grant,
+    2026-08-27: "remove the 'line of coverage not recorded' from the client
+    deliverable").
+
+    A package whose line of coverage nobody has typed yet is unfinished
+    record-keeping of OURS. On the broker's copy it is a worklist and belongs
+    there; on the client's it is a heading that reads as a gap in their cover,
+    over rows that say nothing about what they are covered for.
+
+    THE MARKETING IS NOT LOST, which is what the earlier version of this test
+    was defending — an empty workbook over live marketing. It is on the
+    internal sheet, asserted below, and on the web grid where it can be given
+    the line it is missing. What changed is the audience, not whether it is
+    reported.
+    """
     from bookkit.services import marketing_report
 
     _, placement = _setup(conn)
     _, sub = _submission(conn, placement.id, "Sompo")
     submissions.update(conn, sub.id, status="quoted", quoted_premium=140_000_000)
 
-    sections = marketing_report.to_sections(_compose(conn, placement.id))
+    client = marketing_report.to_sections(_compose(conn, placement.id))
+    assert not any(s.label == marketing_report.PROVISIONAL_LABEL for s in client)
+    assert not any("Sompo" in cell for s in client for row in s.rows for cell in row)
 
-    assert len(sections) == 1
-    assert sections[0].label == marketing_report.PROVISIONAL_LABEL
-    assert "Sompo" in sections[0].rows[0]
-    assert "$1,400,000" in sections[0].rows[0]
+    internal = marketing_report.to_sections(
+        _compose(conn, placement.id, marketing_report.INTERNAL)
+    )
+    provisional = [
+        s for s in internal if s.label == marketing_report.PROVISIONAL_LABEL
+    ]
+    assert len(provisional) == 1
+    assert "Sompo" in provisional[0].rows[0]
+    assert "$1,400,000" in provisional[0].rows[0]
     # Every row is the width of the sheet, or the columns shift under it.
-    width = len(marketing_report.columns(marketing_report.CLIENT))
-    assert all(len(row) == width for row in sections[0].rows)
+    width = len(marketing_report.columns(marketing_report.INTERNAL))
+    assert all(len(row) == width for row in provisional[0].rows)
 
 
 def test_a_free_text_decline_reason_never_reaches_a_client(conn) -> None:
@@ -538,12 +559,20 @@ def test_a_free_text_decline_reason_never_reaches_a_client(conn) -> None:
         decline_reason="underwriter hates the loss runs, off the record",
     )
 
-    client_rows = marketing_report.to_sections(_compose(conn, placement.id))[0].rows
+    # THE CLIENT SHEET HAS NO SECTION FOR THIS ROW AT ALL since 2026-08-27,
+    # which is a stronger guarantee than a blank cell and not a weaker one:
+    # the free-text reason cannot reach a client because the row carrying it
+    # is not composed for that audience. Asserted over EVERY cell of EVERY
+    # section rather than over a row index, so it still holds the day a client
+    # section grows back for some other reason.
+    client = marketing_report.to_sections(_compose(conn, placement.id))
     internal_rows = marketing_report.to_sections(
         _compose(conn, placement.id, marketing_report.INTERNAL)
     )[0].rows
 
-    assert not any("off the record" in cell for cell in client_rows[0])
+    assert not any(
+        "off the record" in cell for s in client for row in s.rows for cell in row
+    )
     assert any("off the record" in cell for cell in internal_rows[0])
 
 

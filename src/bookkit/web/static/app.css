@@ -3814,11 +3814,40 @@ tr:hover .market .chip-remove {
 /* The assign control and, under it, any refusal it raised. `column`, so the
    message reads beneath the picker rather than beside it — the same correction
    `.market-add-form`'s error needed on the add-market row. */
+/* ONE ROW OF CONTROLS, not a stack (2026-08-27). It was a column, which was
+   right while the row-tail held one picker and a button — and wrong the moment
+   `remove` joined them: three stacked lines made every provisional row three
+   times as tall as the figures beside it, so a block of four packages read as
+   a form rather than as a table of what happened. It wraps rather than
+   clipping, because the picker holds line-of-coverage names and a long one on
+   a narrow window has to go somewhere. */
 .marketing-assign {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  align-items: baseline;
+}
+
+/* THE PICKER TAKES THE SLACK AND GIVES IT BACK. `min-width` keeps a line of
+   coverage's name readable; `max-width` stops the widest one in the book from
+   deciding how wide this column is for every row. Its label is the column
+   header (macros/marketing.html), so there is nothing beside it here. */
+.marketing-assign .inline-field {
+  display: flex;
+  min-width: 9rem;
+  max-width: 14rem;
+  flex: 1 1 9rem;
+}
+
+.marketing-assign .inline-field select {
+  width: 100%;
+}
+
+/* THE REFUSAL GETS THE FULL WIDTH. It is a sentence, and letting it flow
+   inline between two buttons is what makes a message look like a caption. */
+.marketing-assign .cell-error-msg,
+.marketing-assign .detail-label {
+  flex-basis: 100%;
 }
 
 .marketing-empty {
@@ -6014,4 +6043,60 @@ details.aside-section[open] > summary {
     padding-left: 0;
     padding-top: 0.8rem;
   }
+}
+
+/* --- what a market still wants, under the row that counts them -----------
+ *
+ * A CONDITION IS PROSE AND A COMPARISON IS A GRID (Grant, 2026-08-27:
+ * "subjectivities are often a large list which has not enough room in the
+ * table nor the export"). The Subj. column keeps the FIGURE markets are
+ * compared on; the words live in a row of their own, closed by default, so a
+ * grid of six markets does not become a page of sentences.
+ *
+ * DENSITY IS NOT THE ENEMY, undifferentiated density is (CLAUDE.md). This is
+ * the grouping half of that rule and not a thinning: nothing left the screen,
+ * it is one click away instead of none, and the summary says how many and in
+ * what state before anybody clicks.
+ */
+.marketing-subj-row > td {
+  /* No top border: the disclosure belongs to the row above it, and a rule
+     between them would read as a row of its own. */
+  border-top: 0;
+  padding-top: 0;
+}
+
+.marketing-subj > summary {
+  font-size: var(--hint-size);
+  color: var(--muted);
+  cursor: pointer;
+  /* The marker stays: a triangle is what tells a reader this opens, and the
+     summary text beside it is what says what is behind it. */
+  list-style-position: outside;
+}
+
+.marketing-subj[open] > summary {
+  margin-bottom: 0.35rem;
+}
+
+.marketing-subj-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.3rem;
+}
+
+/* THE STATUS PILL FIRST, THE CONDITION SECOND, and the condition takes the
+   width. A subjectivity is a sentence and the one thing that must never wrap
+   into a two-character column is the sentence. */
+.marketing-subj-item {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+  gap: 0.25rem 0.6rem;
+  align-items: baseline;
+  font-size: var(--body-size);
+}
+
+.marketing-subj-text {
+  white-space: normal;
 }

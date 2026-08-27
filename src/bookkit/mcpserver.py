@@ -863,6 +863,23 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         return _submission_sent_on(rw, response_ref, sent_on)
 
     @server.tool()
+    async def submission_remove(submission_ref: str) -> dict[str, Any]:
+        """Take back an APPROACH recorded in error — one that never went out.
+        `submission_ref` is an exact submission id (marketing_report's
+        `submissions_with_no_line[].submission_id`). Use it ONLY for a package
+        that should not exist: a mistyped carrier, a duplicate approach, one
+        filed against the wrong placement. Every other way a package leaves the
+        running is a FACT worth keeping — we pulled it is submission_withdraw,
+        what a market said is market_responded — and this erases the row
+        instead of claiming any of them. REFUSED while any response is recorded
+        against it, because those are marketing that happened: take each answer
+        off with market_response_remove first (each its own undo unit) and the
+        package is then reachable here. The delete is soft and revertible from
+        the change list, and the subjectivities recorded against the package go
+        with it and come back with it."""
+        return _submission_remove(rw, submission_ref)
+
+    @server.tool()
     async def submission_withdraw(submission_ref: str) -> dict[str, Any]:
         """WE PULLED THIS PACKAGE. `submission_ref` is an exact submission id —
         marketing_report hands them back in `responses[].submission_id` and in
@@ -3832,6 +3849,44 @@ def _submission_org_and_market(
     )
     named = orgs.names_for_any(conn, {submission.market_org_id or ""})
     return org_id, named.get(submission.market_org_id or "", "this market")
+
+
+def _submission_remove(
+    conn: sqlite3.Connection, submission_ref: str
+) -> dict[str, Any]:
+    """AN APPROACH RECORDED IN ERROR, taken back — the MCP half of the web's
+    provisional-row remove, and the pair `market_response_remove` already has
+    one level down.
+
+    A MISSING VERB IS NOT A REFUSAL, IT IS A WRONG WRITE (CLAUDE.md). Without
+    this an assistant asked to unmake a duplicate or mistyped approach reaches
+    for the nearest door, and the nearest doors here are both wrong in the same
+    way: `submission_withdraw` records that WE PULLED a package that went out,
+    and `market_responded` would put a status on it — each of them a claim that
+    this book went to that market, written onto a row that says it never did.
+
+    THE REFUSAL WHEN ANSWERS EXIST IS THE POINT, not an obstacle to route
+    around: `services.marketing_entry.remove_package` owns it, so the sentence
+    an assistant reads is the sentence a broker reads, and it names the verb
+    that does apply.
+    """
+    from .services import marketing_entry
+
+    submission = _resolve_submission(conn, submission_ref)
+    org_id, market_name = _submission_org_and_market(conn, submission)
+    with _open_batch(
+        conn,
+        tool="submission_remove",
+        org_id=org_id,
+        summary=f"removed the approach to {market_name}, recorded in error",
+    ) as batch:
+        marketing_entry.remove_package(conn, submission.id)
+    return {
+        "removed": submission.id,
+        "market": market_name,
+        "sent_on": str(submission.sent_on),
+        "batch": batch.ref,
+    }
 
 
 def _submission_withdraw(

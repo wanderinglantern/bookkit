@@ -238,6 +238,51 @@
 {% endmacro %}
 
 
+{% macro conditions_row(r, columns) %}
+  {# WHAT THIS MARKET STILL WANTS, under the row that counts them.
+
+     ITS OWN <tr>, AND `row()` ABOVE STILL EMITS EXACTLY ONE. That split is
+     what keeps "ONE RESPONSE, ONE TOP-LEVEL ELEMENT" (CLAUDE.md) true: a cell
+     save answers with `row()` alone, retargeted onto `#mrow-<id>`, so the
+     response is a single `<tr>` and this row is left standing beside it. It
+     cannot go stale — no cell on this grid writes a subjectivity — and the
+     block- and section-sized answers re-render both macros together.
+
+     RENDERED, NOT FETCHED. There is no second route and no loading state: the
+     list is small, it comes off a report the panel has already composed, and a
+     disclosure that has to go to the server is one a broker learns not to
+     open. The cost is markup for rows nobody expands, which is the cheaper
+     half of the trade on a page that is already one composed report.
+
+     NOTHING AT ALL WHEN THERE IS NOTHING. A `<details>` with an empty body is
+     an affordance that lies about having something behind it. #}
+  {% if r.conditions %}
+    <tr class="marketing-subj-row" id="msubj-{{ r.id }}">
+      <td colspan="{{ columns | length + 1 }}">
+        <details class="marketing-subj">
+          {# THE SUMMARY COUNTS, and it counts the SAME thing the Subj. column
+             does — what is still outstanding — so the two figures on one row
+             can never disagree. The total is beside it because "2 of 6" and
+             "2 of 2" are different states of a chase and the column has room
+             for only one number. #}
+          <summary>{{ r.conditions_summary }}</summary>
+          <ul class="marketing-subj-list">
+            {% for c in r.conditions %}
+              <li class="marketing-subj-item">
+                <span class="market-pill {{ c.tone }}">{{ c.status }}</span>
+                <span class="marketing-subj-text">{{ c.description }}</span>
+                {% if c.due_on %}<span class="detail-label">due {{ c.due_on }}</span>{% endif %}
+                {% if c.satisfied_on %}<span class="detail-label">satisfied {{ c.satisfied_on }}</span>{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </details>
+      </td>
+    </tr>
+  {% endif %}
+{% endmacro %}
+
+
 {% macro provisional_block(b, columns) %}
   {# THE MARKETING THAT HAS NO LINE OF COVERAGE YET.
 
@@ -254,7 +299,16 @@
      row: not one of them is knowable here, and a header of nine "not set"
      cells beside a real quote invites somebody to fill figures in against a
      line nobody chose. What it has instead is a sentence saying what these
-     rows are, and one control per row that makes them ordinary. #}
+     rows are, and two controls per row — one that makes them ordinary, one
+     that takes back an approach recorded in error.
+
+     `columns` IS `marketing_grid.PROVISIONAL_COLUMNS`, which is NARROWER than
+     the grid above. It carries the ten facts a submission can state and drops
+     the ten it cannot, because printing those ten blank pushed both controls
+     off the right-hand edge of this table's own scroller — the assign picker
+     sat 689px past it at a 1600px window and no reader ever found it (Grant,
+     2026-08-27: "there is no way to directly record the line nor just remove
+     entirely"). The macro renders what it is handed and decides nothing. #}
   <article class="marketing-block marketing-provisional" id="{{ b.id }}">
     <header class="marketing-block-head">
       <span class="marketing-line">Line of coverage not recorded</span>
@@ -276,7 +330,13 @@
                  it cannot disagree about which columns are pinned. #}
               <th{% if column.th_class %} class="{{ column.th_class }}"{% endif %}>{{ column.header }}</th>
             {% endfor %}
-            <th class="row-tail"><span class="visually-hidden">row actions</span></th>
+            {# THE HEADER IS THE LABEL, the same rule every inline cell on this
+               grid follows: a control in a row has no visible label of its
+               own, so the column header carries it once instead of once per
+               row. It was on each row and cost 130px of a 450px tail, which
+               pushed `remove` onto a second line and made every package three
+               lines tall. #}
+            <th class="row-tail">assign a line of coverage</th>
           </tr>
         </thead>
         <tbody>
@@ -318,7 +378,7 @@
                      never be recomputed from it. #}
                   <span class="detail-label">withdrawn — not assigned to a line</span>
                 {% elif b.line_options %}
-                  <label class="inline-field"><span class="pair-k">assign a line of coverage</span>
+                  <label class="inline-field"><span class="visually-hidden">line of coverage for this package</span>
                     {# NO `form=` and no <form> element: this control lives
                        inside a table, where a form is illegal, so the button
                        below carries the POST and `hx-include="closest tr"`
@@ -347,6 +407,22 @@
                   <span class="detail-label">this book carries no lines of
                     coverage yet — add one at the top of this section first</span>
                 {% endif %}
+                {# THE PACKAGE ITSELF, TAKEN BACK. OUTSIDE every branch above,
+                   because it applies to all three of them: a withdrawn
+                   package, a package waiting for a line and a package on a
+                   book that has no lines yet are all equally capable of
+                   having been recorded against the wrong client.
+
+                   IT FETCHES THE QUESTION rather than writing, the same split
+                   every confirm in this app makes — and for the sharper
+                   reason a response row's remove gives: a delete is the one
+                   row action whose mistake looks exactly like success,
+                   because what it destroys is no longer on the screen to
+                   notice missing. #}
+                <button type="button" class="row-action-btn row-action-danger"
+                        hx-get="{{ r.remove_url }}"
+                        hx-target="#mprovrow-{{ r.id }}" hx-swap="outerHTML"
+                        title="this approach was recorded in error — take the whole package back">remove</button>
                 {# THE REFUSAL, BESIDE THE ROW IT WAS RAISED ON, and OUTSIDE
                    the branches above. An assign answers with the whole section
                    because the row moves out of this block into a line of
@@ -359,6 +435,12 @@
                 </div>
               </td>
             </tr>
+            {# THE SAME DISCLOSURE THE ORDINARY ROW HAS. A package carries its
+               subjectivities whether or not anybody has recorded which line of
+               coverage it answers on — they hang off the SUBMISSION — so a
+               count printed here with no way to read the list would be the
+               same half-a-control this block was fixed for. #}
+            {{ conditions_row(r, columns) }}
           {% endfor %}
         </tbody>
       </table>
@@ -492,7 +574,7 @@
         </thead>
         <tbody>
           {% for r in b.rows %}
-            {{ row(r, columns) }}
+            {{ row(r, columns) }}{{ conditions_row(r, columns) }}
           {% else %}
             {# IN WORDS. An empty table cannot be told from a rendering bug,
                and "nobody has gone to market on this line" is a real and

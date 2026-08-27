@@ -425,22 +425,40 @@ def _bare_package(conn, placement, market_name="Sompo", **fields):
 
 
 def test_the_report_shows_a_package_with_no_line_and_names_it(conn) -> None:
-    """THE ASSISTANT CAN SEE IT AND CAN NAME IT. The composed text carries the
-    block unaided; without the index there is no id for the verb to take, which
-    is the half-a-link CLAUDE.md says a change is not done without."""
+    """THE ASSISTANT CAN SEE IT AND CAN NAME IT.
+
+    THE INDEX IS THE LOAD-BEARING HALF, and it is asserted on BOTH audiences.
+    The rendered text is whichever sheet was asked for, and since 2026-08-27
+    the client's does not carry this block (Grant: "remove the 'line of
+    coverage not recorded' from the client deliverable") — so an assistant
+    reading the default report would see nothing to fix, and if the ids went
+    with the words it would have no ref for `market_assign_line` or
+    `submission_remove` either. That is the half-a-link CLAUDE.md says a change
+    is not done without, and the index is what keeps it whole: `provisional` is
+    composed the same way for both audiences and only the RENDERING withholds
+    it.
+    """
     _, placement = _book(conn)
     _, package = _bare_package(
         conn, placement, quoted_premium=140_000_000, status="quoted",
     )
 
-    out = mcpserver._marketing_report(conn, placement.ref)
+    client = mcpserver._marketing_report(conn, placement.ref)
+    internal = mcpserver._marketing_report(conn, placement.ref, "internal")
 
-    assert "Line of coverage not recorded" in out["report"]
-    assert "Sompo" in out["report"]
-    named = out["submissions_with_no_line"]
-    assert [row["submission_id"] for row in named] == [package.id]
-    assert named[0]["market"] == "Sompo"
-    assert named[0]["quoted_premium"] == 140_000_000
+    # THE WORDS: the broker's copy carries the block, the client's does not —
+    # the same split the .xlsx makes, from the same composer.
+    assert "Line of coverage not recorded" in internal["report"]
+    assert "Sompo" in internal["report"]
+    assert "Line of coverage not recorded" not in client["report"]
+
+    # THE IDS: on both, or a verb addressed to one of these packages has
+    # nothing to take.
+    for out in (client, internal):
+        named = out["submissions_with_no_line"]
+        assert [row["submission_id"] for row in named] == [package.id]
+        assert named[0]["market"] == "Sompo"
+        assert named[0]["quoted_premium"] == 140_000_000
 
 
 def test_assigning_a_line_over_mcp_writes_the_response_and_batches_it(conn) -> None:

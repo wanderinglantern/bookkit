@@ -1,0 +1,57 @@
+{# The in-place confirm for taking back an APPROACH recorded in error.
+
+   THE PACKAGE, NOT AN ANSWER. `_response_remove_confirm.html` is the same
+   question one level down — it takes back what a market SAID and deliberately
+   leaves the approach standing, because the package did go out. This one takes
+   back the going-out itself, and it is only reachable on a package no response
+   row speaks for, which is what the "line of coverage not recorded" block
+   holds. `services.marketing_entry.remove_package` refuses otherwise and names
+   the answer-by-answer control as the fix.
+
+   SWAPPED OVER THE ROW, so the question sits exactly where the answer will
+   land — the same shape `_response_remove_confirm.html` and
+   `_market_confirm.html` take, and never a modal somewhere else on the page.
+
+   GET renders this and writes NOTHING; only the [remove] POST writes.
+   [keep] re-fetches the SECTION rather than the row, and that is the one
+   difference from the response confirm: a provisional row has no fragment
+   route of its own, and inventing one would be a second composition of a row
+   the section already builds. The target below says `closest tr` and the
+   server overrides it — `_section` answers with `HX-Retarget` onto the
+   section's own id, which is how every section-sized answer in this module
+   says where it goes.
+
+   IT SAYS WHAT SURVIVES, because a delete is the one act whose mistake looks
+   exactly like success — what it destroys is no longer on the screen to notice
+   missing. A soft delete is revertible and the account's change list can put
+   it back; the subjectivities recorded against the package go with it and come
+   back with it, which this says rather than leaving a broker to find out. #}
+{# THE ROW'S OWN id, because this element STANDS IN FOR IT — the same reason
+   `_response_remove_confirm.html` carries `mrow-<id>`. The remove button's
+   `hx-get` targets `#mprovrow-<id>`, so a confirm without it leaves the next
+   swap landing nowhere. #}
+<tr id="mprovrow-{{ submission_id }}" class="marketing-row marketing-confirm" role="alert">
+  <td colspan="{{ span }}" class="prose">
+    {% if error %}<span class="cell-error-msg" role="alert">{{ error }}</span>{% endif %}
+    Remove the approach to {{ who }} recorded as sent on {{ sent_on }}? Nothing
+    a market said is recorded against it, so this takes back the whole package.
+    The change list can put it back.
+    {% if subjectivities %}
+      The {{ subjectivities }} subjectivit{{ "y" if subjectivities == 1 else "ies" }}
+      recorded against it {{ "goes" if subjectivities == 1 else "go" }} with it.
+    {% endif %}
+    {# WITHDRAW IS THE OTHER VERB AND THIS NAMES IT. The two are easy to reach
+       for interchangeably and they record opposite facts: withdrawing says we
+       stopped chasing a package that DID go out, removing says it never went
+       out at all. A confirm that does not say so is where the wrong one gets
+       clicked. #}
+    <span class="detail-label">If we did send it and simply stopped chasing it,
+      Withdraw on the Pipeline tab is the one that keeps the record.</span>
+    <button type="button" class="row-action-btn row-action-danger"
+            hx-post="{{ remove_url }}"
+            hx-target="closest tr" hx-swap="outerHTML">remove</button>
+    <button type="button" class="row-action-btn"
+            hx-get="{{ keep_url }}"
+            hx-target="closest tr" hx-swap="outerHTML">keep</button>
+  </td>
+</tr>
