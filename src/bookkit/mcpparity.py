@@ -387,20 +387,26 @@ IMPLEMENTED: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {
         "for the browser and this tool alike."
     ),
     ("submission_subjectivity", "update"): (
-        ("subjectivity_ask_client", "subjectivity_unlink", "request_item_received"),
-        "THREE WRITERS, ONE FIELD EACH, and none of them a generic setter. "
-        "subjectivity_ask_client attaches the condition to the client ask that "
-        "will answer it and subjectivity_unlink takes it back off — the pair "
-        "exists because the picker behind it is ranked by a fuzzy score and a "
-        "wrong attach reads as 'answered', so the way back has to be one act. "
+        (
+            "subjectivity_ask_client", "subjectivity_unlink",
+            "request_item_received", "settle_subjectivity",
+        ),
+        "FOUR WRITERS AND NONE A GENERIC SETTER. subjectivity_ask_client "
+        "attaches the condition to the client ask that will answer it and "
+        "subjectivity_unlink takes it back off — the pair exists because the "
+        "picker behind it is ranked by a fuzzy score and a wrong attach reads "
+        "as 'answered', so the way back has to be one act. "
         "request_item_received settles the ones an arriving answer unblocks, "
         "as a batch the broker confirms: RECEIVED IS NOT MET, the client "
         "sending a document does not satisfy a market's condition, so the "
-        "answer surfaces the list and never decides. "
-        "STILL MISSING, and named so it stays visible: settling ONE condition "
-        "on its own, with no ask behind it — the inspection that happened, the "
-        "warranty somebody signed. That is the `settle_subjectivity` verb the "
-        "old deferral described and it is still not built."
+        "answer surfaces the list and never decides. settle_subjectivity "
+        "(built 2026-08-28, with the grid's own populate controls) settles "
+        "ONE condition with no ask behind it — the inspection that happened, "
+        "the warranty somebody signed — moving status and satisfied_on "
+        "together through consistency.settlement_date, the same rule the web "
+        "form applies. Description and due-date edits stay on the web: the "
+        "form primitive is what the subjectivity_form denial refuses, not the "
+        "transition."
     ),
     ("rfi_item", "create"): (
         ("request_item_add", "subjectivity_ask_client"),

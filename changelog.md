@@ -2,6 +2,26 @@
 
 All notable changes to bookkit, newest date first.
 
+## 2026-08-28
+
+### Added
+- **The marketing grid can populate subjectivities, not just read them.**
+  Every response row (and every provisional row) carries a `+ subjectivity`
+  control that opens the shared form in place, keyed by the row's package —
+  so a condition added under one carrier appears under every row that
+  package answered on. Each disclosed condition gained an `edit` control,
+  which is also how one is settled: status and satisfied-on move together
+  (met with no date stamps today, reopening clears the leftover date, waived
+  carries none). There is deliberately no remove — a condition that stopped
+  applying is waived, because what a market once required is a fact worth
+  keeping. Every save answers with the whole section, so the Subj. counts on
+  sibling rows, the disclosure summary and the Blocking panel update in the
+  same swap, one undo unit per save.
+- **`settle_subjectivity` on MCP**, beside `subjectivity_add` — the verb the
+  `subjectivity_form` denial promised. It applies the same
+  status-owns-its-date rule the web form does; description and due-date
+  edits stay on the web, recorded in the parity ledger.
+
 ## 2026-08-24
 
 ### Added

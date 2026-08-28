@@ -693,6 +693,14 @@ def row_view(
         "conditions_summary": _conditions_summary(
             (conditions or {}).get(row.submission_id, [])
         ),
+        # WHERE THE ROW POPULATES THEM (Grant, 2026-08-28). Until this URL the
+        # disclosure could only read: the one door onto a subjectivity was the
+        # Pipeline tab, per-submission and nowhere near the carrier row being
+        # worked. Per row rather than on the block because the URL carries the
+        # row's own submission id.
+        "subj_add_url": subjectivity_add_action(
+            ref, placement_id, row.submission_id
+        ),
         # THE "NO FEES OR TAXES APPLY" AFFORDANCE, offered only while it would
         # DO something. NULL is "nobody has told us" and 0 is "we asked, there
         # is none"; only 0 contributes to a total, so without a one-click way
@@ -832,6 +840,20 @@ def assign_action(ref: str, placement_id: str, submission_id: str) -> str:
     )
 
 
+def subjectivity_add_action(ref: str, placement_id: str, submission_id: str) -> str:
+    """Where the row's + subjectivity form is fetched from and where it posts —
+    ONE formula, the way `assign_action` is one.
+
+    KEYED BY THE SUBMISSION, never the response: a condition belongs to the
+    package (`_conditions_by_package`), so the same URL serves every row that
+    package answered on — and the list it grows appears under all of them,
+    which is correct rather than duplication."""
+    return (
+        f"/accounts/{ref}/program/{placement_id}"
+        f"/marketing/submissions/{submission_id}/subjectivities/new"
+    )
+
+
 def assign_line_options(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     """The lines of coverage the ASSIGN control offers, in ONE place — the
     panel renders these as its options and the POST re-queries the same list so
@@ -883,6 +905,11 @@ def provisional_row_view(
         ),
         "conditions_summary": _conditions_summary(
             (conditions or {}).get(row.submission_id, [])
+        ),
+        # THE SAME DOOR THE ORDINARY ROW HAS: conditions are recorded against
+        # the SUBMISSION, which is the one id this block is sure of.
+        "subj_add_url": subjectivity_add_action(
+            ref, placement_id, row.submission_id
         ),
         # WITHDRAWN PACKAGES KEEP THEIR ROW AND LOSE THEIR CONTROL. The
         # marketing happened and stays reported; what is withheld is a write
@@ -938,6 +965,11 @@ def provisional_view(
         # control belongs here for the same reason the disclosure does.
         "subj_ask_url": (
             f"/accounts/{ref}/program/{placement_id}/marketing/subjectivities/ask"
+        ),
+        # AND EDITED HERE TOO, same reason — the block above carries the same
+        # key and the macro reads whichever block it was handed.
+        "subj_edit_base": (
+            f"/accounts/{ref}/program/{placement_id}/marketing/subjectivities"
         ),
         # ITS OWN COLUMNS, handed to the macro rather than looked up there.
         # The template renders whatever it is given; deciding the column set
@@ -1597,6 +1629,10 @@ def block_view(
         # `base` is right here and a second formula for it is a second thing to
         # keep in step.
         "subj_ask_url": f"{base}/subjectivities/ask",
+        # WHERE ONE CONDITION IS EDITED — settled included: status and
+        # satisfied_on travel on the shared form, and there is no separate
+        # mark-met act on any surface (forms.entities.subjectivity_form).
+        "subj_edit_base": f"{base}/subjectivities",
         "release_url": sort_action(ref, placement_id),
         "release_vals": json.dumps(
             {

@@ -142,9 +142,10 @@ UNMAPPED_BUILDERS: dict[str, str] = {
         "would advertise a kind and then refuse every id given for it. It is "
         "also the wrong primitive: settling a subjectivity moves status and "
         "satisfied_on together, which is a transition rather than a field "
-        "edit, the same reason rfi_item.status is denied. The shape when it "
-        "arrives is add_subjectivity / settle_subjectivity beside the quote "
-        "tools — see ROADMAP's quotes entry."
+        "edit, the same reason rfi_item.status is denied. That shape has "
+        "arrived: subjectivity_add is the create door and settle_subjectivity "
+        "is the transition (2026-08-28). Description and due-date edits stay "
+        "on the web, where the shared form is the right primitive."
     ),
     "placement_form": (
         "Placements are read-only to the assistant by design (see mcpserver's "

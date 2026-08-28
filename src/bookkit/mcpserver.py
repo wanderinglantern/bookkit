@@ -509,6 +509,31 @@ def _register_write_tools(server: MCPServer, rw: sqlite3.Connection) -> None:
         )
 
     @server.tool()
+    async def settle_subjectivity(
+        subjectivity_ref: str,
+        status: str,
+        satisfied_on: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Settle ONE market condition — `met` when the market's requirement
+        is satisfied, `waived` when the market dropped it, back to
+        `outstanding` when it was marked in error. `subjectivity_ref` is the
+        exact id from blocking_list.
+
+        STATUS AND satisfied_on MOVE TOGETHER — this is a transition, not a
+        field edit. `met` with no date stamps today; `waived` and
+        `outstanding` carry no satisfied date, and a leftover one is cleared.
+        RECEIVED IS NOT MET: the client sending a document does not satisfy a
+        market's condition — request_item_received offers the settle, this
+        verb decides it. There is no delete: a condition that stopped
+        applying is `waived`, because what a market once required is a fact
+        worth keeping."""
+        return _settle_subjectivity(
+            rw, subjectivity_ref, status,
+            satisfied_on=satisfied_on, notes=notes,
+        )
+
+    @server.tool()
     async def subjectivity_ask_client(
         subjectivity_ref: str,
         item_ref: str | None = None,
@@ -2841,6 +2866,71 @@ def _subjectivity_add(
         "description": subjectivity.description,
         "due_on": subjectivity.due_on,
         "status": subjectivity.status,
+        "batch": batch.ref,
+    }
+
+
+def _settle_subjectivity(
+    conn: sqlite3.Connection,
+    subjectivity_ref: str,
+    status: str,
+    *,
+    satisfied_on: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Settle one condition. The status ↔ satisfied_on pairing is
+    `services.consistency.settlement_date`'s — the same rule the web form
+    applies through `apply_subjectivity`, so a tool and a browser cannot
+    disagree about what a settled row carries.
+
+    THE VERB THE DENIAL PROMISED. mcpsurface recorded `subjectivity_form` as
+    denied and named `add + settle` as the intended shape; `subjectivity_add`
+    shipped with the ask verb and this is the other half. Description and due
+    date edits stay on the web — the form primitive was the thing being
+    refused, not the transition.
+    """
+    from .forms.entities import SUBJECTIVITY_MET_STATUS
+    from .models import SUBJECTIVITY_STATUSES
+    from .repo import submissions as submissions_repo
+    from .services import consistency
+
+    subjectivity = _resolve_subjectivity(conn, subjectivity_ref)
+    if status not in SUBJECTIVITY_STATUSES:
+        raise ValueError(
+            f"a subjectivity status is one of "
+            f"{', '.join(SUBJECTIVITY_STATUSES)} — not {status!r}"
+        )
+    if satisfied_on:
+        satisfied_on = _due_or_refuse(satisfied_on, "a satisfied date")
+    submission = submissions_repo.get(conn, subjectivity.submission_id)
+    org_id, market_name = _submission_org_and_market(conn, submission)
+    stamped = consistency.settlement_date(
+        status,
+        satisfied_on,
+        subjectivity.satisfied_on,
+        settled_status=SUBJECTIVITY_MET_STATUS,
+        date_label="satisfied on",
+        today=date.today().isoformat(),
+    )
+    fields: dict[str, Any] = {"status": status, "satisfied_on": stamped}
+    if notes is not None:
+        fields["notes"] = notes
+    with _open_batch(
+        conn, tool="settle_subjectivity", org_id=org_id,
+        summary=(
+            f"marked a condition from {market_name} {status}: "
+            f"{subjectivity.description[:60]}"
+        ),
+    ) as batch:
+        updated = submissions_repo.update_subjectivity(
+            conn, subjectivity.id, **fields
+        )
+    return {
+        "subjectivity_ref": updated.id,
+        "market": market_name,
+        "description": updated.description,
+        "status": updated.status,
+        "satisfied_on": updated.satisfied_on,
         "batch": batch.ref,
     }
 

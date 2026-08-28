@@ -1255,6 +1255,8 @@ _BATCHED_WRITES = {
     )(_an_approach(rw)),
     "subjectivity_ask_client": lambda rw, tmp: mcpserver._subjectivity_ask_client(
         rw, _a_condition(rw), prompt="Five-year loss runs, currently valued"),
+    "settle_subjectivity": lambda rw, tmp: mcpserver._settle_subjectivity(
+        rw, _a_condition(rw), "met"),
     "subjectivity_unlink": lambda rw, tmp: (
         lambda c: (
             mcpserver._subjectivity_ask_client(rw, c, prompt="Loss runs"),
@@ -1372,6 +1374,10 @@ _TOUCHES = {
     # batch would mean the guard had been bypassed.
     "submission_remove": {"submission"},
     "subjectivity_add": {"submission_subjectivity"},
+    # ONE ROW, ONE TRANSITION: status and satisfied_on move together on the
+    # condition itself, and nothing else is touched — the ask it may be
+    # attached to keeps its own vocabulary (RECEIVED IS NOT MET).
+    "settle_subjectivity": {"submission_subjectivity"},
     # THREE TABLES, because asking the client for something no ask covers yet
     # opens the ENVELOPE as well as writing the line in it: one request per
     # renewal, made on demand (services.rfi._request_for_placement). All three

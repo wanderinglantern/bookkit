@@ -238,7 +238,25 @@
 {% endmacro %}
 
 
-{% macro conditions_row(r, columns, subj_ask_url="") %}
+{% macro subj_add_control(r) %}
+  {# THE ROW'S OWN DOOR (Grant, 2026-08-28). Until this control the grid could
+     only READ a package's conditions — the one place to add or settle one was
+     the Pipeline tab, per-submission and nowhere near the carrier row being
+     worked. The button fetches the shared subjectivity form into the empty
+     host beside it and writes nothing itself; the form macro's own
+     Save/Cancel contract (`hx-target="closest .form-host"`) then does the
+     rest — a refusal re-renders in the host with the typing intact, Cancel
+     empties it back to this button, and a save answers with the whole
+     section. #}
+  <button type="button" class="row-action-btn"
+          hx-get="{{ r.subj_add_url }}"
+          hx-target="#msubj-form-{{ r.id }}" hx-swap="innerHTML"
+    >+ subjectivity</button>
+  <div class="form-host marketing-subj-form" id="msubj-form-{{ r.id }}"></div>
+{% endmacro %}
+
+
+{% macro conditions_row(r, columns, subj_ask_url="", subj_edit_base="") %}
   {# WHAT THIS MARKET STILL WANTS, under the row that counts them.
 
      ITS OWN <tr>, AND `row()` ABOVE STILL EMITS EXACTLY ONE. That split is
@@ -254,11 +272,18 @@
      open. The cost is markup for rows nobody expands, which is the cheaper
      half of the trade on a page that is already one composed report.
 
-     NOTHING AT ALL WHEN THERE IS NOTHING. A `<details>` with an empty body is
-     an affordance that lies about having something behind it. #}
-  {% if r.conditions %}
+     NO EMPTY `<details>`, EVER — a disclosure with nothing behind it is an
+     affordance that lies. The row itself now renders even with no conditions,
+     because it carries the + subjectivity control and that control DOES
+     something (Grant, 2026-08-28: the grid must be able to populate the list,
+     not only read it); what stays withheld is the triangle, until there is
+     something to disclose. #}
+  {% if r.conditions or r.subj_add_url %}
     <tr class="marketing-subj-row" id="msubj-{{ r.id }}">
       <td colspan="{{ columns | length + 1 }}">
+        {% if not r.conditions %}
+          {{ subj_add_control(r) }}
+        {% else %}
         <details class="marketing-subj">
           {# THE SUMMARY COUNTS, and it counts the SAME thing the Subj. column
              does — what is still outstanding — so the two figures on one row
@@ -297,10 +322,31 @@
                           title="ask the client for this — reusing an ask already out where one covers it"
                     >ask the client</button>
                 {% endif %}
+                {% if subj_edit_base %}
+                  {# SETTLING IS THIS BUTTON. The shared form carries status
+                     and satisfied on together, because settling is a
+                     transition of the pair and no surface has a separate
+                     mark-met act (forms.entities.subjectivity_form). The form
+                     lands in the host below, in place — never a modal
+                     somewhere else on the page. #}
+                  <button type="button" class="row-action-btn"
+                          hx-get="{{ subj_edit_base }}/{{ c.id }}/edit"
+                          hx-target="#msubjedit-{{ c.id }}" hx-swap="innerHTML"
+                    >edit</button>
+                  <div class="form-host marketing-subj-form"
+                       id="msubjedit-{{ c.id }}"></div>
+                {% endif %}
               </li>
             {% endfor %}
+            {% if r.subj_add_url %}
+              <li class="marketing-subj-item marketing-subj-add"
+                  id="msubj-add-{{ r.id }}">
+                {{ subj_add_control(r) }}
+              </li>
+            {% endif %}
           </ul>
         </details>
+        {% endif %}
       </td>
     </tr>
   {% endif %}
@@ -464,7 +510,7 @@
                coverage it answers on — they hang off the SUBMISSION — so a
                count printed here with no way to read the list would be the
                same half-a-control this block was fixed for. #}
-            {{ conditions_row(r, columns, b.subj_ask_url) }}
+            {{ conditions_row(r, columns, b.subj_ask_url, b.subj_edit_base) }}
           {% endfor %}
         </tbody>
       </table>
@@ -617,7 +663,7 @@
         </thead>
         <tbody>
           {% for r in b.rows %}
-            {{ row(r, columns) }}{{ conditions_row(r, columns, b.subj_ask_url) }}
+            {{ row(r, columns) }}{{ conditions_row(r, columns, b.subj_ask_url, b.subj_edit_base) }}
           {% else %}
             {# IN WORDS. An empty table cannot be told from a rendering bug,
                and "nobody has gone to market on this line" is a real and

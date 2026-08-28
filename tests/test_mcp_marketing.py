@@ -1130,3 +1130,99 @@ def test_reverting_a_merge_hands_the_name_back(conn) -> None:
     restored = orgs.find_market(conn, "Hartwell Mut.")
     assert restored is not None
     assert aliases.resolve(conn, "Hartwell Mut.") == restored.id
+
+
+# --- settling one condition (2026-08-28) --------------------------------------
+#
+# The verb the subjectivity_form denial promised: status and satisfied_on move
+# together through consistency.settlement_date — the same rule the web form
+# applies — so a tool and a browser cannot disagree about what a settled row
+# carries.
+
+
+def test_settle_met_with_no_date_stamps_today(conn) -> None:
+    _, _, condition = _blocked(conn)
+
+    out = mcpserver._settle_subjectivity(
+        conn, condition["subjectivity_ref"], "met"
+    )
+
+    assert out["status"] == "met"
+    assert out["satisfied_on"] == date.today().isoformat()
+
+
+def test_waived_settles_without_a_satisfied_date(conn) -> None:
+    """'waived' settles a condition without satisfying it, so it carries no
+    date — the same shape rfi_item has. It is also the house answer to
+    'delete': what a market once required is a fact worth keeping."""
+    _, _, condition = _blocked(conn)
+
+    out = mcpserver._settle_subjectivity(
+        conn, condition["subjectivity_ref"], "waived"
+    )
+
+    assert out["status"] == "waived"
+    assert out["satisfied_on"] is None
+
+
+def test_back_to_outstanding_clears_the_leftover_date(conn) -> None:
+    _, _, condition = _blocked(conn)
+    mcpserver._settle_subjectivity(
+        conn, condition["subjectivity_ref"], "met", satisfied_on="2026-08-20"
+    )
+
+    out = mcpserver._settle_subjectivity(
+        conn, condition["subjectivity_ref"], "outstanding"
+    )
+
+    assert out["status"] == "outstanding"
+    assert out["satisfied_on"] is None
+
+
+def test_a_date_that_contradicts_the_status_is_refused(conn) -> None:
+    """The live contradiction settlement_date exists for: a date typed NOW
+    beside a status that cannot carry it is refused naming both fixes, never
+    silently discarded."""
+    from bookkit.repo import submissions as submissions_repo
+
+    _, _, condition = _blocked(conn)
+
+    with pytest.raises(ValueError, match="does not go with status"):
+        mcpserver._settle_subjectivity(
+            conn, condition["subjectivity_ref"], "outstanding",
+            satisfied_on="2026-08-20",
+        )
+    after = submissions_repo.get_subjectivity(conn, condition["subjectivity_ref"])
+    assert after.satisfied_on is None
+
+
+def test_an_unknown_status_is_refused_with_the_list(conn) -> None:
+    _, _, condition = _blocked(conn)
+
+    with pytest.raises(ValueError, match="one of"):
+        mcpserver._settle_subjectivity(
+            conn, condition["subjectivity_ref"], "done"
+        )
+
+
+def test_an_unknown_ref_names_where_a_real_one_comes_from(conn) -> None:
+    _book(conn)
+
+    with pytest.raises(ValueError, match="blocking_list"):
+        mcpserver._settle_subjectivity(conn, "nope", "met")
+
+
+def test_settling_is_one_undo_unit(conn) -> None:
+    from bookkit.repo import submissions as submissions_repo
+    from bookkit.services import batches
+
+    _, _, condition = _blocked(conn)
+
+    out = mcpserver._settle_subjectivity(
+        conn, condition["subjectivity_ref"], "met"
+    )
+    batches.revert(conn, out["batch"], "2026-08-28T09:00:00+00:00")
+
+    after = submissions_repo.get_subjectivity(conn, condition["subjectivity_ref"])
+    assert after.status == "outstanding"
+    assert after.satisfied_on is None

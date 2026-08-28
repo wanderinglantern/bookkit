@@ -342,3 +342,197 @@ def test_the_duplicate_refusal_comes_back_in_the_picker(client_and_org):
     assert "already been asked this" in saved.text
     assert "Asks already out" in saved.text, "the picker is still there to attach with"
     assert submissions.get_subjectivity(conn, second.id).rfi_item_id is None
+
+
+# --- populating the list from the grid (Grant, 2026-08-28) --------------------
+#
+# The disclosure above could only READ a package's conditions; the one door for
+# writing one was the Pipeline tab. These hold the grid's own door: the add
+# control on every row, the edit-that-settles on every condition, and the
+# section-sized answer that keeps the Subj. counts and the Blocking block
+# honest in the same swap.
+
+
+def _package(conn, placement, market_name: str):
+    """A package with one response row and NO conditions yet."""
+    market = orgs.find_by_name(conn, market_name)
+    if market is None or market.kind != "market":
+        market = orgs.create(conn, kind="market", name=market_name)
+    sub = submissions.create(
+        conn, market_org_id=market.id, sent_on="2026-07-01",
+        placement_id=placement.id,
+    )
+    response = marketing.create_response(conn, sub.id, GL, market_org_id=market.id)
+    return sub, response
+
+
+def _add_url(org, placement, submission_id: str) -> str:
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/marketing/submissions/{submission_id}/subjectivities/new"
+    )
+
+
+def _edit_url(org, placement, subjectivity_id: str) -> str:
+    return (
+        f"/accounts/{org.ref}/program/{placement.id}"
+        f"/marketing/subjectivities/{subjectivity_id}/edit"
+    )
+
+
+def _subj_row(html: str, row_id: str) -> str:
+    """The one msubj `<tr>` for a grid row, cut out of the tab's HTML."""
+    start = html.index(f'id="msubj-{row_id}"')
+    return html[start:html.index("</tr>", start)]
+
+
+def test_a_row_with_nothing_to_disclose_still_offers_the_add_control(
+    client_and_org,
+):
+    """The affordance DOES something, so the row renders even empty — what
+    stays withheld is the disclosure triangle, because a `<details>` with
+    nothing behind it lies about having something to show."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _placement(client, org)
+    _, response = _package(conn, placement, "Sompo")
+
+    tab = client.get(f"/accounts/{org.ref}/marketing")
+
+    row = _subj_row(tab.text, response.id)
+    assert "+ subjectivity" in row
+    assert "<details" not in row
+
+
+def test_the_add_form_get_writes_nothing(client_and_org):
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _placement(client, org)
+    sub, _ = _package(conn, placement, "Sompo")
+
+    got = client.get(_add_url(org, placement, sub.id))
+
+    assert got.status_code == 200
+    assert "new subjectivity" in got.text
+    assert submissions.subjectivities_for(conn, sub.id) == []
+
+
+def test_adding_answers_with_the_section_and_every_row_of_the_package(
+    client_and_org,
+):
+    """A condition belongs to the PACKAGE, so one save moves the disclosure
+    under every row that package answered on — across blocks — which is why
+    the answer is the section and nothing smaller."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _placement(client, org)
+    sub, _ = _package(conn, placement, "Sompo")
+    from bookkit.repo import lines as lines_repo
+    second_line = next(
+        line.id for line in lines_repo.all_lines(conn) if line.id != GL
+    )
+    marketing.create_response(conn, sub.id, second_line, market_org_id=sub.market_org_id)
+
+    saved = client.post(
+        _add_url(org, placement, sub.id),
+        data={"description": "Signed TRIA form", "status": "outstanding"},
+    )
+
+    assert saved.status_code == 200
+    assert saved.headers.get("HX-Retarget") == f"#marketing-{placement.id}"
+    recorded = submissions.subjectivities_for(conn, sub.id)
+    assert [s.description for s in recorded] == ["Signed TRIA form"]
+    assert saved.text.count("Signed TRIA form") >= 2, (
+        "both rows of the package disclose the same condition"
+    )
+
+
+def test_a_refused_add_keeps_the_typing_and_writes_nothing(client_and_org):
+    """COMMIT IN PLACE: the refusal comes back as the form, message and typed
+    values intact, and the package records nothing."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _placement(client, org)
+    sub, _ = _package(conn, placement, "Sompo")
+
+    saved = client.post(
+        _add_url(org, placement, sub.id),
+        data={
+            "description": "Signed TRIA form",
+            "status": "outstanding",
+            "satisfied_on": "2026-08-20",
+        },
+    )
+
+    assert saved.status_code == 200
+    assert "form-error" in saved.text
+    assert 'value="Signed TRIA form"' in saved.text
+    assert submissions.subjectivities_for(conn, sub.id) == []
+
+
+def test_every_condition_offers_edit_and_met_with_no_date_stamps_today(
+    client_and_org,
+):
+    """Settling IS the edit form — status and satisfied_on move together
+    through consistency.settlement_date, the same rule the Pipeline tab and
+    MCP inherit. "today" is conftest's frozen clock — the same one the app
+    writes with."""
+    from conftest import FROZEN_TODAY
+
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _placement(client, org)
+    condition = _condition(conn, placement, "AIG", "5-year loss runs")
+
+    tab = client.get(f"/accounts/{org.ref}/marketing")
+    assert f'id="msubjedit-{condition.id}"' in tab.text, (
+        "the edit control's host renders with the condition"
+    )
+
+    saved = client.post(
+        _edit_url(org, placement, condition.id),
+        data={"description": "5-year loss runs", "status": "met"},
+    )
+
+    assert saved.status_code == 200
+    assert saved.headers.get("HX-Retarget") == f"#marketing-{placement.id}"
+    after = submissions.get_subjectivity(conn, condition.id)
+    assert after.status == "met"
+    assert after.satisfied_on == FROZEN_TODAY.isoformat()
+
+
+def test_back_to_outstanding_clears_the_leftover_date(client_and_org):
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _placement(client, org)
+    condition = _condition(
+        conn, placement, "AIG", "5-year loss runs",
+        status="met", satisfied_on="2026-08-20",
+    )
+
+    saved = client.post(
+        _edit_url(org, placement, condition.id),
+        data={"description": "5-year loss runs", "status": "outstanding"},
+    )
+
+    assert saved.status_code == 200
+    after = submissions.get_subjectivity(conn, condition.id)
+    assert after.status == "outstanding"
+    assert after.satisfied_on is None
+
+
+def test_a_condition_on_another_placement_cannot_be_edited(client_and_org):
+    """The same three-id chain the ask flow checks: the same 404 for "no such
+    id" and "someone else's id"."""
+    client, org = client_and_org
+    conn = client.app.state.conn
+    placement = _placement(client, org)
+    other = placements.create(
+        conn, org_id=org.id, program_name="Elsewhere",
+        period_from="2026-01-05", period_to="2027-01-05",
+    )
+    elsewhere = _condition(conn, other, "AIG", "Somebody else's condition")
+
+    got = client.get(_edit_url(org, placement, elsewhere.id))
+
+    assert got.status_code == 404

@@ -43,6 +43,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from ...forms.entities import apply_subjectivity, subjectivity_form
 from ...forms.inline import market_approach_fields, market_response_fields
 from ...forms.spec import Field, checked_option, parse_value
 from ...models import MarketResponse
@@ -56,8 +57,8 @@ from ...services import consistency, marketing_entry, marketing_report
 from ...services import rfi as rfi_svc
 from .. import marketing_grid
 from ..app import TEMPLATES
-from ..forms_render import render_cell, render_cell_display
-from .account import _conn, _not_here, _org, _owned
+from ..forms_render import render_cell, render_cell_display, render_form
+from .account import _conn, _not_here, _org, _owned, _save
 
 
 async def _remember_sort(request: Request) -> None:
@@ -2114,6 +2115,97 @@ async def subjectivity_ask(
             )
         )
     return _section(request, ref, org, placement_id)
+
+
+# --- populating a package's subjectivities from the grid ---------------------
+#
+# THE GRID COULD ONLY READ THEM (Grant, 2026-08-28). The disclosure above
+# shipped with the RFI join and the one door for WRITING a condition stayed on
+# the Pipeline tab — per-submission, org-wide, nowhere near the carrier row
+# being worked. These four routes are the row's own door: the shared
+# subjectivity form, fetched into a host beside the row, exactly the
+# Pipeline's flow with the answer resized to this surface.
+#
+# EVERY WRITE ANSWERS WITH THE SECTION, the same answer the ask flow gives and
+# for the same reason: a condition belongs to the PACKAGE, so one save moves
+# the Subj. count on every row that package answered on — across blocks — plus
+# the disclosure summary and the Blocking panel. Nothing smaller is honest.
+
+_SUBJ_ADD = (
+    "/accounts/{ref}/program/{placement_id}"
+    "/marketing/submissions/{submission_id}/subjectivities/new"
+)
+_SUBJ_EDIT = (
+    "/accounts/{ref}/program/{placement_id}"
+    "/marketing/subjectivities/{subjectivity_id}/edit"
+)
+
+
+@router.get(_SUBJ_ADD, response_class=HTMLResponse)
+def subjectivity_new_form(
+    request: Request, ref: str, placement_id: str, submission_id: str
+) -> HTMLResponse:
+    """The add form, into the row's own host. WRITES NOTHING."""
+    org, _ = _placement(request, ref, placement_id)
+    _owned_submission(_conn(request), org, placement_id, submission_id)
+    action = marketing_grid.subjectivity_add_action(ref, placement_id, submission_id)
+    return HTMLResponse(render_form(request, subjectivity_form(), action))
+
+
+@router.post(_SUBJ_ADD, response_class=HTMLResponse)
+async def subjectivity_create(
+    request: Request, ref: str, placement_id: str, submission_id: str
+) -> HTMLResponse:
+    """One condition recorded against the PACKAGE — `submission_id` is the
+    URL's key because the condition is every answered line's, not this row's.
+    `_save` owns the parse, the batch and the refusal re-render."""
+    org, _ = _placement(request, ref, placement_id)
+    conn = _conn(request)
+    sub = _owned_submission(conn, org, placement_id, submission_id)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = marketing_grid.subjectivity_add_action(ref, placement_id, submission_id)
+    refused = _save(
+        request, org, subjectivity_form(), action, raw,
+        lambda values: apply_subjectivity(conn, values, sub.id),
+    )
+    return refused or _section(request, ref, org, placement_id)
+
+
+@router.get(_SUBJ_EDIT, response_class=HTMLResponse)
+def subjectivity_edit_form(
+    request: Request, ref: str, placement_id: str, subjectivity_id: str
+) -> HTMLResponse:
+    """The edit form — settling included: status and satisfied_on travel on
+    this same form, and no surface has a separate mark-met act
+    (forms.entities.subjectivity_form). WRITES NOTHING."""
+    org, _ = _placement(request, ref, placement_id)
+    subj = _owned_subjectivity(_conn(request), org, placement_id, subjectivity_id)
+    action = _SUBJ_EDIT.format(
+        ref=ref, placement_id=placement_id, subjectivity_id=subjectivity_id
+    )
+    return HTMLResponse(render_form(request, subjectivity_form(subj), action))
+
+
+@router.post(_SUBJ_EDIT, response_class=HTMLResponse)
+async def subjectivity_update(
+    request: Request, ref: str, placement_id: str, subjectivity_id: str
+) -> HTMLResponse:
+    """The correction or the settling, one batch either way. The status ↔
+    satisfied_on pairing is `services.consistency.settlement_date`'s, applied
+    inside `apply_subjectivity` — the same rule the Pipeline tab and MCP
+    inherit, never restated here."""
+    org, _ = _placement(request, ref, placement_id)
+    conn = _conn(request)
+    subj = _owned_subjectivity(conn, org, placement_id, subjectivity_id)
+    raw = {k: str(v) for k, v in (await request.form()).items()}
+    action = _SUBJ_EDIT.format(
+        ref=ref, placement_id=placement_id, subjectivity_id=subjectivity_id
+    )
+    refused = _save(
+        request, org, subjectivity_form(subj), action, raw,
+        lambda values: apply_subjectivity(conn, values, subj.submission_id, subj),
+    )
+    return refused or _section(request, ref, org, placement_id)
 
 
 def _owned_subjectivity(
